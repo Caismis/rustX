@@ -7278,6 +7278,12 @@
           "description": "Request-relative System Prompt presentation, resolved natively so the\nbrowser never compares request details to discover a prompt change.",
           "$ref": "#/$defs/TraceSystemPromptPresentation"
         },
+        "predecessor": {
+          "$ref": "#/$defs/TraceRequestPredecessor"
+        },
+        "tool_catalog": {
+          "$ref": "#/$defs/TraceToolCatalogState"
+        },
         "context_additions": {
           "description": "Canonical request Context this exact request introduced, in the order\nfrozen by `RequestSnapshot.request_context_ids`. A retry or recovery\nrequest reuses admitted context and therefore introduces none.",
           "type": "array",
@@ -7297,6 +7303,8 @@
         "assistant_message_id",
         "model",
         "system_prompt",
+        "predecessor",
+        "tool_catalog",
         "context_additions",
         "context_truncated"
       ]
@@ -7569,6 +7577,74 @@
           "type": "string",
           "const": "previous_unavailable"
         }
+      ]
+    },
+    "TraceRequestPredecessor": {
+      "description": "The exact shared predecessor of the prompt and Tool catalog comparison.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "type": "string",
+              "const": "not_applicable"
+            }
+          },
+          "required": [
+            "availability"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestId2"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "availability": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "availability"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId2"
+            },
+            "availability": {
+              "type": "string",
+              "const": "available"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "request_id"
+          ]
+        }
+      ]
+    },
+    "TraceToolCatalogState": {
+      "description": "Complete frozen Tool definitions are compared before any display bounding.",
+      "type": "string",
+      "enum": [
+        "initial",
+        "changed",
+        "unchanged",
+        "previous_unavailable"
       ]
     },
     "TraceContextPresentation": {
@@ -7952,6 +8028,20 @@
         "effective_system_prompt": {
           "$ref": "#/$defs/TraceText"
         },
+        "predecessor": {
+          "$ref": "#/$defs/TraceRequestPredecessor"
+        },
+        "previous_system_prompt": {
+          "description": "Absent for no predecessor or unavailable content; empty is a real value.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "messages": {
           "description": "The reconstructed provider-neutral request context, in wire order.",
           "type": "array",
@@ -8019,6 +8109,7 @@
         "options",
         "omitted_option_count",
         "effective_system_prompt",
+        "predecessor",
         "messages",
         "messages_truncated",
         "tools",

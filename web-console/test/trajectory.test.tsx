@@ -1,877 +1,478 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted interaction contracts; see PROVENANCE.md. */
+import { useCallback, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
-import { completeTraceDetail, replaceTrace, refreshTrace, selectTrace, TRACE_LIMIT, type TraceCache } from '../src/client/trace';
-import { ArtifactContext } from '../src/app/components/Artifact';
+import { beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
+import { trajectoryItems, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
+import { searchItems } from '../src/app/trajectory/search';
 import { requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import { App } from '../src/app/App';
-import { Server, snapshot } from './fixture';
-
-let server: Server | undefined;
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v20';
 
 beforeEach(() => {
-  localStorage.clear();
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
   vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(360);
-  // jsdom performs no layout, so the ledger's scroll height is modelled from
-  // what it actually renders: the virtualizer's explicit total when it owns
-  // the window, otherwise one fixed row height per mounted row.
-  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    const virtual = this.querySelector<HTMLElement>(':scope > div[style*="height"]');
-    const explicit = Number.parseFloat(virtual?.style.height ?? '');
-    if (Number.isFinite(explicit) && explicit > 0) return explicit;
-    const rows = this.querySelectorAll('[data-trace-id]').length;
-    return rows > 0 ? rows * 30 : 360;
-  });
-  Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    value: function (this: HTMLElement, options: ScrollToOptions) {
-      this.scrollTop = options.top ?? 0;
-    },
-  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: function (this: HTMLElement, options: ScrollToOptions) { this.scrollTop = options.top ?? 0; } });
 });
-
-afterEach(() => {
-  server?.client.disconnect();
-  server = undefined;
-  cleanup();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
-function renderTrajectory(
-  cache: TraceCache,
-  onLoadDetail: (id: string) => void = noop,
-  loadEarlier: () => void = noop,
-) {
-  return render(
-    <Trajectory cache={cache} loadEarlier={loadEarlier} latest={noop} onSelect={noop} onLoadDetail={onLoadDetail} />,
-  );
+const cacheOf = (records: TraceRecord[]) => replaceTrace({ records, next_cursor: null });
+function show(cache: TraceCache, load = vi.fn(), older = vi.fn()) {
+  return render(<Trajectory cache={cache} loadEarlier={older} latest={noop} onSelect={noop} onLoadDetail={load} />);
 }
-const cacheOf = (records = [traceRecord(0), traceRecord(1)], next_cursor: string | null = null) =>
-  replaceTrace({ records, next_cursor });
+const context = (id: string): TraceContextPresentation => ({ message_id: id, producer: { Native: 'workspace_instructions' }, context_kind: 'native_environment', source: { type: 'runtime' }, preview: { text: `Preview ${id}`, truncated: false }, attachments: [], truncated: false });
+const richRequest = (n = 0) => {
+  const record = traceRecord(n);
+  record.request!.system_prompt = { state: 'initial', preview: { text: 'Frozen prompt', truncated: false } };
+  record.request!.tool_catalog = 'initial';
+  record.request!.predecessor = { availability: 'not_applicable' };
+  record.request!.context_additions = [context('context-z'), context('context-a')];
+  return record;
+};
+function row(type: string, id = 'trace:0') { return document.querySelector<HTMLElement>(`[data-display-type="${type}"][data-owner="${id}"]`)!; }
 
-it('groups rows by the Attempt and Step the server resolved, and previews their content', () => {
-  renderTrajectory(
-    cacheOf([
-      traceRecord(0, { preview: { text: 'first request', truncated: false } }),
-      traceRecord(1, { location: { attempt_id: 'attempt-a', step_id: '2' } }),
-    ]),
-  );
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  // One section opens for the Attempt the server resolved; both Steps of that
-  // Attempt sit inside it.
-  expect(within(ledger).getByText('Attempt 1')).toBeDefined();
-  expect(within(ledger).getByText('first request')).toBeDefined();
-  expect(ledger.querySelectorAll('[data-trace-id]')).toHaveLength(2);
-  expect(within(ledger).getByLabelText('Fold Step 1')).toBeDefined();
-  expect(within(ledger).getByLabelText('Fold Step 2')).toBeDefined();
+it('T1-01 maps every native prompt/tool combination without reading details', () => {
+  for (const [prompt, tools, label, facet] of [
+    ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],
+    ['changed', 'unchanged', 'System Prompt Updated', 'System Prompt'],
+    ['unchanged', 'changed', 'Tools Updated', 'Tools'],
+    ['changed', 'changed', 'System Prompt and Tools Updated', 'Summary'],
+    ['unchanged', 'unchanged', undefined, undefined],
+    ['previous_unavailable', 'previous_unavailable', 'Previous input unavailable', 'Summary'],
+  ] as const) {
+    const record = richRequest(); record.request!.system_prompt.state = prompt; record.request!.tool_catalog = tools;
+    expect(systemLabel(record)).toEqual(label ? { label, facet } : undefined);
+    const items = trajectoryItems([record]);
+    expect(items.filter(item => item.type === 'SystemRow')).toHaveLength(label ? 1 : 0);
+  }
 });
 
-it('a proposed ToolCall never renders as an execution, and a started Tool says so', () => {
-  const proposal = traceRecord(0, {
-    kind: 'assistant',
-    request: null,
-    preview: { text: 'calling bash', truncated: false },
-    calls: [{ call_id: 'call-1', tool_id: 'tool-bash', name: 'bash' }],
-  });
-  renderTrajectory(cacheOf([proposal, traceTool(1)]));
-  fireEvent.click(screen.getByText('calling bash'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  expect(within(inspector).getByText(/proves assembly/)).toBeDefined();
-  expect(within(inspector).queryByText(/durable start fact/)).toBeNull();
-
-  fireEvent.click(screen.getByText('ls -la'));
-  expect(
-    within(screen.getByLabelText('Trace record inspector')).getByText(/durable start fact/),
-  ).toBeDefined();
+it('T1-04 preserves frozen Context order and exact owner/display/facet identities', () => {
+  const record = richRequest();
+  const items = trajectoryItems([record]);
+  expect(items.map(item => item.type)).toEqual(['AttemptSectionHeader', 'StepHeader', 'SystemRow', 'ContextRow', 'ContextRow', 'RequestBoundary']);
+  const contexts = items.filter(item => item.type === 'ContextRow');
+  expect(contexts.map(item => item.context_message_id)).toEqual(['context-z', 'context-a']);
+  expect(contexts.map(item => item.owner_record_id)).toEqual(['trace:0', 'trace:0']);
+  expect(new Set(items.map(item => item.display_key)).size).toBe(items.length);
+  const load = vi.fn(); show(cacheOf([record]), load);
+  fireEvent.click(row('SystemRow')); expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+  fireEvent.click(document.querySelector('[data-display-type="ContextRow"][data-display-key*="context-a"]')!);
+  expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
+  expect(document.querySelector('[data-context-message-id="context-a"][data-selected]')).not.toBeNull();
+  fireEvent.click(row('RequestBoundary')); expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
 });
 
-it('an unterminated record shows no duration and no generation metrics', () => {
-  renderTrajectory(
-    cacheOf([traceRecord(0, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } })]),
-  );
-  fireEvent.click(screen.getByText('historical-model-0'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Timing' }));
-  expect(within(inspector).getAllByText('Unavailable').length).toBeGreaterThan(0);
-  expect(within(inspector).getByText(/No settled generation evidence/)).toBeDefined();
+it('T1-04 controlled out-of-order owner responses cannot change a newer facet or steal focus', async () => {
+  const resolvers = new Map<string, (value: TraceDetail) => void>();
+  const reads: string[] = [];
+  function Fixture() {
+    const [cache, setCache] = useState(cacheOf([richRequest(0), richRequest(1)]));
+    const load = useCallback((id: string) => {
+      reads.push(id);
+      setCache(current => beginTraceDetail(current, id));
+      void new Promise<TraceDetail>(resolve => resolvers.set(id, resolve)).then(detail => setCache(current => completeTraceDetail(current, id, 1, detail)));
+    }, []);
+    return <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))} onLoadDetail={load} loadEarlier={noop} latest={noop} />;
+  }
+  render(<Fixture />);
+  fireEvent.click(row('SystemRow'));
+  fireEvent.click(row('RequestBoundary', 'trace:1'));
+  fireEvent.click(row('ContextRow', 'trace:1'));
+  const selected = row('ContextRow', 'trace:1'); selected.focus();
+  expect(reads).toEqual(['trace:0', 'trace:1']);
+  await act(async () => { resolvers.get('trace:1')!(requestDetail(1)); });
+  await act(async () => { resolvers.get('trace:0')!(requestDetail(0)); });
+  expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
+  expect(selected.getAttribute('aria-selected')).toBe('true');
+  expect(document.activeElement).toBe(selected);
+  fireEvent.click(row('SystemRow', 'trace:1'));
+  fireEvent.click(row('RequestBoundary', 'trace:1'));
+  expect(reads).toEqual(['trace:0', 'trace:1']);
+  expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
 });
 
-it('settled generation evidence renders TTFT, decode duration and throughput', () => {
-  renderTrajectory(
-    cacheOf([
-      traceRecord(0, {
-        request: {
-          ...traceRecord(0).request!,
-          generation: {
-            timeline: null,
-            ttft_ms: '320',
-            generation_ms: '1280',
-            terminal_ms: '1600',
-            output_tokens_per_second: 93.75,
-          },
-        },
-      }),
-    ]),
-  );
-  fireEvent.click(screen.getByText('historical-model-0'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Timing' }));
-  expect(within(inspector).getByText('320 ms')).toBeDefined();
-  expect(within(inspector).getByText('1.28 s')).toBeDefined();
-  expect(within(inspector).getByText('93.8 tokens/s')).toBeDefined();
+it('T1-05 latest unchanged-only page directly discovers prompt with one lazy owner read', () => {
+  const load = vi.fn(); show(cacheOf([traceRecord(9), traceRecord(10)]), load);
+  expect(load).not.toHaveBeenCalled(); expect(document.querySelector('[data-display-type="SystemRow"]')).toBeNull();
+  fireEvent.click(row('RequestBoundary', 'trace:10'));
+  fireEvent.click(screen.getByRole('button', { name: 'View System Prompt' }));
+  expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+  expect(load.mock.calls).toEqual([['trace:10']]);
 });
 
-it('paints preparation and first-output boundaries from native request offsets', () => {
-  const record = traceRecord(0);
-  record.timing.duration_ms = '9000';
-  record.request!.generation = {
-    timeline: { dispatch_ms: '400', first_output_ms: '720', last_output_ms: '1920', terminal_ms: '2000' },
-    ttft_ms: '320', generation_ms: '1280', terminal_ms: '1600', output_tokens_per_second: 93.75,
+it.each([[false, true], [true, false], [true, true]])('T1-02 independent truncation previous=%s current=%s forbids complete diff', (previous, current) => {
+  const record = richRequest(); record.request!.system_prompt.state = 'changed';
+  const detail = requestDetail(0); detail.request!.previous_system_prompt!.truncated = previous; detail.request!.effective_system_prompt.truncated = current;
+  detail.request!.previous_system_prompt!.text = detail.request!.effective_system_prompt.text;
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('SystemRow')); fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
+  expect(screen.getByText(/A complete diff cannot be produced:/)).toBeDefined();
+  expect(screen.queryByText(/No changes/)).toBeNull();
+});
+
+it('T1-02 diff distinguishes initial, unavailable, empty and complete changed content', () => {
+  const record = richRequest(); record.request!.system_prompt.state = 'changed';
+  const detail = requestDetail(0); detail.request!.previous_system_prompt = { text: '', truncated: false }; detail.request!.effective_system_prompt = { text: 'new prompt\n', truncated: false };
+  const cache = completeTraceDetail(cacheOf([record]), record.id, 1, detail);
+  const view = show(cache); fireEvent.click(row('SystemRow')); fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
+  expect(screen.getByLabelText('System prompt diff').textContent).toBe('+ new prompt\n');
+  const update = (availability: 'not_applicable' | 'unavailable') => {
+    const next = requestDetail(0); next.request!.previous_system_prompt = null;
+    next.request!.predecessor = availability === 'not_applicable' ? { availability } : { availability, request_id: 'previous' };
+    view.rerender(<Trajectory cache={completeTraceDetail(cache, record.id, 1, next)} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   };
-  renderTrajectory(cacheOf([record]));
+  update('not_applicable'); expect(screen.getByText('No predecessor · initial prompt.')).toBeDefined();
+  update('unavailable'); expect(screen.getByText(/Previous prompt unavailable/)).toBeDefined();
+});
+
+it('T1-06 retries stay one logical Step; failed and running requests need no Assistant', () => {
+  const records = ['failed', 'failed', 'running', 'completed'].map((state, n) => traceRecord(n, { state: state as TraceRecord['state'] }));
+  const items = trajectoryItems(records);
+  expect(items.filter(item => item.type === 'StepHeader')).toHaveLength(1);
+  expect(items.filter(item => item.type === 'RequestBoundary').map(item => item.record.request!.retry_number)).toEqual([0, 1, 2, 3]);
+  show(cacheOf(records));
+  for (const record of records) { fireEvent.click(row('RequestBoundary', record.id)); expect(row('RequestBoundary', record.id).getAttribute('aria-selected')).toBe('true'); }
+  expect(screen.queryByText('Fold Steps')).toBeNull();
+});
+
+it('T1-06/10 segment anchors regroup within the same structure without acquiring detail ownership', () => {
+  const middle = traceRecord(10);
+  const segment = trajectoryItems([middle]).find(item => item.type === 'StepHeader')!;
+  expect(segment.segment_anchor_record_id).toBe(middle.id);
+  expect('owner_record_id' in segment).toBe(false);
+  const nativeStep = traceRecord(8, { kind: 'step', request: null });
+  const all = trajectoryItems([nativeStep, traceRecord(9), middle]);
+  const target = preferredStructure(all, segment)!;
+  expect(target.type).toBe('StepHeader');
+  expect(target.native_record?.id).toBe(nativeStep.id);
+  expect(target.segment_anchor_record_id).toBe(nativeStep.id);
+  expect('owner_record_id' in target).toBe(false);
+  const split = trajectoryItems([traceRecord(9), traceRecord(11, { kind: 'background', request: null, location: {} }), middle]);
+  expect(split.filter(item => item.type === 'StepHeader')).toHaveLength(2);
+  expect(preferredStructure(split, segment)?.segment_anchor_record_id).toBe(middle.id);
+  expect(preferredStructure(trajectoryItems([traceRecord(9)]), segment)).toBeUndefined();
+  expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:11', 'trace:10']);
+});
+
+it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never owns structural inspection', kind => {
+  const child = kind === 'request' ? traceRecord(10) : traceTool(10);
+  const load = vi.fn(); const select = vi.fn(); const older = vi.fn();
+  render(<Trajectory cache={cacheOf([child])} onSelect={select} onLoadDetail={load} loadEarlier={older} latest={noop} />);
+  const items = trajectoryItems([child]);
+  const step = items.find(item => item.type === 'StepHeader')!;
+  expect(step.display_key).toBe(JSON.stringify(['step-segment', 'attempt-a', '1', child.id]));
+  expect(trajectoryItems([{ ...child, state: 'running' }]).find(item => item.type === 'StepHeader')!.display_key).toBe(step.display_key);
+  for (const type of ['AttemptSectionHeader', 'StepHeader']) {
+    const header = document.querySelector<HTMLElement>(`[data-display-type="${type}"]`)!;
+    act(() => header.focus()); fireEvent.click(header); fireEvent.keyDown(header, { key: 'Enter' });
+    expect(header.hasAttribute('data-owner')).toBe(false);
+    expect(document.activeElement).toBe(header);
+    expect(screen.queryByRole('complementary')).toBeNull();
+  }
+  expect(select.mock.calls.every(([id]) => id === undefined)).toBe(true);
+  expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
+  fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
+  expect(select).toHaveBeenLastCalledWith(child.id);
+  expect(load.mock.calls).toEqual([[child.id]]);
+  expect(screen.getByRole('tab', { name: kind === 'request' ? 'System Prompt' : 'Input' })).toBeDefined();
+});
+
+it('T1-06 exact loaded native structures remain presentation-only and expose only their own evidence', () => {
+  const attempt = traceRecord(8, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' }, state: 'running' });
+  const step = traceRecord(9, { kind: 'step', request: null });
+  const records = [attempt, step, traceTool(10)];
+  const structures = trajectoryItems(records).filter(item => item.type === 'StepHeader' || item.type === 'AttemptSectionHeader');
+  expect(structures.map(item => item.native_record?.id)).toEqual([attempt.id, step.id]);
+  const load = vi.fn(); show(cacheOf(records), load);
+  for (const item of structures) fireEvent.click(document.querySelector(`[data-display-type="${item.type}"]`)!);
+  expect(screen.queryByRole('complementary')).toBeNull(); expect(load).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-display-type="AttemptSectionHeader"]')?.textContent).toContain('running');
+});
+
+it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hijack structural focus', async kind => {
+  const child = kind === 'request' ? traceRecord(10) : traceTool(10);
+  let resolve!: (detail: TraceDetail) => void;
+  const reads: string[] = []; const selections: (string | undefined)[] = [];
+  function Fixture() {
+    const [cache, setCache] = useState(cacheOf([child]));
+    const load = useCallback((id: string) => {
+      reads.push(id); setCache(current => beginTraceDetail(current, id));
+      void new Promise<TraceDetail>(done => { resolve = done; }).then(detail => setCache(current => completeTraceDetail(current, id, 1, detail)));
+    }, []);
+    return <Trajectory cache={cache} onSelect={id => { selections.push(id); setCache(current => selectTrace(current, id)); }} onLoadDetail={load} loadEarlier={noop} latest={noop} />;
+  }
+  render(<Fixture />);
+  fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
+  const step = document.querySelector<HTMLElement>('[data-display-type="StepHeader"]')!;
+  act(() => step.focus()); fireEvent.keyDown(step, { key: 'Enter' });
+  expect(selections.at(-1)).toBeUndefined();
+  await act(async () => resolve(kind === 'request' ? requestDetail(10) : toolDetail(10)));
+  expect(document.activeElement).toBe(step); expect(step.getAttribute('data-selected')).toBe('true');
+  expect(screen.queryByRole('complementary')).toBeNull(); expect(reads).toEqual([child.id]);
+});
+
+const proposal = () => traceRecord(0, { kind: 'assistant', request: null, message_id: 'assistant-0', calls: [{ call_id: 'same', tool_id: 'tool-a', name: 'same name' }, { call_id: 'not-executed', tool_id: 'tool-a', name: 'same name' }] });
+const execution = (n: number, overrides: Partial<TraceRecord> = {}) => traceTool(n, { tool: { ...traceTool(n).tool!, call_id: 'same', tool_id: 'tool-a', name: 'same name' }, ...overrides });
+it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page split', () => {
+  const assistant = proposal();
+  const unrelated = [execution(2, { location: { attempt_id: 'other', step_id: '1' } }), execution(3, { location: { attempt_id: 'attempt-a', step_id: '2' } }), execution(4, { tool: { ...execution(4).tool!, tool_id: 'tool-b' } }), execution(5, { location: {} })];
+  expect(matchingCalls([assistant, execution(1), ...unrelated]).get(assistant.id)?.map(r => r.id)).toEqual(['trace:1']);
+  const records = [assistant, execution(1), ...unrelated];
+  const visible = visibleItems(trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
+  const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
+  expect(summary.preview).toContain('2 proposed · 1 loaded matching executions');
+  expect(visible.filter(item => item.type === 'RecordRow').map(item => item.record.id)).toEqual(['trace:0', 'trace:2', 'trace:3', 'trace:4', 'trace:5']);
+  expect(matchingCalls([execution(1)]).size).toBe(0);
+  expect(matchingCalls([assistant]).size).toBe(0);
+  expect(matchingCalls([assistant, { ...assistant, id: 'other-proposer' }, execution(1)]).size).toBe(0);
+});
+
+it('T1-08 Calls summary exposes warnings and leaves native domains independent', () => {
+  const assistant = proposal();
+  const executions = ['failed', 'denied', 'waiting', 'outcome_unknown'].map((state, n) => execution(n + 1, { state: state as TraceRecord['state'] }));
+  const domains = ['background', 'subagent', 'workflow'].map((kind, n) => traceRecord(n + 10, { kind: kind as TraceRecord['kind'], request: null, originating_tool_call_id: 'same' }));
+  const records = [assistant, ...executions, ...domains, traceRecord(20, { kind: 'compaction', request: null, state: 'running' })];
+  const visible = visibleItems(trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
+  const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
+  for (const state of ['failed', 'denied', 'waiting', 'outcome_unknown']) expect(summary.preview).toContain(`1 ${state}`);
+  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(true);
+  expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe('Compacting…');
+  for (const state of ['incomplete', 'failed', 'completed'] as const) {
+    const item = trajectoryItems([traceRecord(21, { kind: 'compaction', request: null, state })]).find(item => item.type === 'RecordRow')!;
+    expect(item.label).toBe(state === 'completed' ? 'COMPACTED' : `Compaction · ${state}`);
+  }
+});
+
+it('T1-09 search reveals both collapsed kinds without any detail/history reads', () => {
+  const records = [proposal(), execution(1)]; const load = vi.fn(); const older = vi.fn();
+  show(cacheOf(records), load, older);
+  fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Collapse Calls' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Attempts' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'ls -la' } });
+  expect(row('RecordRow', 'trace:1')).not.toBeNull(); expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
+  const items = trajectoryItems([richRequest()]);
+  expect(searchItems(items, 'Preview context-a')?.size).toBe(1);
+  expect(searchItems(items, 'Frozen prompt')?.size).toBeGreaterThan(0);
+  expect(preferredItem(items, 'trace:0')?.type).toBe('RequestBoundary');
+});
+
+it('T1-10 512 native records plus synthetic items keep mounted rows and reads bounded', () => {
+  const records = Array.from({ length: 512 }, (_, n) => richRequest(n));
+  const items = trajectoryItems(records);
+  expect(items.length).toBeGreaterThan(2000);
+  expect(new Set(items.map(item => item.display_key)).size).toBe(items.length);
+  const load = vi.fn(); show(cacheOf(records), load);
+  expect(document.querySelectorAll('[data-display-key]').length).toBeLessThan(60);
+  expect(load).not.toHaveBeenCalled();
+});
+
+it('T1-11 content-only updates never move an off-tail reader', () => {
+  const records = Array.from({ length: 20 }, (_, n) => traceRecord(n)); const view = show(cacheOf(records));
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  Object.defineProperty(ledger, 'scrollHeight', { configurable: true, value: 900 });
+  ledger.scrollTop = 150; fireEvent.scroll(ledger);
+  const updated = records.map(record => ({ ...record, state: 'running' as const }));
+  view.rerender(<Trajectory cache={cacheOf(updated)} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(ledger.scrollTop).toBe(150); expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeDefined();
+});
+
+it('safe existing Tool renderers expose supported Code, Input, Result and Native', () => {
+  const record = traceTool(1); show(completeTraceDetail(cacheOf([record]), record.id, 1, toolDetail(1)));
+  fireEvent.click(row('RecordRow', record.id));
+  for (const facet of ['Code', 'Input', 'Result', 'Native']) { fireEvent.click(screen.getByRole('tab', { name: facet })); expect(screen.getByRole('tab', { name: facet }).getAttribute('aria-selected')).toBe('true'); }
+  expect(within(screen.getByRole('tabpanel')).getByText('tool-bash')).toBeDefined();
+});
+
+
+it('T1-12 sequence keeps equal glyph widths even when native duration is missing', () => {
+  const records = [traceRecord(0, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } }), traceRecord(1)];
+  show(cacheOf(records));
+  const glyph = document.querySelector<HTMLElement>('[data-record-id="trace:0"]')!;
+  expect(glyph.hasAttribute('data-marker')).toBe(false);
+  expect(glyph.style.width).toBe('50%');
   fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
-  const span = screen.getByRole('button', { name: 'Inspect Request · historical-model · request-0' });
-  expect(span.style.getPropertyValue('--trajectory-dispatch')).toBe('20%');
-  expect(span.style.getPropertyValue('--trajectory-first-output')).toBe('36%');
+  expect(glyph.getAttribute('data-marker')).toBe('true');
 });
 
-it('request detail is fetched on demand and renders historical input with its Tool catalog', () => {
-  const loads: string[] = [];
-  let cache = cacheOf([traceRecord(0)]);
-  const ui = renderTrajectory(cache, id => loads.push(id));
-  fireEvent.click(screen.getByText('historical-model-0'));
-  expect(loads).toEqual(['trace:0']);
-
-  cache = completeTraceDetail(selectTrace(cache, 'trace:0'), 'trace:0', cache.epoch, requestDetail(0));
-  ui.rerender(
-    <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />,
-  );
-  const inspector = screen.getByLabelText('Trace record inspector');
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Prompt' }));
-  expect(within(inspector).getByText('You are the historical agent.')).toBeDefined();
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
-  expect(within(inspector).getByText(/Inspect the trajectory/)).toBeDefined();
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Tools' }));
-  expect(within(inspector).getByText('bash')).toBeDefined();
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Options' }));
-  expect(within(inspector).getByText('temperature')).toBeDefined();
-  // The allowlist omission is visible without naming what was omitted.
-  expect(within(inspector).getByText(/2 configured request parameters/)).toBeDefined();
+it('T1-12 Journal duration remains visible in Inspector when Model timing lacks a bridge', () => {
+  const record = traceRecord(0, { timing: { started_at: '2026-09-15T00:00:00Z', ended_at: '2026-09-15T00:00:09Z', duration_ms: '9000' } });
+  record.request!.generation = { ttft_ms: '320', generation_ms: '1280', terminal_ms: '1600', output_tokens_per_second: null, timeline: null };
+  show(cacheOf([record]));
+  fireEvent.click(row('RequestBoundary'));
+  fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+  const facts = within(screen.getByRole('tabpanel'));
+  expect(facts.getByText('Journal wall duration').nextElementSibling?.textContent).toBe('9.00 s');
+  expect(facts.getByText('Two authoritative durable timestamps.')).toBeDefined();
+  expect(record.timing.duration_ms).toBe('9000');
 });
 
-it('native Tool source renders as code while the original arguments stay inspectable', () => {
-  let cache = cacheOf([traceTool(0)]);
-  const ui = renderTrajectory(cache);
-  fireEvent.click(screen.getByText('ls -la'));
-  cache = completeTraceDetail(selectTrace(cache, 'trace:0'), 'trace:0', cache.epoch, toolDetail(0));
-  ui.rerender(
-    <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />,
-  );
-  const inspector = screen.getByLabelText('Trace record inspector');
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Code' }));
-  expect(within(inspector).getByText(/Highlighted as shell/)).toBeDefined();
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Input' }));
-  expect(within(inspector).getByText('Recorded arguments')).toBeDefined();
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Result' }));
-  expect(within(inspector).getByText('1.23 s')).toBeDefined();
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Schema' }));
-  expect(within(inspector).getByText('Run one command.')).toBeDefined();
-});
-
-it('loaded-window search filters rows and says the window is what was searched', () => {
-  renderTrajectory(
-    cacheOf([
-      traceRecord(0, { preview: { text: 'alpha request', truncated: false } }),
-      traceRecord(1, { preview: { text: 'beta request', truncated: false } }),
-    ]),
-  );
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  fireEvent.change(screen.getByLabelText('Search loaded Trace'), { target: { value: 'beta' } });
-  expect(ledger.querySelectorAll('[data-trace-id]')).toHaveLength(1);
-  fireEvent.change(screen.getByLabelText('Search loaded Trace'), { target: { value: 'zzz' } });
-  expect(screen.getByText(/Load earlier records to search further back/)).toBeDefined();
-});
-
-it('folding a Step hides its rows behind a summary without hiding the next Step', () => {
-  renderTrajectory(
-    cacheOf([
-      traceRecord(0, { preview: { text: 'step one first', truncated: false } }),
-      traceRecord(1, { preview: { text: 'step one second', truncated: false } }),
-      traceRecord(2, {
-        location: { attempt_id: 'attempt-a', step_id: '2' },
-        preview: { text: 'step two', truncated: false },
-      }),
-    ]),
-  );
-  fireEvent.click(screen.getByLabelText('Fold Step 1'));
-  expect(screen.getByText('step one first')).toBeDefined();
-  expect(screen.queryByText('step one second')).toBeNull();
-  expect(screen.getByText('step two')).toBeDefined();
-  fireEvent.click(screen.getByLabelText('Expand Step 1'));
-  expect(screen.getByText('step one second')).toBeDefined();
-});
-
-it('selection survives a prepend by stable identity and reports removal on rebase', () => {
-  const first = traceRecord(10, { preview: { text: 'selected record', truncated: false } });
-  let cache = cacheOf([first]);
-  const ui = renderTrajectory(cache);
-  fireEvent.click(screen.getByText('selected record'));
-  expect(screen.getByLabelText('Trace record inspector')).toBeDefined();
-
-  cache = replaceTrace({ records: [traceRecord(9), first], next_cursor: null });
-  ui.rerender(
-    <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />,
-  );
-  expect(
-    within(screen.getByLabelText('Trace record inspector')).getByText('request-10'),
-  ).toBeDefined();
-
-  ui.rerender(
-    <Trajectory
-      cache={replaceTrace({ records: [traceRecord(9)], next_cursor: null })}
-      loadEarlier={noop}
-      latest={noop}
-      onSelect={noop}
-      onLoadDetail={noop}
-    />,
-  );
-  expect(screen.queryByLabelText('Trace record inspector')).toBeNull();
-  expect(screen.getByRole('status').textContent).toContain('left the loaded window');
-});
-
-it('a long ledger virtualizes to a bounded row window', () => {
-  const records = Array.from({ length: 500 }, (_, index) => traceRecord(index));
-  const ui = renderTrajectory(cacheOf(records));
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  expect(ledger.getAttribute('aria-rowcount')).toBe('500');
-  const mounted = ui.container.querySelectorAll('[data-trace-id]').length;
-  expect(mounted).toBeGreaterThan(0);
-  expect(mounted).toBeLessThan(60);
-});
-
-it('tail-follow stops once the reader scrolls upward and resumes at the tail', () => {
-  let records = Array.from({ length: 80 }, (_, index) => traceRecord(index + 10));
-  const ui = renderTrajectory(cacheOf(records));
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  const update = () =>
-    ui.rerender(
-      <Trajectory
-        cache={cacheOf(records)}
-        loadEarlier={noop}
-        latest={noop}
-        onSelect={noop}
-        onLoadDetail={noop}
-      />,
-    );
-  // At the tail: a new record follows it.
-  ledger.scrollTop = ledger.scrollHeight - 360;
-  fireEvent.scroll(ledger);
-  records = [...records, traceRecord(90)];
-  update();
-  expect(ledger.scrollTop).toBe(ledger.scrollHeight);
-  // Away from the tail: a new record must not move the reader.
-  ledger.scrollTop = 400;
-  fireEvent.scroll(ledger);
-  records = [...records, traceRecord(91)];
-  update();
-  expect(ledger.scrollTop).toBe(400);
-  // Returning to the tail resumes following.
-  ledger.scrollTop = ledger.scrollHeight;
-  fireEvent.scroll(ledger);
-  records = [...records, traceRecord(92)];
-  update();
-  expect(ledger.scrollTop).toBe(ledger.scrollHeight);
-});
-
-it('a server lifecycle repair settles a selected record retained outside the window', () => {
-  const old = traceRecord(1, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } });
-  const cache = selectTrace(replaceTrace({ records: [old], next_cursor: 'trace:1' }), old.id);
-  const ui = renderTrajectory(cache);
-  fireEvent.click(within(screen.getByRole('table', { name: 'Trace ledger' })).getByText('historical-model-1'));
-  const settled = refreshTrace(cache, { records: [traceRecord(100)], next_cursor: null }, [
-    {
-      id: old.id,
-      state: 'completed',
-      timing: { ...old.timing, ended_at: '2026-09-15T00:00:02Z', duration_ms: '2500' },
-      attachments: [],
-      truncated: false,
-    },
-  ]);
-  ui.rerender(
-    <Trajectory cache={settled} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />,
-  );
-  const inspector = screen.getByLabelText('Trace record inspector');
-  expect(within(inspector).getByText('completed')).toBeDefined();
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Timing' }));
-  expect(within(inspector).getByText('2.50 s')).toBeDefined();
-  expect(screen.getByRole('status').textContent).toContain('retained outside the loaded history');
-});
-
-it('the timing overview draws spans only from recorded timing', () => {
-  renderTrajectory(
-    cacheOf([
-      traceRecord(0),
-      traceRecord(1, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } }),
-    ]),
-  );
-  const overview = screen.getByLabelText('Timing overview');
-  const spans = overview.querySelectorAll('button[data-kind]');
-  expect(spans).toHaveLength(2);
-  // The unterminated record is a start marker, never a span.
-  expect(overview.querySelectorAll('button[data-marker]')).toHaveLength(1);
-});
-
-it('timeline and ledger selections refer to the same stable record identity', () => {
-  renderTrajectory(cacheOf([traceRecord(0), traceRecord(1)]));
-  const overview = screen.getByLabelText('Timing overview');
-  fireEvent.click(within(overview).getByLabelText('Inspect Request · historical-model · request-0'));
-  expect(within(screen.getByLabelText('Trace record inspector')).getByText('request-0')).toBeDefined();
-});
-
-it('Chat / Trajectory switching stays on one attachment while live facts change', async () => {
-  server = new Server();
-  server.snapshots.set('A', { ...snapshot(), trace: { records: [traceRecord(0)] } });
-  await server.attached('A');
-  localStorage.setItem(
-    'rustx-console-view-v2',
-    JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }),
-  );
-  render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  const attachments = server.requests.filter(item => item.request.method === 'session/attach').length;
-  fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' }));
-  await act(async () => {
-    await server!.update('A', {
-      ...snapshot(),
-      trace: { records: [traceRecord(0), traceRecord(1)] },
-    });
-  });
-  expect(screen.getByText('historical-model-1')).toBeDefined();
-  fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
-  expect(screen.getByLabelText('Canonical conversation')).toBeDefined();
-  expect(server.requests.filter(item => item.request.method === 'session/attach')).toHaveLength(attachments);
-});
-
-it('Goal chat presentation preserves exact native Tool inspection', () => {
-  const record = traceTool(0, { tool: { call_id: 'goal-complete-call', tool_id: 'native.update_goal', name: 'update_goal', started: true, outcome: 'success' }, preview: { text: 'Complete goal', truncated: false } });
-  const detail = toolDetail(0);
-  detail.tool = { ...detail.tool!, call_id: 'goal-complete-call', tool_id: 'native.update_goal', name: 'update_goal', source: null, arguments: { value: { action: 'complete', expected: { id: 'goal-1', revision: 2 } }, truncated: false }, result: { ...detail.tool!.result!, blocks: [{ type: 'text', text: { text: 'Goal completed exactly', truncated: false } }] } };
-  renderTrajectory(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
-  fireEvent.click(screen.getByText('Complete goal'));
-  const inspector = within(screen.getByLabelText('Trace record inspector'));
-  expect(inspector.getByText('native.update_goal')).toBeTruthy();
-  expect(inspector.getByText('goal-complete-call')).toBeTruthy();
-  fireEvent.click(inspector.getByRole('tab', { name: 'Input' }));
-  expect(inspector.getByRole('tree', { name: 'update_goal arguments' }).textContent).toContain('complete');
-  fireEvent.click(inspector.getByRole('tab', { name: 'Result' }));
-  expect(inspector.getByText('Goal completed exactly')).toBeTruthy();
-});
-
-it('one adopted User batch renders every bounded canonical message', () => {
-  const record = traceRecord(0, { kind: 'user', request: null, preview: { text: 'Adopted batch', truncated: false } });
-  const detail = requestDetail(0, { kind: 'user', request: null, messages: [
-    { message_id: 'user-first', role: 'user', source: 'human', blocks: [{ type: 'text', text: { text: 'First adopted message', truncated: false } }], truncated: false },
-    { message_id: 'user-second', role: 'user', source: 'human', blocks: [{ type: 'text', text: { text: 'Second adopted message', truncated: false } }], truncated: false },
-  ] });
-  renderTrajectory(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
-  fireEvent.click(screen.getByText('Adopted batch'));
-  fireEvent.click(screen.getByRole('tab', { name: 'Content' }));
-  expect(screen.getByText('First adopted message')).toBeTruthy();
-  expect(screen.getByText('Second adopted message')).toBeTruthy();
-});
-
-it.each(['Complete', 'Partial', 'Unavailable'] as const)('shows %s managed output with exact plain-text locator and diagnostic', state => {
-  const locator = '/private/rustx-managed-output/example/tasks/<result>.output';
-  const diagnostic = `cannot append ${locator}: recorded I/O failure`;
-  const detail = toolDetail(0);
-  detail.tool!.result!.managed_output = {
-    complete: state === 'Complete', available: state !== 'Unavailable',
-    locator: state === 'Unavailable' ? null : locator,
-    diagnostic: state === 'Complete' ? null : { text: diagnostic, truncated: false },
-  };
-  let cache = cacheOf([traceTool(0)]);
-  cache = completeTraceDetail(selectTrace(cache, 'trace:0'), 'trace:0', cache.epoch, detail);
-  renderTrajectory(cache);
-  const inspector = within(screen.getByLabelText('Trace record inspector'));
-  fireEvent.click(inspector.getByRole('tab', { name: 'Result' }));
-  expect(inspector.getByText(state, { exact: true })).toBeDefined();
-  if (state !== 'Unavailable') {
-    const value = inspector.getByText(locator, { exact: true });
-    expect(value.tagName).toBe('DD');
-    expect(value.querySelector('a, button')).toBeNull();
-  } else {
-    expect(inspector.queryByText('Locator', { exact: true })).toBeNull();
-  }
-  if (state !== 'Complete') expect(inspector.getByText(diagnostic, { exact: true })).toBeDefined();
-});
-
-it('uses semantic content cells and structural lifecycle bars without moving unlocated records', () => {
-  const records = [
-    traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: '**Hello**', truncated: false } }),
-    traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' }, preview: null }),
-    traceRecord(2, { kind: 'step', request: null, preview: null }),
-    traceRecord(3, { kind: 'assistant', request: null, preview: null, calls: [{ call_id: 'c', tool_id: 't', name: 'bash' }] }),
-    traceTool(4),
-    traceRecord(5, { kind: 'compaction', request: null, location: {}, preview: { text: 'Compacted history', truncated: false } }),
-  ];
-  const loads = vi.fn();
-  const ui = renderTrajectory(cacheOf(records), loads);
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  expect(within(ledger).getByText('Assistant')).toBeTruthy();
-  expect(within(ledger).queryByText('MODEL')).toBeNull();
-  expect(within(ledger).getByText('Tool calls · bash')).toBeTruthy();
-  expect(within(ledger).getByText('bash')).toBeTruthy();
-  expect(within(ledger).getByText('Compaction')).toBeTruthy();
-  expect(ui.container.querySelector('[data-trace-id="trace:0"]')?.hasAttribute('data-attempt')).toBe(false);
-  expect(ui.container.querySelector('[data-trace-id="trace:5"]')?.hasAttribute('data-attempt')).toBe(false);
-  expect(ledger.querySelectorAll('[data-structural]')).toHaveLength(2);
-  expect(ledger.querySelector('strong')?.textContent).toBe('Hello');
-  expect(loads).not.toHaveBeenCalled();
-  // Only user selection may request heavy detail. There is no prompt-diff crawl.
-  fireEvent.keyDown(ledger.querySelector('[data-trace-id="trace:3"]')!, { key: 'Enter' });
-  expect(loads).toHaveBeenCalledWith('trace:3');
-  expect(ledger.querySelector('[data-trace-id="trace:3"]')?.getAttribute('aria-selected')).toBe('true');
-});
-
-it('never nests domain evidence under a similarly named adjacent Tool', () => {
-  const kinds = ['background', 'subagent', 'workflow', 'interaction'] as const;
-  renderTrajectory(cacheOf([traceTool(0), ...kinds.map((kind, n) => traceRecord(n + 1, {
-    kind, request: null, location: n % 2 ? { attempt_id: 'other-attempt', step_id: '7' } : {},
-    preview: { text: 'bash', truncated: false },
-  }))]));
-  const rows = screen.getByRole('table', { name: 'Trace ledger' }).querySelectorAll('[data-trace-id]');
-  expect(rows).toHaveLength(5);
-  for (const row of rows) expect(row.parentElement).toBe(rows[0]!.parentElement);
-  expect(rows[1]!.hasAttribute('data-attempt')).toBe(false);
-  expect(rows[2]!.getAttribute('data-attempt')).toBe('other-attempt');
-});
-
-it('search reveals a match inside folded native sections without loading detail', () => {
-  const loads = vi.fn();
-  renderTrajectory(cacheOf([traceRecord(0), traceTool(1)]), loads);
-  fireEvent.click(screen.getByRole('button', { name: 'Fold Attempts' }));
-  expect(screen.queryByText('ls -la')).toBeNull();
-  fireEvent.change(screen.getByLabelText('Search loaded Trace'), { target: { value: 'ls -la' } });
-  expect(screen.getByText('ls -la')).toBeTruthy();
-  expect(loads).not.toHaveBeenCalled();
-});
-
-it('exposes Thinking only for native reasoning and never fabricates System or Context cells', () => {
-  const record = traceRecord(0, { kind: 'assistant', request: null });
-  const detail = requestDetail(0, { kind: 'assistant', request: null, messages: [{ message_id: 'm', role: 'assistant', blocks: [{ type: 'reasoning', text: { text: 'Recorded **reasoning**', truncated: false } }], truncated: false }] });
-  renderTrajectory(completeTraceDetail(selectTrace(cacheOf([record]), record.id), record.id, 1, detail));
-  fireEvent.click(screen.getByRole('tab', { name: 'Thinking' }));
-  expect(screen.getByText('reasoning')).toBeTruthy();
-  expect(screen.queryByRole('tab', { name: 'Prompt' })).toBeNull();
-  expect(document.querySelector('[data-kind="system"], [data-kind="context"], [data-kind="subtool"]')).toBeNull();
-});
-
-it('copies the exact frozen prompt and offers no guessed Code tab', async () => {
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  vi.stubGlobal('navigator', { clipboard: { writeText } });
-  const record = traceRecord(0);
-  const detail = requestDetail(0);
-  detail.request!.effective_system_prompt.text = '  Historical **prompt**\n\nwith exact whitespace.\n';
-  renderTrajectory(completeTraceDetail(selectTrace(cacheOf([record]), record.id), record.id, 1, detail));
-  fireEvent.click(screen.getByRole('tab', { name: 'Prompt' }));
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy text' })); });
-  expect(writeText).toHaveBeenCalledWith(detail.request!.effective_system_prompt.text);
+it.each(['result', 'definition', 'arguments', 'tool'] as const)('Tool facets explicitly disclose absent %s at the read cut', missing => {
+  const record = traceTool(10, { state: missing === 'result' ? 'running' : 'completed' });
+  if (missing === 'result') record.tool!.outcome = null;
+  const detail = toolDetail(10);
+  if (missing === 'tool') { detail.tool = null; detail.truncated = true; }
+  else { detail.tool![missing] = null; detail.tool!.source = null; }
+  if (missing === 'result') detail.tool!.lifecycle = 'started';
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('RecordRow', record.id));
   expect(screen.queryByRole('tab', { name: 'Code' })).toBeNull();
-});
-
-it('Attempt folding does not fold unscoped domain records or invent their owner', () => {
-  renderTrajectory(cacheOf([
-    traceRecord(0), traceTool(1),
-    traceRecord(2, { kind: 'workflow', request: null, location: {}, preview: { text: 'Independent workflow', truncated: false } }),
-    traceRecord(3, { kind: 'subagent', request: null, location: {}, preview: { text: 'Independent child', truncated: false } }),
-  ]));
-  fireEvent.click(screen.getByRole('button', { name: 'Fold Attempts' }));
-  expect(screen.getByText('Independent workflow')).toBeTruthy();
-  expect(screen.getByText('Independent child')).toBeTruthy();
-});
-
-it('names a request by model and native identity, never by a request number', () => {
-  const initial = traceRecord(0, { request: { ...traceRecord(0).request!, retry_number: 0 } });
-  renderTrajectory(selectTrace(cacheOf([initial]), initial.id));
-  const overview = screen.getByLabelText('Timing overview');
-  const inspector = screen.getByLabelText('Trace record inspector');
-  // retry 0 is the initial actual request: it is not "request #0".
-  expect(within(overview).queryByLabelText(/Request #/)).toBeNull();
-  expect(within(inspector).queryByText(/Request #/)).toBeNull();
-  expect(within(inspector).getByText('Request · historical-model')).toBeDefined();
-  expect(
-    within(overview).getByLabelText('Inspect Request · historical-model · request-0'),
-  ).toBeDefined();
-  // The exact native request identity stays inspectable.
-  fireEvent.click(within(inspector).getByText(/Native record/));
-  expect(within(inspector).getByText('Retry / recovery ordinal')).toBeDefined();
-  expect(within(inspector).getByText('request-0')).toBeDefined();
-  expect(within(inspector).getByText(/0 · initial request/)).toBeDefined();
-  // An initial request is never announced as "retry 0" either.
-  expect(within(overview).queryByLabelText(/retry/i)).toBeNull();
-});
-
-// `retry_number` is the native actual-request ordinal within a logical Step.
-// A nonzero value proves only that this was not the first actual request; it
-// does not say whether the repeat was a retry or a recovery. Primary
-// presentation therefore stays neutral, and the native disclosure carries the
-// ordinal under its own honest name.
-it('a nonzero actual-request ordinal stays retry/recovery-neutral in primary presentation', () => {
-  const repeat = traceRecord(0, { request: { ...traceRecord(0).request!, retry_number: 2 } });
-  renderTrajectory(selectTrace(cacheOf([repeat]), repeat.id));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  const overview = screen.getByLabelText('Timing overview');
-  // The title and the span label are identical to the retry_number = 0 case.
-  expect(within(inspector).getByText('Request · historical-model')).toBeDefined();
-  expect(
-    within(overview).getByLabelText('Inspect Request · historical-model · request-0'),
-  ).toBeDefined();
-  // No "retry N", no "Request #N", no bare ordinal, anywhere in primary view.
-  expect(within(overview).queryByLabelText(/retry/i)).toBeNull();
-  expect(within(overview).queryByLabelText(/Request #/)).toBeNull();
-  expect(inspector.querySelector('header')!.textContent).not.toMatch(/retry|#|ordinal/i);
-  // The native disclosure is where the ordinal is named for what it is.
-  fireEvent.click(within(inspector).getByText(/Native record/));
-  expect(within(inspector).getByText('Retry / recovery ordinal')).toBeDefined();
-  expect(within(inspector).getByText(/^2 · retry or recovery within this Step$/)).toBeDefined();
-  // The exact native request identity remains inspectable.
-  expect(within(inspector).getByText('request-0')).toBeDefined();
-});
-
-it('the loaded-window request marker names its own scope and is not an identity', () => {
-  renderTrajectory(cacheOf([traceRecord(0), traceRecord(1)]));
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  // Scoped wording only, and never the "#N" form that reads as an identity.
-  expect(within(ledger).getByLabelText('Request 1 in the loaded window')).toBeDefined();
-  expect(within(ledger).getByLabelText('Request 2 in the loaded window')).toBeDefined();
-  expect(ledger.innerHTML).not.toContain('Request #');
-});
-
-it('the overview offers earlier history only while an older page may be loaded', () => {
-  const older = vi.fn();
-  const { unmount } = renderTrajectory(cacheOf([traceRecord(0)], 'older'), noop, older);
-  const overview = screen.getByLabelText('Timing overview');
-  const boundary = within(overview).getByLabelText('Load earlier records into the overview');
-  expect(boundary.getAttribute('aria-disabled')).toBe('false');
-  // Keyboard activation reaches the same single paging operation.
-  boundary.focus();
-  expect(document.activeElement).toBe(boundary);
-  fireEvent.click(boundary);
-  expect(older).toHaveBeenCalledTimes(1);
-  unmount();
-
-  // No older cursor: no affordance at all.
-  renderTrajectory(cacheOf([traceRecord(0)], null), noop, older);
-  expect(
-    within(screen.getByLabelText('Timing overview')).queryByLabelText(
-      'Load earlier records into the overview',
-    ),
-  ).toBeNull();
-});
-
-// Native start timestamps are mandatory and a page only carries a cursor when
-// it retained an anchor, so the only empty overview is an empty loaded window —
-// which by the same contract has no earlier history to offer.
-it('an empty loaded window shows a plain overview with no earlier history', () => {
-  const older = vi.fn();
-  renderTrajectory(cacheOf([], null), noop, older);
-  const overview = screen.getByLabelText('Timing overview');
-  expect(within(overview).getByText('No recorded timing in the loaded window')).toBeDefined();
-  expect(within(overview).queryByLabelText(/earlier records/i)).toBeNull();
-  expect(older).not.toHaveBeenCalled();
-});
-
-it('a pending or limit-reached load cannot be requested again from the overview', () => {
-  const older = vi.fn();
-  const pending = { ...cacheOf([traceRecord(0)], 'older'), loading: true };
-  const { unmount } = renderTrajectory(pending, noop, older);
-  const loadingBoundary = within(screen.getByLabelText('Timing overview')).getByLabelText(
-    'Loading earlier records',
-  );
-  expect(loadingBoundary.getAttribute('aria-disabled')).toBe('true');
-  fireEvent.click(loadingBoundary);
-  expect(older).not.toHaveBeenCalled();
-  unmount();
-
-  // The finite history limit is the cache's, and the overview obeys it.
-  const full = cacheOf(
-    Array.from({ length: TRACE_LIMIT }, (_, n) => traceRecord(n)),
-    'older',
-  );
-  renderTrajectory(full, noop, older);
-  const limited = within(screen.getByLabelText('Timing overview')).getByLabelText(
-    'Load earlier records into the overview',
-  );
-  expect(limited.getAttribute('aria-disabled')).toBe('true');
-  fireEvent.click(limited);
-  expect(older).not.toHaveBeenCalled();
-});
-
-it('an ordinary row names its artifacts without reading any artifact resource', () => {
-  const read = vi.fn();
-  const records = [
-    traceRecord(0, { kind: 'user', request: null, attachments: [
-      { artifact_id: 'brief-0', name: 'brief.md', mime_type: 'text/markdown', image: false },
-      { artifact_id: 'shot-0', name: 'screenshot.png', mime_type: 'image/png', image: true },
-    ] }),
-    traceRecord(1, { kind: 'assistant', request: null, attachments: [
-      { artifact_id: 'diagram-1', name: 'diagram.png', mime_type: 'image/png', image: true },
-    ] }),
-    traceRecord(2, { kind: 'assistant', request: null, attachments: [
-      { artifact_id: 'unnamed-2', name: null, mime_type: 'image/png', image: true },
-    ] }),
-  ];
-  render(
-    <ArtifactContext.Provider value={{ read, release: noop } as never}>
-      <Trajectory cache={cacheOf(records)} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />
-    </ArtifactContext.Provider>,
-  );
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  // Named file first, with a compact count for the rest.
-  expect(within(ledger).getByText('brief.md')).toBeDefined();
-  expect(within(ledger).getByText('+1')).toBeDefined();
-  // An image is marked as one, distinctly from a generic file.
-  const file = ledger.querySelector('[data-trace-id="trace:0"] [data-image]');
-  const image = ledger.querySelector('[data-trace-id="trace:1"] [data-image]');
-  expect(file).toBeNull();
-  expect(image).not.toBeNull();
-  expect(within(ledger).getByText('diagram.png')).toBeDefined();
-  // A nameless artifact falls back to what it is, never to its machine id.
-  expect(within(ledger).getByText('Image')).toBeDefined();
-  expect(ledger.innerHTML).not.toContain('unnamed-2');
-  // Rendering an ordinary row must never begin owning artifact bytes.
-  expect(read).not.toHaveBeenCalled();
-});
-
-it('selecting a record in the overview clears a search that would hide it', () => {
-  const match = traceTool(0, { preview: { text: 'cargo check', truncated: false } });
-  const hidden = traceTool(1, { preview: { text: 'git diff --stat', truncated: false } });
-  renderTrajectory(cacheOf([match, hidden]));
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  const search = screen.getByLabelText('Search loaded Trace');
-  fireEvent.change(search, { target: { value: 'cargo check' } });
-  expect(within(ledger).getByText('cargo check')).toBeDefined();
-  expect(within(ledger).queryByText('git diff --stat')).toBeNull();
-
-  fireEvent.click(
-    within(screen.getByLabelText('Timing overview')).getByLabelText('Inspect Tool · bash · call-1'),
-  );
-  // The explicit selection wins: the query yields so the record is reachable.
-  expect((search as HTMLInputElement).value).toBe('');
-  expect(within(ledger).getByText('git diff --stat')).toBeDefined();
-  expect(ledger.querySelector('[data-trace-id="trace:1"]')?.getAttribute('aria-selected')).toBe('true');
-});
-
-it('a search that already matches the selected record is preserved', () => {
-  const match = traceTool(0, { preview: { text: 'cargo check', truncated: false } });
-  renderTrajectory(cacheOf([match, traceTool(1)]));
-  const search = screen.getByLabelText('Search loaded Trace');
-  fireEvent.change(search, { target: { value: 'cargo' } });
-  fireEvent.click(
-    within(screen.getByLabelText('Timing overview')).getByLabelText('Inspect Tool · bash · call-0'),
-  );
-  expect((search as HTMLInputElement).value).toBe('cargo');
-});
-
-it('rustX domain kinds carry a visible discriminator that is not the preview text', () => {
-  const kinds = ['background', 'subagent', 'workflow', 'interaction'] as const;
-  renderTrajectory(cacheOf(kinds.map((kind, n) => traceRecord(n, {
-    kind, request: null, location: {}, preview: { text: `neutral summary ${n}`, truncated: false },
-  }))));
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  // Each kind is told apart by its own persistent label, never by hovering
-  // and never by preview text that happens to name the kind.
-  for (const [n, short] of ['BG', 'SUBAGENT', 'WORKFLOW', 'INTERACT'].entries()) {
-    const row = ledger.querySelector(`[data-trace-id="trace:${n}"]`)!;
-    expect(row.textContent).toContain(short);
-    expect(row.textContent).toContain(`neutral summary ${n}`);
-    expect(row.getAttribute('data-kind')).toBe(kinds[n]);
+  const expected = {
+    Input: 'The canonical proposal for this call is not loadable at this read cut.',
+    Result: 'No canonical Tool result is recorded at this read cut.',
+    Schema: 'The historical Tool definition is unavailable at this read cut.',
+  };
+  for (const facet of ['Input', 'Result', 'Schema'] as const) {
+    fireEvent.click(screen.getByRole('tab', { name: facet }));
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.textContent?.trim().length).toBeGreaterThan(0);
+    if (missing === 'tool') expect(within(panel).getByText('Tool detail is unavailable in this bounded detail projection.')).toBeDefined();
+    else if ((facet === 'Input' && missing === 'arguments') || (facet === 'Result' && missing === 'result') || (facet === 'Schema' && missing === 'definition')) expect(within(panel).getByText(expected[facet])).toBeDefined();
   }
 });
 
-// ---------------------------------------------------------------------------
-// Server-resolved presentation relationships (#372)
-//
-// The browser renders these relationships. It never derives them: no request
-// detail is compared, no request messages are diffed, and no name, timestamp
-// or row adjacency correlates a domain record with a Tool call.
-// ---------------------------------------------------------------------------
+it('T1-09 structural search and Attempt collapse never borrow child facts or another Attempt', () => {
+  const child = traceRecord(10, { preview: { text: 'unique child preview', truncated: false } });
+  const other = traceTool(11, { location: { attempt_id: 'attempt-b', step_id: '1' } });
+  const items = trajectoryItems([child, other]);
+  const matches = searchItems(items, 'unique child preview')!;
+  expect(items.filter(item => matches.has(item.display_key)).every(item => item.type !== 'StepHeader' && item.type !== 'AttemptSectionHeader')).toBe(true);
+  const structural = items.find(item => item.type === 'StepHeader')!;
+  expect(searchItems(items, 'Step 1')?.has(structural.display_key)).toBe(true);
+  expect(preferredStructure(trajectoryItems([{ ...child, location: { attempt_id: 'attempt-b', step_id: '1' } }]), structural)).toBeUndefined();
+  const visible = visibleItems(items, [child, other], new Set(['attempt-a']), new Set(), null);
+  expect(visible.filter(item => item.type === 'RequestBoundary')).toHaveLength(0);
+  expect(visible.filter(item => item.type === 'RecordRow').map(item => item.owner_record_id)).toEqual([other.id]);
+  expect(visible.filter(item => item.type === 'StepHeader').map(item => item.attempt_id)).toEqual(['attempt-b']);
+});
 
-const withSystem = (n: number, state: 'initial' | 'changed' | 'unchanged', preview?: string) =>
-  traceRecord(n, {
-    request: {
-      ...traceRecord(n).request!,
-      system_prompt: {
-        state,
-        preview: preview === undefined ? null : { text: preview, truncated: false },
-      },
-    },
+it('T1-04 timeline navigation explicitly selects its native Request after structural focus', () => {
+  const child = traceRecord(10); const load = vi.fn(); show(cacheOf([child]), load);
+  const header = document.querySelector<HTMLElement>('[data-display-type="StepHeader"]')!;
+  act(() => header.focus());
+  expect(load).not.toHaveBeenCalled();
+  fireEvent.click(document.querySelector('[data-record-id="trace:10"]')!);
+  expect(load.mock.calls).toEqual([[child.id]]);
+  expect(row('RequestBoundary', child.id).getAttribute('data-selected')).toBe('true');
+  expect(header.hasAttribute('data-selected')).toBe(false);
+});
+
+/** All reads are explicitly completed or rejected by the test, never a timer. */
+function controlledDetails(records: TraceRecord[]) {
+  const reads: string[] = []; const selections: (string | undefined)[] = [];
+  const pending = new Map<string, { resolve: (detail: TraceDetail) => void; reject: (error: Error) => void }>();
+  const older = vi.fn();
+  function Fixture() {
+    const [cache, setCache] = useState(cacheOf(records));
+    const load = useCallback((id: string) => {
+      reads.push(id); setCache(current => beginTraceDetail(current, id));
+      void new Promise<TraceDetail>((resolve, reject) => pending.set(id, { resolve, reject })).then(
+        detail => setCache(current => completeTraceDetail(current, id, 1, detail)),
+        (error: Error) => setCache(current => completeTraceDetail(current, id, 1, undefined, error.message)),
+      );
+    }, []);
+    return <Trajectory cache={cache} onSelect={id => { selections.push(id); setCache(current => selectTrace(current, id)); }} onLoadDetail={load} loadEarlier={older} latest={noop} />;
+  }
+  render(<Fixture />);
+  return { reads, selections, pending, older };
+}
+const assistantDetail = () => requestDetail(0, { kind: 'assistant', request: null, messages: [] });
+function collapseAndSelectSummary() {
+  fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Collapse Calls' }));
+  const summary = row('CollapsedCallSummary');
+  expect(summary).not.toBeNull();
+  act(() => summary.focus()); fireEvent.keyDown(summary, { key: 'Enter' });
+  return summary;
+}
+
+it('T1-04 Calls summary retains display focus through delayed detail and falls back only on expansion', async () => {
+  const { reads, selections, pending } = controlledDetails([proposal(), execution(1)]);
+  const summary = collapseAndSelectSummary();
+  const key = summary.dataset.displayKey;
+  const assertSummary = () => {
+    expect(summary.dataset.displayKey).toBe(key);
+    expect(summary.getAttribute('data-selected')).toBe('true');
+    expect(summary.getAttribute('aria-selected')).toBe('true');
+    expect(row('RecordRow').getAttribute('aria-selected')).toBe('false');
+    expect(document.activeElement).toBe(summary);
+    expect(selections).toEqual(['trace:0']);
+    expect(reads).toEqual(['trace:0']);
+  };
+  assertSummary();
+  await act(async () => pending.get('trace:0')!.resolve(assistantDetail()));
+  assertSummary();
+  // Fire the explicit expansion while DOM focus is still on the summary.
+  fireEvent.click(within(summary).getByRole('button', { name: 'Expand Calls' }));
+  expect(row('CollapsedCallSummary')).toBeNull();
+  expect(row('RecordRow').getAttribute('data-selected')).toBe('true');
+  expect(document.activeElement).toBe(row('RecordRow'));
+  expect(reads).toEqual(['trace:0']);
+});
+
+it.each(['expand', 'search', 'other owner'] as const)('T1-04 pending summary detail respects newer %s display state', async transition => {
+  const { reads, selections, pending, older } = controlledDetails([proposal(), execution(1), traceRecord(2)]);
+  const summary = collapseAndSelectSummary();
+  if (transition === 'expand') fireEvent.click(within(summary).getByRole('button', { name: 'Expand Calls' }));
+  else if (transition === 'search') {
+    const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+    act(() => search.focus());
+    fireEvent.change(search, { target: { value: 'ASSISTANT' } });
+  } else {
+    fireEvent.click(row('RequestBoundary', 'trace:2'));
+    fireEvent.click(screen.getByRole('button', { name: 'View System Prompt' }));
+    act(() => row('RequestBoundary', 'trace:2').focus());
+  }
+  const focus = document.activeElement;
+  await act(async () => pending.get('trace:0')!.resolve(assistantDetail()));
+  expect(document.activeElement).toBe(focus);
+  expect(older).not.toHaveBeenCalled();
+  if (transition === 'other owner') {
+    expect(row('CollapsedCallSummary').getAttribute('aria-selected')).toBe('false');
+    expect(row('RequestBoundary', 'trace:2').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+    expect(selections).toEqual(['trace:0', 'trace:2']);
+    expect(reads).toEqual(['trace:0', 'trace:2']);
+  } else {
+    expect(row('CollapsedCallSummary')).toBeNull();
+    expect(row('RecordRow').getAttribute('aria-selected')).toBe('true');
+    expect(reads).toEqual(['trace:0']);
+    if (transition === 'search') {
+      fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: '' } });
+      expect(row('CollapsedCallSummary').getAttribute('aria-selected')).toBe('false');
+      expect(row('RecordRow').getAttribute('aria-selected')).toBe('true');
+    }
+  }
+});
+
+it.each(['resolve', 'reject'] as const)('Tool facets distinguish pending historical reads from %s outcomes', async outcome => {
+  const { reads, pending } = controlledDetails([traceTool(10)]);
+  fireEvent.click(row('RecordRow', 'trace:10'));
+  const facets = ['Input', 'Result', 'Schema'] as const;
+  const noAbsence = (panel: HTMLElement) => {
+    expect(within(panel).queryByText(/bounded detail projection|No canonical Tool result|canonical proposal.*not loadable|historical Tool definition is unavailable/)).toBeNull();
+  };
+  for (const facet of facets) {
+    fireEvent.click(screen.getByRole('tab', { name: facet }));
+    const panel = screen.getByRole('tabpanel');
+    expect(within(panel).getByRole('status').textContent).toBe('Loading record detail…');
+    noAbsence(panel); expect(reads).toEqual(['trace:10']);
+    expect(screen.queryByRole('tab', { name: 'Code' })).toBeNull();
+  }
+  const detail = toolDetail(10, { tool: null, truncated: true });
+  await act(async () => {
+    if (outcome === 'resolve') pending.get('trace:10')!.resolve(detail);
+    else pending.get('trace:10')!.reject(new Error('Controlled historical read failure'));
   });
-
-const withContext = (n: number, truncated = false) =>
-  traceRecord(n, {
-    request: {
-      ...traceRecord(n).request!,
-      context_additions: [
-        {
-          message_id: 'ctx-goal',
-          producer: { Native: 'goal_status' },
-          context_kind: 'goal_status',
-          source: { type: 'runtime' },
-          preview: { text: 'Goal: active', truncated: false },
-          attachments: [],
-          truncated: false,
-        },
-        {
-          message_id: 'ctx-observation',
-          producer: { Native: 'runtime_tool_observation' },
-          context_kind: 'runtime_tool_observation',
-          source: { type: 'runtime' },
-          preview: { text: 'The tool batch settled.', truncated: false },
-          attachments: [],
-          truncated: false,
-        },
-      ],
-      context_truncated: truncated,
-    },
-  });
-
-it('renders the server-resolved System Prompt relationship without comparing requests', () => {
-  const loadDetail = vi.fn();
-  // Only the changed request is loaded: its classification stands on its own,
-  // so a window without the predecessor renders exactly the same answer.
-  renderTrajectory(cacheOf([withSystem(1, 'changed', 'You are the historical agent.')]), loadDetail);
-  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  expect(within(ledger).getByText('System prompt changed')).toBeDefined();
-
-  fireEvent.click(screen.getByText('historical-model-1'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  expect(within(inspector).getByText('Changed')).toBeDefined();
-  expect(within(inspector).getByText(/nearest preceding actual request/)).toBeDefined();
-  expect(within(inspector).getByText('You are the historical agent.')).toBeDefined();
-  // No detail was needed to answer it, and no second request was consulted.
-  expect(loadDetail).not.toHaveBeenCalledWith(expect.stringMatching(/trace:0/));
-});
-
-it('an unchanged prompt makes no ledger claim and repeats no preview', () => {
-  renderTrajectory(cacheOf([withSystem(0, 'unchanged')]));
-  expect(screen.queryByText(/System prompt/)).toBeNull();
-  fireEvent.click(screen.getByText('historical-model-0'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  expect(within(inspector).getByText('Unchanged')).toBeDefined();
-  expect(within(inspector).getByText(/froze the identical prompt/)).toBeDefined();
-});
-
-it('renders introduced Context in the server’s frozen order, from the summary alone', () => {
-  renderTrajectory(cacheOf([withContext(0, true)]));
-  expect(screen.getByText(/2 context facts\+/)).toBeDefined();
-  fireEvent.click(screen.getByText('historical-model-0'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
-  const sections = within(inspector).getAllByRole('heading', { level: 4 });
-  expect(sections.map(heading => heading.textContent)).toEqual([
-    'Goal status · Runtime ctx-goal',
-    'Runtime tool observation · Runtime ctx-observation',
-  ]);
-  expect(within(inspector).getByText(/Further context facts omitted/)).toBeDefined();
-  expect(within(inspector).getByText(/reuses admitted context/)).toBeDefined();
-});
-
-it('renders each certified extension’s exact contributor, never the family alone', () => {
-  // Both facts are ExtensionEnvironment, so the family cannot tell them
-  // apart. The browser derives nothing: it renders the provenance the server
-  // resolved from each canonical message's own UserSource.
-  const record = traceRecord(0, {
-    request: {
-      ...traceRecord(0).request!,
-      context_additions: [
-        {
-          message_id: 'ctx-extension-a',
-          producer: { CertifiedExtension: 'vendor-a.environment' },
-          context_kind: 'extension_environment',
-          source: { type: 'certified_extension', contributor: 'vendor-a.environment' },
-          preview: { text: 'Facts from A.', truncated: false },
-          attachments: [],
-          truncated: false,
-        },
-        {
-          message_id: 'ctx-extension-b',
-          producer: { CertifiedExtension: 'vendor-b.environment' },
-          context_kind: 'extension_environment',
-          source: { type: 'certified_extension', contributor: 'vendor-b.environment' },
-          preview: { text: 'Facts from B.', truncated: false },
-          attachments: [],
-          truncated: false,
-        },
-      ],
-      context_truncated: false,
-    },
-  });
-  renderTrajectory(cacheOf([record]));
-  fireEvent.click(screen.getByText('historical-model-0'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
-  const sections = within(inspector).getAllByRole('heading', { level: 4 });
-  expect(sections.map(heading => heading.textContent)).toEqual([
-    'Extension environment · Extension vendor-a.environment ctx-extension-a',
-    'Extension environment · Extension vendor-b.environment ctx-extension-b',
-  ]);
-});
-
-it('a request that introduced no Context says so rather than showing nothing', () => {
-  renderTrajectory(cacheOf([traceRecord(0)]));
-  fireEvent.click(screen.getByText('historical-model-0'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  fireEvent.click(within(inspector).getByRole('tab', { name: 'Context' }));
-  expect(within(inspector).getByText('This request introduced no canonical context')).toBeDefined();
-});
-
-it('a domain record keeps its originating ToolCall when the parent row is not loaded', () => {
-  const background = traceRecord(0, {
-    kind: 'background',
-    request: null,
-    native_id: 'exec_1',
-    originating_tool_call_id: 'call-parent',
-    preview: { text: 'detached execution', truncated: false },
-  });
-  // The loaded window holds no Tool row at all, and the only other row shares
-  // the domain record's names. Neither can supply or forge the correlation.
-  renderTrajectory(cacheOf([background, traceRecord(1)]));
-  fireEvent.click(screen.getByText('detached execution'));
-  const inspector = screen.getByLabelText('Trace record inspector');
-  expect(within(inspector).getByText('call-parent')).toBeDefined();
-  expect(within(inspector).getByText(/confers no lifecycle/)).toBeDefined();
-});
-
-it('a lifecycle refresh leaves the immutable relationships exactly as projected', () => {
-  const record = { ...withContext(0), ...{} };
-  record.request!.system_prompt = { state: 'changed', preview: { text: 'prompt-B', truncated: false } };
-  const newest = traceRecord(1);
-  const cache = cacheOf([record, newest]);
-  // The refreshed tail overlaps the loaded interval by stable identity, so
-  // the window is repaired in place rather than rebased. The repaired record
-  // is the one the tail no longer covers: exactly the case where a patch,
-  // not a fresh projection, has to carry it.
-  const refreshed = refreshTrace(cache, { records: [newest], next_cursor: null }, [
-    {
-      id: record.id,
-      state: 'failed',
-      timing: { started_at: '2026-09-15T00:00:00Z', ended_at: '2026-09-15T00:00:02Z', duration_ms: '2000' },
-      request: { failure_kind: 'transport', usage: null, generation: null },
-      tool: null,
-      message_id: null,
-      attachments: [],
-      truncated: false,
-    },
-  ]);
-  const repaired = refreshed.page.records[0]!;
-  expect(repaired.state).toBe('failed');
-  expect(repaired.request!.failure_kind).toBe('transport');
-  expect(repaired.request!.system_prompt).toEqual(record.request!.system_prompt);
-  expect(repaired.request!.context_additions).toEqual(record.request!.context_additions);
-  expect(repaired.originating_tool_call_id).toEqual(record.originating_tool_call_id);
+  for (const facet of facets) {
+    fireEvent.click(screen.getByRole('tab', { name: facet }));
+    const panel = screen.getByRole('tabpanel');
+    expect(within(panel).queryByRole('status')).toBeNull();
+    if (outcome === 'resolve') expect(within(panel).getByText('Tool detail is unavailable in this bounded detail projection.')).toBeDefined();
+    else {
+      expect(within(panel).getByRole('alert').textContent).toBe(`${facet} could not be established because the historical detail read failed: Controlled historical read failure`);
+      noAbsence(panel);
+    }
+    expect(reads).toEqual(['trace:10']);
+  }
 });

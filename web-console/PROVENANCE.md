@@ -732,3 +732,56 @@ existing derived `DisclosureRow` primitive and icon set; they carry no Harness
 copyright header because no Harness source is present in them. Upstream hashes, the
 pinned reset commit, licensing, classifications and dependency closure are otherwise
 unchanged, and no Harness or Cordis build-time or runtime dependency is introduced.
+
+## Issue #394 — one native-owned Trajectory display projection
+
+This section supersedes the earlier WEB-15 renderer/selection/folding descriptions.
+The reference remains **ddefc45fbc7f8e46dd73185e68295696d1297887**. No repin,
+Harness runtime dependency, event assembler or compatibility renderer is added.
+`source-inventory.json` records immutable upstream SHA-256, commit, local destination,
+local SHA-256, imports, exclusions and treatment for every derived file. Its
+`inspected_only` entries record the excluded/reference-only source below.
+
+| Pinned source under `packages/client/ui-trajectory/src/client/` | Local treatment / semantic replacement |
+| --- | --- |
+| `TrajectoryView.tsx` | Inspect composition, exclude view registry, controller, assembler and global state. `Trajectory.tsx` receives the existing bounded native Trace cache. |
+| `TrajectoryTable.tsx`, `TrajectoryTable.module.css` | Adapt dense Event/Content ledger, request boundaries, selection, Inspector and virtual-row grammar in `Trajectory.tsx`, `Trajectory.module.css`, `TrajectoryInspector.tsx`. Exclude index selection, global Request numbers, adjacent-call matching, generic custom pane resizing and scroll-height prepend arithmetic. Native IDs + local display keys/facets replace them. |
+| `TrajectoryToolbar.tsx`, `TrajectoryToolbar.module.css` | Adapt thin Duration/Attempts/Calls/search controls into local Trajectory files. Actual time is an explicit rustX extension exposing the pinned time/actual projections. No permanent load/latest/count chrome. |
+| `TrajectoryTimeline.tsx`, `TrajectoryTimeline.module.css`, `timeline.ts` | Adapt Input/Model/Tools overview, linked selection, zoom/pan, phase drawing and shared idle compression. Native Request clock bridge/TTFT replaces Harness Assistant step-start timing. Accepted Assistant adds no second generation span. |
+| `TrajectoryCell.tsx`, `TrajectoryCell.module.css` | Inspect role/tag/content grammar; retain the existing adapted `TrajectoryCell.tsx`/ledger CSS. Exclude the legacy standalone metrics-card layout and Subtool. |
+| `TrajectoryTurn.tsx`, `TrajectoryTurn.module.css`, `TrajectoryTurnHeader.tsx`, `TrajectoryTurnHeader.module.css`, `TrajectoryGroupHeader.tsx`, `TrajectoryGroupHeader.module.css` | Inspect section/header hierarchy; adapt lightweight Attempt/Step segments in `layout.ts` and local CSS. Exclude Turn lifecycle interpretation and permanent metric columns. Native AttemptId/TurnId own identity. |
+| `layout.ts` | Replace assembler-derived layout with closed `TrajectoryDisplayItem` projection; no client prompt comparison, context-role inference or synthetic runtime events. |
+| `locales.ts` | Inspect and adapt English SYSTEM/update, Context, Calls and timing labels. Exclude plugin locale registration; native relationship enum determines the label. |
+| `trajectory-contract.ts`, `trajectory-virtual-rows.ts` | Inspect envelope/row grammar; exclude Harness snapshot authority and index keys. Generated Trace DTOs and semantic display keys replace them. |
+
+Also inspected `packages/core/session/src/types.ts` (EpochHeader, RequestContext,
+request/system/context events) and
+`packages/client/ui-conversation/src/client/contract/request-inspection.ts`
+(ConversationPromptSnapshot, SystemPromptNode, RequestPromptChange, RequestView).
+Their runtime semantics are **excluded**: rustX has no canonical SYSTEM message;
+immutable RequestSnapshot + one native exact predecessor own prompt/Tool
+relationships. Context comes only from frozen `request_context_ids` with native
+producer/family. Background/Subagent/Workflow remain native domains, not Subtools.
+
+Parity and deliberate differences:
+
+| Upstream behavior | rustX mapping / difference | Verification |
+| --- | --- | --- |
+| Initial/system/tools/combined labels | Native enum → SYSTEM immediately before its actual Request, after Step; no invented Session-start event | T1-01/03 |
+| Prompt rows and Context | Request-owned facets, exact frozen Message IDs/order; unchanged-only page has direct System Prompt access | T1-04/05 |
+| Request boundaries | Actual RequestIdentity and retry ordinal within native Turn, including no-Assistant failures; no global number | T1-06 |
+| Calls fold | Exact scoped proposal/execution match, loaded only; warnings and native domains remain visible | T1-07/08/09 |
+| Virtual rows / prepend | Semantic keys + pixel offset; bounded TanStack mount window; inspectable items retain owners, structural focus follows the same native Attempt/Step segment without borrowing a child owner | T1-10/11 |
+| Duration and Actual time | sequence = equal operations; duration = recorded spans with shared idle compression; time = absolute-start markers; actual = absolute spans, gaps and overlap retained | T1-12 |
+| Inspector geometry | `react-resizable-panels` owns drag, keys, constraints and reset; local measured-container responsive policy | T1-13 |
+
+New production dependencies are exactly `diff@9.0.0` (jsdiff line algorithm only,
+never relationship classification) and `react-resizable-panels@4.12.4`. Lockfile,
+production dependency notices and artifact checks include both. Existing TanStack
+Virtual, React Aria Tabs, Markdown, Shiki, JSON/artifact and authorization primitives
+remain the only corresponding engines. No diff UI framework or new state machine.
+
+See [acceptance record](../docs/trajectory-convergence-validation.md) for concrete
+T1/X tests, commands and browser evidence. Browser control uses the repository's
+pinned Playwright container: agent-browser is unavailable in this environment and
+no Browser plugin is installed; the container is also the CI screenshot authority.

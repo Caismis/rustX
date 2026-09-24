@@ -144,3 +144,45 @@ fn documentation_guard_distinguishes_current_paths_and_negative_spellings() {
         assert!(!obsolete_contract(current), "{current}");
     }
 }
+
+#[test]
+fn current_app_server_documentation_matches_negotiated_version() {
+    use rustx::app_server::protocol::APP_SERVER_PROTOCOL_VERSION;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc = std::fs::read_to_string(root.join("docs/app-server-protocol.md")).unwrap();
+    let version = APP_SERVER_PROTOCOL_VERSION;
+    assert!(doc.starts_with(&format!("# App Server protocol v{version}\n")));
+    let section = |heading: &str| {
+        doc.split_once(heading)
+            .unwrap()
+            .1
+            .split("\n##")
+            .next()
+            .unwrap()
+    };
+    let lifecycle = section("## Current Session lifecycle contract");
+    assert!(lifecycle.contains(&format!("Initialization requires exactly v{version} ")));
+    assert!(lifecycle.contains(&format!("WebSocket requires `rustx.app-server.v{version}`")));
+    assert!(lifecycle.contains(&format!(
+        "v{} and all earlier versions are rejected",
+        version - 1
+    )));
+    for current in [section("### Reproducible generation"), lifecycle] {
+        for suffix in ["ts", "schema.json"] {
+            assert!(current.contains(&format!("`v{version}.{suffix}`")));
+            for older in 1..version {
+                assert!(!current.contains(&format!("`v{older}.{suffix}`")));
+                assert!(
+                    !root
+                        .join(format!("protocol/app-server/v{older}.{suffix}"))
+                        .exists()
+                );
+            }
+            assert!(
+                root.join(format!("protocol/app-server/v{version}.{suffix}"))
+                    .exists()
+            );
+        }
+    }
+}

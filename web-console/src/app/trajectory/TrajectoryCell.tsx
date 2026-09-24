@@ -4,7 +4,7 @@ import type {
   TraceKind,
   TraceRecord,
   TraceSystemPromptState,
-} from '../../../../protocol/app-server/v19';
+} from '../../../../protocol/app-server/v20';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import css from './Trajectory.module.css';
@@ -144,7 +144,7 @@ export function CellRelations({ record }: { record: TraceRecord }) {
 
 export function CellContent({ record }: { record: TraceRecord }) {
   const preview = previewOf(record);
-  const result = record.tool?.detail?.text || record.tool?.outcome;
+  const result = record.tool?.detail?.text || (record.tool?.outcome === 'success' ? undefined : record.tool?.outcome);
   return <>
     {record.tool && <strong className={css.toolName}>{record.tool.name ?? record.tool.tool_id}</strong>}
     <div className={css.preview}>

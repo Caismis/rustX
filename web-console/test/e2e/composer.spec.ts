@@ -211,7 +211,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     const request = history.find((row: any) => row.request?.context_additions.some((context: any) => context.context_kind === 'agent_status'));
     expect(request).toBeTruthy();
     await trajectory.getByLabel('Search loaded Trace').fill(request.request.model);
-    await trajectory.locator(`[data-trace-id="${request.id}"]`).click();
+    await trajectory.locator(`[data-display-type="RequestBoundary"][data-owner="${request.id}"]`).click();
     const inspector = trajectory.getByLabel('Trace record inspector');
     await inspector.getByRole('tab', { name: 'Context', exact: true }).click();
     await expect(inspector).toContainText('Accepted contribution');

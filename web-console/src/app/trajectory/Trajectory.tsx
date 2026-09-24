@@ -1,64 +1,19 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
-/**
- * The Trajectory view: a dense chronological ledger over native Trace
- * records, with a timing overview above it and a record inspector beside it.
- *
- * The browser owns presentation only. It renders, folds, searches, selects,
- * pages and anchors scrolling; it never folds Journal events, never infers a
- * retry from timestamps, never derives a duration, and never turns a
- * proposed ToolCall into an execution. Every displayed fact is one the
- * server resolved from native authority.
- */
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { TraceRecord } from '../../../../protocol/app-server/v19';
-import type { TraceCache } from '../../client/trace';
-import { TRACE_LIMIT } from '../../client/trace';
+import { Group, Panel, Separator } from 'react-resizable-panels';
+import { TRACE_LIMIT, type TraceCache } from '../../client/trace';
 import { Button } from '../../presentation/primitives/Button';
 import { Input } from '../../presentation/primitives/Input';
-import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { TrajectoryInspector } from './TrajectoryInspector';
-import { CellContent, CellIcon, cellLabel, cellNarrowLabel, previewOf } from './TrajectoryCell';
+import { CellContent, CellIcon } from './TrajectoryCell';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import {
-  foldRows,
-  foldableKeys,
-  sectionKeyOf,
-  sectionLabel,
-  sectionOrdinals,
-  stepFoldKey,
-  trajectoryRows,
-} from './layout';
-import { TrajectorySearchIndex } from './search';
+import { trajectoryItems, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, preferredDisplayItem, type InspectableDisplayItem, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
+import { searchItems } from './search';
 import { timelineFocus, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
-import { formatDuration } from './timeline';
 import css from './Trajectory.module.css';
 
-/** Row height, fixed so a prepend preserves the reader's visible anchor. */
-const ROW_HEIGHT = 30;
-/** Folded summary rows are shorter, exactly as the Harness ledger makes them. */
-const SUMMARY_ROW_HEIGHT = 20;
-/** Below this many rows the ledger renders directly; above it, virtualized. */
-const VIRTUALIZATION_THRESHOLD = 100;
-const OVERSCAN_ROWS = 12;
-/** Distance from the bottom within which the reader counts as "at the tail". */
-const TAIL_THRESHOLD_PX = 2;
-
-function durationOf(record: TraceRecord): string {
-  return record.timing.duration_ms == null
-    ? '—'
-    : formatDuration(Number(record.timing.duration_ms));
-}
-
-/** Props for the Trajectory view. */
+const heightOf = (item: TrajectoryDisplayItem) => item.type === 'StepHeader' || item.type === 'CollapsedCallSummary' ? 20 : 30;
 export interface TrajectoryProps {
   cache: TraceCache;
   loadEarlier: () => void;
@@ -67,479 +22,209 @@ export interface TrajectoryProps {
   onLoadDetail: (id: string) => void;
 }
 
-/**
- * Render the Trajectory ledger, overview and inspector.
- * @param props - the loaded Trace window and its read controls.
- * @returns the Trajectory view.
- */
+/** Native owner selection stays in the read cache; display/facet lives locally. */
 export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail }: TrajectoryProps) {
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
-  const [foldedAttempts, setFoldedAttempts] = useState<ReadonlySet<string>>(new Set());
-  const [foldedSteps, setFoldedSteps] = useState<ReadonlySet<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string | undefined>(cache.selection?.id);
-  const [focusRange, setFocusRange] = useState<TrajectoryTimeRange | null>(null);
-  const [searchIndex] = useState(() => new TrajectorySearchIndex());
-  const [indexRevision, setIndexRevision] = useState(0);
-
-  const records = cache.page.records;
-  const allRows = useMemo(() => trajectoryRows(records), [records]);
-  const ordinals = useMemo(() => sectionOrdinals(allRows), [allRows]);
-
-  useEffect(() => {
-    if (searchIndex.update(allRows)) setIndexRevision(revision => revision + 1);
-  }, [allRows, searchIndex]);
-  const searchMatches = useMemo(
-    () => searchIndex.search(query),
-    // The revision participates so a rebuilt index re-runs the same query.
-    [searchIndex, indexRevision, query],
-  );
-
-  const boundaryLabel = useCallback(
-    (_record: TraceRecord, index: number) => {
-      const row = allRows[index];
-      if (row === undefined || !row.sectionStart) return undefined;
-      return sectionLabel(row.attempt, ordinals.get(row.section) ?? 0);
-    },
-    [allRows, ordinals],
-  );
-  const timelineModel = useMemo(
-    () => trajectoryTimeline(records, mode, boundaryLabel),
-    [records, mode, boundaryLabel],
-  );
-  const focusedIds = useMemo(
-    () => timelineFocus(timelineModel, focusRange),
-    [timelineModel, focusRange],
-  );
-
-  /**
-   * The rows actually rendered.
-   *
-   * Search replaces folding while a query is active, exactly as Harness
-   * does: a folded section must not hide a match the reader asked for.
-   */
-  const rows = useMemo(() => {
-    if (searchMatches !== null) {
-      return allRows.filter(row => searchMatches.has(row.record.id));
-    }
-    const byAttempt = foldRows(allRows, foldedAttempts, 'attempt', row => sectionKeyOf(row.record));
-    return foldRows(byAttempt, foldedSteps, 'step', row => stepFoldKey(row.record));
-  }, [allRows, foldedAttempts, foldedSteps, searchMatches]);
-
-  const selected =
-    (cache.selection?.id === selectedId ? cache.selection : undefined) ??
-    records.find(record => record.id === selectedId);
-  const selectedDetail = selectedId === undefined ? undefined : cache.details[selectedId];
-  const select = useCallback(
-    (id?: string) => {
-      setSelectedId(id);
-      onSelect(id);
-    },
-    [onSelect],
-  );
-
-  const viewport = useRef<HTMLDivElement>(null);
-  const pendingFocus = useRef<string | undefined>(undefined);
-  const followsTail = useRef(true);
-  const mounted = useRef(false);
-  const prependAnchor = useRef<{ first: string | undefined; scrollHeight: number; scrollTop: number; virtualized: boolean } | null>(null);
-  const virtualized = rows.length > VIRTUALIZATION_THRESHOLD;
-  const rowKey = useCallback(
-    (index: number) => {
-      const row = rows[index]!;
-      return row.collapsedSummary === undefined ? row.record.id : `${row.record.id}:summary`;
-    },
-    [rows],
-  );
-  const rowSize = useCallback(
-    (index: number) => (rows[index]?.collapsedSummary === undefined ? ROW_HEIGHT : SUMMARY_ROW_HEIGHT),
-    [rows],
-  );
-  const virtualizer = useVirtualizer({
-    count: virtualized ? rows.length : 0,
-    enabled: virtualized,
-    getScrollElement: () => viewport.current,
-    estimateSize: rowSize,
-    getItemKey: rowKey,
-    overscan: OVERSCAN_ROWS,
-    initialRect: { width: 800, height: 500 },
-    anchorTo: 'end',
-    followOnAppend: 'auto',
-    scrollEndThreshold: TAIL_THRESHOLD_PX,
+  const [attempts, setAttempts] = useState<ReadonlySet<string>>(new Set());
+  const [calls, setCalls] = useState<ReadonlySet<string>>(new Set());
+  const [selection, setSelection] = useState<TrajectorySelection | undefined>(() => {
+    const item = cache.selection ? preferredItem(trajectoryItems(cache.page.records), cache.selection.id) : undefined;
+    return item ? selectionOf(item) : undefined;
   });
-
+  const [structure, setStructure] = useState<StructuralDisplayItem | undefined>(undefined);
+  const [range, setRange] = useState<TrajectoryTimeRange | null>(null);
+  const [width, setWidth] = useState(0);
+  const [offTail, setOffTail] = useState(false);
+  const root = useRef<HTMLElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  const followsTail = useRef(true);
+  const focusedDisplay = useRef<string | undefined>(undefined);
+  const pendingFocus = useRef<string | undefined>(undefined);
+  const prepend = useRef<{ first: string | undefined; item: FocusableDisplayItem; offset: number } | null>(null);
+  const records = cache.page.records;
+  const allItems = useMemo(() => trajectoryItems(records, cache.page.next_cursor), [records, cache.page.next_cursor]);
+  const matches = useMemo(() => searchItems(allItems, query), [allItems, query]);
+  const rows = useMemo(() => visibleItems(allItems, records, attempts, calls, matches), [allItems, records, attempts, calls, matches]);
+  const selectionItems = useMemo(() => displayUniverse(allItems, rows), [allItems, rows]);
+  const matchingOwners = useMemo(() => matches ? new Set(allItems.filter((item): item is InspectableDisplayItem => isInspectable(item) && matches.has(item.display_key)).map(item => item.owner_record_id)) : null, [allItems, matches]);
+  const boundaryLabel = useCallback((_record: unknown, index: number) => {
+    const item = allItems.find(item => item.type === 'AttemptSectionHeader' && item.display_key === JSON.stringify(['attempt-section', records[index]?.location.attempt_id, records[index]?.id]));
+    return item?.type === 'AttemptSectionHeader' ? item.label : undefined;
+  }, [allItems, records]);
+  const timelineModel = useMemo(() => trajectoryTimeline(records, mode, boundaryLabel), [records, mode, boundaryLabel]);
+  const focusedIds = useMemo(() => timelineFocus(timelineModel, range), [timelineModel, range]);
+  const virtualized = rows.length > 100;
+  const virtualizer = useVirtualizer({
+    count: virtualized ? rows.length : 0, enabled: virtualized,
+    getScrollElement: () => viewport.current,
+    estimateSize: index => heightOf(rows[index]!),
+    getItemKey: index => rows[index]!.display_key,
+    overscan: 12, initialRect: { width: 800, height: 500 },
+    anchorTo: 'end', followOnAppend: 'auto', scrollEndThreshold: 2,
+  });
+  const selectedItem = selection ? preferredItem(selectionItems, selection.owner_record_id, selection) : undefined;
+  const selected = selectedItem?.record ?? (cache.selection?.id === selection?.owner_record_id ? cache.selection : undefined);
+  const selectedDetail = selection ? cache.details[selection.owner_record_id] : undefined;
+  const select = useCallback((item?: FocusableDisplayItem) => {
+    const inspectable = item && isInspectable(item) ? item : undefined;
+    setStructure(item && !isInspectable(item) ? item : undefined);
+    setSelection(inspectable ? selectionOf(inspectable) : undefined);
+    onSelect(inspectable?.owner_record_id);
+  }, [onSelect]);
   useLayoutEffect(() => {
-    const id = pendingFocus.current;
-    if (!id) return;
-    const index = rows.findIndex(row => !row.collapsedSummary && row.record.id === id);
-    if (index < 0) return;
-    pendingFocus.current = undefined;
-    followsTail.current = false;
-    if (virtualized) virtualizer.scrollToIndex(index, { align: 'auto' });
-    else {
-      const node = Array.from(viewport.current?.querySelectorAll<HTMLElement>('[data-trace-id]') ?? []).find(node => node.dataset.traceId === id);
-      if (node && viewport.current) {
-        const pane = viewport.current;
-        const rowBounds = node.getBoundingClientRect();
-        const paneBounds = pane.getBoundingClientRect();
-        if (rowBounds.top < paneBounds.top) pane.scrollTop += rowBounds.top - paneBounds.top;
-        else if (rowBounds.bottom > paneBounds.bottom) pane.scrollTop += rowBounds.bottom - paneBounds.bottom;
-      }
-    }
-  }, [rows, selectedId, virtualized, virtualizer]);
+    const element = root.current;
+    if (!element) return;
+    const observer = new ResizeObserver(entries => setWidth(entries[0]?.contentRect.width ?? 0));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
-  const firstId = records[0]?.id;
+  // Selection migration only follows semantic regrouping, never a detail reply.
+  useLayoutEffect(() => {
+    if (selection && selectedItem && selection.display_key !== selectedItem.display_key) {
+      const active = document.activeElement as HTMLElement | null;
+      if (focusedDisplay.current === selection.display_key && (active === document.body || active?.dataset.displayKey === selection.display_key)) pendingFocus.current = selectedItem.display_key;
+      setSelection({ ...selection, display_key: selectedItem.display_key });
+    }
+  }, [selection, selectedItem]);
+  // Structural regrouping stays within the containing native Attempt/Step.
+  // Neither a late detail response nor a new segment anchor supplies an owner.
+  useLayoutEffect(() => {
+    if (!structure) return;
+    const next = preferredStructure(allItems, structure);
+    if (next?.display_key === structure.display_key) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (next && focusedDisplay.current === structure.display_key && (active === document.body || active?.closest<HTMLElement>('[data-display-key]')?.dataset.displayKey === structure.display_key)) pendingFocus.current = next.display_key;
+    setStructure(next);
+  }, [allItems, structure]);
+  const activeKey = structure?.display_key ?? selection?.display_key;
+  useLayoutEffect(() => {
+    const key = pendingFocus.current;
+    if (!key) return;
+    const index = rows.findIndex(item => item.display_key === key);
+    if (index < 0) return;
+    if (virtualized) virtualizer.scrollToIndex(index, { align: 'auto' });
+    const node = Array.from(viewport.current?.querySelectorAll<HTMLElement>('[data-display-key]') ?? []).find(node => node.dataset.displayKey === key);
+    if (node) { node.focus({ preventScroll: virtualized }); pendingFocus.current = undefined; }
+  });
+  const first = records[0]?.id;
   useLayoutEffect(() => {
     const pane = viewport.current;
-    if (pane === null) return;
-    const anchor = prependAnchor.current;
-    // A prepended older page must not move what the reader is looking at:
-    // restore the previous distance from the bottom of the content.
-    if (anchor !== null && anchor.first !== firstId) {
-      if (!virtualized) pane.scrollTop = anchor.scrollTop + pane.scrollHeight - anchor.scrollHeight;
-      else if (!anchor.virtualized) {
-        // The virtualizer has no prior keyed anchor on its first enabled
-        // render. Transfer the existing reader offset across that boundary.
-        virtualizer.scrollToOffset(anchor.scrollTop + pane.scrollHeight - anchor.scrollHeight);
+    if (!pane) return;
+    const anchor = prepend.current;
+    if (anchor && anchor.first !== first) {
+      const target = preferredDisplayItem(rows, anchor.item);
+      if (target) {
+        const index = rows.indexOf(target);
+        const start = rows.slice(0, index).reduce((sum, item) => sum + heightOf(item), 0);
+        // Transfer one semantic anchor across threshold/header changes; normal
+        // virtual scroll mechanics and keyed measurement remain TanStack's.
+        if (virtualized) virtualizer.scrollToOffset(start - anchor.offset);
+        else pane.scrollTop = start - anchor.offset;
       }
-      prependAnchor.current = null;
+      prepend.current = null;
       followsTail.current = false;
-      return;
-    }
-    if (!mounted.current && rows.length > 0) {
-      mounted.current = true;
-      followsTail.current = true;
+    } else if (followsTail.current && rows.length) {
       if (virtualized) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' });
       else pane.scrollTop = pane.scrollHeight;
-      return;
     }
-    // New records follow the tail only while the reader is still at it.
-    if (followsTail.current && !virtualized) pane.scrollTop = pane.scrollHeight;
-  }, [firstId, rows.length, virtualized, virtualizer]);
+  }, [first, rows.length, virtualized, virtualizer]);
 
-  // One paging authority. The toolbar button, the ledger's history row and
-  // the overview's earlier-history marker all read these and call the same
-  // `requestOlder`; none of them tracks a cursor or a pending load itself.
-  const hasEarlierRecords = Boolean(cache.page.next_cursor);
-  const canLoadEarlier = hasEarlierRecords && !cache.loading && records.length < TRACE_LIMIT;
-
+  const canLoadEarlier = Boolean(cache.page.next_cursor) && !cache.loading && records.length < TRACE_LIMIT;
   const requestOlder = () => {
     if (!canLoadEarlier) return;
     const pane = viewport.current;
-    if (pane !== null) {
-      prependAnchor.current = { first: firstId, scrollHeight: pane.scrollHeight, scrollTop: pane.scrollTop, virtualized };
+    if (pane) {
+      const bounds = pane.getBoundingClientRect();
+      const node = Array.from(pane.querySelectorAll<HTMLElement>('[data-display-key]')).find(node => node.dataset.displayType && node.getBoundingClientRect().bottom > bounds.top);
+      const item = node ? rows.find((item): item is FocusableDisplayItem => item.type !== 'HistoryBoundary' && item.display_key === node.dataset.displayKey) : undefined;
+      if (node && item) prepend.current = { first, item, offset: node.getBoundingClientRect().top - bounds.top };
     }
+    followsTail.current = false;
     loadEarlier();
   };
-
-  const toggleAttempt = (key: string) =>
-    setFoldedAttempts(current => {
-      const next = new Set(current);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
-  const toggleStep = (key: string) =>
-    setFoldedSteps(current => {
-      const next = new Set(current);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
-  const attemptKeys = useMemo(() => foldableKeys(allRows.filter(row => row.attempt !== null), row => sectionKeyOf(row.record)), [allRows]);
-  const stepKeys = useMemo(() => foldableKeys(allRows.filter(row => row.record.location.step_id != null), row => stepFoldKey(row.record)), [allRows]);
-  const allAttemptsFolded = attemptKeys.length > 0 && attemptKeys.every(key => foldedAttempts.has(key));
-  const allStepsFolded = stepKeys.length > 0 && stepKeys.every(key => foldedSteps.has(key));
-
-  const rendered = virtualized
-    ? virtualizer.getVirtualItems().map(item => ({ row: rows[item.index]!, item }))
-    : rows.map((row, index) => ({ row, item: { index, key: rowKey(index), start: 0, size: rowSize(index) } }));
-
-  const selectionOutsideWindow = selected !== undefined && !records.some(record => record.id === selected.id);
-  const selectionRemoved = selectedId !== undefined && selected === undefined;
-
-  return (
-    <section className={css.root} aria-label="Trajectory">
-      <div className={css.toolbar} role="toolbar" aria-label="Trajectory controls">
-        <Button
-          size="sm"
-          aria-pressed={mode === 'duration'}
-          title={mode === 'duration' ? 'Use equal-width blocks' : 'Use recorded durations'}
-          onClick={() => {
-            setMode(current => (current === 'duration' ? 'sequence' : 'duration'));
-            setFocusRange(null);
-          }}
-        >
-          Duration
-        </Button>
-        <Button
-          size="sm"
-          aria-pressed={allAttemptsFolded}
-          onClick={() =>
-            setFoldedAttempts(allAttemptsFolded ? new Set() : new Set(attemptKeys))
-          }
-        >
-          {allAttemptsFolded ? 'Expand Attempts' : 'Fold Attempts'}
-        </Button>
-        <Button size="sm" aria-pressed={allStepsFolded} onClick={() => setFoldedSteps(allStepsFolded ? new Set() : new Set(stepKeys))}>
-          {allStepsFolded ? 'Expand Steps' : 'Fold Steps'}
-        </Button>
-        <Input
-          aria-label="Search loaded Trace"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          placeholder="Search loaded records"
-        />
-        <Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>
-          {cache.loading ? 'Loading…' : 'Load older'}
-        </Button>
-        <Button size="sm" onClick={latest}>
-          Latest
-        </Button>
-        <small className={css.count}>
-          {records.length} loaded
-          {searchMatches === null ? '' : ` · ${rows.length} matching`}
-        </small>
-      </div>
-      {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
-
-      <TrajectoryTimeline
-        records={records}
-        mode={mode}
-        range={focusRange}
-        selectedId={selectedId ?? null}
-        searchMatches={searchMatches}
-        onRangeChange={setFocusRange}
-        onSelect={id => {
-          pendingFocus.current = id;
-          const record = records.find(record => record.id === id);
-          if (record) {
-            setFoldedAttempts(current => { const next = new Set(current); next.delete(sectionKeyOf(record)); return next; });
-            setFoldedSteps(current => { const next = new Set(current); next.delete(stepFoldKey(record)); return next; });
-          }
-          // Picking a record in the overview is an explicit request to see
-          // that record. An active query that excludes it would leave it
-          // selected but absent from the ledger, so the query yields to the
-          // selection. A query that already matches it is left alone.
-          if (searchMatches !== null && !searchMatches.has(id)) setQuery('');
-          select(id);
-        }}
-        boundaryLabel={boundaryLabel}
-        hasEarlierRecords={hasEarlierRecords}
-        loadingEarlier={cache.loading === true}
-        canLoadEarlier={canLoadEarlier}
-        onLoadEarlier={requestOlder}
-      />
-
-      {selectionOutsideWindow && (
-        <p role="status" className={css.note}>
-          The selected record is retained outside the loaded history window.
-        </p>
-      )}
-      {selectionRemoved && (
-        <p role="status" className={css.note}>
-          The selected record left the loaded window.{' '}
-          <Button size="sm" onClick={() => select(undefined)}>
-            Dismiss selection
-          </Button>
-        </p>
-      )}
-
-      <div className={css.split}>
-        <div
-          ref={viewport}
-          className={css.ledger}
-          data-trajectory-scroll=""
-          role="table"
-          aria-label="Trace ledger"
-          aria-rowcount={rows.length}
-          style={{ overflowAnchor: 'none' }}
-          onScroll={event => {
-            const pane = event.currentTarget;
-            followsTail.current =
-              pane.scrollHeight - pane.clientHeight - pane.scrollTop <= TAIL_THRESHOLD_PX;
-          }}
-        >
-          <div className={css.loadRow}>
-            {hasEarlierRecords ? (
-              <Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>
-                {cache.loading ? 'Loading earlier records…' : 'Load earlier records'}
-              </Button>
-            ) : <span>Beginning of loaded history</span>}
-          </div>
-          <div
-            style={
-              virtualized
-                ? { height: virtualizer.getTotalSize(), position: 'relative' }
-                : { position: 'relative' }
-            }
-          >
-            {rendered.map(({ row, item }) => {
-              const record = row.record;
-              const folded = row.collapsedSummary !== undefined;
-              const structural = record.kind === 'attempt' || record.kind === 'step';
-              const attemptFolded = foldedAttempts.has(sectionKeyOf(record));
-              const stepFolded = foldedSteps.has(stepFoldKey(record));
-              const style: CSSProperties = virtualized
-                ? {
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: item.size,
-                    transform: `translateY(${item.start}px)`,
-                  }
-                : { height: item.size };
-              return (
-                <div
-                  key={item.key}
-                  role="row"
-                  tabIndex={folded ? -1 : 0}
-                  aria-label={`${cellLabel[record.kind]} · ${previewOf(record) || record.state}`}
-                  onKeyDown={event => {
-                    if (event.target !== event.currentTarget) return;
-                    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(record.id); }
-                    if (event.key === 'Escape') select(undefined);
-                  }}
-                  aria-rowindex={item.index + 1}
-                  aria-selected={!folded && selectedId === record.id}
-                  className={css.record}
-                  data-trace-id={record.id}
-                  data-kind={record.kind}
-                  data-state={record.state}
-                  data-structural={structural || undefined}
-                  data-attempt={record.location.attempt_id ?? undefined}
-                  data-step={record.location.step_id ?? undefined}
-                  data-section-start={row.sectionStart || undefined}
-                  data-section-end={row.sectionEnd || undefined}
-                  data-group-start={row.groupStart || undefined}
-                  data-collapsed-summary={row.collapsedKind}
-                  data-selected={(!folded && selectedId === record.id) || undefined}
-                  data-timeline-focus={
-                    focusedIds === null ? undefined : focusedIds.has(record.id) ? 'inside' : 'outside'
-                  }
-                  style={style}
-                  onClick={() => { if (!folded) select(record.id); }}
-                  onDoubleClick={event => {
-                    if (folded) return;
-                    event.preventDefault();
-                    if (record.location.step_id != null) toggleStep(stepFoldKey(record));
-                    else if (row.attempt !== null) toggleAttempt(sectionKeyOf(record));
-                  }}
-                >
-                  <span role="cell" className={css.event}>
-                    {row.sectionStart && !folded && (
-                      <span className={css.sectionLabel} title={row.attempt === null ? 'Outside an Attempt' : `Native Attempt ${row.attempt}`} data-active={row.section === allRows.find(candidate => candidate.record.id === selectedId)?.section || undefined}>
-                        {row.attempt === null ? 'Unscoped' : sectionLabel(row.attempt, ordinals.get(row.section) ?? 0)}
-                      </span>
-                    )}
-                    {row.attempt !== null && <span className={css.rail} aria-hidden="true" />}
-                    {!folded && selectedId === record.id && (
-                      <span className={css.selectionRail} aria-hidden="true" />
-                    )}
-                    {row.requestNumber !== undefined && !folded && (
-                      <Tooltip label={`Request ${row.requestNumber} in the loaded window`} side="right">
-                        <span
-                          className={css.requestMarker}
-                          data-status={record.state}
-                          role="img"
-                          aria-label={`Request ${row.requestNumber} in the loaded window`}
-                        />
-                      </Tooltip>
-                    )}
-                    {!folded && (
-                      <>
-                        {row.groupStart && row.attempt !== null && (
-                          <button
-                            type="button"
-                            className={css.foldToggle}
-                            aria-label={`${
-                              record.location.step_id == null
-                                ? attemptFolded
-                                  ? 'Expand'
-                                  : 'Fold'
-                                : stepFolded
-                                  ? 'Expand'
-                                  : 'Fold'
-                            } ${row.groupLabel}`}
-                            aria-expanded={
-                              record.location.step_id == null ? !attemptFolded : !stepFolded
-                            }
-                            onClick={event => {
-                              event.stopPropagation();
-                              if (record.location.step_id != null) toggleStep(stepFoldKey(record));
-                              else toggleAttempt(sectionKeyOf(record));
-                            }}
-                          >
-                            {(record.location.step_id == null ? attemptFolded : stepFolded) ? '▸' : '▾'}
-                          </button>
-                        )}
-                        <Tooltip label={cellLabel[record.kind]} side="right">
-                          <span className={css.kindTag} data-kind={record.kind}>
-                            <span className={css.kindIcon} aria-hidden="true"><CellIcon kind={record.kind} /></span>
-                            <span className={css.kindLabel}>{structural ? row.groupLabel : cellLabel[record.kind]}</span>
-                            {cellNarrowLabel[record.kind] !== undefined && (
-                              // The row's own aria-label already names the
-                              // kind, so this narrow-width discriminator is
-                              // visual only and must not be announced twice.
-                              <span className={css.kindShort} aria-hidden="true">
-                                {cellNarrowLabel[record.kind]}
-                              </span>
-                            )}
-                          </span>
-                        </Tooltip>
-                      </>
-                    )}
-                  </span>
-                  <div role="cell" className={css.content} title={previewOf(record)}>
-                    {folded ? (
-                      <button
-                        type="button"
-                        className={css.collapsed}
-                        onClick={event => {
-                          event.stopPropagation();
-                          if (row.collapsedKind === 'step') toggleStep(stepFoldKey(record));
-                          else toggleAttempt(sectionKeyOf(record));
-                        }}
-                      >
-                        <span aria-hidden="true">…</span> {row.collapsedSummary}
-                      </button>
-                    ) : (
-                      <>
-                        <CellContent record={record} />
-                      </>
-                    )}
-                  </div>
-                  <span role="cell" className={css.trailing}>
-                    {!folded && <>
-                      <span className={css.state} title={record.state} aria-label={`State: ${record.state}`}>
-                        {record.state === 'completed' ? '✓' : record.state === 'running' ? '◌' : record.state}
-                      </span>
-                      <span className={css.duration} title="Recorded Journal duration">{durationOf(record)}</span>
-                    </>}
-                  </span>
+  const toggleAttempt = (id: string) => setAttempts(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
+  const toggleCalls = (id: string) => setCalls(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
+  const attemptIds = [...new Set(records.flatMap(record => record.location.attempt_id ? [record.location.attempt_id] : []))];
+  const callOwners = records.filter(record => record.kind === 'assistant' && record.calls.length).map(record => record.id);
+  const narrow = width < 720;
+  const rendered = virtualized ? virtualizer.getVirtualItems().map(item => ({ row: rows[item.index]!, index: item.index, start: item.start })) : rows.map((row, index) => ({ row, index, start: 0 }));
+  const close = () => { if (selection) pendingFocus.current = selection.display_key; select(); };
+  return <section ref={root} className={css.root} aria-label="Trajectory" onFocusCapture={event => {
+    focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
+  }}>
+    <div className={css.toolbar} role="toolbar" aria-label="Trajectory controls">
+      <Button size="sm" aria-pressed={mode === 'duration' || mode === 'actual'} onClick={() => { setMode(mode === 'duration' ? 'sequence' : mode === 'actual' ? 'time' : mode === 'time' ? 'actual' : 'duration'); setRange(null); }}>Duration</Button>
+      <Button size="sm" aria-pressed={mode === 'time' || mode === 'actual'} onClick={() => { setMode(mode === 'actual' ? 'duration' : mode === 'time' ? 'sequence' : mode === 'duration' ? 'actual' : 'time'); setRange(null); }}>Actual time</Button>
+      <Button size="sm" aria-label={attempts.size ? 'Expand Attempts' : 'Fold Attempts'} aria-pressed={attempts.size > 0} onClick={() => setAttempts(attempts.size ? new Set() : new Set(attemptIds))}>Attempts</Button>
+      <Button size="sm" aria-label={calls.size ? 'Expand Calls' : 'Collapse Calls'} aria-pressed={calls.size > 0} onClick={() => setCalls(calls.size ? new Set() : new Set(callOwners))}>Calls</Button>
+      <Input className={css.search} aria-label="Search loaded Trace" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search loaded history" />
+      {offTail && <Button size="sm" onClick={() => { followsTail.current = true; setOffTail(false); latest(); if (virtualized) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' }); else if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight; }}>Jump to latest</Button>}
+    </div>
+    {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
+    <TrajectoryTimeline records={records} mode={mode} range={range} selectedId={selection?.owner_record_id ?? null} searchMatches={matchingOwners} onRangeChange={setRange} boundaryLabel={boundaryLabel}
+      hasEarlierRecords={Boolean(cache.page.next_cursor)} canLoadEarlier={canLoadEarlier} loadingEarlier={cache.loading === true} onLoadEarlier={requestOlder}
+      onSelect={id => { const item = preferredItem(allItems, id); if (!item) return; setAttempts(new Set()); setCalls(new Set()); if (matches && !matches.has(item.display_key)) setQuery(''); followsTail.current = false; pendingFocus.current = item.display_key; select(item); }} />
+    <Group className={css.split} orientation={narrow ? 'vertical' : 'horizontal'}>
+      <Panel id="ledger" minSize={narrow ? '160px' : '340px'} className={css.ledgerPanel}>
+        <div className={css.columns} aria-hidden="true"><span>Event</span><span>Content</span></div>
+        <div ref={viewport} className={css.ledger} data-trajectory-scroll="" role="table" aria-label="Trace ledger" aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }} onScroll={event => {
+          const pane = event.currentTarget;
+          followsTail.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2;
+          setOffTail(!followsTail.current);
+        }}>
+          <div style={virtualized ? { height: virtualizer.getTotalSize(), position: 'relative' } : { position: 'relative' }}>
+            {rendered.map(({ row, index, start }) => {
+              const style = { height: heightOf(row), ...(virtualized ? { position: 'absolute' as const, top: 0, left: 0, width: '100%', transform: `translateY(${start}px)` } : {}) };
+              if (row.type === 'HistoryBoundary') return <div key={row.display_key} data-display-key={row.display_key} className={css.loadRow} style={style}><Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>{cache.loading ? 'Loading earlier records…' : 'Load earlier records'}</Button></div>;
+              const activate = () => select(row);
+              const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
+                if (event.key === 'Escape') close();
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]; if (next && next.type !== 'HistoryBoundary') { pendingFocus.current = next.display_key; select(next); } }
+              };
+              if (!isInspectable(row)) return <div key={row.display_key} data-display-key={row.display_key} data-display-type={row.type} data-anchor={row.segment_anchor_record_id} data-attempt={row.attempt_id} data-step={row.type === 'StepHeader' ? row.step_id : undefined} data-structural="true" data-selected={activeKey === row.display_key || undefined}
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={row.label} tabIndex={0} className={css.record} style={style} onClick={activate} onFocus={() => { if (structure?.display_key !== row.display_key) activate(); }} onKeyDown={onKeyDown} title={row.type === 'StepHeader' ? `Attempt ${row.attempt_id} · Step ${row.step_id}` : `Attempt ${row.attempt_id} · loaded-window ordinal ${row.ordinal}`}>
+                <span role="cell" className={css.event}>
+                  {row.type === 'AttemptSectionHeader' && <button className={css.foldToggle} aria-label={`${attempts.has(row.attempt_id) ? 'Expand' : 'Fold'} ${row.label}`} onClick={event => { event.stopPropagation(); toggleAttempt(row.attempt_id); }}>{attempts.has(row.attempt_id) ? '▸' : '▾'}</button>}
+                  <span className={css.kindTag} data-kind={row.type === 'StepHeader' ? 'step' : 'attempt'}>{row.label}</span>
+                </span>
+                <div role="cell" className={css.content}>
+                  {row.type === 'AttemptSectionHeader' && attempts.has(row.attempt_id) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === row.attempt_id && r.state !== 'completed').map(r => r.state).join(' · ')}</span>}
+                  {row.type === 'AttemptSectionHeader' && row.native_record && row.native_record.state !== 'completed' && <span className={css.state}>{row.native_record.state}</span>}
                 </div>
-              );
+              </div>;
+              const record = row.record;
+              const warning = record.state !== 'completed' && (row.type === 'RecordRow' || row.type === 'RequestBoundary');
+              const truncated = row.type === 'ContextRow' ? row.context.truncated || row.context.preview?.truncated : row.type === 'SystemRow' ? record.request?.system_prompt.preview?.truncated : record.truncated || record.preview?.truncated;
+              return <div key={row.display_key} data-display-key={row.display_key} data-owner={row.owner_record_id} data-trace-id={record.id} data-display-type={row.type} data-kind={record.kind} data-state={record.state} data-selected={activeKey === row.display_key || undefined} data-timeline-focus={focusedIds ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={`${row.label} · ${row.preview || record.state}`} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown}>
+                <span role="cell" className={css.event}>
+                  <span className={css.kindTag} data-kind={row.type === 'SystemRow' ? 'system' : row.type === 'ContextRow' ? 'context' : record.kind}>
+                    {row.type === 'RecordRow' && <span className={css.kindIcon}><CellIcon kind={record.kind} /></span>}
+                    <span>{row.type === 'SystemRow' ? 'SYSTEM' : row.type === 'ContextRow' ? 'CONTEXT' : row.label}</span>
+                  </span>
+                </span>
+                <div role="cell" className={css.content}>
+                  {row.type === 'RecordRow' ? <CellContent record={record} /> : <span className={css.preview}>{row.type === 'SystemRow' || row.type === 'ContextRow' ? `${row.label} · ${row.preview || 'Empty'}` : row.preview}</span>}
+                  {row.type === 'RequestBoundary' && <span className={css.relation}>retry / recovery {record.request?.retry_number}</span>}
+                  {row.type === 'CollapsedCallSummary' && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>Expand Calls</button>}
+                  {row.type === 'RecordRow' && record.calls.length > 0 && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>{calls.has(record.id) ? 'Expand' : 'Collapse'} Calls</button>}
+                  {warning && <span className={css.state}>{record.state}</span>}
+                  {truncated && <span className={css.state}>Truncated</span>}
+                  {row.type === 'RequestBoundary' && record.request?.context_truncated && <span className={css.state}>Context history truncated</span>}
+                </div>
+              </div>;
             })}
           </div>
-          {rows.length === 0 && (
-            <p className={css.note}>
-              {searchMatches === null
-                ? 'No records in the loaded window.'
-                : 'No loaded record matches this search. Load earlier records to search further back.'}
-            </p>
-          )}
+          {!rows.length && <p className={css.note}>{matches ? 'No loaded item matches this search.' : 'No records in the loaded window.'}</p>}
         </div>
-        {selected && (
-          <TrajectoryInspector
-            key={selected.id}
-            record={selected}
-            detail={selectedDetail?.detail}
-            loading={selectedDetail?.loading}
-            error={selectedDetail?.error}
-            onLoadDetail={onLoadDetail}
-            onClose={() => select(undefined)}
-          />
-        )}
-      </div>
-    </section>
-  );
+      </Panel>
+      {selected && selection && <><Separator className={css.separator} /><Panel id="inspector" minSize={narrow ? '180px' : '320px'} defaultSize={narrow ? '48%' : `${Math.min(440, Math.max(320, width * .38))}px`} maxSize={narrow ? '70%' : `${Math.max(320, width - 346)}px`}>
+        <TrajectoryInspector record={selected} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error} selection={selection} onFacet={facet => setSelection(current => current ? { ...current, facet } : current)} onLoadDetail={onLoadDetail} onClose={close} />
+      </Panel></>}
+    </Group>
+  </section>;
 }

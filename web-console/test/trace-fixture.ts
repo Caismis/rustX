@@ -1,4 +1,4 @@
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v19';
+import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v20';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
@@ -19,6 +19,8 @@ export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): Tr
     usage: null,
     generation: null,
     system_prompt: { state: 'unchanged', preview: null },
+    predecessor: { availability: 'available', request_id: 'previous-request' },
+    tool_catalog: 'unchanged',
     context_additions: [],
     context_truncated: false,
   },
@@ -69,6 +71,8 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
     reasoning_profile: null,
     options: [{ name: 'temperature', value: { value: 0.25, truncated: false } }],
     omitted_option_count: 2,
+    predecessor: { availability: 'available', request_id: 'previous-request' },
+    previous_system_prompt: { text: 'Previous prompt.', truncated: false },
     effective_system_prompt: { text: 'You are the historical agent.', truncated: false },
     messages: [
       {

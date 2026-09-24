@@ -2,216 +2,165 @@ import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 
 for (const width of [1440, 390]) {
-  test(`Harness-first Trajectory, native inspector and keyboard at ${width}px`, async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', error => errors.push(error.message));
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
-    await expect(page).toHaveTitle('Trajectory presentation contracts');
+  for (const theme of ['light', 'dark']) {
+    test(`T1-13/15 semantic ledger, facets and keyboard ${width} ${theme}`, async ({ page }) => {
+      const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+      if (theme === 'dark') await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
+      const ledger = page.getByRole('table', { name: 'Trace ledger' });
+      await expect(page).toHaveTitle('Trajectory presentation contracts');
+      await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+      await expect(ledger.getByText('Initial System Prompt', { exact: false })).toBeVisible();
+      await expect(ledger.getByText('System Prompt Updated', { exact: false }).first()).toBeVisible();
+      await expect(ledger.getByText('Tools Updated', { exact: false }).first()).toBeVisible();
+      await expect(ledger.getByText('System Prompt and Tools Updated', { exact: false })).toBeVisible();
+      await expect(ledger.locator('[data-display-type="ContextRow"]')).toHaveCount(2);
+      await expectStableScreenshot(page, `trajectory-ledger-${width}-${theme}.png`);
+      const system = ledger.locator('[data-display-type="SystemRow"][data-owner="trace:3"]');
+      await system.focus(); await page.keyboard.press('Enter');
+      const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
+      await expect(inspector.getByRole('tab', { name: 'System Prompt', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(inspector.getByText('You are the historical agent.')).toBeVisible();
+      await expectStableScreenshot(page, `trajectory-inspector-${width}-${theme}.png`);
+      const context = ledger.locator('[data-display-type="ContextRow"]').last(); await context.click();
+      await expect(inspector.getByRole('tab', { name: 'Context', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(inspector.locator('[data-context-message-id="context-agent"][data-selected]').first()).toBeVisible();
+      await inspector.getByRole('tab', { name: 'Context', exact: true }).focus(); await page.keyboard.press('ArrowRight');
+      await expect(inspector.getByRole('tab', { name: 'Tools', exact: true })).toBeFocused();
+      await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+      await inspector.getByRole('button', { name: 'Close record' }).click(); await expect(context).toBeFocused();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+    });
+  }
+}
+
+test('T1-13 library drag, keyboard separator, double-click reset and narrow Ledger on wide viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 1050, height: 844 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+  await page.locator('[data-display-type="RequestBoundary"][data-owner="trace:9"]').click();
+  const panel = page.locator('#inspector[data-panel]');
+  const separator = page.getByRole('separator');
+  const initial = (await panel.boundingBox())!.width;
+  expect(initial).toBeGreaterThanOrEqual(320); expect(initial).toBeLessThanOrEqual(440);
+  const box = (await separator.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 50); await page.mouse.down(); await page.mouse.move(box.x - 180, box.y + 50); await page.mouse.up();
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(initial + 100);
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await expect(ledger.locator('[data-display-type="RequestBoundary"]').first()).toHaveCSS('grid-template-columns', /90px/);
+  await expectStableScreenshot(page, 'trajectory-resized-narrow-ledger.png');
+  await separator.focus(); const before = await separator.getAttribute('aria-valuenow'); await page.keyboard.press('ArrowRight');
+  await expect(separator).not.toHaveAttribute('aria-valuenow', before!);
+  await separator.dblclick(); await expect.poll(async () => Math.abs((await panel.boundingBox())!.width - initial)).toBeLessThan(2);
+  await expectStableScreenshot(page, 'trajectory-resize-reset.png');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('T1-08/09/15 Calls warnings, independent background, search and truncated failed Request Diff', async ({ page }) => {
+  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await page.getByRole('toolbar', { name: 'Trajectory controls' }).getByRole('button', { name: 'Collapse Calls' }).click();
+  await expect(ledger.locator('[data-display-type="CollapsedCallSummary"]')).toContainText('2 proposed · 1 loaded matching executions · 1 failed');
+  await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toHaveCount(0);
+  await expect(ledger.locator('[data-owner="trace:6"]')).toBeVisible();
+  await expectStableScreenshot(page, 'trajectory-calls.png');
+  await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('Missing field');
+  await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toBeVisible();
+  await expectStableScreenshot(page, 'trajectory-search.png');
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
+  await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('');
+  await ledger.locator('[data-display-type="RequestBoundary"][data-owner="trace:11"]').click();
+  await expect(page.getByRole('complementary')).toContainText('failed');
+  await page.getByRole('tab', { name: 'Diff', exact: true }).click();
+  await expect(page.getByRole('tabpanel')).toContainText('current prompt truncated; previous prompt truncated');
+  await expect(page.getByRole('tabpanel')).not.toContainText('No changes');
+  await expectStableScreenshot(page, 'trajectory-truncated-diff.png');
+});
+
+for (const scenario of ['long', 'threshold']) {
+  test(`T1-10/11 semantic prepend and tail isolation ${scenario}`, async ({ page }) => {
+    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?${scenario}`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
-    await expect(ledger.getByRole('row')).toHaveCount(15);
-    // An ordinary row names its artifacts: the native name, a compact count
-    // for the rest, and an image marked as an image rather than a file.
-    const user = ledger.locator('[data-trace-id="trace:0"]');
-    await expect(user.getByText('brief.md', { exact: true })).toBeVisible();
-    await expect(user.getByText('+1', { exact: true })).toBeVisible();
-    await expect(user.locator('[data-image]')).toHaveCount(0);
-    await expect(
-      ledger.locator('[data-trace-id="trace:10"] [data-image]'),
-    ).toHaveCount(1);
-    await expect(ledger.getByText('diagram.png', { exact: true })).toBeVisible();
-    // A request is named by model and native identity, never "Request #N".
-    await expect(ledger.getByText('Request #')).toHaveCount(0);
-    // rustX-specific domain kinds stay distinguishable with no hover and no
-    // help from preview text, which deliberately never names its own kind.
-    for (const [id, full, short] of [
-      ['trace:6', 'Background', 'BG'],
-      ['trace:12', 'Subagent', 'SUBAGENT'],
-      ['trace:13', 'Workflow', 'WORKFLOW'],
-      ['trace:14', 'Interaction', 'INTERACT'],
-    ] as const) {
-      const row = ledger.locator(`[data-trace-id="${id}"]`);
-      await expect(row.getByText(width === 390 ? short : full, { exact: true })).toBeVisible();
-    }
-    await expectStableScreenshot(page, `trajectory-${width}.png`);
-    const tool = ledger.locator('[data-trace-id="trace:5"]');
-    await tool.focus();
-    await page.keyboard.press('Enter');
-    await expect(tool).toHaveAttribute('aria-selected', 'true');
-    const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
-    await expect(inspector.getByText('Review complete', { exact: true })).toBeVisible();
-    await expectStableScreenshot(page, `trajectory-summary-${width}.png`);
-    await inspector.getByRole('tab', { name: 'Code', exact: true }).click();
-    await expect(inspector.getByRole('button', { name: 'Copy source' })).toBeVisible();
-    await expect(inspector.getByText('git diff --stat', { exact: true })).toBeVisible();
-    await expectStableScreenshot(page, `trajectory-code-${width}.png`);
-    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
-    await expect(inspector.getByRole('tree')).toContainText('/workspace/rustX');
-    await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
-    await expect(inspector.getByRole('tree')).toContainText('insertions');
-    await expect(inspector.getByText('Review complete', { exact: true })).toBeVisible();
-    await expectStableScreenshot(page, `trajectory-result-${width}.png`);
-    await inspector.getByRole('tab', { name: 'Artifacts', exact: true }).click();
-    await expect(inspector.getByText('review.md', { exact: true })).toBeVisible();
-    await inspector.getByRole('button', { name: 'Close record' }).click();
-    await page.getByRole('button', { name: 'Fold Attempts', exact: true }).click();
-    await expect(ledger.getByText('git diff --stat', { exact: true })).toHaveCount(0);
-    await expectStableScreenshot(page, `trajectory-folded-${width}.png`);
-    await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('git diff');
-    await expect(tool).toBeVisible();
-    await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('');
-    // Exact native selection from the Overview also reveals the folded group.
-    await page.getByRole('button', { name: 'Inspect Tool · bash · call-5', exact: true }).click();
-    await expect(tool).toHaveAttribute('aria-selected', 'true');
-    await inspector.getByRole('button', { name: 'Close record' }).click();
-    await ledger.locator('[data-trace-id="trace:3"]').click();
-    await inspector.getByRole('tab', { name: 'Prompt' }).click();
-    await expect(inspector.getByText('You are the historical agent.')).toBeVisible();
-    await inspector.getByRole('tab', { name: 'Prompt' }).focus();
-    await page.keyboard.press('ArrowRight');
-    await expect(inspector.getByRole('tab', { name: 'Context' })).toBeFocused();
-    await expect(inspector.getByText('Inspect the trajectory.')).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-    expect(errors).toEqual([]);
+    const expected = scenario === 'long' ? 480 : 90;
+    await expect(page.locator('[data-native-count]')).toHaveAttribute('data-native-count', String(expected));
+    await ledger.evaluate(el => { el.scrollTop = 400; el.dispatchEvent(new Event('scroll')); });
+    const anchor = await ledger.locator('[data-display-type="RequestBoundary"]').evaluateAll(elements => {
+      const pane = elements[0]!.closest('[role="table"]')!.getBoundingClientRect();
+      const row = elements.find(el => el.getBoundingClientRect().top >= pane.top && el.getBoundingClientRect().bottom < pane.bottom)!;
+      return { key: row.getAttribute('data-display-key'), top: row.getBoundingClientRect().top };
+    });
+    const selected = ledger.locator(`[data-display-key=${JSON.stringify(anchor.key)}]`);
+    // The overview history boundary loads without moving the scroll position to a toolbar control.
+    await page.getByRole('button', { name: 'Load earlier records into the overview' }).click();
+    await expect(page.locator('[data-native-count]')).toHaveAttribute('data-native-count', String(expected + 32));
+    await expect.poll(async () => Math.abs((await selected.boundingBox())!.y - anchor.top)).toBeLessThan(2);
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+    expect(await ledger.locator('[data-display-key]').count()).toBeLessThan(65);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    const offset = await ledger.evaluate(el => el.scrollTop);
+    await page.getByRole('button', { name: 'Update', exact: true }).click();
+    expect(await ledger.evaluate(el => el.scrollTop)).toBe(offset);
+    await expectStableScreenshot(page, `trajectory-prepend-${scenario}.png`);
+    await page.getByRole('button', { name: 'Jump to latest' }).click();
+    await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
+    await page.getByRole('button', { name: 'Append', exact: true }).click();
+    await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
   });
 }
 
-test('timeline focus, wheel zoom, right-drag pan and keyboard reset preserve selection', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
-  const canvas = page.getByLabel('Timeline navigation: arrow keys pan, Escape clears focus');
-  const box = (await canvas.boundingBox())!;
-  await page.mouse.move(box.x + box.width * .3, box.y + 5);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * .6, box.y + 5);
-  await page.mouse.up();
-  await expect(page.locator('[data-timeline-focus="outside"]').first()).toBeVisible();
-  await page.mouse.wheel(0, -100);
-  await expect(canvas).not.toHaveAttribute('data-domain-end', '15');
-  const before = Number(await canvas.getAttribute('data-domain-start'));
-  await page.mouse.move(box.x + box.width * .5, box.y + 5);
-  await page.mouse.down({ button: 'right' });
-  await page.mouse.move(box.x + box.width * .4, box.y + 5);
-  await page.mouse.up({ button: 'right' });
-  await expect.poll(async () => Number(await canvas.getAttribute('data-domain-start'))).toBeGreaterThan(before);
-  await page.mouse.click(box.x + box.width * .4, box.y + 5, { button: 'right' });
-  await expect(page.locator('[data-timeline-focus]')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Reset timeline' }).click();
-  await expect(canvas).toHaveAttribute('data-domain-start', '0');
-  await expect(canvas).toHaveAttribute('data-domain-end', '15');
-});
+for (const kind of ['request', 'tool']) {
+  test(`T1-04/06/10 structural ${kind} anchor stays structural through threshold prepend`, async ({ page }) => {
+    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?threshold&structure${kind === 'tool' ? '&tool' : ''}`);
+    const ledger = page.getByRole('table', { name: 'Trace ledger' });
+    await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    const segment = ledger.locator('[data-display-type="StepHeader"][data-anchor="trace:100"]');
+    await segment.focus(); await page.keyboard.press('Enter'); await segment.click();
+    await expect(segment).toBeFocused();
+    await expect(segment).not.toHaveAttribute('data-owner');
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    // Anchor the top of this structure itself. The old native starts are absent.
+    await ledger.evaluate(el => { el.scrollTop = 60; el.dispatchEvent(new Event('scroll')); });
+    const before = (await segment.boundingBox())!.y;
+    // Keep DOM keyboard ownership on the segment while invoking the controlled prepend.
+    await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((el: HTMLButtonElement) => el.click());
+    await expect(segment).toHaveCount(0);
+    const merged = ledger.locator('[data-display-type="StepHeader"][data-anchor="trace:51"]');
+    await expect(merged).toBeFocused();
+    await expect(merged).toHaveAttribute('data-selected', 'true');
+    await expect(merged).toHaveAttribute('data-attempt', 'attempt-a');
+    await expect(merged).toHaveAttribute('data-step', '1');
+    await expect.poll(async () => Math.abs((await merged.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+    // Child inspection remains an explicit, separate user action.
+    const child = ledger.locator(`[data-display-type="${kind === 'tool' ? 'RecordRow' : 'RequestBoundary'}"][data-owner="trace:100"]`);
+    await ledger.evaluate(el => { el.scrollTop = 1700; el.dispatchEvent(new Event('scroll')); });
+    await child.click();
+    await expect(page.getByRole('complementary')).toBeVisible();
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  });
+}
 
-test('virtual history preserves prepend anchor and follows append only at tail', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?long');
-  const ledger = page.getByRole('table', { name: 'Trace ledger' });
-  await expect(ledger).toHaveAttribute('aria-rowcount', '160');
-  await expect(ledger.locator('[data-trace-id="trace:259"]')).toBeVisible();
-  expect(await ledger.getByRole('row').count()).toBeLessThan(60);
-  await ledger.evaluate(el => { el.scrollTop = 700; });
-  await expect.poll(async () => ledger.evaluate(el => el.scrollTop)).toBe(700);
-  const anchor = ledger.locator('[data-trace-id="trace:125"]');
-  await expect(anchor).toBeVisible();
-  const y = (await anchor.boundingBox())!.y;
-  await page.getByRole('button', { name: 'Load older', exact: true }).click();
-  await expect(ledger).toHaveAttribute('aria-rowcount', '192');
-  await expect.poll(async () => (await anchor.boundingBox())!.y).toBe(y);
-  const top = await ledger.evaluate(el => el.scrollTop);
-  await page.getByRole('button', { name: 'Append record' }).click();
-  await expect(ledger).toHaveAttribute('aria-rowcount', '193');
-  await expect.poll(async () => ledger.evaluate(el => el.scrollTop)).toBe(top);
-  await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; });
-  await expect(ledger.locator('[data-trace-id="trace:260"]')).toBeVisible();
-  await page.getByRole('button', { name: 'Append record' }).click();
-  await expect(ledger.locator('[data-trace-id="trace:261"]')).toBeVisible();
-  await expect.poll(async () => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2);
-});
-
-test('the overview offers earlier history, loads it once and keeps the reader anchored', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?long');
-  const ledger = page.getByRole('table', { name: 'Trace ledger' });
-  const overview = page.getByLabel('Timing overview');
-  const boundary = overview.getByLabel('Load earlier records into the overview');
-  await expect(ledger).toHaveAttribute('aria-rowcount', '160');
-  await expect(boundary).toBeVisible();
-  await expect(boundary).toHaveAttribute('aria-disabled', 'false');
-
-  await ledger.evaluate(el => { el.scrollTop = 700; });
-  await expect.poll(async () => ledger.evaluate(el => el.scrollTop)).toBe(700);
-  const anchor = ledger.locator('[data-trace-id="trace:125"]');
-  await expect(anchor).toBeVisible();
-  const y = (await anchor.boundingBox())!.y;
-
-  // Keyboard reaches the same single paging operation the ledger uses.
-  await boundary.focus();
-  await expect(boundary).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(ledger).toHaveAttribute('aria-rowcount', '192');
-  // A prepend triggered from the overview preserves the reader's anchor.
-  await expect.poll(async () => (await anchor.boundingBox())!.y).toBe(y);
-  // The fixture's older page is the last one, so the affordance retires.
-  await expect(boundary).toHaveCount(0);
-});
-
-test('selecting a dimmed overview record clears a search that hides it', async ({ page }) => {
+test('T1-04 Calls summary keeps its display identity until explicit expansion', async ({ page }) => {
   await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
   const ledger = page.getByRole('table', { name: 'Trace ledger' });
-  const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
-  const hidden = ledger.locator('[data-trace-id="trace:5"]');
-
-  await search.fill('cargo check');
-  await expect(ledger.getByText('cargo check', { exact: true })).toBeVisible();
-  await expect(hidden).toHaveCount(0);
-  // The record is still in the overview, dimmed as a non-match.
-  const span = page.getByRole('button', { name: 'Inspect Tool · bash · call-5', exact: true });
-  await expect(span).toHaveAttribute('data-dimmed', '');
-
-  await span.click();
-  await expect(search).toHaveValue('');
-  await expect(hidden).toBeVisible();
-  await expect(hidden).toHaveAttribute('aria-selected', 'true');
-  const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
-  await expect(inspector.getByText('Tool · bash', { exact: true })).toBeVisible();
-  await expect(span).toHaveAttribute('aria-pressed', 'true');
-});
-
-/** A JSON row's copy menu held the keyboard when the inspector body scrolled
- * the row away. The menu closes with its anchor, and the keyboard goes to the
- * owner the inspector names — its scrolling tab panel — without scrolling back
- * to the row. */
-test('a JSON copy menu whose row scrolls out of the inspector leaves the keyboard on the inspector body', async ({ page }) => {
-  const errors: string[] = [];
-  page.on('pageerror', error => errors.push(error.message));
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
-  const ledger = page.getByRole('table', { name: 'Trace ledger' });
-  await ledger.locator('[data-trace-id="trace:5"]').click();
-  const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
-  await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
-  const body = inspector.getByRole('tabpanel');
-  const tree = body.getByRole('tree');
-  await expect(tree).toContainText('/workspace/rustX');
-  // A short body with room to scroll its first JSON row out, at its top.
-  expect(await body.evaluate(el => {
-    el.style.flex = 'none'; el.style.height = '96px'; el.style.paddingBottom = '400px';
-    el.scrollTop = 0; return el.scrollTop;
-  })).toBe(0);
-  const row = tree.getByRole('treeitem').first();
-  await row.hover();
-  const copy = row.locator('[data-json-copy-button]');
-  await copy.click({ button: 'right' });
-  const menu = page.getByRole('menu');
-  await expect(menu).toBeVisible();
-  await copy.focus(); await page.keyboard.press('ArrowDown');
-  await expect(menu.getByRole('menuitem').first()).toBeFocused();
-
-  const scrolledTo = await body.evaluate(el => { el.scrollTop = el.scrollHeight; return el.scrollTop; });
-  expect(scrolledTo).toBeGreaterThan(0);
-  await expect(menu).toHaveCount(0);
-  expect(await body.evaluate((el, top) => ({
-    scrollTop: el.scrollTop === top,
-    body: document.activeElement === el,
-    menuitems: document.querySelectorAll('[role="menuitem"]').length,
-  }), scrolledTo)).toEqual({ scrollTop: true, body: true, menuitems: 0 });
-  await expect(body).toBeFocused();
-  expect(errors).toEqual([]);
+  await page.getByRole('toolbar').getByRole('button', { name: 'Collapse Calls' }).click();
+  const summary = ledger.locator('[data-display-type="CollapsedCallSummary"][data-owner="trace:4"]');
+  const assistant = ledger.locator('[data-display-type="RecordRow"][data-owner="trace:4"]');
+  await summary.focus(); await page.keyboard.press('Enter');
+  await expect(summary).toHaveAttribute('data-selected', 'true');
+  await expect(summary).toBeFocused();
+  await expect(assistant).toHaveAttribute('aria-selected', 'false');
+  await expect(page.getByRole('complementary')).toBeVisible();
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  await summary.getByRole('button', { name: 'Expand Calls' }).click();
+  await expect(summary).toHaveCount(0);
+  await expect(assistant).toHaveAttribute('data-selected', 'true');
+  await expect(assistant).toBeFocused();
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
 });

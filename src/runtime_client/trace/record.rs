@@ -76,7 +76,8 @@ impl TraceProjection<'_> {
                 // Both relationships below are resolved here, from native
                 // authority, so no client has to compare request details or
                 // diff messages to discover them.
-                let system_prompt = self.system_prompt_presentation(anchor.sequence, frozen)?;
+                let previous = self.previous_request(anchor.sequence)?;
+                let (system_prompt, tool_catalog) = previous.presentation(frozen);
                 let (context_additions, context_truncated) = self.context_presentation(frozen)?;
                 Some(TraceRequestSummary {
                     previous_failure_kind: self.previous_request_failure(frozen)?,
@@ -88,6 +89,8 @@ impl TraceProjection<'_> {
                     usage: request.usage,
                     generation: request.generation,
                     system_prompt,
+                    predecessor: previous.identity(),
+                    tool_catalog,
                     context_additions,
                     context_truncated,
                 })

@@ -149,3 +149,17 @@ def web_session_archive() -> Scenario:
 
 
 SCENARIOS["web_session_archive"] = web_session_archive
+
+
+def web_trace_convergence() -> Scenario:
+    """Request input is frozen before the save/adoption gates in the browser suite."""
+    return Scenario(
+        "web_trace_convergence",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Before adoption",)),
+             Stream(Text("Frozen before configuration."), Gate("trace-before"), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("After adoption", "TRACE_NEW_INSTRUCTIONS")),
+             Stream(Text("Frozen after explicit adoption."), Finish())),
+    )
+
+
+SCENARIOS["web_trace_convergence"] = web_trace_convergence

@@ -1190,6 +1190,25 @@ export type ModelErrorKind =
  * containing the predecessor would.
  */
 export type TraceSystemPromptState = 'initial' | 'changed' | 'unchanged' | 'previous_unavailable';
+/**
+ * The exact shared predecessor of the prompt and Tool catalog comparison.
+ */
+export type TraceRequestPredecessor =
+  | {
+      availability: 'not_applicable';
+    }
+  | {
+      request_id?: RequestId2 | null;
+      availability: 'unavailable';
+    }
+  | {
+      request_id: RequestId2;
+      availability: 'available';
+    };
+/**
+ * Complete frozen Tool definitions are compared before any display bounding.
+ */
+export type TraceToolCatalogState = 'initial' | 'changed' | 'unchanged' | 'previous_unavailable';
 export type NativeContextContributor =
   | 'goal_status'
   | 'workspace_instructions'
@@ -4756,6 +4775,8 @@ export interface TraceRequestSummary {
   usage?: ModelUsage | null;
   generation?: TraceGeneration | null;
   system_prompt: TraceSystemPromptPresentation;
+  predecessor: TraceRequestPredecessor;
+  tool_catalog: TraceToolCatalogState;
   /**
    * Canonical request Context this exact request introduced, in the order
    * frozen by `RequestSnapshot.request_context_ids`. A retry or recovery
@@ -4991,6 +5012,11 @@ export interface TraceRequestDetail {
    */
   omitted_option_count: number;
   effective_system_prompt: TraceText;
+  predecessor: TraceRequestPredecessor;
+  /**
+   * Absent for no predecessor or unavailable content; empty is a real value.
+   */
+  previous_system_prompt?: TraceText | null;
   /**
    * The reconstructed provider-neutral request context, in wire order.
    */

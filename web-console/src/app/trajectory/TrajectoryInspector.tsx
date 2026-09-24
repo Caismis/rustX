@@ -26,13 +26,15 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v19';
+} from '../../../../protocol/app-server/v20';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
-import { navigateTabs } from '../../presentation/primitives/tabs';
+import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
+import { diffLines } from 'diff';
+import type { TrajectoryFacet, TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
@@ -68,7 +70,7 @@ function Truncated({ of }: { of: boolean | undefined }) {
 
 function Text({ value, markdown = false }: { value: TraceText; markdown?: boolean }) {
   const [copied, setCopied] = useState<string>();
-  if (value.text === '') return <span className={css.unavailable}>Empty</span>;
+  if (value.text === '' && !value.truncated) return <span className={css.unavailable}>Empty</span>;
   return (
     <>
       {markdown ? (
@@ -90,19 +92,21 @@ const InspectorBody = createContext<RefObject<HTMLElement | null> | undefined>(u
 
 /** The inspector's scrolling tab panel, named as the focus owner of the JSON
  * copy menus inside it. */
-function InspectorPanel({ active, children }: { active: string; children: ReactNode }) {
+function InspectorPanel({ active, children, selectedId, content }: { active: string; children: ReactNode; selectedId?: string; content?: TraceDetail }) {
   const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (active !== 'Context' || !selectedId || !body.current) return;
+    const target = Array.from(body.current.querySelectorAll<HTMLElement>('[data-context-message-id]')).find(node => node.dataset.contextMessageId === selectedId);
+    if (target) body.current.scrollTop += target.getBoundingClientRect().top - body.current.getBoundingClientRect().top;
+  }, [active, selectedId, content]);
   return (
-    <div
+    <TabPanel
       ref={body}
-      role="tabpanel"
-      id="trace-section"
-      aria-labelledby={`trace-tab-${active}`}
-      tabIndex={0}
+      id={active}
       className={css.inspectorBody}
     >
       <InspectorBody value={body}>{children}</InspectorBody>
-    </div>
+    </TabPanel>
   );
 }
 
@@ -332,7 +336,9 @@ function SystemPrompt({ system }: { system: TraceSystemPromptPresentation }) {
 function ContextAdditions({
   additions,
   truncated,
+  selectedId,
 }: {
+  selectedId?: string | undefined;
   additions: readonly TraceContextPresentation[];
   truncated: boolean;
 }) {
@@ -347,14 +353,14 @@ function ContextAdditions({
         <p className={css.unavailable}>This request introduced no canonical context</p>
       )}
       {additions.map(addition => (
-        <section key={addition.message_id} className={css.requestMessage}>
+        <section key={addition.message_id} className={css.requestMessage} data-context-message-id={addition.message_id} data-selected={addition.message_id === selectedId || undefined}>
           <h4 className={css.blockLabel}>
             {CONTEXT_KIND[addition.context_kind]} · {contextSource(addition.source)}
             <span className={css.machine}> {addition.message_id}</span>
           </h4>
-          {addition.preview && <p className={css.preview}>{addition.preview.text}</p>}
+          {addition.preview ? <p>{addition.preview.text || "Empty"}</p> : <p>Content unavailable</p>}
           {addition.attachments.length > 0 && <Attachments artifacts={addition.attachments} />}
-          <Truncated of={addition.truncated} />
+          <Truncated of={addition.truncated || addition.preview?.truncated} />
         </section>
       ))}
       {truncated && (
@@ -367,34 +373,54 @@ function ContextAdditions({
 }
 
 /** The sections available for one record, given what the server projected. */
-function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): string[] {
-  const request = detail?.request ?? undefined;
-  const tool = detail?.tool ?? undefined;
-  const messages = detail?.messages ?? [];
-  return [
-    'Summary',
-    ...(messages.length > 0 ? ['Content', 'Raw'] : []),
-    ...(request ? ['Prompt'] : []),
-    // Context opens from the summary alone: the introduced facts are native,
-    // so a reader does not wait for heavy detail to see them.
-    ...(record.request ? ['Context'] : []),
-    ...(request ? ['Context', ...(request.tools.length ? ['Tools'] : []), 'Options'] : []),
-    ...(tool ? ['Input'] : []),
-    ...(tool?.source ? ['Code'] : []),
-    ...(messages.some(message => message.blocks.some(block => block.type === 'reasoning')) ? ['Thinking'] : []),
-    ...(tool?.result ? ['Result'] : []),
-    ...(tool?.definition ? ['Schema'] : []),
-    ...(record.request?.usage ? ['Usage'] : []),
-    'Timing',
-    ...(record.attachments.length > 0 || (tool?.result?.attachments.length ?? 0) > 0
-      ? ['Artifacts']
-      : []),
-  ].filter((value, index, all) => all.indexOf(value) === index);
+function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): TrajectoryFacet[] {
+  if (record.kind === 'request') return ['Summary', 'System Prompt', 'Diff', 'Context', 'Tools', 'Options', 'Usage', 'Timing', 'Native'];
+  if (record.kind === 'assistant') return ['Summary', 'Content', ...(detail?.messages.some(message => message.blocks.some(block => block.type === 'reasoning')) ? ['Thinking' as const] : []), 'Raw', 'Timing', 'Native'];
+  if (record.kind === 'tool') return ['Summary', 'Input', ...(detail?.tool?.source ? ['Code' as const] : []), 'Result', 'Schema', 'Timing', 'Artifacts', 'Native'];
+  return ['Summary', ...(detail?.messages.length ? ['Content' as const] : []), 'Timing', 'Artifacts', 'Native'];
+}
+
+/** Native classification is an input, never the output of jsdiff. */
+function PromptDiff({ record, detail }: { record: TraceRecord; detail: TraceDetail | undefined }) {
+  const request = detail?.request;
+  if (!request) return <p className={css.unavailable}>Prompt content unavailable until detail is loaded.</p>;
+  const previous = request.previous_system_prompt;
+  if (request.predecessor.availability === 'not_applicable') return <p>No predecessor · initial prompt.</p>;
+  if (request.predecessor.availability === 'unavailable' || !previous) return <p>Previous prompt unavailable · a complete diff cannot be produced.</p>;
+  if (request.effective_system_prompt.truncated || previous.truncated) return <p className={css.truncated}>A complete diff cannot be produced: {request.effective_system_prompt.truncated ? 'current prompt truncated' : ''}{request.effective_system_prompt.truncated && previous.truncated ? '; ' : ''}{previous.truncated ? 'previous prompt truncated' : ''}. Native relationship: {record.request?.system_prompt.state}.</p>;
+  if (record.request?.system_prompt.state === 'unchanged') return <p>No changes · complete frozen prompts are natively unchanged.</p>;
+  if (record.request?.system_prompt.state !== 'changed') return <p>Native prompt relationship unavailable · a complete diff cannot be produced.</p>;
+  const changes = diffLines(previous.text, request.effective_system_prompt.text, { maxEditLength: 4096 });
+  if (!changes) return <p>A complete diff cannot be produced within the display work bound.</p>;
+  return <pre className={css.diff} aria-label="System prompt diff">{changes.map((change, index) => <span key={index} data-change={change.added ? 'added' : change.removed ? 'removed' : 'context'}>{change.added ? '+ ' : change.removed ? '− ' : '  '}{change.value}</span>)}</pre>;
+}
+
+type ToolDetailState =
+  | { type: 'pending'; loading: boolean }
+  | { type: 'read_error'; error: string }
+  | { type: 'loaded_missing_tool' }
+  | { type: 'loaded_tool' };
+
+/** Only a successful historical read can establish payload or fact absence. */
+function toolDetailState(detail: TraceDetail | undefined, loading: boolean | undefined, error: string | undefined): ToolDetailState {
+  if (error) return { type: 'read_error', error };
+  if (loading || !detail) return { type: 'pending', loading: loading === true };
+  return { type: detail.tool ? 'loaded_tool' : 'loaded_missing_tool' };
+}
+function ToolFacet({ state, facet, children }: { state: ToolDetailState; facet: string; children: ReactNode }) {
+  switch (state.type) {
+    case 'pending': return <p role="status" className={css.unavailable}>{state.loading ? 'Loading record detail…' : 'Historical Tool detail has not been loaded.'}</p>;
+    case 'read_error': return <p role="alert" className={css.error}>{facet} could not be established because the historical detail read failed: {state.error}</p>;
+    case 'loaded_missing_tool': return <p className={css.unavailable}>Tool detail is unavailable in this bounded detail projection.</p>;
+    case 'loaded_tool': return children;
+  }
 }
 
 /** Props for the Trajectory record inspector. */
 export interface TrajectoryInspectorProps {
   record: TraceRecord;
+  selection: TrajectorySelection;
+  onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
   loading?: boolean | undefined;
   error?: string | undefined;
@@ -410,13 +436,15 @@ export interface TrajectoryInspectorProps {
  */
 export function TrajectoryInspector({
   record,
+  selection,
+  onFacet,
   detail,
   loading,
   error,
   onLoadDetail,
   onClose,
 }: TrajectoryInspectorProps) {
-  const [section, setSection] = useState('Summary');
+  const section = selection.facet;
   useEffect(() => {
     if (record.has_detail && !detail && !loading && !error) onLoadDetail(record.id);
   }, [record.id, record.has_detail, detail, loading, error, onLoadDetail]);
@@ -424,6 +452,8 @@ export function TrajectoryInspector({
   const active = sections.includes(section) ? section : 'Summary';
   const request = detail?.request ?? undefined;
   const tool = detail?.tool ?? undefined;
+  const toolState = toolDetailState(detail, loading, error);
+  const toolFactFacet = record.kind === 'tool' && ['Input', 'Result', 'Schema'].includes(active);
   const messages = detail?.messages ?? [];
   const title =
     record.kind === 'request' && record.request
@@ -440,33 +470,21 @@ export function TrajectoryInspector({
           Close record
         </Button>
       </header>
-      <div role="tablist" aria-label="Record sections" className={css.tabs} onKeyDown={navigateTabs}>
-        {sections.map(name => (
-          <Button
-            size="sm"
-            key={name}
-            role="tab"
-            id={`trace-tab-${name}`}
-            aria-controls="trace-section"
-            tabIndex={active === name ? 0 : -1}
-            aria-selected={active === name}
-            onClick={() => setSection(name)}
-          >
-            {name}
-          </Button>
-        ))}
-      </div>
-      {loading && (
+      <Tabs className={css.inspectorTabs} selectedKey={active} onSelectionChange={key => onFacet(key as TrajectoryFacet)}>
+      <TabList aria-label="Record sections" className={css.tabs}>
+        {sections.map(name => <Tab key={name} id={name}>{name}</Tab>)}
+      </TabList>
+      {loading && !toolFactFacet && (
         <p role="status" className={css.unavailable}>
           Loading record detail…
         </p>
       )}
-      {error && (
+      {error && !toolFactFacet && (
         <p role="alert" className={css.error}>
           {error}
         </p>
       )}
-      <InspectorPanel active={active}>
+      <InspectorPanel active={active} selectedId={selection.context_message_id} content={detail}>
         {active === 'Summary' && (
           <>
           <div className={css.summaryPreview}><MarkdownText text={previewOf(record)} /></div>
@@ -483,8 +501,27 @@ export function TrajectoryInspector({
             {tool.result.blocks.map((block, index) => <Block key={index} block={block} />)}
             <Truncated of={tool.result.blocks_truncated} />
           </section>}
-          <details className={css.nativeDetails}>
-          <summary>Native record · {record.state}</summary>
+          <dl className={css.facts}>
+            <dt>Status</dt><dd>{record.state}</dd>
+            {record.request && <>
+              <dt>Model</dt><dd>{record.request.model}</dd>
+              <dt>Retry / recovery ordinal</dt><dd>{record.request.retry_number}</dd>
+              <SystemPrompt system={record.request.system_prompt} />
+              <dt>Tools</dt><dd>{record.request.tool_catalog.replaceAll('_', ' ')}</dd>
+              <dt>Context introduced</dt><dd>{record.request.context_additions.length}{record.request.context_truncated ? ' · truncated' : ''}</dd>
+              {record.request.failure_kind && <><dt>Failure</dt><dd>{record.request.failure_kind}</dd></>}
+              <dt>Historical input</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>View System Prompt</Button> <Button size="sm" onClick={() => onFacet('Tools')}>View Tools</Button></dd>
+              <dt>Acceptance</dt><dd>Provider completion alone does not prove canonical Assistant acceptance.</dd>
+            </>}
+            {record.calls.length > 0 && <><dt>Proposed calls</dt><dd>{record.calls.length} · A proposal proves assembly, not execution.</dd></>}
+            {record.tool && <><dt>Execution</dt><dd>{record.tool.started ? 'Started · a durable start fact exists' : 'Proposed only'}</dd><dt>Outcome</dt><dd>{record.tool.outcome ?? 'Unknown'}</dd></>}
+          </dl>
+          <Truncated of={record.truncated || detail?.truncated} />
+
+          </>
+        )}
+
+        {active === 'Native' && <>          <section className={css.nativeDetails}>
           <dl className={css.facts}>
             <dt>State</dt>
             <dd>{record.state}</dd>
@@ -589,9 +626,7 @@ export function TrajectoryInspector({
             )}
             <Truncated of={record.truncated} />
           </dl>
-          </details>
-          </>
-        )}
+          </section></>}
 
         {active === 'Content' && messages.map(message => (
           <section key={message.message_id}>
@@ -616,7 +651,9 @@ export function TrajectoryInspector({
           <Structured value={{ value: messages, truncated: detail?.truncated ?? false }} label="Projected messages" />
         )}
 
-        {active === 'Prompt' && request && (<><h3 className={css.sectionLabelHeading}>Effective system prompt</h3><Text value={request.effective_system_prompt} markdown /></>)}
+        {active === 'System Prompt' && request && (<><h3 className={css.sectionLabelHeading}>Effective system prompt</h3><Text value={request.effective_system_prompt} markdown /></>)}
+
+        {active === 'Diff' && <PromptDiff record={record} detail={detail} />}
 
         {active === 'Thinking' && messages.map(message => <section key={message.message_id}>{message.blocks.filter(block => block.type === 'reasoning').map((block, index) => <Text key={index} value={block.text} markdown />)}</section>)}
 
@@ -624,6 +661,7 @@ export function TrajectoryInspector({
           <ContextAdditions
             additions={record.request.context_additions}
             truncated={record.request.context_truncated}
+            selectedId={selection.context_message_id}
           />
         )}
 
@@ -642,7 +680,7 @@ export function TrajectoryInspector({
               snapshot and the historical Surface revision it referenced.
             </p>
             {request.messages.map((entry, index) => (
-              <section key={index} className={css.requestMessage}>
+              <section key={entry.message_id ?? index} className={css.requestMessage} data-context-message-id={entry.message_id} data-selected={entry.message_id === selection.context_message_id || undefined}>
                 <h4 className={css.blockLabel}>
                   {entry.role}
                   {entry.source ? ` · ${entry.source}` : ''}
@@ -666,17 +704,17 @@ export function TrajectoryInspector({
           </>
         )}
 
-        {active === 'Input' && tool && (
-          <>
+        {active === 'Input' && (
+          <ToolFacet state={toolState} facet={active}>
             <h3 className={css.sectionLabelHeading}>Recorded arguments</h3>
-            {tool.arguments ? (
+            {tool?.arguments ? (
               <Structured value={tool.arguments} label={`${tool.name ?? tool.tool_id} arguments`} />
             ) : (
               <p className={css.unavailable}>
                 The canonical proposal for this call is not loadable at this read cut.
               </p>
             )}
-          </>
+          </ToolFacet>
         )}
 
         {active === 'Code' && tool?.source && (
@@ -700,8 +738,8 @@ export function TrajectoryInspector({
           </>
         )}
 
-        {active === 'Result' && tool?.result && (
-          <>
+        {active === 'Result' && <ToolFacet state={toolState} facet={active}>
+          {tool?.result ? <>
             <dl className={css.facts}>
               <dt>Outcome</dt>
               <dd>{tool.result.outcome}</dd>
@@ -759,10 +797,12 @@ export function TrajectoryInspector({
               <Block key={index} block={block} />
             ))}
             <Truncated of={tool.result.blocks_truncated} />
-          </>
-        )}
+          </> : <p className={css.unavailable}>No canonical Tool result is recorded at this read cut.</p>}
+        </ToolFacet>}
 
-        {active === 'Schema' && tool?.definition && <Definition definition={tool.definition} />}
+        {active === 'Schema' && <ToolFacet state={toolState} facet={active}>
+          {tool?.definition ? <Definition definition={tool.definition} /> : <p className={css.unavailable}>The historical Tool definition is unavailable at this read cut.</p>}
+        </ToolFacet>}
 
         {active === 'Tools' && request && (
           <>
@@ -873,6 +913,7 @@ export function TrajectoryInspector({
           <Attachments artifacts={[...record.attachments, ...(tool?.result?.attachments ?? [])]} />
         )}
       </InspectorPanel>
+      </Tabs>
     </aside>
   );
 }

@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v19';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v20';
 import { Server, snapshot } from './fixture';
 import { prependTranscript, refreshTranscript, replaceTranscript, HISTORY_LIMIT } from '../src/client/transcript';
 const entry = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `m${n}`, role: 'assistant', content: [{ type: 'text', text: `Message ${n}` }] } } });

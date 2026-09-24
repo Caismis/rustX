@@ -5,7 +5,7 @@ import { mcpTransport } from '../src/bindings/mcp';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { chooseOption, renderEditor } from './settings-harness';
 import { cfg3Source } from './cfg3-data';
-import type { SourceScope, SourceSettings } from '../../protocol/app-server/v19';
+import type { SourceScope, SourceSettings } from '../../protocol/app-server/v20';
 afterEach(cleanup);
 
 const noop = () => {};
