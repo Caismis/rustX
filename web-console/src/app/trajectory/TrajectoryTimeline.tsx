@@ -8,7 +8,8 @@
  * Assistant request's span shows the recorded split between waiting for the
  * first output and decoding, so the division is evidence rather than decoration.
  *
- * A record with one timestamp renders as a start marker, never as a span.
+ * A timed span requires endpoints in its rendered domain. Request Model spans
+ * use provider evidence; Journal terminal timing cannot replace a missing bridge.
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import type { TraceRecord } from '../../../../protocol/app-server/v20';

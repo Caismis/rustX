@@ -181,7 +181,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v19 subprotocols above.
+endpoint/token; the browser then connects directly using the v20 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -278,7 +278,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v19; pipeline individual requests instead. This limitation is
+supported in v20; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -367,7 +367,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v19 admits at most one writable external controller per resident
+Protocol v20 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -483,8 +483,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v19.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v19.ts`: TypeScript generated from that schema using pinned
+- `v20.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v20.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -794,7 +794,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v19 includes `inbound/edit { target, expected, text }` and
+Protocol v20 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -964,7 +964,7 @@ literal values. `SourceSettings.user`, `SourceSettings.workspace`,
 redacted document view, so no source projection can carry a literal Tool
 environment value, and an override is authored by supplying a new value rather
 than by reading a lower owner's value back.
-Protocol v19 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v20 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -1079,9 +1079,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v19 and WebSocket requires `rustx.app-server.v20`.
-v13 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v19.ts`, `v19.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v20 and WebSocket requires `rustx.app-server.v20`.
+v19 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v20.ts`, `v20.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1132,9 +1132,9 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v19 vocabulary includes v12's
+is unchanged and never repeats them. This v20 vocabulary includes v12's
 read-only native `subagent/transcript` contract and these Trace DTO changes.
-Version 12 and earlier clients are rejected without a compatibility decoder or a
+Version 19 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
 
 ## Session archive preparation
@@ -1152,7 +1152,7 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Subagent conversations (v19)
+## Read-only native Subagent conversations (v20)
 
 `subagent/transcript { target, subagent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,

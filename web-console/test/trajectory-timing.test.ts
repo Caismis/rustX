@@ -6,6 +6,7 @@ const start = Date.parse('2026-09-15T00:00:00Z');
 function request(withBridge: boolean, wallDuration = 2000) {
   const record = traceRecord(0);
   record.timing.duration_ms = String(wallDuration);
+  record.timing.ended_at = new Date(start + wallDuration).toISOString();
   record.request!.generation = {
     ttft_ms: '320', generation_ms: '1280', terminal_ms: '1600', output_tokens_per_second: 93.75,
     timeline: withBridge ? {
@@ -35,8 +36,12 @@ describe('authoritative request phase positions', () => {
     expect(span.end).toBe(start + 2000);
     expect(span.durationMs).toBe(9000);
   });
-  it('keeps numeric metrics but no phase positions without the native bridge', () => {
-    const span = model(false);
+  it('Journal terminal at 9000ms cannot supply a Model endpoint without the native bridge', () => {
+    const record = request(false, 9000);
+    const span = trajectoryTimeline([record], 'duration', () => undefined)!.spans[0]!;
+    expect(record.timing.ended_at).toBe(new Date(start + 9000).toISOString());
+    expect(span.durationMs).toBe(9000);
+    expect(span.start).toBe(start);
     expect(span.ttftMs).toBe(320);
     expect(span.firstOutputAt).toBeUndefined();
     expect(span.dispatchAt).toBeUndefined();
@@ -54,7 +59,10 @@ describe('authoritative request phase positions', () => {
     record.request!.generation!.timeline!.last_output_ms = null;
     const span = trajectoryTimeline([record], 'duration', () => undefined)!.spans[0]!;
     expect(span.dispatchAt).toBe(start + 400);
+    expect(span.end).toBe(start + 2000);
+    expect(span.providerTerminalAt).toBe(start + 2000);
     expect(span.firstOutputAt).toBeUndefined();
+    expect(span.lastOutputAt).toBeUndefined();
   });
 });
 
@@ -63,6 +71,9 @@ it('preserves measured zero separately from absent and running timing', () => {
   zero.request!.generation = { ttft_ms: '0', generation_ms: '0', terminal_ms: '0', output_tokens_per_second: null, timeline: { dispatch_ms: '0', first_output_ms: '0', last_output_ms: '0', terminal_ms: '0' } };
   const running = traceRecord(1, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } });
   const [measured, missing] = trajectoryTimeline([zero, running], 'duration', () => undefined)!.spans;
+  expect(measured!.start).toBe(start);
+  expect(measured!.end).toBe(start);
+  expect(measured!.providerTerminalAt).toBe(start);
   expect(measured!.durationMs).toBe(0);
   expect(measured!.ttftMs).toBe(0);
   expect(measured!.firstOutputAt).toBe(start);

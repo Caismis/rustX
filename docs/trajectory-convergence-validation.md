@@ -175,3 +175,80 @@ The final sequence-width correction intentionally changed six timing screenshots
 A normal run detected exactly those six reference mismatches (79 other tests
 passed); the explicit update command regenerated the references without changing
 tolerances, followed by the final normal comparison above.
+
+## PR #401 review correction: protocol and timing contracts
+
+Starting HEAD: `52ff9b6c5e81f77c1fb73d5e970ae74656db9a03`. This bounded correction
+retains the implementation architecture and changes no timing algorithm, native
+DTO, protocol version, runtime semantics or screenshot reference.
+
+The protocol audit corrected current browser subprotocol guidance, batch and
+controller behavior, generation filenames, inbound/SourceTarget wording, Session
+initialization, current Trace vocabulary and the Subagent heading/links. TUI
+current-version wording was corrected alongside those links. Initialization is
+exactly App Server v20; WebSocket selects `rustx.app-server.v20`; generated files
+are `v20.ts` and `v20.schema.json`; v19 and earlier are unsupported.
+
+The remaining v19 mentions in `app-server-protocol.md` are the explicit rejection
+and removed-artifact statements, “App Server v19 made…” and “Before v19…” history.
+Repository-wide search also retains the historical PR #333 CFG3 residue audit,
+this acceptance record's migration history, and unrelated SQLite schema history.
+The former Subagent v19 heading described current behavior, not a historical
+introduction, so it and both incoming links now say v20.
+
+**Timing invariant:** A span requires two authoritative endpoints in the timing
+domain being rendered; Request Model-lane spans use provider-domain
+`GenerationEvidence`, while Journal duration remains separate native evidence.
+
+The reviewed Rust `TraceTiming`, `TraceGeneration`, `TraceGenerationTimeline`,
+`generation_metrics` and `generation_timeline` retain their native ownership.
+Numeric metrics cannot manufacture a bridge. Request Journal settlement may
+include persistence latency, so its terminal cannot substitute for a provider
+terminal. No fallback to Journal Request duration was added. Equal-width sequence
+and start-only time projections remain unchanged.
+
+| Regression | Contract proved |
+| --- | --- |
+| `documentation::current_app_server_documentation_matches_negotiated_version` | Current heading, exact initialization, WebSocket and generation sections agree with `APP_SERVER_PROTOCOL_VERSION`; older generated artifacts are absent. Runs in the existing Rust contracts target. |
+| `Journal terminal at 9000ms cannot supply a Model endpoint without the native bridge` | Exact Journal start/end and 9000ms duration remain available, but Model start=end=T0; numeric TTFT supplies no phase positions. |
+| `T1-12 Journal duration remains visible in Inspector when Model timing lacks a bridge` | Timing facet explicitly renders Journal wall duration as 9.00s and its durable timestamp source. |
+| `does not stretch phases to fit Journal wall duration or settlement delay` | The fixture now supplies consistent Journal endpoints 9000ms apart; provider span still ends at +2000ms. |
+| `renders dispatch without inventing first output for a silent request` | Provider span ends at +2000ms with no first/last output positions. |
+| `preserves measured zero separately from absent and running timing` | Start-only running Request stays a marker; zero provider terminal and measured zero remain present, not missing. |
+| Existing T1-12 canonical-acceptance/parallel-domain and four-mode tests | No Assistant duplicate span; parallel work retains overlap; duration compression uses one shared transform across lanes. |
+
+All timing fixtures use literal timestamps and native offsets, without sleeps or
+clock-dependent ordering. The two focused Web files pass 26 tests. The requested
+`pnpm ... test -- ...` invocation runs all files with this script/toolchain;
+`pnpm --dir web-console exec vitest run test/trajectory-timing.test.ts test/trajectory.test.tsx`
+was also run to verify the precise focused selection.
+
+Review-correction validation (Linux; the repository CI workflow and package scripts
+were inspected before choosing these commands):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all` | Applied formatting to the new documentation test. |
+| `cargo fmt --all --check` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo check --all-targets --all-features` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo test --test contracts current_app_server_documentation_matches_negotiated_version --all-features` | 1 passed. |
+| `pnpm --dir protocol/app-server check` | Passed regeneration and drift check; generated artifacts unchanged. |
+| `pnpm --dir protocol/app-server typecheck` | Passed. |
+| `pnpm --dir web-console typecheck` | Passed. |
+| `pnpm --dir web-console test -- trajectory-timing.test.ts trajectory.test.tsx` | 882 passed; this script invocation selected all files. |
+| `pnpm --dir web-console exec vitest run test/trajectory-timing.test.ts test/trajectory.test.tsx` | 26 passed in the exact two focused files. |
+| `pnpm --dir web-console test` | 882 passed in 50 files. |
+| `pnpm --dir web-console check:provenance` | Passed: 114 source records, 131 package notices. |
+| `node web-console/scripts/provenance.ts --reference /tmp/rustx-394-harness` | Passed against the pinned upstream checkout. |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 85 passed in strict normal screenshot comparison; includes the canonical `pnpm build` and packaged-artifact check. No reference update. |
+| `CARGO_BUILD_JOBS=2 cargo build --bins` | Passed. |
+| `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=8 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | 3,892 passed, 0 failed, 7 intentionally ignored; no environment failure or retry in this correction run. |
+| `pnpm --dir dev typecheck`; `pnpm --dir dev test` | Passed; 37 tests passed. |
+| `pnpm --dir tui typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | Passed; 852 tests passed. |
+| `uv sync --frozen`; `uv run --frozen pytest` in `test-support/fake-provider` | Passed; 51 tests passed. |
+| `git diff --check`; `git diff --cached --check` | Passed. |
+
+The seven existing ignored Rust tests remain the five paid/live cases, fixture
+writer and stage profile described above. macOS execution is left to the existing
+GitHub Actions platform job; this local environment is Linux.

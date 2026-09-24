@@ -119,7 +119,9 @@ function timingOf(record: TraceRecord) {
  *
  * `sequence` gives every record equal width, which stays readable when one
  * slow Tool would otherwise compress an entire session into a sliver.
- * `duration` uses recorded wall time. A record with no usable start is
+ * Timed spans require endpoints in the rendered domain: provider timing for
+ * Requests, record timing otherwise. Journal settlement never supplies a
+ * Request provider endpoint. A record with no usable start is
  * omitted from the timed projection rather than placed at an invented point.
  */
 export function trajectoryTimeline(
@@ -165,8 +167,8 @@ export function trajectoryTimeline(
       label: label(record),
       error: isError(record),
       start: timing.startedAt,
-      // An in-flight or unterminated record is a marker, not a span: its end
-      // equals its start, so nothing on screen claims a duration it lacks.
+      // Endpoints must belong to the rendered domain. Even a Journal-terminal
+      // Request stays a marker without the native provider timeline bridge.
       end: timing.startedAt + (record.kind === 'request' ? count(timing.timeline?.terminal_ms) ?? 0 : timing.durationMs ?? 0),
       ...phasePositions(timing.startedAt, timing.timeline),
       startedAt: timing.startedAt,

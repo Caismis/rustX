@@ -231,3 +231,15 @@ it('T1-12 sequence keeps equal glyph widths even when native duration is missing
   fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
   expect(glyph.getAttribute('data-marker')).toBe('true');
 });
+
+it('T1-12 Journal duration remains visible in Inspector when Model timing lacks a bridge', () => {
+  const record = traceRecord(0, { timing: { started_at: '2026-09-15T00:00:00Z', ended_at: '2026-09-15T00:00:09Z', duration_ms: '9000' } });
+  record.request!.generation = { ttft_ms: '320', generation_ms: '1280', terminal_ms: '1600', output_tokens_per_second: null, timeline: null };
+  show(cacheOf([record]));
+  fireEvent.click(row('RequestBoundary'));
+  fireEvent.click(screen.getByRole('tab', { name: 'Timing' }));
+  const facts = within(screen.getByRole('tabpanel'));
+  expect(facts.getByText('Journal wall duration').nextElementSibling?.textContent).toBe('9.00 s');
+  expect(facts.getByText('Two authoritative durable timestamps.')).toBeDefined();
+  expect(record.timing.duration_ms).toBe('9000');
+});

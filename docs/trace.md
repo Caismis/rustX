@@ -553,4 +553,19 @@ attachment views, Markdown, the audited Harness JSON tree and code primitives.
 Native Bash command content has a shell contract; Write content has source text
 but no inferred language. Unknown third-party Tool contracts get structured JSON.
 The timing overview supports linked selection, interval focus, zoom and pan.
-Two recorded endpoints define spans; a start alone remains a marker.
+A span requires two authoritative endpoints in the timing domain being rendered;
+Request Model-lane spans use provider-domain `GenerationEvidence`, while Journal
+duration remains separate native evidence.
+
+For Tool, Background, Subagent, Workflow, Interaction and applicable Compaction
+records, two authoritative endpoints in the record's rendered domain define a
+measured span; one endpoint defines a marker. For a Model Request, the native
+monotonic/UTC bridge and request-relative provider-terminal position authorize
+the provider span. Request start without that usable generation timeline defines
+a marker, even if `TraceTiming.ended_at` and `duration_ms` exist. Numeric TTFT
+alone cannot authorize phase placement. Journal timing remains authoritative in
+Inspector timing facts and can include persistence/settlement latency; it cannot
+substitute for a provider endpoint. A silent provider can have a terminal span
+without first-output evidence. Zero is a valid measurement, not missing evidence.
+These rules govern timed spans; sequence mode uses equal units and time mode
+shows start markers intentionally.
