@@ -102,9 +102,13 @@ if (variant.get('write') === 'held') {
   });
   server.held.add('configuration/sourceWrite');
   const releases: (() => void)[] = [];
+  let workspaceWrites = 0;
+  // Workspace writes use the Product Host boundary, not the User RPC socket.
+  (window as unknown as { rustxHeldWorkspaceWrites: () => number }).rustxHeldWorkspaceWrites = () => workspaceWrites;
   const configure = server.workspaceHost.configureWorkspace!;
   server.workspaceHost.configureWorkspace = async (id, at, operation) => {
     if (operation.kind === 'write') {
+      workspaceWrites++;
       await new Promise<void>(resolve => releases.push(resolve));
       commit('workspace', operation.mutation);
     }

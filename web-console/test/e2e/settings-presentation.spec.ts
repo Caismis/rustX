@@ -176,7 +176,7 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
   await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-  expect(await confirmation.evaluate(el => el.contains(document.activeElement))).toBe(true);
+  await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(confirmation).toHaveCount(0);
   await expect(settings).toBeVisible();
@@ -463,7 +463,7 @@ test('a focused rail tab hands the keyboard to the section trigger when the pane
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await settled(page);
   expect(await bodyFrames(page)).toBe(0);
-  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   // Presentation only: the same page, no menu opened, no native traffic.
   expect(await selectedSettingsPage(page)).toBe('Extensions');
   await expect(page.getByRole('menu')).toHaveCount(0);
@@ -508,7 +508,7 @@ test('a focused closed section trigger hands the keyboard to the selected rail t
   await expect(extensions).toHaveAttribute('aria-selected', 'true');
   await settled(page);
   expect(await bodyFrames(page)).toBe(0);
-  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   expect(await nativeRequests(page)).toHaveLength(requests);
 
   // Rail navigation continues from there at once: the arrows move between
@@ -526,14 +526,13 @@ test('a focused closed section trigger hands the keyboard to the selected rail t
   expect(errors).toEqual([]);
 });
 
-/** Two animation frames: every focus restoration React Aria schedules after a
- * layer unmounts has run by then. */
+/** Observe rendered frames after a responsive layout transition. */
 const settled = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 /** Where the keyboard is: never the page body, never a disabled control,
  * always inside the Settings dialog. */
 const keyboard = (page: Page) => page.evaluate(() => {
   const active = document.activeElement!;
-  return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[role="dialog"][aria-label="Settings"]') !== null, rendered: active.getClientRects().length > 0 };
+  return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[role="dialog"][aria-label="Settings"]') !== null, rendered: active.getClientRects().length > 0, connected: active.isConnected };
 });
 const releaseWrites = (page: Page) => page.evaluate(() => (window as unknown as { rustxReleaseWrites: () => void }).rustxReleaseWrites());
 
@@ -550,20 +549,34 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   const writes = async () => (await nativeRequests(page)).filter(request => request.method === 'configuration/sourceWrite').length;
 
   // Cancel: nothing is written and focus returns to the trigger.
-  await remove.focus(); await page.keyboard.press('Enter');
+  await expect(remove).toBeEnabled(); await remove.focus(); await expect(remove).toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(cancel).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(deletion).toHaveCount(0);
-  await settled(page);
   await expect(remove).toBeFocused();
+  await expect(settings).toBeVisible();
+  expect(await writes()).toBe(0);
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   // Escape: only the confirmation closes, and focus returns to the trigger.
   await page.keyboard.press('Enter');
   await expect(cancel).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(deletion).toHaveCount(0); await expect(settings).toBeVisible();
-  await settled(page);
+  await expect(deletion).toHaveCount(0);
   await expect(remove).toBeFocused();
+  await expect(settings).toBeVisible();
   expect(await writes()).toBe(0);
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
+
+  // With the transient layer gone, Escape belongs to Settings again.
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+  expect(await writes()).toBe(0);
+  await openUserSettings(page);
+  await openSettingsPage(page, 'Models');
+  await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  await expect(remove).toBeEnabled(); await remove.focus(); await expect(remove).toBeFocused();
 
   // Confirm: the removal is submitted and held in flight. The unit's controls,
   // the trigger among them, are closed until native answers, so focus settles
@@ -574,12 +587,11 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await expect(deletion.getByRole('button', { name: 'Remove Provider transport', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(deletion).toHaveCount(0);
-  expect(await writes()).toBe(1);
+  await expect.poll(writes).toBe(1);
   await expect(remove).toBeDisabled();
-  await settled(page);
   await expect(unit).toBeFocused();
-  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
-  // Still in flight after every scheduled restoration has run.
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
+  // The native response is still held; focus remains on the outcome surface.
   await expect(remove).toBeDisabled();
   await expect(unit).toBeFocused();
 
@@ -588,11 +600,11 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await releaseWrites(page);
   await expect(unit.getByText('Provider transport saved. Native coordination owns application.')).toBeVisible();
   await expect(remove).toHaveCount(0);
-  expect(await writes()).toBe(1);
+  await expect.poll(writes).toBe(1);
   await expect(unit).toBeFocused();
   // Tab continues from the unit into its now-enabled controls.
   await page.keyboard.press('Tab');
-  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
@@ -604,27 +616,73 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   const unit = settings.getByRole('form', { name: 'Root identity' });
   const restore = unit.getByRole('button', { name: 'Use global default Root identity', exact: true });
   const confirmation = page.getByRole('dialog', { name: 'Use the global default for Root identity?' });
-  await restore.focus(); await page.keyboard.press('Enter');
+  // This Workspace mutation travels through the native Product Host boundary.
+  const writes = () => page.evaluate(() => (window as unknown as { rustxHeldWorkspaceWrites: () => number }).rustxHeldWorkspaceWrites());
+  for (const dismissal of ['Cancel', 'Escape', 'outside'] as const) {
+    await expect(restore).toBeEnabled(); await restore.focus(); await expect(restore).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+    if (dismissal === 'outside') await page.mouse.click(2, 2);
+    else await page.keyboard.press(dismissal === 'Cancel' ? 'Enter' : 'Escape');
+    await expect(confirmation).toHaveCount(0);
+    await expect(settings).toBeVisible();
+    await expect(restore).toBeFocused();
+    expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
+    expect(await writes()).toBe(0);
+  }
+  await expect(restore).toBeEnabled(); await restore.focus(); await expect(restore).toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(confirmation.getByRole('button', { name: 'Use global default Root identity', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(confirmation).toHaveCount(0);
   await expect(restore).toBeDisabled();
-  await settled(page);
+  await expect.poll(writes).toBe(1);
   await expect(unit).toBeFocused();
-  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
 
+  await expect(unit).toBeFocused();
   await releaseWrites(page);
+  await expect.poll(writes).toBe(1);
   await expect(unit.getByText('Root identity saved. Native coordination owns application.')).toBeVisible();
   await expect(unit.locator('[data-authored="absent"]')).toContainText('Inherited — no Workspace override');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
+for (const unavailable of ['disabled', 'hidden', 'removed'] as const) test(`dismissal settles on the unit when its trigger becomes ${unavailable}`, async ({ page }) => {
+  const errors = await start(page, '?write=held');
+  await openUserSettings(page);
+  const settings = dialog(page);
+  await openSettingsPage(page, 'Models');
+  await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  const unit = settings.getByRole('form', { name: 'Provider transport' });
+  const trigger = page.locator('form[aria-label="Provider transport"] button').filter({ hasText: 'Remove Provider transport' });
+  await trigger.click();
+  const confirmation = page.getByRole('alertdialog');
+  await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  // Simulate an invoking control becoming unavailable while the modal owns
+  // focus. The other unit controls remain usable, so settlement must be the
+  // form itself, not an arbitrary descendant selected by a focus heuristic.
+  await trigger.evaluate((node, reason) => {
+    if (reason === 'removed') node.remove();
+    else if (reason === 'hidden') (node as HTMLElement).style.display = 'none';
+    else (node as HTMLButtonElement).disabled = true;
+  }, unavailable);
+  await confirmation.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(settings).toBeVisible();
+  await expect(unit).toBeFocused();
+  await expect(unit.getByLabel('Endpoint', { exact: true })).toBeEnabled();
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
+  expect((await nativeRequests(page)).filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(0);
+  expect(errors).toEqual([]);
+});
+
 test('reduced motion removes Settings and banner motion', async ({ page }) => {
   const errors = await start(page, '?session=preparing');
-  const dot = page.getByRole('region', { name: 'Session configuration' }).locator('svg rect').first();
+  const dot = page.getByRole('region', { name: 'Session configuration', includeHidden: true }).locator('svg rect').first();
   await expect(dot).toHaveCSS('animation-name', 'none');
   await openUserSettings(page);
   await openSettingsPage(page, 'Extensions');

@@ -1,6 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, RefObject } from 'react'
+import { useDialogPortal } from './DialogSurface';
 import { createPortal } from 'react-dom'
 import { autoUpdate, flip, hide, offset, shift, size, useFloating, type Placement, type VirtualElement } from '@floating-ui/react-dom'
 import clsx from 'clsx'
@@ -208,6 +209,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   focusOwner?: RefObject<HTMLElement | null> | undefined
   className?: string | undefined
 }) {
+  const portalContainer = useDialogPortal();
   const rootRef = useRef<HTMLSpanElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   /** Index the arrow walk last focused, the resume point when focus left the rows. */
@@ -679,7 +681,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
       onPointerLeave={closeOnPointerLeave ? () => { if (open) armClose() } : undefined}
     >
       {anchor}
-      {list !== false && createPortal(list, document.body)}
+      {list !== false && createPortal(list, portalContainer)}
     </span>
   )
 }
@@ -736,6 +738,7 @@ function Submenu({ id, row, items, dense, compact, presented, enter, onEntered, 
   cardRef: { current: HTMLDivElement | null }
   onSelect: (id: string) => void
 }) {
+  const portalContainer = useDialogPortal();
   const { refs, floatingStyles, placement, isPositioned, elements, middlewareData } = useFloating({
     placement: 'right-end',
     strategy: 'fixed',
@@ -791,6 +794,6 @@ function Submenu({ id, row, items, dense, compact, presented, enter, onEntered, 
         ))}
       </div>
     </div>,
-    document.body,
+    portalContainer,
   )
 }

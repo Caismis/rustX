@@ -45,7 +45,7 @@ presentation in this change are rustX-authored and carry no DeepSeek header.
 Page glyphs come from the existing `presentation/primitives/icons` family; no
 icon package is added.
 
-New pinned dependencies, the only two this issue allows:
+Pinned dependencies adopted for demonstrated #393 requirements:
 
 - `@floating-ui/react-dom` 2.1.9 (MIT, Floating UI contributors), production,
   with its install closure `@floating-ui/dom` 1.8.0, `@floating-ui/core` 1.8.0
@@ -56,9 +56,27 @@ New pinned dependencies, the only two this issue allows:
   rendered test pages, are never bundled, never modified and never
   redistributed with the Web Console, so they add no production notice.
 
-No Radix, second modal runtime, form layer, state or query library, design
-system or icon family is added. React Aria Components and TanStack Form keep
-exactly their #392 responsibilities.
+- `@base-ui/react` 1.8.0 (MIT), production, with `@base-ui/utils` 0.4.0
+  and `reselect` 5.3.0 added transitively. Its closure also makes the existing
+  `@babel/runtime` 7.29.7 a production dependency. The normal notice generator
+  reproduces the complete closure in `public/THIRD-PARTY-NOTICES.txt`; no
+  package-specific license exception is needed.
+  `DialogSurface` imports only Dialog and AlertDialog, for Settings and its
+  confirmations. Base UI owns generic modal mechanics. rustX keeps Harness
+  styling and workflow semantics; UnitShell supplies the stable outcome form.
+  Cancel uses `initialFocus`. The public `finalFocus` callback applies the exact
+  workflow focus destination and returns `false` to suppress automatic
+  restoration to a different descendant. No styles, tokens or state ownership
+  are imported. See <https://base-ui.com/react/components/dialog>.
+  This replaces the confirmation unmount-cleanup workaround. Radix 1.1.23 and
+  all of its draft dependency/notices entries were removed. The revised
+  acceptance contract measures terminal focus, not transient body focus during
+  library teardown. Other application modal surfaces remain unchanged.
+
+React Aria retains non-dialog interaction semantics and TanStack Form retains
+field mechanics. Menus and selects portal into their containing dialog scope;
+Menu positioning, reference-hidden settlement and container-query ownership
+remain unchanged.
 
 Reference products were inspected only, with no source, asset or text copied.
 Harness remains the visual family (the pinned commit above). ZCode documentation

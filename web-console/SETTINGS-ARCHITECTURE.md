@@ -715,9 +715,9 @@ revision settles it — with no replay and no second write.
 ## Composition
 
 `presentation/settings/SettingsRoot` remains the sole modal/navigation owner. Its
-overlay, focus containment and restoration and its vertical page tabs are React
-Aria Components (`ModalOverlay`/`Modal`/`Dialog`/`Tabs`) styled by the retained
-Harness classes; the hand-written focus trap and portal it replaced are gone. It
+overlay, focus containment and restoration use the shared Base UI-backed
+`DialogSurface`; vertical page tabs remain React Aria `Tabs`. Both retain the
+Harness classes. It
 also owns the narrow section menu (see *Presentation (#393)*).
 `SettingsContent.module.css` adapts the pinned Harness Models editor and Plugin
 field/inventory vocabulary: outlined identity cards, filled editing modules,
@@ -1015,15 +1015,15 @@ ever dispatched.
 
 **React Aria is interaction semantics only.** It is imported only by
 `primitives/aria.tsx` and `presentation/settings/SettingsRoot.tsx`. It owns
-keyboard navigation, roving focus, dialog focus containment and restoration,
-tab/grid/select/menu/disclosure/switch semantics. The page tabs are a vertical
+keyboard navigation, roving focus and tab/grid/select/menu/disclosure/switch
+semantics. Base UI owns the shared dialog behavior. The page tabs are a vertical
 rail (ArrowUp/ArrowDown); on a narrow panel the rail is hidden and the section
 menu selects pages instead (see *Presentation (#393)*). No Spectrum stylesheet is
 loaded; every visual token is the existing `--dsw-*` family
-(`SettingsWorkflow.module.css`). Removal confirmations are `ModalOverlay`+`Dialog`
+(`SettingsWorkflow.module.css`). Removal confirmations are shared `DialogSurface`
 layers over the one Settings root — `role="alertdialog"` for a real deletion,
 `role="dialog"` for restoring inheritance — with initial focus on Cancel; the
-global WebUI modals are unchanged.
+other application modal surfaces remain unchanged.
 
 **Removal semantics.** User Settings removes an authored definition
 (`data-removal="authored-removal"`, "Remove … from User configuration?").
@@ -1099,7 +1099,7 @@ open section menu is not this path: its trigger does not hold the keyboard,
 and the menu settles on its focus owner through anchor liveness.
 
 **Floating geometry is Floating UI's.** Every `Menu` surface — the list and
-each open submenu — is portaled to the body and placed by
+each open submenu — is portaled to the containing dialog portal (or body outside a dialog) and placed by
 `@floating-ui/react-dom` (`offset`, `flip`, `shift`, `size`, `autoUpdate`, fixed
 strategy): anchor measurement, placement, flip, shift, available size and
 anchor tracking. `side`/`align` map to one placement and `getAnchorRect` is a
@@ -1121,8 +1121,8 @@ open and focused. It ends only by a key that closes or selects from it, by its
 row ceasing to be a visible anchor, or by a pointer press on a parent row,
 which moves the keyboard to the pressed row before that row's submenu or
 selection replaces it; with the keyboard back on the parent list, hover shows
-submenus again. Inside a React Aria modal each surface is marked
-`data-react-aria-top-layer`, the attribute React Aria's modal focus containment,
+submenus again. Each surface retains
+`data-react-aria-top-layer`, the attribute React Aria's overlay focus containment,
 `ariaHideOutside` and interact-outside detection honour, and Escape on an open
 menu is stopped in the document capture phase so the modal never also sees it.
 Tooltip and HoverCard keep their existing geometry.
@@ -1164,44 +1164,55 @@ parent stays open and its rows keep their scroll. Owners state only whether a me
 layout rules that decide whether its anchor is rendered. jsdom has no layout, so the unit test
 setup treats every anchor as rendered; Chromium proves the contract.
 
-**Modal mechanics stay React Aria's.** The nested-dialog and focus contracts
-pass in real Chromium on React Aria (`settings-presentation.spec.ts`), so no
-Radix Dialog or second modal runtime was added. Two focus defects of the nested
-confirmation were found in Chromium and fixed inside `ConfirmAction`:
+**Dialog behavior owns close lifecycle; Settings workflows provide the intended
+focus destination.** `DialogSurface` wraps Base UI 1.8.0 Dialog/AlertDialog for
+the one Settings panel and its transient confirmations. Base UI owns layering,
+containment, Escape, outside dismissal, initial focus and the public `finalFocus`
+lifecycle. rustX retains Harness DOM styling, tokens, icons and vocabulary.
+Portaled menus and selects share the containing dialog portal as siblings of
+the popup, keeping their own focus scopes and restoration owners. Their existing
+interaction engines, Floating UI geometry, anchor liveness and focus owners are
+unchanged. Other application modal surfaces are outside this bounded change.
 
-- its Cancel was focused by native `autoFocus` during commit, before the
-  confirmation's focus scope registered as a child of the Settings scope, so
-  the Settings scope took focus back; RAC `Button autoFocus` focuses from an
-  effect after registration;
-- closing it could leave focus on `<body>`. A hand-written restoration (a
-  synchronous unmount, then focusing the trigger) avoided that on dismissal,
-  but it assumed the trigger could still take focus. After a real Confirm it
-  cannot: `UNIT.SUBMIT` moves the unit to `mutation.submitting`, which disables
-  the unit's fieldset and the trigger with it, so focus fell to `<body>` for
-  the whole in-flight write.
+`ConfirmAction` owns only local open state and the dismissed/confirmed outcome.
+Cancel receives initial focus through the `initialFocus` ref. Its `finalFocus`
+callback focuses the connected, enabled, rendered invoking trigger after Cancel,
+Escape or outside dismissal; if that trigger cannot take focus, it focuses the
+caller's stable target. Confirmed actions focus that stable target directly.
+The callback returns `false` to suppress automatic restoration: Base UI's default
+can choose a tabbable child of a programmatically focusable form, while this
+workflow explicitly names the form itself. All focus settlement runs inside
+this public close callback, with no cleanup hook, timers, RAF or microtasks in
+rustX. `UnitShell` supplies its form (`tabindex="-1"`), mounted and enabled through
+the native mutation and outcome. Confirmation submits once, without owning CAS,
+transaction actors or native truth. Deletion is an alert dialog; inheritance
+restoration is a non-destructive ordinary dialog.
 
-The confirmation is now a React Aria `DialogTrigger`. React Aria owns its open
-state, dismissal (Cancel, Escape, a press outside), containment and initial
-focus. Its two exits are two focus contracts. A dismissal changes nothing and
-returns focus to the trigger, or to the workflow target below if the trigger
-can no longer take it. A confirmation may disable or remove its trigger, so
-`ConfirmAction` requires a `settle` target from its caller and focuses that.
-React Aria's own restoration is not relied on for either exit, for two reasons
-found in Chromium. It refocuses a connected trigger without asking whether it
-is enabled. It also runs a frame after the layer unmounts, leaving the keyboard
-on `<body>` for that frame. In the full application that frame lasted long
-enough for the Settings dialog's own `useDialog` refocus timer to take focus to
-the dialog: the keyboard reachability test failed 3 in 20 runs with it. A
-component inside the layer (`SettleOnLeave`) places focus from its passive
-cleanup instead. React Aria lifts the modal's `inert` from a passive effect of
-an ancestor, and an unmounting tree's passive cleanups run ancestors first and,
-for the discrete input that closed the layer, in the same task as the commit.
-Focus is therefore never on `<body>` between frames, and React Aria's later
-restoration finds it placed. `ConfirmAction` knows nothing of the transaction,
-CAS or the actors. The unit editor names its own card (the `<form>`,
-`tabindex="-1"`): the region that owns the in-flight mutation and presents its
-outcome, mounted and enabled through the whole write. The mutation semantics
-are unchanged: the unit's controls stay closed while it submits.
+Acceptance asserts **terminal settlement**, using the closed-dialog and exact
+focused-target observations. It does not prohibit a transient body-focused frame
+during library teardown. That earlier review assertion was stronger than #393's
+product contract and was removed only from confirmation-close tests; responsive
+navigation frame probes remain. Radix 1.1.23 had also failed the former assertion
+because its close callback is delayed; it is not retained as a parallel engine.
+The old `SettleOnLeave` workaround and its React Aria cleanup/restoration timing
+assumptions are gone. No Settings/XState/native ownership or transaction semantics
+change. Held-write fixtures count User RPC writes and Workspace Product Host
+writes at their actual boundaries before releasing either response.
+
+Screenshot evidence uses the existing reference-local raster-noise policy.
+Reviewed head `45dd456` and the final implementation were captured in the same
+pinned Chromium container with identical product rectangles and measured styles.
+The original three-pixel failure is bottom-right r24 corner/shadow coverage,
+with a one-grey-level delta; it also occurs on the light desktop page references.
+The dark corner has 14 changed pixels (delta 1). Full-page captures additionally
+expose compositing differences on blurred background edges: the deletion image
+has 6,077 pixels in nine bounded regions (maximum delta 3), and the mobile menu
+has 134 pixels in three edge regions (maximum delta 2). The confirmation itself
+has identical geometry and styling; its accessible name now uses `aria-label`.
+The manifest records actual region counts, channel bounds and raw samples;
+comparison remains exact everywhere else. Baselines and global tolerances are
+unchanged. Menus portal outside the blurred viewport so their backdrop sampling
+preserves the existing composition.
 
 **Page vocabulary.** `SettingsContent.module.css` scopes one hierarchy to the
 Settings section (`.page`): page title and description, group headings,

@@ -908,7 +908,7 @@ it('S2-10 cancelling a deletion writes nothing and returns focus; confirming per
   fireEvent.click(trigger);
   const dialog = await screen.findByRole('alertdialog');
   // The dialog states the actual removal: this User definition, nothing else.
-  expect(within(dialog).getByText('Remove Provider transport from User configuration?')).toBeTruthy();
+  expect(within(dialog).getByRole('heading', { name: 'Remove Provider transport from User configuration?' })).toBeTruthy();
   expect(within(dialog).getByText(/Models that name this Provider identity are not changed/)).toBeTruthy();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
@@ -969,9 +969,11 @@ it('S2-12 React Aria and TanStack Form stay bounded to Settings interaction and 
     'src/app/settings/primitives/aria.tsx',
     'src/presentation/settings/SettingsRoot.tsx',
   ]);
+  expect(importers('@base-ui/react/dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);
+  expect(importers('@base-ui/react/alert-dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);
   expect(importers('@tanstack/react-form')).toEqual(['src/app/settings/forms/bridge.tsx']);
   // One Settings modal root.
-  const modalRoots = sources(join(root, 'src')).filter(path => readFileSync(path, 'utf8').includes('<Modal className={css.panel}>'));
+  const modalRoots = sources(join(root, 'src')).filter(path => readFileSync(path, 'utf8').includes('title="Settings" overlayClassName={css.overlay}'));
   expect(modalRoots.map(path => relative(root, path))).toEqual(['src/presentation/settings/SettingsRoot.tsx']);
   // Settings keeps no browser storage and no URL state.
   for (const path of sources(join(root, 'src/app/settings'))) {

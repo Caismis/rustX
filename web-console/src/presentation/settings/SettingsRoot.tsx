@@ -1,7 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Dialog, Modal, ModalOverlay, Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import clsx from 'clsx';
+import { DialogSurface } from '../primitives/DialogSurface';
 import { Menu } from '../primitives/Menu';
 import { IconChevronDownOutline14, IconCloseOutline16, IconSettingsOutline16 } from '../primitives/icons';
 import css from './SettingsRoot.module.css';
@@ -16,8 +17,8 @@ export interface SettingsPageEntry { id: string; label: string; icon: ReactNode 
  * primary product pages as its navigation.
  *
  * Focus containment, focus restoration to the trigger, Escape and the
- * dismissable mask are React Aria's, not hand-written: `ModalOverlay`/`Modal`/
- * `Dialog` own the dialog semantics and `Tabs`/`TabList`/`Tab`/`TabPanel` own
+ * dismissable mask belong to the shared Base UI-backed `DialogSurface`.
+ * React Aria `Tabs`/`TabList`/`Tab`/`TabPanel` own
  * roving focus and arrow-key page navigation along the vertical rail.
  *
  * The panel has two layouts and no layout state. It is a size container, and
@@ -59,13 +60,17 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
 }) {
   const [sections, setSections] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
+  const [dialogNode, setDialogNode] = useState<HTMLElement | null>(null);
+  const attachDialog = useCallback((node: HTMLElement | null) => {
+    dialogRef.current = node;
+    setDialogNode(node);
+  }, []);
   const sectionTriggerRef = useRef<HTMLButtonElement>(null);
-  useNavigationFocusHandoff(dialogRef, sectionTriggerRef);
+  useNavigationFocusHandoff(dialogNode, sectionTriggerRef);
   const active = pages.find(page => page.id === activeId)!;
   return (
-    <ModalOverlay className={css.overlay} isOpen isDismissable onOpenChange={open => { if (!open) onClose(); }}>
-      <Modal className={css.panel}>
-        <Dialog ref={dialogRef} className={css.dialog} aria-label="Settings">
+    <DialogSurface open onClose={onClose} title="Settings" overlayClassName={css.overlay}
+      panelClassName={css.panel} className={css.dialog} contentRef={attachDialog} initialFocus={() => { dialogRef.current?.focus({ preventScroll: true }); return false; }}>
           {/* The header is deliberately outside <Tabs>: React Aria renders a
               Tabs subtree a second time into a detached collection document
               to discover its tabs, and the section menu measures real DOM. */}
@@ -103,9 +108,7 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
               <TabPanel key={activeId} id={activeId} className={workflow.pageTabPanel}>{children}</TabPanel>
             </div>
           </Tabs>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+    </DialogSurface>
   );
 }
 
@@ -134,9 +137,8 @@ const RAIL_TAB = `nav[aria-label="${RAIL_LABEL}"] [role="tab"]`;
  * control and never bounces between the two. Selection, the section menu,
  * drafts and native state are not touched.
  */
-function useNavigationFocusHandoff(dialogRef: RefObject<HTMLElement | null>, sectionTriggerRef: RefObject<HTMLButtonElement | null>): void {
+function useNavigationFocusHandoff(dialog: HTMLElement | null, sectionTriggerRef: RefObject<HTMLButtonElement | null>): void {
   useEffect(() => {
-    const dialog = dialogRef.current;
     if (dialog === null) return;
     const onFocusOut = (event: FocusEvent) => {
       const control = event.target;
@@ -153,7 +155,7 @@ function useNavigationFocusHandoff(dialogRef: RefObject<HTMLElement | null>, sec
     };
     dialog.addEventListener('focusout', onFocusOut);
     return () => { dialog.removeEventListener('focusout', onFocusOut); };
-  }, [dialogRef, sectionTriggerRef]);
+  }, [dialog, sectionTriggerRef]);
 }
 
 export function SettingsTrigger({ wide, onClick }: { wide: boolean; onClick: () => void }) {

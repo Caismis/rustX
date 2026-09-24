@@ -1,19 +1,24 @@
-import { useEffect, useId, useRef, type Key, type ReactNode, type RefObject } from 'react';
+import { useRef, useState, type Key, type ReactNode, type RefObject } from 'react';
+import { DialogSurface, useDialogPortal } from '../../../presentation/primitives/DialogSurface';
 import clsx from 'clsx';
 import {
-  Button as AriaButton, Dialog, DialogTrigger, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
-  ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, SearchField, Select, SelectValue,
+  Button as AriaButton, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
+  ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Popover as AriaPopover, SearchField, Select, SelectValue,
   Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs,
 } from 'react-aria-components';
 import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import buttonCss from '../../../presentation/primitives/Button.module.css';
 import css from '../../../presentation/settings/SettingsWorkflow.module.css';
 
+function Popover(props: React.ComponentProps<typeof AriaPopover>) {
+  const container = useDialogPortal();
+  return <AriaPopover {...props} UNSTABLE_portalContainer={container} />;
+}
+
 /** The bounded React Aria adoption of the Settings workflows.
  *
  * React Aria Components own interaction and accessibility semantics here and
- * nothing else: keyboard navigation and roving focus, dialog focus containment
- * and restoration, menu/list/select interaction, accessible tabs, disclosure
+ * nothing else: keyboard navigation and roving focus, menu/list/select interaction, accessible tabs, disclosure
  * behavior and search-field semantics. Every visual decision stays in the
  * existing Harness-derived rustX token family, so no competing design system
  * is imported and no Spectrum stylesheet is loaded.
@@ -139,28 +144,9 @@ export function Toggle({ label, checked, onChange, disabled = false }: {
  * The destructive trigger carries the existing trash glyph; its label, like
  * every label, keeps full contrast.
  *
- * This is a transient layer over the one Settings modal root, not a second
- * Settings tree: it mounts only while the confirmation is open, React Aria
- * contains focus inside it, and Escape closes this topmost layer only.
- *
- * Where focus goes when the layer closes depends on how it closed:
- *
- * - dismissed (Cancel, Escape, a press outside): nothing was done, so focus
- *   returns to the trigger that opened it — or, if the trigger can no longer
- *   take focus, to `settle`;
- * - confirmed: the confirmed action may disable or remove the trigger — a
- *   submitted removal closes the controls of its unit until native answers —
- *   so focus settles on `settle`, the stable element the caller's workflow
- *   names for the action's outcome.
- *
- * React Aria owns the layer: its open state, dismissal, focus containment and
- * initial focus. Its own restoration is not used for either exit. It refocuses
- * a connected trigger whether or not it is enabled, and it runs a frame after
- * the layer unmounts, leaving the keyboard on the page body for that frame —
- * long enough, in the full application, for the Settings dialog's own
- * `useDialog` refocus timer to claim it. `SettleOnLeave` places focus in the
- * same task as the unmount instead, so React Aria's restoration later finds it
- * placed and leaves it there. */
+ * The workflow names the stable outcome surface; this interaction chooses
+ * dismissed versus confirmed. DialogSurface owns the close-focus lifecycle.
+ */
 export function ConfirmAction({ label, title, description, confirm, onConfirm, tone, settle, disabled = false }: {
   label: string; title: string; description: ReactNode; confirm: string;
   onConfirm: () => void; tone: 'destructive' | 'restore';
@@ -171,65 +157,40 @@ export function ConfirmAction({ label, title, description, confirm, onConfirm, t
   disabled?: boolean;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
-  /** How the open layer is closing; set when React Aria closes it, consumed
-   * when it has left. */
-  const closing = useRef<'dismissed' | 'confirmed' | null>(null);
-  const titleId = useId();
+  const cancel = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const closing = useRef<'dismissed' | 'confirmed'>('dismissed');
   const destructive = tone === 'destructive';
-  const settleFocus = () => {
-    const outcome = closing.current;
-    closing.current = null;
-    if (outcome === null) return;
-    for (const target of outcome === 'confirmed' ? [settle.current] : [trigger.current, settle.current]) {
-      target?.focus({ preventScroll: true });
-      if (target !== null && target === document.activeElement) return;
-    }
-  };
   return <span className={css.removal} data-tone={tone}>
-    <DialogTrigger onOpenChange={open => { if (!open) closing.current ??= 'dismissed'; }}>
-      <AriaButton ref={trigger} isDisabled={disabled} className={clsx(buttonCss.button, buttonCss.ghost, buttonCss.md, destructive && css.dangerTrigger)}>
-        {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{label}
-      </AriaButton>
-      <ModalOverlay className={css.confirmOverlay} isDismissable>
-        <Modal className={css.confirmModal}>
-          <Dialog className={css.confirmDialog} role={destructive ? 'alertdialog' : 'dialog'} aria-labelledby={titleId}>
-            {({ close }) => <>
-              <SettleOnLeave onLeave={settleFocus} />
-              <Heading slot="title" id={titleId}>{title}</Heading>
-              {description}
-              <div className={css.confirmActions}>
-                {/* The least destructive action takes initial focus. React
-                    Aria's Button focuses from an effect, after this layer's
-                    focus scope is registered as a child of the Settings scope;
-                    a native `autoFocus` fires during commit, before that, so the
-                    Settings scope would read it as focus escaping and take it
-                    back to the trigger. */}
-                <AriaButton autoFocus className={`${buttonCss.button} ${buttonCss.outline} ${buttonCss.md}`} onPress={close}>Cancel</AriaButton>
-                <AriaButton className={`${buttonCss.button} ${buttonCss.primary} ${buttonCss.md} ${destructive ? css.destructive : ''}`}
-                  onPress={() => { closing.current = 'confirmed'; onConfirm(); close(); }}>{confirm}</AriaButton>
-              </div>
-            </>}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+    <button type="button" ref={trigger} disabled={disabled}
+      className={clsx(buttonCss.button, buttonCss.ghost, buttonCss.md, destructive && css.dangerTrigger)}
+      onClick={() => { closing.current = 'dismissed'; setOpen(true); }}>
+      {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{label}
+    </button>
+    <DialogSurface open={open} onClose={() => setOpen(false)} title={title}
+      role={destructive ? 'alertdialog' : 'dialog'} overlayClassName={css.confirmOverlay}
+      panelClassName={css.confirmModal} className={css.confirmDialog} initialFocus={cancel}
+      finalFocus={() => {
+        const targets = closing.current === 'confirmed' ? [settle.current] : [trigger.current, settle.current];
+        for (const target of targets) {
+          if (!target?.isConnected || target.matches(':disabled, [aria-disabled="true"]')
+            || !target.checkVisibility({ visibilityProperty: true })) continue;
+          target.focus({ preventScroll: true });
+          if (document.activeElement === target) break;
+        }
+        // Custom focus is complete. In particular, a programmatically focusable
+        // unit form must not be replaced by its first tabbable descendant.
+        return false;
+      }}>
+      <h2>{title}</h2>
+      {description}
+      <div className={css.confirmActions}>
+        <button type="button" ref={cancel} className={`${buttonCss.button} ${buttonCss.outline} ${buttonCss.md}`} onClick={() => setOpen(false)}>Cancel</button>
+        <button type="button" className={`${buttonCss.button} ${buttonCss.primary} ${buttonCss.md} ${destructive ? css.destructive : ''}`}
+          onClick={() => { closing.current = 'confirmed'; setOpen(false); onConfirm(); }}>{confirm}</button>
+      </div>
+    </DialogSurface>
   </span>;
-}
-
-/** A confirmation layer's departure, observed from inside it.
- *
- * React Aria's modal makes everything outside it — the Settings dialog
- * included — inert from a passive effect of an ancestor of this component.
- * Passive cleanups of an unmounting tree run ancestors first, and for the
- * discrete Cancel, Escape or Confirm that closes the layer React runs them in
- * the same task as the commit. This cleanup therefore runs once nothing
- * outside the layer is inert, and before any timer or frame could see the
- * keyboard on the page body. */
-function SettleOnLeave({ onLeave }: { onLeave: () => void }) {
-  const leave = useRef(onLeave);
-  leave.current = onLeave;
-  useEffect(() => () => leave.current(), []);
-  return null;
 }
 
 /** A secondary filter strip, used by the one Extensions resource surface. */

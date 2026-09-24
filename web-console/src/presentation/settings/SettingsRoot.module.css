@@ -66,8 +66,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  /* React Aria's ModalOverlay is the mask element itself: it owns the
-     dismissable backdrop, so no separate mask node is rendered. */
+  /* Base UI's DialogViewport is the mask element itself: it owns the
+     dismissable viewport, so no separate styled mask node is rendered. */
   background: var(--dsw-alias-bg-mask-1);
   backdrop-filter: var(--dsw-mask-blur);
 }

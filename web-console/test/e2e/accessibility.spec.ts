@@ -116,7 +116,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await expect(confirmation).toBeVisible();
     await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
     await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-    expect(await confirmation.evaluate(el => el.contains(document.activeElement))).toBe(true);
+    await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(confirmation).toHaveCount(0); await expect(remove).toBeFocused();
     await expect(endpoint).toHaveValue(/\/draft-only$/);

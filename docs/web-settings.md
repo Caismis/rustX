@@ -233,11 +233,17 @@ dialog shows. Page focus is presentation navigation only: no draft, CAS base or
 mutation identity lives there, so leaving a detail never discards editing
 intent.
 
-React Aria Components provide the interaction semantics of the Settings dialog
-(modal focus containment and restoration, page and filter tabs, resource grids,
-selects, menus, disclosures, switches and confirmation dialogs) inside the one
-Settings modal root; every visual decision stays in the existing rustX token
-family. The narrow section menu is the shared rustX Menu, whose
+The shared Base UI-backed dialog primitive owns modal containment, layering,
+Escape, dismissal and the explicit close-focus lifecycle for Settings and its
+confirmations. Settings workflows provide the intended focus destination:
+dismissal returns to the usable trigger (otherwise the unit form); confirmation
+settles on the stable unit form while native writes are in flight.
+These are terminal-focus contracts, observed after the dialog closes; transient
+body focus during library teardown is not a product invariant. The public
+`finalFocus` callback focuses the exact target and disables automatic restoration.
+Cancel receives initial focus. React Aria retains page/filter tabs, resource
+grids, selects, menus, disclosures and switches. All styling stays in the
+existing rustX token family. The narrow section menu is the shared rustX Menu, whose
 geometry — placement, flip, shift, available size and following its anchor, for
 the list and for every submenu — is Floating UI's, within the Menu's design
 dimensions. Neither library holds a page, target or draft: they own
