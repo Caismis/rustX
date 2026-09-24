@@ -68,10 +68,7 @@ Pinned dependencies adopted for demonstrated #393 requirements:
   workflow focus destination and returns `false` to suppress automatic
   restoration to a different descendant. No styles, tokens or state ownership
   are imported. See <https://base-ui.com/react/components/dialog>.
-  This replaces the confirmation unmount-cleanup workaround. Radix 1.1.23 and
-  all of its draft dependency/notices entries were removed. The revised
-  acceptance contract measures terminal focus, not transient body focus during
-  library teardown. Other application modal surfaces remain unchanged.
+  Other application modal surfaces remain unchanged.
 
 React Aria retains non-dialog interaction semantics and TanStack Form retains
 field mechanics. Menus and selects portal into their containing dialog scope;

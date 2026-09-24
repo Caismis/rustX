@@ -1192,27 +1192,28 @@ Acceptance asserts **terminal settlement**, using the closed-dialog and exact
 focused-target observations. It does not prohibit a transient body-focused frame
 during library teardown. That earlier review assertion was stronger than #393's
 product contract and was removed only from confirmation-close tests; responsive
-navigation frame probes remain. Radix 1.1.23 had also failed the former assertion
-because its close callback is delayed; it is not retained as a parallel engine.
+navigation frame probes remain. Radix was evaluated, but its public close-focus
+lifecycle did not satisfy the tested contract; it is not a dependency.
 The old `SettleOnLeave` workaround and its React Aria cleanup/restoration timing
 assumptions are gone. No Settings/XState/native ownership or transaction semantics
 change. Held-write fixtures count User RPC writes and Workspace Product Host
 writes at their actual boundaries before releasing either response.
 
-Screenshot evidence uses the existing reference-local raster-noise policy.
-Reviewed head `45dd456` and the final implementation were captured in the same
-pinned Chromium container with identical product rectangles and measured styles.
-The original three-pixel failure is bottom-right r24 corner/shadow coverage,
-with a one-grey-level delta; it also occurs on the light desktop page references.
-The dark corner has 14 changed pixels (delta 1). Full-page captures additionally
-expose compositing differences on blurred background edges: the deletion image
-has 6,077 pixels in nine bounded regions (maximum delta 3), and the mobile menu
-has 134 pixels in three edge regions (maximum delta 2). The confirmation itself
-has identical geometry and styling; its accessible name now uses `aria-label`.
-The manifest records actual region counts, channel bounds and raw samples;
-comparison remains exact everywhere else. Baselines and global tolerances are
-unchanged. Menus portal outside the blurred viewport so their backdrop sampling
-preserves the existing composition.
+Screenshot evidence follows the unchanged contract: a stable capture, compared
+exactly, with only same-implementation rasterizer noise excepted. Moving the
+Settings panel and its confirmations under the Base UI portal changes how
+Chromium composites the backdrop-filtered mask and the r24 panel shadow. Twenty
+Settings references (the desktop pages, workspace, conflict, loading,
+read-error, Advanced, the 390px pages and section menu, the deletion
+confirmation, and the shell Settings references) change only in the panel's
+edge/shadow coverage and in the blurred page behind the mask (maximum channel
+delta 6); the dialog content and geometry are unchanged. Each reference rendered
+one byte-identical output in nine repeated same-HEAD captures in the pinned
+container. That is deterministic implementation output, so the references were
+reviewed and regenerated through `RUSTX_SCREENSHOT_UPDATE`. The noise manifest
+gains no entry. The earlier provider-detail mobile corner entry (bimodal before
+this change) was removed, because the current implementation renders that corner
+one way in every capture.
 
 **Page vocabulary.** `SettingsContent.module.css` scopes one hierarchy to the
 Settings section (`.page`): page title and description, group headings,
