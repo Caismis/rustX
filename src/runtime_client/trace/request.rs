@@ -56,6 +56,7 @@ pub(super) fn request_detail(
     store: &dyn ConversationStore,
     snapshot: &RequestSnapshot,
     outcome: RequestOutcome,
+    previous: &super::summary::PreviousRequest,
 ) -> Result<Option<TraceRequestDetail>, ConversationStoreError> {
     if !identity_fits(snapshot.request_id.as_str())
         || !identity_fits(snapshot.identity.attempt_id.as_str())
@@ -122,6 +123,8 @@ pub(super) fn request_detail(
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
     Ok(Some(TraceRequestDetail {
         contributions,
+        predecessor: previous.identity(),
+        previous_system_prompt: previous.prompt(),
         request_id: snapshot.request_id.clone(),
         attempt_id: snapshot.identity.attempt_id.clone(),
         step_id: snapshot.identity.turn.clone(),

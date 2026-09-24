@@ -1,6 +1,13 @@
-# App Server protocol v19
+# App Server protocol v20
 
-App Server v19 makes resource-diagnostic attribution a native fact
+App Server v20 adds the mandatory shared Request predecessor and frozen Tool
+catalog classification to Trace summaries, plus bounded previous prompt content
+to Request detail (#394). Runtime Client v46 carries the same vocabulary. The
+strict version policy rejects v19/v45 and earlier peers; generated v19 artifacts
+are removed. This is no persisted-schema change: SQLite remains v43. See
+[Trace ownership and bounds](trace.md). All affected clients use generated v20.
+
+App Server v19 made resource-diagnostic attribution a native fact
 (Issue #392). `ResourceDiagnostic.subject` is a required tagged member:
 `{kind:"resource", family, name}` for a diagnostic of exactly one resource
 identity, or `{kind:"collection", family}` for a failure of a family's source
@@ -11,7 +18,7 @@ member, which carried a loader field path such as `mcp_servers.<id>`, is now
 ownership from that path or from a source file several identities share, and
 the second inference attached one MCP definition's failure to every sibling in
 the same `mcp.toml`. The same `CapabilityInspection` travels in the Runtime
-Client snapshot, which is v45 for the same reason. v18 and every earlier
+Client snapshot, which advanced to v45 for the same reason. v18 and every earlier
 version are rejected; there is no dual handling and no compatibility shim.
 Generated v18 artifacts are removed.
 
@@ -37,13 +44,13 @@ Catalog metadata after an asynchronous display-projection publication
 and every earlier version are rejected; there is no dual handling and no
 compatibility shim. Generated v16 artifacts are removed.
 
-App Server v19 also carries v16's producer identity on Trace context additions
+App Server v20 also carries v16's producer identity on Trace context additions
 and typed accepted contributions on request detail. These are historical
 RequestSnapshot facts, not live Todo/Goal authority. See
 [native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v19 identifies one complete mandatory vocabulary, including exact
+App Server v20 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -151,13 +158,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v19",
+  "rustx.app-server.v20",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v19` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v20` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -742,7 +749,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v19; no compatibility path is provided.
+This remains mandatory protocol v20; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -772,7 +779,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v19, with no compatibility field and no activation mode.
+App Server protocol v20, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -1072,7 +1079,7 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v19 and WebSocket requires `rustx.app-server.v19`.
+Initialization requires exactly v19 and WebSocket requires `rustx.app-server.v20`.
 v13 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v19.ts`, `v19.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
@@ -1103,7 +1110,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v19;
+explicit recovery action. These recovery semantics remain in App Server v20;
 native Runtime Client is v44.
 
 ## Rich historical Trace inspection (#364)

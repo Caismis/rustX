@@ -11,7 +11,8 @@ use super::record::generation_metrics;
 use super::request::{RequestOutcome, request_detail};
 use super::tool::{historical_definition, tool_detail};
 use super::types::{
-    TraceDetail, TraceKind, TraceMessageDetail, TraceMessageRole, TraceRequestFailure,
+    TraceDetail, TraceKind, TraceMessageDetail, TraceMessageRole, TraceRequestDetail,
+    TraceRequestFailure,
 };
 use super::{ADOPTED_MESSAGE_LIMIT, STEP_JOIN_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
@@ -19,7 +20,7 @@ use crate::durable::presentation::FactScope;
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
 use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::snapshot::RequestSnapshot;
-use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
+use crate::runtime::identity::{MessageId, RequestId, ToolCallId, ToolId};
 use crate::tools::types::ToolCall;
 
 impl TraceProjection<'_> {
@@ -39,13 +40,7 @@ impl TraceProjection<'_> {
         match &anchor.event {
             E::ModelRequestStarted { request_id, .. } => {
                 detail.kind = TraceKind::Request;
-                let frozen = self.store.load_request_snapshot(request_id)?;
-                let end = self.ending(
-                    FactScope::Request(request_id.to_string()),
-                    &["model_request_completed", "model_request_failed"],
-                )?;
-                detail.request =
-                    request_detail(self.store, &frozen, request_outcome(end.as_ref()))?;
+                detail.request = self.request_detail_at(request_id, anchor.sequence)?;
                 detail.truncated = detail.request.is_none();
             }
             E::InboundTurnAdopted { message_ids } => {
@@ -128,6 +123,24 @@ impl TraceProjection<'_> {
             _ => unreachable!("allowlisted anchors only"),
         }
         Ok(detail)
+    }
+
+    fn request_detail_at(
+        &self,
+        request_id: &RequestId,
+        anchor_sequence: u64,
+    ) -> Result<Option<TraceRequestDetail>, ConversationStoreError> {
+        let frozen = self.store.load_request_snapshot(request_id)?;
+        let end = self.ending(
+            FactScope::Request(request_id.to_string()),
+            &["model_request_completed", "model_request_failed"],
+        )?;
+        request_detail(
+            self.store,
+            &frozen,
+            request_outcome(end.as_ref()),
+            &self.previous_request(anchor_sequence)?,
+        )
     }
 
     /// Assembles Tool detail from its three separate native authorities.

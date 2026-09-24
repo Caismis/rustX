@@ -39,46 +39,12 @@ use crate::message::types::{ContextKind, InboundKind, MessageBlock, UserSource};
 use crate::model::snapshot::RequestSnapshot;
 
 impl TraceProjection<'_> {
-    /// The System Prompt presentation of one actual request.
-    ///
-    /// # Errors
-    ///
-    /// Propagates the durable read failure of the predecessor lookup or of
-    /// its immutable snapshot. A failed read is never reported as "no
-    /// predecessor": that would turn an unreadable store into a claim that
-    /// this request is the first one.
-    pub(super) fn system_prompt_presentation(
+    /// One indexed predecessor seek shared by BOTH immutable comparisons.
+    /// `RequestNotFound` is absence; every other durable error propagates.
+    pub(super) fn previous_request(
         &self,
         anchor_sequence: u64,
-        frozen: &RequestSnapshot,
-    ) -> Result<TraceSystemPromptPresentation, ConversationStoreError> {
-        let previous = self.previous_request_prompt(anchor_sequence)?;
-        let state = system_prompt_state(&previous, &frozen.effective_system_prompt);
-        Ok(TraceSystemPromptPresentation {
-            // `Unchanged` says the preceding request's row already carries
-            // this preview, so repeating it on every row of a long run of
-            // identical requests would be pure duplication.
-            preview: match state {
-                TraceSystemPromptState::Unchanged => None,
-                _ => Some(TracePreview::of(&frozen.effective_system_prompt)),
-            },
-            state,
-        })
-    }
-
-    /// The frozen prompt of the nearest preceding actual request.
-    ///
-    /// The predecessor is whichever `ModelRequestStarted` immediately
-    /// precedes this one in durable start order: it may belong to an earlier
-    /// retry, a recovery request, an earlier logical Step or an earlier
-    /// Attempt. The lookup is a single indexed seek bounded by this
-    /// projection's own read cut, so it never scans the Journal and never
-    /// depends on which records a client loaded.
-    ///
-    fn previous_request_prompt(
-        &self,
-        anchor_sequence: u64,
-    ) -> Result<PreviousPrompt, ConversationStoreError> {
+    ) -> Result<PreviousRequest, ConversationStoreError> {
         #[cfg(test)]
         probe::record(&probe::SYSTEM_PREDECESSOR);
         let Some(previous) = self
@@ -86,7 +52,6 @@ impl TraceProjection<'_> {
             .read_presentation_events(&FactQuery {
                 scope: FactScope::All,
                 kinds: vec!["model_request_started"],
-                // Exclusive, so this request can never be its own predecessor.
                 before: Some(anchor_sequence),
                 after: 0,
                 ascending: false,
@@ -95,16 +60,20 @@ impl TraceProjection<'_> {
             })?
             .pop()
         else {
-            return Ok(PreviousPrompt::None);
+            return Ok(PreviousRequest::None);
         };
-        let E::ModelRequestStarted { request_id, .. } = &previous.event else {
-            return Ok(PreviousPrompt::Unavailable);
+        let E::ModelRequestStarted { request_id, .. } = previous.event else {
+            return Err(ConversationStoreError::InvalidReference(
+                "non-request predecessor".into(),
+            ));
         };
-        Ok(PreviousPrompt::Frozen(
-            self.store
-                .load_request_snapshot(request_id)?
-                .effective_system_prompt,
-        ))
+        match self.store.load_request_snapshot(&request_id) {
+            Ok(snapshot) => Ok(PreviousRequest::Frozen(Box::new(snapshot))),
+            Err(ConversationStoreError::RequestNotFound(_)) => {
+                Ok(PreviousRequest::Unavailable(request_id))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// The canonical Context this exact request introduced, in frozen order.
@@ -234,38 +203,72 @@ fn context_invariant(
     ))
 }
 
-/// What native authority established about one request's predecessor.
-///
-/// The three cases stay apart deliberately: "there is no earlier actual
-/// request" and "there is one whose frozen prompt could not be read" are
-/// different answers, and collapsing them would let an unreadable
-/// predecessor be presented as the start of the conversation.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum PreviousPrompt {
-    /// Native authority proved no earlier actual request exists.
+/// The full frozen snapshot is loaded once, never separately per relationship.
+pub(super) enum PreviousRequest {
     None,
-    /// A predecessor exists, but its frozen prompt could not be established.
-    Unavailable,
-    /// The predecessor's exact frozen prompt.
-    Frozen(String),
+    Unavailable(crate::runtime::identity::RequestId),
+    Frozen(Box<RequestSnapshot>),
 }
 
-/// Classifies one request's prompt against its resolved predecessor.
-///
-/// Comparison is exact historical value equality between two immutable
-/// snapshots — never against current configuration, current assembly, or
-/// System section names.
-pub(super) fn system_prompt_state(
-    previous: &PreviousPrompt,
-    current: &str,
-) -> TraceSystemPromptState {
-    match previous {
-        PreviousPrompt::None => TraceSystemPromptState::Initial,
-        PreviousPrompt::Unavailable => TraceSystemPromptState::PreviousUnavailable,
-        PreviousPrompt::Frozen(previous) if previous == current => {
-            TraceSystemPromptState::Unchanged
+impl PreviousRequest {
+    pub(super) fn identity(&self) -> super::types::TraceRequestPredecessor {
+        use super::types::TraceRequestPredecessor as P;
+        match self {
+            Self::None => P::NotApplicable,
+            Self::Unavailable(id) => P::Unavailable {
+                request_id: identity_fits(id.as_str()).then(|| id.clone()),
+            },
+            Self::Frozen(snapshot) if identity_fits(snapshot.request_id.as_str()) => P::Available {
+                request_id: snapshot.request_id.clone(),
+            },
+            Self::Frozen(_) => P::Unavailable { request_id: None },
         }
-        PreviousPrompt::Frozen(_) => TraceSystemPromptState::Changed,
+    }
+
+    pub(super) fn prompt(&self) -> Option<super::bounds::TraceText> {
+        match self {
+            Self::Frozen(snapshot) => Some(super::bounds::TraceText::detail(
+                &snapshot.effective_system_prompt,
+            )),
+            _ => None,
+        }
+    }
+
+    pub(super) fn presentation(
+        &self,
+        current: &RequestSnapshot,
+    ) -> (
+        TraceSystemPromptPresentation,
+        super::types::TraceToolCatalogState,
+    ) {
+        use super::types::TraceToolCatalogState as T;
+        use TraceSystemPromptState as S;
+        #[cfg(test)]
+        probe::record(&probe::TOOL_RELATIONSHIP);
+        let (state, tools) = match self {
+            Self::None => (S::Initial, T::Initial),
+            Self::Unavailable(_) => (S::PreviousUnavailable, T::PreviousUnavailable),
+            Self::Frozen(previous) => (
+                if previous.effective_system_prompt == current.effective_system_prompt {
+                    S::Unchanged
+                } else {
+                    S::Changed
+                },
+                if previous.tool_definitions == current.tool_definitions {
+                    T::Unchanged
+                } else {
+                    T::Changed
+                },
+            ),
+        };
+        (
+            TraceSystemPromptPresentation {
+                state,
+                preview: (state != S::Unchanged)
+                    .then(|| TracePreview::of(&current.effective_system_prompt)),
+            },
+            tools,
+        )
     }
 }
 
@@ -283,6 +286,7 @@ pub(super) mod probe {
         /// Resolutions of the System Prompt predecessor presentation.
         pub(in crate::runtime_client::trace) static SYSTEM_PREDECESSOR: Cell<u32> =
             const { Cell::new(0) };
+        pub(in crate::runtime_client::trace) static TOOL_RELATIONSHIP: Cell<u32> = const { Cell::new(0) };
         /// Canonical Context presentation joins against the Message Ledger.
         pub(in crate::runtime_client::trace) static CONTEXT_LEDGER_JOIN: Cell<u32> =
             const { Cell::new(0) };
@@ -303,41 +307,14 @@ pub(super) mod probe {
         )
     }
 
+    pub(in crate::runtime_client::trace) fn tool_count() -> u32 {
+        TOOL_RELATIONSHIP.with(Cell::get)
+    }
+
     /// Zeroes both counters so the next call is measured on its own.
     pub(in crate::runtime_client::trace) fn reset() {
         SYSTEM_PREDECESSOR.with(|count| count.set(0));
+        TOOL_RELATIONSHIP.with(|count| count.set(0));
         CONTEXT_LEDGER_JOIN.with(|count| count.set(0));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PreviousPrompt as P, TraceSystemPromptState as S, system_prompt_state};
-
-    fn frozen(prompt: &str) -> P {
-        P::Frozen(prompt.to_owned())
-    }
-
-    /// Each closed answer comes from exactly one resolved predecessor shape.
-    #[test]
-    fn system_prompt_classification_is_total_and_exact() {
-        assert_eq!(system_prompt_state(&P::None, "prompt"), S::Initial);
-        assert_eq!(
-            system_prompt_state(&P::Unavailable, "prompt"),
-            S::PreviousUnavailable
-        );
-        assert_eq!(
-            system_prompt_state(&frozen("prompt"), "prompt"),
-            S::Unchanged
-        );
-        assert_eq!(system_prompt_state(&frozen("older"), "prompt"), S::Changed);
-        // Equality is exact: whitespace is content, not formatting.
-        assert_eq!(
-            system_prompt_state(&frozen("prompt "), "prompt"),
-            S::Changed
-        );
-        // An empty prompt is a real historical value, not an absent one.
-        assert_eq!(system_prompt_state(&frozen(""), ""), S::Unchanged);
-        assert_eq!(system_prompt_state(&P::None, ""), S::Initial);
     }
 }

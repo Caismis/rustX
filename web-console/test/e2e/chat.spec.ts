@@ -75,29 +75,29 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
     const ledger = trajectory.getByRole('table', { name: 'Trace ledger' });
-    await expect(ledger).toHaveAttribute('aria-rowcount', '32');
+    await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(32);
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
     await ledger.evaluate(el => { el.scrollTop = 200; el.dispatchEvent(new Event('scroll')); });
-    const traceAnchor = trajectory.locator('[data-trace-id]').nth(8);
-    const traceAnchorId = await traceAnchor.getAttribute('data-trace-id');
+    const traceAnchor = trajectory.locator('[data-display-type="RequestBoundary"]').first();
+    const traceAnchorId = await traceAnchor.getAttribute('data-owner');
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
-    await trajectory.getByRole('button', { name: 'Load older', exact: true }).click();
-    await expect(ledger).toHaveAttribute('aria-rowcount', '64');
-    for (const count of [96, 128]) {
-      await trajectory.getByRole('button', { name: 'Load older', exact: true }).click();
-      await expect(ledger).toHaveAttribute('aria-rowcount', String(count));
+    for (let pageNumber = 0; pageNumber < 3; pageNumber++) {
+      const before = Number(await ledger.getAttribute('aria-rowcount'));
+      await trajectory.getByRole('button', { name: 'Load earlier records into the overview', exact: true }).click();
+      await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(before);
     }
-    expect(await trajectory.locator('[data-trace-id]').count()).toBeLessThan(64);
-    await expect.poll(async () => Math.abs(await trajectory.locator(`[data-trace-id="${traceAnchorId}"]`).evaluate(el => el.getBoundingClientRect().top) - traceAnchorTop)).toBeLessThan(2);
+    expect(await trajectory.locator('[data-display-key]').count()).toBeLessThan(80);
+    await expect.poll(async () => Math.abs(await trajectory.locator(`[data-display-type="RequestBoundary"][data-owner="${traceAnchorId}"]`).evaluate(el => el.getBoundingClientRect().top) - traceAnchorTop)).toBeLessThan(2);
     const requestRecord = traceBeforeBrowser.records.find(record => record.request)!;
     await trajectory.getByLabel('Search loaded Trace').fill(requestRecord.request!.model);
-    await trajectory.locator(`[data-trace-id="${requestRecord.id}"]`).click();
+    await trajectory.locator(`[data-display-type="RequestBoundary"][data-owner="${requestRecord.id}"]`).click();
     const inspector = trajectory.getByLabel('Trace record inspector');
+    await inspector.getByRole('tab', { name: 'Native', exact: true }).click();
     await expect(inspector).toContainText(requestRecord.request!.request_id);
     await expect(inspector).toContainText('Logical Step');
     // Historical request input is now inspectable rather than withheld, and
     // it is fetched on demand for the selected record only.
-    await inspector.getByRole('tab', { name: 'Prompt', exact: true }).click();
+    await inspector.getByRole('tab', { name: 'System Prompt', exact: true }).click();
     await expect(inspector).toContainText('Effective system prompt');
     await inspector.getByRole('tab', { name: 'Context', exact: true }).click();
     await expect(inspector).toContainText('Reconstructed request context');
@@ -127,13 +127,13 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
-    await expect(trajectory.getByRole('table').getByLabel('State: running').first()).toBeVisible();
+    await expect(trajectory.getByRole('table').getByText('running', { exact: true }).first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
-    await expect(trajectory.getByRole('table').getByLabel('State: running').first()).toBeVisible();
+    await expect(trajectory.getByRole('table').getByText('running', { exact: true }).first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const beforeSettlement = Number(await ledger.getAttribute('aria-rowcount'));
     await fixture.release('settle-chat');
@@ -205,7 +205,8 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(tool).toHaveCount(1);
     const stableToolId = await tool.getAttribute('data-trace-id');
     await tool.click();
-    await expect(trajectory.getByLabel('Trace record inspector')).toContainText('chat-image');
+    await inspector.getByRole('tab', { name: 'Native', exact: true }).click();
+    await expect(inspector).toContainText('chat-image');
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);

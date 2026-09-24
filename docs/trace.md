@@ -34,7 +34,7 @@ own the existing publication audit presentation. Canonical ToolCall proposals
 prove assembly, not execution: a separate started Tool record proves execution.
 
 Native `TurnId` is the logical model Step inside an Attempt. The UI labels the
-Attempt as a Turn/Attempt group and shows its native Steps. `RequestIdentity`
+Attempt as a lightweight section and shows its native Steps. `RequestIdentity`
 places request #0 and retries/recovery #1, #2, etc. beneath the **same** logical
 Step. The exact preceding request's failure class distinguishes transient,
 context-overflow and corrective cases when recorded. Neither timestamps nor
@@ -42,8 +42,10 @@ repeated output are retry evidence. Tool joins include Attempt, logical Step,
 ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
-Native Runtime Client version 43 and App Server version 13 carry this mandatory
-summary/detail vocabulary. SQLite schema 43 gates the persisted request terminal vocabulary including
+Native Runtime Client version 46 and App Server version 20 carry this mandatory
+summary/detail vocabulary, including the shared predecessor and frozen Tool
+catalog classification added by #394. Required fields change the strict vocabulary;
+both negotiated versions advance, with no aliases or alternate decoder. SQLite schema 43 gates the persisted request terminal vocabulary including
 generation evidence. The Event Journal envelope framing is unchanged; this is
 request terminal event data, not a new Trace store.
 
@@ -60,8 +62,8 @@ Trace table, or a second history or cache authority.
 
 `TraceRequestSummary.system_prompt` carries a closed state — `initial`,
 `changed`, `unchanged`, `previous_unavailable` — plus a bounded preview of the
-prompt the request introduced. `unchanged` carries no preview, because the
-preceding request's row already does.
+prompt the request introduced. `unchanged` carries no duplicate preview. The Request Summary always links
+directly to its own System Prompt, even when no change row is in the loaded page.
 
 The predecessor is resolved by **native durable actual-request ordering**: one
 bounded, indexed, `limit = 1` seek for the nearest preceding
@@ -85,6 +87,25 @@ honest third answer for a predecessor whose frozen state the projection cannot
 establish at the captured cut; it never hides a durable read failure, which is
 propagated as an error under the existing durable contract.
 
+One shared `PreviousRequest` resolution loads that exact predecessor once for
+**both** full effective-prompt equality and full frozen `tool_definitions`
+equality (including schemas and policies). `TraceRequestSummary.predecessor`
+records `not_applicable`, `available { request_id }`, or `unavailable { request_id? }`;
+`tool_catalog` carries `initial`, `changed`, `unchanged`, or `previous_unavailable`.
+No predecessor, an unavailable predecessor, a genuinely empty value, bounded
+truncation, and a durable read error remain distinct. Only `RequestNotFound` is
+unavailability; corruption/I/O errors propagate. No all-history snapshot reads
+are introduced. Summary resolution performs one indexed predecessor seek per
+Request, detail performs one, and lifecycle refresh performs **zero** predecessor,
+Context relationship, or Tool relationship resolutions (instrumented tests).
+
+Detail includes bounded `previous_system_prompt` from that same predecessor.
+`diff@9.0.0` computes text lines only after native classification and only when
+both complete bounded strings exist. Either-side truncation/unavailability is
+explicit; equal displayed prefixes never prove equality. A diff edit bound may
+also decline to render a complete diff. Settings/configuration cannot rewrite
+historical Request inputs; only a later Request freezes an adopted configuration.
+
 The complete prompt stays in `TraceRequestDetail.effective_system_prompt`
 under the existing bounded detail contract. A pageable summary carries only
 state and a preview, so a page of 32 requests never carries 32 prompts.
@@ -106,7 +127,7 @@ ordinary User message. The durable start transition checks structural Context
 identity/order, but does not prove Context Assembly provenance/family semantics.
 Trace therefore validates that semantic relationship independently.
 
-`TraceContextKind` is a closed presentation family — `goal_status`,
+`TraceContextKind` is a closed presentation family — `native_environment`, `goal_status`,
 `runtime_tool_observation`, `extension_environment`, `agent_status`. The
 internal `ContextKind` payload does not cross: a complete `GoalSnapshot` or
 Agent Status generation metadata never enters a summary.
@@ -126,6 +147,7 @@ Trace projects source and family jointly from the canonical `UserSource` and
 
 | Canonical source | Canonical kind | Trace source | Trace kind |
 | --- | --- | --- | --- |
+| Runtime | NativeEnvironment | Runtime | NativeEnvironment |
 | Runtime | GoalStatus | Runtime | GoalStatus |
 | Runtime | RuntimeToolObservation | Runtime | RuntimeToolObservation |
 | Runtime | AgentStatus | Runtime | AgentStatus |
@@ -420,8 +442,8 @@ independent Journal UTC start/end span. `TraceTiming.duration_ms` remains that
 Journal wall duration, including terminal recording delay and any wall-clock
 adjustment, and is labelled separately in Inspector. No current clock participates
 in reopening or projection. Equal-width sequence mode does not paint duration
-phase boundaries. Missing bridge evidence leaves the wall span unsplit even if
-numeric TTFT/generation metrics exist; missing output never acquires a boundary.
+phase boundaries. Missing bridge evidence leaves a Request marker even if
+numeric TTFT/generation metrics exist; its Journal duration stays separately labelled; missing output never acquires a boundary.
 
 For example, preparation 400 ms + dispatch-origin TTFT 320 ms + generation
 1280 ms yields request-relative dispatch 400 ms, first output 720 ms and terminal
@@ -442,13 +464,79 @@ replaces the cache. Selection is presentation state, never native authority.
 
 ## Presentation and deliberate exclusions
 
-Trajectory adapts the pinned Harness timing lanes, dense ledger, folding,
-selection/inspector, loaded-window search and virtual scrolling patterns to native
-Trace props. Attempt and Step folds do not change native state. Fixed-height
-virtual rows preserve reader anchors as payloads change; end anchoring follows
-new rows only when the reader remains at the tail. Chat/Trajectory is local view
-state on the same attachment. Chat transcript paging and the developer raw
-JSON-RPC inspector remain separate.
+The browser projects native `TraceRecord` summaries into a closed local
+`TrajectoryDisplayItem` union: `RecordRow`, `SystemRow`, `ContextRow`,
+`StepHeader`, `RequestBoundary`, `AttemptSectionHeader`, `CollapsedCallSummary`,
+and `HistoryBoundary`. None is an invented runtime event. The dense ledger has
+Event and Content columns. Successful state/duration/check chrome is absent;
+important lifecycle, uncertainty, missing history and truncation remain visible.
+
+Every owned item retains the exact native record. `owner_record_id` keys the
+existing bounded detail cache; `display_key` keys virtualization, focus, selection
+and prepend anchoring. Keys are JSON tuples, never indexes: record + native ID,
+system/request-boundary + Request ID, context + Request ID + Message ID,
+step-segment + Attempt + Turn + first native record identity, attempt-section +
+Attempt + segment anchor, collapsed-calls + canonical Assistant Message ID, and
+history-boundary + opaque cursor. One Trace cache supplies Session/Conversation
+scope. The Trajectory component lifetime is keyed by Session, Conversation and
+attachment so local folds/facets cannot leak across authority replacement.
+Selection stores display key, native owner, facet and optional Context
+Message ID. A late detail response can fill its owner's cache but cannot change
+these presentation fields or focus. Removed segments fall back to the same
+owner/facet, then the owner's Request boundary/content row, never a numeric index.
+
+Attempt numbers are loaded-window presentation ordinals, not native IDs. A
+logical Step is native `TurnId`; an unscoped record can split it into multiple
+visible segments without moving any records. Retry/recovery boundaries remain
+inside the same Step, using native Request identity and ordinal. Attempt/Step
+are section structure, not ordinary content rows. Fold Steps is removed.
+
+Calls collapse joins canonical Assistant proposals to **loaded** executions by
+Session/Conversation, Attempt, Turn, ToolCall ID and Tool ID. Missing/ambiguous
+scope remains uncollapsed. Proposals and executions have separate counts; failed,
+denied, waiting, running and unknown states remain in the summary. Background,
+Subagent and Workflow never become Subtools. Search overrides Calls and Attempt
+collapse, searches only loaded labels/previews/native identities, and performs
+no detail or history reads. History loading lives at the boundary; Jump to latest
+appears only off-tail. The old toolbar load/latest/count chrome is removed.
+
+SYSTEM mapping is initial prompt → Initial System Prompt; prompt change →
+System Prompt Updated; Tools change only → Tools Updated; both → System Prompt
+and Tools Updated; both unchanged → no duplicate; predecessor unavailable →
+neutral uncertainty. Ordering is Step segment, SYSTEM, frozen ordered CONTEXT,
+Request boundary. No Session-start SYSTEM is fabricated. CONTEXT retains exact
+producer/source, native family, preview and truncation with Request/Message IDs.
+
+TanStack Virtual owns ordinary virtualization with semantic keys. One native
+owner/display-key + pixel-offset anchor transfers across prepend, boundary/header
+insertion/removal, segment merging and the 100-display-item threshold. Tail follow
+runs only at the tail; content/lifecycle-only repair does not pull a reader down.
+
+The local Inspector uses React Aria tabs and existing safe Markdown, Shiki, JSON
+and artifact primitives. SYSTEM/CONTEXT select facets of the owning Request.
+Summary is a human-readable view; Native holds IDs and allowlisted native facts.
+`react-resizable-panels@4.12.4` owns drag/keyboard resizing, constraints, container
+reconciliation and double-click reset. Default Inspector width is
+clamp(320px, 38%, 440px), minimum 320px; Ledger minimum is 340px. Below a measured
+Trajectory width of 720px the panels stack. A Ledger container query at 560px
+compacts Event/icons even in a desktop viewport. No geometry is persisted.
+
+Timing lanes are Input / Model / Tools. Request generation is counted once,
+never again for canonical Assistant acceptance; Attempt/Step/SYSTEM acquire no
+durations. Parallel domain evidence retains overlap. Mode contracts:
+
+| Mode | Coordinates | Width / idle gaps |
+| --- | --- | --- |
+| sequence | durable visible execution order | equal width; no clock claim |
+| duration | recorded time with one cross-lane union-of-occupied-time transform | measured widths; idle gaps removed; overlap retained |
+| time | absolute recorded starts | markers; idle gaps retained |
+| actual | absolute recorded starts/ends | measured widths; idle gaps and overlap retained |
+
+Actual time is an intentional rustX toolbar extension exposing the pinned
+projection's second axis. Hover/Inspector retains original absolute timestamps;
+normalized duration positions do not replace native times. Missing timestamps
+are omitted, zero is valid, single timestamps are markers, and no running end
+is synthesized. No aggregate sums overlapping parent/child duration.
 
 See [Web provenance](../web-console/PROVENANCE.md) and its existing source
 inventory for inspected versus rewritten upstream paths and MIT notices.

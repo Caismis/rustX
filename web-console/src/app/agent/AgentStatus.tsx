@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentStatusView } from '../../../../protocol/app-server/v19';
+import type { AgentStatusView } from '../../../../protocol/app-server/v20';
 import { agentStatusFacets, agentStatusSummary } from '../../bindings/agent-status';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconContextInjectionOutline16 } from '../../presentation/primitives/icons';

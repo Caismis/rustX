@@ -217,6 +217,25 @@ pub struct TraceSystemPromptPresentation {
     pub preview: Option<TracePreview>,
 }
 
+/// The exact shared predecessor of the prompt and Tool catalog comparison.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "availability", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TraceRequestPredecessor {
+    NotApplicable,
+    Unavailable { request_id: Option<RequestId> },
+    Available { request_id: RequestId },
+}
+
+/// Complete frozen Tool definitions are compared before any display bounding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceToolCatalogState {
+    Initial,
+    Changed,
+    Unchanged,
+    PreviousUnavailable,
+}
+
 /// The closed presentation family of one admitted model-visible context fact.
 ///
 /// This is a presentation vocabulary, not the internal `ContextKind` payload:
@@ -304,6 +323,8 @@ pub struct TraceRequestSummary {
     /// Request-relative System Prompt presentation, resolved natively so the
     /// browser never compares request details to discover a prompt change.
     pub system_prompt: TraceSystemPromptPresentation,
+    pub predecessor: TraceRequestPredecessor,
+    pub tool_catalog: TraceToolCatalogState,
     /// Canonical request Context this exact request introduced, in the order
     /// frozen by `RequestSnapshot.request_context_ids`. A retry or recovery
     /// request reuses admitted context and therefore introduces none.
@@ -459,6 +480,9 @@ pub struct TraceRequestDetail {
     /// Their names are not disclosed; the count keeps the omission visible.
     pub omitted_option_count: usize,
     pub effective_system_prompt: TraceText,
+    pub predecessor: TraceRequestPredecessor,
+    /// Absent for no predecessor or unavailable content; empty is a real value.
+    pub previous_system_prompt: Option<TraceText>,
     /// The reconstructed provider-neutral request context, in wire order.
     pub messages: Vec<TraceRequestMessage>,
     pub messages_truncated: bool,

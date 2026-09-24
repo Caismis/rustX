@@ -80,11 +80,11 @@ pub use types::{
     TraceContextSource, TraceCursor, TraceDetail, TraceGeneration, TraceGenerationTimeline,
     TraceKind, TraceLifecycle, TraceLocation, TraceManagedOutput, TraceMessageDetail,
     TraceMessageRole, TracePage, TraceRecord, TraceRequestDetail, TraceRequestFailure,
-    TraceRequestMessage, TraceRequestOption, TraceRequestOutcome, TraceRequestSummary, TraceState,
-    TraceSystemPromptPresentation, TraceSystemPromptState, TraceTiming, TraceToolCall,
-    TraceToolDefinition, TraceToolDetail, TraceToolLifecycle, TraceToolOutcome,
-    TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource, TraceToolSummary,
-    TraceToolTruncation,
+    TraceRequestMessage, TraceRequestOption, TraceRequestOutcome, TraceRequestPredecessor,
+    TraceRequestSummary, TraceState, TraceSystemPromptPresentation, TraceSystemPromptState,
+    TraceTiming, TraceToolCall, TraceToolCatalogState, TraceToolDefinition, TraceToolDetail,
+    TraceToolLifecycle, TraceToolOutcome, TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource,
+    TraceToolSummary, TraceToolTruncation,
 };
 
 use record::bound_record;

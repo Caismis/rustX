@@ -41,7 +41,7 @@ describe('authoritative request phase positions', () => {
     expect(span.firstOutputAt).toBeUndefined();
     expect(span.dispatchAt).toBeUndefined();
     expect(span.providerTerminalAt).toBeUndefined();
-    expect(span.end).toBe(start + 2000);
+    expect(span.end).toBe(start);
   });
   it('does not paint duration boundaries onto equal-width sequence units', () => {
     const span = trajectoryTimeline([request(true)], 'sequence', () => undefined)!.spans[0]!;
@@ -69,4 +69,27 @@ it('preserves measured zero separately from absent and running timing', () => {
   expect(missing!.durationMs).toBeUndefined();
   expect(missing!.ttftMs).toBeUndefined();
   expect(missing!.end).toBe(missing!.start);
+});
+
+it('T1-12 epoch zero, missing instant, parallel domains and canonical acceptance do not invent or duplicate spans', () => {
+  const records = ['tool', 'background', 'subagent', 'workflow'].map((kind, n) => traceRecord(n, {
+    kind: kind as 'tool', request: null,
+    timing: { started_at: new Date(0).toISOString(), ended_at: new Date(1000).toISOString(), duration_ms: '1000' },
+  }));
+  records.push(traceRecord(4, { kind: 'assistant', request: null }), traceRecord(5, { kind: 'attempt', request: null }), traceRecord(6, { kind: 'step', request: null }));
+  records.push(traceRecord(7, { timing: { started_at: 'unavailable' } }));
+  const spans = trajectoryTimeline(records, 'duration', () => undefined)!.spans;
+  expect(spans.map(span => span.id)).toEqual(['trace:0', 'trace:1', 'trace:2', 'trace:3']);
+  expect(spans.map(span => [span.lane, span.start, span.end])).toEqual(Array.from({ length: 4 }, () => [2, 0, 1000]));
+  expect(trajectoryTimeline(records, 'sequence', () => undefined)!.spans.map(span => span.id)).toEqual(['trace:0', 'trace:1', 'trace:2', 'trace:3', 'trace:7']);
+});
+
+it('T1-12 four modes keep native time distinct from a shared idle-compression transform', () => {
+  const records = [0, 100, 2000].map((ms, n) => traceRecord(n, { kind: n === 1 ? 'background' : 'tool', request: null,
+    timing: { started_at: new Date(ms).toISOString(), ended_at: new Date(ms + 1000).toISOString(), duration_ms: '1000' } }));
+  const spans = (mode: 'sequence' | 'duration' | 'time' | 'actual') => trajectoryTimeline(records, mode, () => undefined)!.spans.map(s => [s.start, s.end]);
+  expect(spans('sequence')).toEqual([[0, 1], [1, 2], [2, 3]]);
+  expect(spans('duration')).toEqual([[0, 1000], [100, 1100], [1100, 2100]]);
+  expect(spans('time')).toEqual([[0, 0], [100, 100], [2000, 2000]]);
+  expect(spans('actual')).toEqual([[0, 1000], [100, 1100], [2000, 3000]]);
 });

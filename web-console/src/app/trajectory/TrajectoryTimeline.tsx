@@ -11,7 +11,7 @@
  * A record with one timestamp renders as a start marker, never as a span.
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
-import type { TraceRecord } from '../../../../protocol/app-server/v19';
+import type { TraceRecord } from '../../../../protocol/app-server/v20';
 import {
   TRAJECTORY_LANES,
   formatDuration,
@@ -334,9 +334,7 @@ export function TrajectoryTimeline({
                 .map(candidate => {
                   const left = percent(candidate.start);
                   const width = percent(candidate.end) - left;
-                  const marker = mode === 'duration'
-                    ? candidate.end === candidate.start
-                    : candidate.durationMs === undefined;
+                  const marker = mode !== 'sequence' && candidate.end === candidate.start;
                   const phasePercent = (at: number | undefined) =>
                     at === undefined || candidate.end <= candidate.start
                       ? undefined

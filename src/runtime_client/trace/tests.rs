@@ -3577,3 +3577,221 @@ fn non_admitted_context_provenance_is_rejected_after_durable_request_start() {
         assert_context_pair_rejected(source, ContextKind::RuntimeToolObservation);
     }
 }
+
+/// T1-01/02/03: both relationships use one exact predecessor, even when the
+/// newest page excludes it. Full frozen values determine equality, not prefixes.
+#[test]
+fn shared_predecessor_compares_complete_prompt_and_tool_definitions() {
+    use super::summary::probe;
+    for (prompt_changed, tools_changed) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let store = store("conv_7c1a0b52-3d68-7e41-9a07-2f5b8d6e04c3");
+        start(&store);
+        let prefix = "p".repeat(TRACE_DETAIL_TEXT_BYTES + 1);
+        let mut first = prepared_request(&store, 0, None, identity_of("1", 0));
+        first.effective_system_prompt = prefix.clone();
+        first.tool_definitions[0].description = "t".repeat(TRACE_DETAIL_TEXT_BYTES + 1);
+        first.tool_definitions[0].input_schema = serde_json::json!({"value": "s".repeat(8192)});
+        let first = commit_request(&store, first, &[]);
+        completion(&store, &first, None, None, 4);
+        let mut second = prepared_request(&store, 1, None, identity_of("1", 1));
+        second.effective_system_prompt =
+            format!("{prefix}{}", if prompt_changed { "different" } else { "" });
+        second.tool_definitions.clone_from(&first.tool_definitions);
+        if tools_changed {
+            second.tool_definitions[0].input_schema["value"] =
+                serde_json::json!(format!("{}different", "s".repeat(8192)));
+        }
+        let second = commit_request(&store, second, &[]);
+        completion(&store, &second, None, None, 6);
+        let projection = TraceProjection::new(&store).unwrap();
+        probe::reset();
+        let newest = projection.page(None, 1).unwrap();
+        assert_eq!(probe::counts(), (1, 0));
+        assert_eq!(probe::tool_count(), 1);
+        let record = &newest.records[0];
+        let summary = record.request.as_ref().unwrap();
+        assert_eq!(summary.request_id, second.request_id);
+        assert_eq!(
+            summary.predecessor,
+            TraceRequestPredecessor::Available {
+                request_id: first.request_id.clone()
+            }
+        );
+        assert_eq!(
+            summary.system_prompt.state,
+            if prompt_changed {
+                TraceSystemPromptState::Changed
+            } else {
+                TraceSystemPromptState::Unchanged
+            }
+        );
+        assert_eq!(
+            summary.tool_catalog,
+            if tools_changed {
+                TraceToolCatalogState::Changed
+            } else {
+                TraceToolCatalogState::Unchanged
+            }
+        );
+        probe::reset();
+        let detail = projection.detail(&record.id).unwrap().unwrap();
+        assert_eq!(probe::counts(), (1, 0));
+        assert_eq!(probe::tool_count(), 0);
+        assert!(super::bounds::encoded_len(&detail) <= TRACE_DETAIL_BYTES);
+        let detail = detail.request.unwrap();
+        assert_eq!(detail.predecessor, summary.predecessor);
+        assert!(detail.effective_system_prompt.truncated);
+        let previous = detail.previous_system_prompt.unwrap();
+        assert!(previous.truncated);
+        assert_eq!(previous.text, detail.effective_system_prompt.text);
+        probe::reset();
+        projection
+            .refresh(std::slice::from_ref(&record.position), None)
+            .unwrap();
+        assert_eq!(probe::counts(), (0, 0));
+        assert_eq!(probe::tool_count(), 0);
+        assert_eq!(
+            store.request_snapshot_page_reads(),
+            0,
+            "no all-history snapshot reads"
+        );
+    }
+}
+
+/// T1-02: four independent content bounds plus empty values and no predecessor.
+#[test]
+fn predecessor_prompt_bounds_are_independent_and_empty_is_available() {
+    for (previous_long, current_long) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let store = store("conv_7c1a0b52-3d68-7e41-9a07-2f5b8d6e04c3");
+        start(&store);
+        let long = "\u{0001}".repeat(TRACE_DETAIL_TEXT_BYTES + 2);
+        let first = request_with(&store, "1", 0, if previous_long { &long } else { "" }, &[]);
+        completion(&store, &first, None, None, 4);
+        let initial = page(&store)
+            .records
+            .into_iter()
+            .find(|r| r.kind == TraceKind::Request)
+            .unwrap();
+        assert_eq!(
+            initial.request.as_ref().unwrap().predecessor,
+            TraceRequestPredecessor::NotApplicable
+        );
+        assert_eq!(
+            initial.request.as_ref().unwrap().tool_catalog,
+            TraceToolCatalogState::Initial
+        );
+        assert!(
+            detail_of(&store, &initial.id)
+                .request
+                .unwrap()
+                .previous_system_prompt
+                .is_none()
+        );
+        let second = request_with(&store, "1", 1, if current_long { &long } else { "" }, &[]);
+        completion(&store, &second, None, None, 6);
+        let newest = TraceProjection::new(&store).unwrap().page(None, 1).unwrap();
+        let detail = detail_of(&store, &newest.records[0].id);
+        assert!(super::bounds::encoded_len(&detail) <= TRACE_DETAIL_BYTES);
+        let request = detail.request.unwrap();
+        assert_eq!(request.effective_system_prompt.truncated, current_long);
+        let previous = request.previous_system_prompt.unwrap();
+        assert_eq!(previous.truncated, previous_long);
+        if !previous_long {
+            assert_eq!(previous.text, "");
+        }
+    }
+}
+
+/// T1-01/02/14: exercise real `SQLite` corruption, not an error synthesized by the
+/// browser or a clock. Each mutation commits before the next exact read cut.
+#[test]
+fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conversation.sqlite");
+    let store = SqliteConversationStore::open(
+        ConversationId::new("conv_7c1a0b52-3d68-7e41-9a07-2f5b8d6e04c3"),
+        &path,
+    )
+    .unwrap();
+    store.initialize(&[]).unwrap();
+    start(&store);
+    let first = request_with(&store, "1", 0, "", &[]);
+    completion(&store, &first, None, None, 4);
+    let second = request_with(&store, "1", 1, "next", &[]);
+    completion(&store, &second, None, None, 6);
+    let projection = TraceProjection::new(&store).unwrap();
+    let current = projection.page(None, 1).unwrap().records.remove(0);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let original: String = connection
+        .query_row(
+            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            [first.request_id.as_str()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE request_snapshots SET snapshot_json='{' WHERE request_id=?1",
+            [first.request_id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        projection.page(None, 1).is_err(),
+        "corrupt durable content is an error"
+    );
+    assert!(
+        projection.detail(&current.id).is_err(),
+        "detail cannot downgrade the same error"
+    );
+    // Lifecycle only reads the current snapshot, never the broken predecessor.
+    super::summary::probe::reset();
+    assert_eq!(
+        projection
+            .refresh(std::slice::from_ref(&current.position), None)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(super::summary::probe::counts(), (0, 0));
+    assert_eq!(super::summary::probe::tool_count(), 0);
+    connection
+        .execute(
+            "UPDATE request_snapshots SET snapshot_json=?1 WHERE request_id=?2",
+            [&original, first.request_id.as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "DELETE FROM request_snapshots WHERE request_id=?1",
+            [first.request_id.as_str()],
+        )
+        .unwrap();
+    let newest = projection.page(None, 1).unwrap();
+    let summary = newest.records[0].request.as_ref().unwrap();
+    assert_eq!(
+        summary.system_prompt.state,
+        TraceSystemPromptState::PreviousUnavailable
+    );
+    assert_eq!(
+        summary.tool_catalog,
+        TraceToolCatalogState::PreviousUnavailable
+    );
+    assert_eq!(
+        summary.predecessor,
+        TraceRequestPredecessor::Unavailable {
+            request_id: Some(first.request_id)
+        }
+    );
+    let detail = projection
+        .detail(&current.id)
+        .unwrap()
+        .unwrap()
+        .request
+        .unwrap();
+    assert_eq!(detail.predecessor, summary.predecessor);
+    assert!(detail.previous_system_prompt.is_none());
+}

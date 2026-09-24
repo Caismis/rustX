@@ -1,4 +1,4 @@
-import type { SourceSettings, EffectiveConfiguration, ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v19';
+import type { SourceSettings, EffectiveConfiguration, ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v20';
 export function cfg3Source(): SourceSettings {
   return { absent_resource_revision: 'missing', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {},
     user: { path: '/bound/rustx.toml', revision: 'user-1', authored: { providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'environment', variable: 'USER_KEY' } } }, models: {} } },

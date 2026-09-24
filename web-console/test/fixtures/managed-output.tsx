@@ -16,5 +16,5 @@ let cache = replaceTrace({ records: [traceTool(0)], next_cursor: null });
 cache = completeTraceDetail(selectTrace(cache, 'trace:0'), 'trace:0', cache.epoch, detail);
 const noop = () => {};
 createRoot(document.getElementById('root')!).render(
-  <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />,
+  <main style={{ height: '100dvh', display: 'flex', minWidth: 0 }}><Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} /></main>,
 );

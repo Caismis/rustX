@@ -5,12 +5,12 @@
  * Generation phases use request-relative monotonic offsets supplied by Trace,
  * anchored through the native runtime's paired durable-start clock reading.
  * Journal wall spans and dispatch-origin numeric metrics cannot supply that
- * relationship. Missing bridge evidence leaves a request unsplit.
+ * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v19';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v20';
 
 /** Horizontal projection of the overview's domain. */
-export type TrajectoryTimelineMode = 'sequence' | 'duration';
+export type TrajectoryTimelineMode = 'sequence' | 'duration' | 'time' | 'actual';
 
 /** Inclusive selection in the active projection's domain. */
 export interface TrajectoryTimeRange {
@@ -52,13 +52,13 @@ export interface TrajectoryTimelineModel extends TrajectoryTimeRange {
 
 /** Lanes group related activity, exactly as the Harness overview does. */
 function laneOf(kind: TraceKind): number {
-  if (kind === 'tool' || kind === 'background') return 2;
-  if (kind === 'request' || kind === 'assistant' || kind === 'compaction') return 1;
+  if (kind === 'tool' || kind === 'background' || kind === 'subagent' || kind === 'workflow') return 2;
+  if (kind === 'request' || kind === 'compaction') return 1;
   return 0;
 }
 
 /** Lane titles, top to bottom. */
-export const TRAJECTORY_LANES = ['Session', 'Model', 'Execution'] as const;
+export const TRAJECTORY_LANES = ['Input', 'Model', 'Tools'] as const;
 
 /** Kinds whose failure state should read as an error in the overview. */
 function isError(record: TraceRecord): boolean {
@@ -133,6 +133,7 @@ export function trajectoryTimeline(
     for (const [index, record] of records.entries()) {
       const boundary = sectionLabelOf(record, index);
       if (boundary !== undefined) boundaries.push({ label: boundary, at: spans.length });
+      if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
       const timing = timingOf(record);
       spans.push({
         id: record.id,
@@ -156,6 +157,7 @@ export function trajectoryTimeline(
     if (timing.startedAt === undefined) continue;
     const boundary = sectionLabelOf(record, index);
     if (boundary !== undefined) boundaries.push({ label: boundary, at: timing.startedAt });
+    if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
     spans.push({
       id: record.id,
       kind: record.kind,
@@ -165,7 +167,7 @@ export function trajectoryTimeline(
       start: timing.startedAt,
       // An in-flight or unterminated record is a marker, not a span: its end
       // equals its start, so nothing on screen claims a duration it lacks.
-      end: timing.startedAt + (count(timing.timeline?.terminal_ms) ?? timing.durationMs ?? 0),
+      end: timing.startedAt + (record.kind === 'request' ? count(timing.timeline?.terminal_ms) ?? 0 : timing.durationMs ?? 0),
       ...phasePositions(timing.startedAt, timing.timeline),
       startedAt: timing.startedAt,
       ...(timing.durationMs === undefined ? {} : { durationMs: timing.durationMs }),
@@ -174,6 +176,29 @@ export function trajectoryTimeline(
     });
   }
   if (spans.length === 0) return null;
+  // One union-of-occupied-time transform for every lane. Overlapping work
+  // shares coordinates; summing parent/child durations is never an aggregate.
+  if (mode === 'duration') {
+    const gaps: { start: number; end: number }[] = [];
+    let covered = Math.min(...spans.map(span => span.start));
+    for (const span of [...spans].sort((a, b) => a.start - b.start)) {
+      if (span.start > covered) gaps.push({ start: covered, end: span.start });
+      covered = Math.max(covered, span.end);
+    }
+    const project = (at: number) => at - gaps.reduce((sum, gap) => sum + Math.max(0, Math.min(at, gap.end) - gap.start), 0);
+    for (const span of spans) {
+      span.start = project(span.start); span.end = project(span.end);
+      for (const key of ['dispatchAt', 'firstOutputAt', 'lastOutputAt', 'providerTerminalAt'] as const) {
+        if (span[key] !== undefined) span[key] = project(span[key]);
+      }
+    }
+    for (const boundary of boundaries) boundary.at = project(boundary.at);
+  } else if (mode === 'time') {
+    for (const span of spans) {
+      span.end = span.start;
+      delete span.dispatchAt; delete span.firstOutputAt; delete span.lastOutputAt; delete span.providerTerminalAt;
+    }
+  }
   return {
     start: Math.min(...spans.map(span => span.start)),
     end: Math.max(...spans.map(span => span.end)),
