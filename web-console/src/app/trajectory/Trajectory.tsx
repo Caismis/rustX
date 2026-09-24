@@ -8,7 +8,7 @@ import { Input } from '../../presentation/primitives/Input';
 import { TrajectoryInspector } from './TrajectoryInspector';
 import { CellContent, CellIcon } from './TrajectoryCell';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import { trajectoryItems, visibleItems, preferredItem, selectionOf, type OwnedDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
+import { trajectoryItems, visibleItems, preferredItem, selectionOf, isInspectable, preferredStructure, preferredDisplayItem, type InspectableDisplayItem, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
 import { timelineFocus, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
@@ -32,6 +32,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     const item = cache.selection ? preferredItem(trajectoryItems(cache.page.records), cache.selection.id) : undefined;
     return item ? selectionOf(item) : undefined;
   });
+  const [structure, setStructure] = useState<StructuralDisplayItem | undefined>(undefined);
   const [range, setRange] = useState<TrajectoryTimeRange | null>(null);
   const [width, setWidth] = useState(0);
   const [offTail, setOffTail] = useState(false);
@@ -40,12 +41,12 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const followsTail = useRef(true);
   const focusedDisplay = useRef<string | undefined>(undefined);
   const pendingFocus = useRef<string | undefined>(undefined);
-  const prepend = useRef<{ first: string | undefined; selection: TrajectorySelection; offset: number } | null>(null);
+  const prepend = useRef<{ first: string | undefined; item: FocusableDisplayItem; offset: number } | null>(null);
   const records = cache.page.records;
   const allItems = useMemo(() => trajectoryItems(records, cache.page.next_cursor), [records, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(allItems, query), [allItems, query]);
   const rows = useMemo(() => visibleItems(allItems, records, attempts, calls, matches), [allItems, records, attempts, calls, matches]);
-  const matchingOwners = useMemo(() => matches ? new Set(allItems.filter((item): item is OwnedDisplayItem => item.type !== 'HistoryBoundary' && matches.has(item.display_key)).map(item => item.owner_record_id)) : null, [allItems, matches]);
+  const matchingOwners = useMemo(() => matches ? new Set(allItems.filter((item): item is InspectableDisplayItem => isInspectable(item) && matches.has(item.display_key)).map(item => item.owner_record_id)) : null, [allItems, matches]);
   const boundaryLabel = useCallback((_record: unknown, index: number) => {
     const item = allItems.find(item => item.type === 'AttemptSectionHeader' && item.display_key === JSON.stringify(['attempt-section', records[index]?.location.attempt_id, records[index]?.id]));
     return item?.type === 'AttemptSectionHeader' ? item.label : undefined;
@@ -64,9 +65,11 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const selectedItem = selection ? preferredItem(allItems, selection.owner_record_id, selection) : undefined;
   const selected = selectedItem?.record ?? (cache.selection?.id === selection?.owner_record_id ? cache.selection : undefined);
   const selectedDetail = selection ? cache.details[selection.owner_record_id] : undefined;
-  const select = useCallback((item?: OwnedDisplayItem) => {
-    setSelection(item ? selectionOf(item) : undefined);
-    onSelect(item?.owner_record_id);
+  const select = useCallback((item?: FocusableDisplayItem) => {
+    const inspectable = item && isInspectable(item) ? item : undefined;
+    setStructure(item && !isInspectable(item) ? item : undefined);
+    setSelection(inspectable ? selectionOf(inspectable) : undefined);
+    onSelect(inspectable?.owner_record_id);
   }, [onSelect]);
   useLayoutEffect(() => {
     const element = root.current;
@@ -84,6 +87,17 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       setSelection({ ...selection, display_key: selectedItem.display_key });
     }
   }, [selection, selectedItem]);
+  // Structural regrouping stays within the containing native Attempt/Step.
+  // Neither a late detail response nor a new segment anchor supplies an owner.
+  useLayoutEffect(() => {
+    if (!structure) return;
+    const next = preferredStructure(allItems, structure);
+    if (next?.display_key === structure.display_key) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (next && focusedDisplay.current === structure.display_key && (active === document.body || active?.closest<HTMLElement>('[data-display-key]')?.dataset.displayKey === structure.display_key)) pendingFocus.current = next.display_key;
+    setStructure(next);
+  }, [allItems, structure]);
+  const activeKey = structure?.display_key ?? selection?.display_key;
   useLayoutEffect(() => {
     const key = pendingFocus.current;
     if (!key) return;
@@ -99,7 +113,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     if (!pane) return;
     const anchor = prepend.current;
     if (anchor && anchor.first !== first) {
-      const target = preferredItem(rows, anchor.selection.owner_record_id, anchor.selection);
+      const target = preferredDisplayItem(rows, anchor.item);
       if (target) {
         const index = rows.indexOf(target);
         const start = rows.slice(0, index).reduce((sum, item) => sum + heightOf(item), 0);
@@ -122,9 +136,9 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     const pane = viewport.current;
     if (pane) {
       const bounds = pane.getBoundingClientRect();
-      const node = Array.from(pane.querySelectorAll<HTMLElement>('[data-display-key]')).find(node => node.dataset.owner && node.getBoundingClientRect().bottom > bounds.top);
-      const item = node ? rows.find((item): item is OwnedDisplayItem => item.type !== 'HistoryBoundary' && item.display_key === node.dataset.displayKey) : undefined;
-      if (node && item) prepend.current = { first, selection: selectionOf(item), offset: node.getBoundingClientRect().top - bounds.top };
+      const node = Array.from(pane.querySelectorAll<HTMLElement>('[data-display-key]')).find(node => node.dataset.displayType && node.getBoundingClientRect().bottom > bounds.top);
+      const item = node ? rows.find((item): item is FocusableDisplayItem => item.type !== 'HistoryBoundary' && item.display_key === node.dataset.displayKey) : undefined;
+      if (node && item) prepend.current = { first, item, offset: node.getBoundingClientRect().top - bounds.top };
     }
     followsTail.current = false;
     loadEarlier();
@@ -163,19 +177,30 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
             {rendered.map(({ row, index, start }) => {
               const style = { height: heightOf(row), ...(virtualized ? { position: 'absolute' as const, top: 0, left: 0, width: '100%', transform: `translateY(${start}px)` } : {}) };
               if (row.type === 'HistoryBoundary') return <div key={row.display_key} data-display-key={row.display_key} className={css.loadRow} style={style}><Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>{cache.loading ? 'Loading earlier records…' : 'Load earlier records'}</Button></div>;
-              const record = row.record;
-              const structural = row.type === 'AttemptSectionHeader' || row.type === 'StepHeader';
-              const warning = record.state !== 'completed' && (row.type === 'RecordRow' || row.type === 'RequestBoundary' || (row.type === 'AttemptSectionHeader' && record.kind === 'attempt'));
-              const truncated = row.type === 'ContextRow' ? row.context.truncated || row.context.preview?.truncated : row.type === 'SystemRow' ? record.request?.system_prompt.preview?.truncated : record.truncated || record.preview?.truncated;
-              return <div key={row.display_key} data-display-key={row.display_key} data-owner={row.owner_record_id} data-trace-id={record.id} data-display-type={row.type} data-kind={record.kind} data-state={record.state} data-structural={structural || undefined} data-selected={selection?.display_key === row.display_key || undefined} data-timeline-focus={focusedIds ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
-                role="row" aria-rowindex={index + 1} aria-selected={selection?.display_key === row.display_key} aria-label={`${row.label} · ${row.preview || record.state}`} tabIndex={0} className={css.record} style={style} onClick={() => select(row)} onKeyDown={event => {
-                  if (event.target !== event.currentTarget) return;
-                  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(row); }
-                  if (event.key === 'Escape') close();
-                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]; if (next && next.type !== 'HistoryBoundary') { pendingFocus.current = next.display_key; select(next); } }
-                }}>
+              const activate = () => select(row);
+              const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
+                if (event.key === 'Escape') close();
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]; if (next && next.type !== 'HistoryBoundary') { pendingFocus.current = next.display_key; select(next); } }
+              };
+              if (!isInspectable(row)) return <div key={row.display_key} data-display-key={row.display_key} data-display-type={row.type} data-anchor={row.segment_anchor_record_id} data-attempt={row.attempt_id} data-step={row.type === 'StepHeader' ? row.step_id : undefined} data-structural="true" data-selected={activeKey === row.display_key || undefined}
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={row.label} tabIndex={0} className={css.record} style={style} onClick={activate} onFocus={() => { if (structure?.display_key !== row.display_key) activate(); }} onKeyDown={onKeyDown} title={row.type === 'StepHeader' ? `Attempt ${row.attempt_id} · Step ${row.step_id}` : `Attempt ${row.attempt_id} · loaded-window ordinal ${row.ordinal}`}>
                 <span role="cell" className={css.event}>
-                  {row.type === 'AttemptSectionHeader' && <button className={css.foldToggle} aria-label={`${attempts.has(record.location.attempt_id!) ? 'Expand' : 'Fold'} ${row.label}`} onClick={event => { event.stopPropagation(); toggleAttempt(record.location.attempt_id!); }}>{attempts.has(record.location.attempt_id!) ? '▸' : '▾'}</button>}
+                  {row.type === 'AttemptSectionHeader' && <button className={css.foldToggle} aria-label={`${attempts.has(row.attempt_id) ? 'Expand' : 'Fold'} ${row.label}`} onClick={event => { event.stopPropagation(); toggleAttempt(row.attempt_id); }}>{attempts.has(row.attempt_id) ? '▸' : '▾'}</button>}
+                  <span className={css.kindTag} data-kind={row.type === 'StepHeader' ? 'step' : 'attempt'}>{row.label}</span>
+                </span>
+                <div role="cell" className={css.content}>
+                  {row.type === 'AttemptSectionHeader' && attempts.has(row.attempt_id) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === row.attempt_id && r.state !== 'completed').map(r => r.state).join(' · ')}</span>}
+                  {row.type === 'AttemptSectionHeader' && row.native_record && row.native_record.state !== 'completed' && <span className={css.state}>{row.native_record.state}</span>}
+                </div>
+              </div>;
+              const record = row.record;
+              const warning = record.state !== 'completed' && (row.type === 'RecordRow' || row.type === 'RequestBoundary');
+              const truncated = row.type === 'ContextRow' ? row.context.truncated || row.context.preview?.truncated : row.type === 'SystemRow' ? record.request?.system_prompt.preview?.truncated : record.truncated || record.preview?.truncated;
+              return <div key={row.display_key} data-display-key={row.display_key} data-owner={row.owner_record_id} data-trace-id={record.id} data-display-type={row.type} data-kind={record.kind} data-state={record.state} data-selected={activeKey === row.display_key || undefined} data-timeline-focus={focusedIds ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={`${row.label} · ${row.preview || record.state}`} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown}>
+                <span role="cell" className={css.event}>
                   <span className={css.kindTag} data-kind={row.type === 'SystemRow' ? 'system' : row.type === 'ContextRow' ? 'context' : record.kind}>
                     {row.type === 'RecordRow' && <span className={css.kindIcon}><CellIcon kind={record.kind} /></span>}
                     <span>{row.type === 'SystemRow' ? 'SYSTEM' : row.type === 'ContextRow' ? 'CONTEXT' : row.label}</span>
@@ -186,7 +211,6 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                   {row.type === 'RequestBoundary' && <span className={css.relation}>retry / recovery {record.request?.retry_number}</span>}
                   {row.type === 'CollapsedCallSummary' && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>Expand Calls</button>}
                   {row.type === 'RecordRow' && record.calls.length > 0 && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>{calls.has(record.id) ? 'Expand' : 'Collapse'} Calls</button>}
-                  {row.type === 'AttemptSectionHeader' && attempts.has(record.location.attempt_id!) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === record.location.attempt_id && r.state !== 'completed').map(r => r.state).join(' · ')}</span>}
                   {warning && <span className={css.state}>{record.state}</span>}
                   {truncated && <span className={css.state}>Truncated</span>}
                   {row.type === 'RequestBoundary' && record.request?.context_truncated && <span className={css.state}>Context history truncated</span>}

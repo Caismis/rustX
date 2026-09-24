@@ -13,17 +13,32 @@ interface Origin extends TrajectorySelection {
   label: string;
   preview: string;
 }
-/** Presentation objects, never Journal facts. Native owners remain unchanged. */
-export type TrajectoryDisplayItem =
+/** A segment anchor controls placement, never detail ownership. Headers stay
+ * presentation-only even when the exact native structural record is loaded. */
+interface Segment {
+  display_key: string;
+  attempt_id: string;
+  segment_anchor_record_id: string;
+  segment_record_ids: string[];
+  native_record?: TraceRecord;
+  label: string;
+  preview: string;
+}
+export type StructuralDisplayItem =
+  | (Segment & { type: 'StepHeader'; step_id: string })
+  | (Segment & { type: 'AttemptSectionHeader'; ordinal: number });
+/** Only this closed union owns inspectable native records. */
+export type InspectableDisplayItem =
   | (Origin & { type: 'RecordRow' })
   | (Origin & { type: 'SystemRow' })
   | (Origin & { type: 'ContextRow'; context: TraceContextPresentation })
-  | (Origin & { type: 'StepHeader'; segment: string })
   | (Origin & { type: 'RequestBoundary' })
-  | (Origin & { type: 'AttemptSectionHeader'; ordinal: number })
-  | (Origin & { type: 'CollapsedCallSummary'; executions: readonly TraceRecord[] })
-  | { type: 'HistoryBoundary'; display_key: string; cursor: string };
-export type OwnedDisplayItem = Exclude<TrajectoryDisplayItem, { type: 'HistoryBoundary' }>;
+  | (Origin & { type: 'CollapsedCallSummary'; executions: readonly TraceRecord[] });
+export type FocusableDisplayItem = InspectableDisplayItem | StructuralDisplayItem;
+export type TrajectoryDisplayItem = FocusableDisplayItem | { type: 'HistoryBoundary'; display_key: string; cursor: string };
+export function isInspectable(item: TrajectoryDisplayItem): item is InspectableDisplayItem {
+  return item.type !== 'HistoryBoundary' && item.type !== 'StepHeader' && item.type !== 'AttemptSectionHeader';
+}
 export const displayKey = (...parts: (string | number | null | undefined)[]) => JSON.stringify(parts);
 
 function origin(record: TraceRecord, tag: string, label: string, preview = '', facet: TrajectoryFacet = 'Summary', ...parts: string[]): Origin {
@@ -53,6 +68,10 @@ export function trajectoryItems(records: readonly TraceRecord[], cursor?: string
   const items: TrajectoryDisplayItem[] = [];
   if (cursor) items.push({ type: 'HistoryBoundary', display_key: displayKey('history-boundary', cursor), cursor });
   const ordinals = new Map<string, number>();
+  const nativeAttempts = new Map(records.filter(record => record.kind === 'attempt').map(record => [record.location.attempt_id, record]));
+  const nativeSteps = new Map(records.filter(record => record.kind === 'step').map(record => [displayKey(record.location.attempt_id, record.location.step_id), record]));
+  let attemptSegment: StructuralDisplayItem | undefined;
+  let stepSegment: StructuralDisplayItem | undefined;
   let previousAttempt: string | null | undefined;
   let previousStep: string | null | undefined;
   for (const record of records) {
@@ -62,11 +81,19 @@ export function trajectoryItems(records: readonly TraceRecord[], cursor?: string
     if (newSection) {
       if (!ordinals.has(attempt)) ordinals.set(attempt, ordinals.size + 1);
       const ordinal = ordinals.get(attempt)!;
-      items.push({ ...origin(record, 'attempt-section', `Attempt ${ordinal}`, '', 'Summary', attempt, record.id), type: 'AttemptSectionHeader', ordinal });
+      const native = nativeAttempts.get(attempt);
+      attemptSegment = { type: 'AttemptSectionHeader', display_key: displayKey('attempt-section', attempt, record.id), attempt_id: attempt, segment_anchor_record_id: record.id, segment_record_ids: [], ordinal, label: `Attempt ${ordinal}`, preview: '', ...(native ? { native_record: native } : {}) };
+      items.push(attemptSegment);
     }
     if (attempt != null && step != null && (newSection || step !== previousStep)) {
-      items.push({ ...origin(record, 'step-segment', `Step ${step}`, '', 'Summary', attempt, step, record.id), type: 'StepHeader', segment: record.id });
+      const native = nativeSteps.get(displayKey(attempt, step));
+      stepSegment = { type: 'StepHeader', display_key: displayKey('step-segment', attempt, step, record.id), attempt_id: attempt, step_id: step, segment_anchor_record_id: record.id, segment_record_ids: [], label: `Step ${step}`, preview: '', ...(native ? { native_record: native } : {}) };
+      items.push(stepSegment);
     }
+    if (attempt == null) attemptSegment = undefined;
+    if (attempt == null || step == null) stepSegment = undefined;
+    attemptSegment?.segment_record_ids.push(record.id);
+    stepSegment?.segment_record_ids.push(record.id);
     previousAttempt = attempt;
     previousStep = step;
     if (record.kind === 'attempt' || record.kind === 'step') continue;
@@ -128,7 +155,8 @@ export function visibleItems(items: readonly TrajectoryDisplayItem[], records: r
   for (const owner of calls) for (const record of matching.get(owner) ?? []) hidden.add(record.id);
   return items.flatMap<TrajectoryDisplayItem>(item => {
     if (item.type === 'HistoryBoundary') return [item];
-    if (item.type !== 'AttemptSectionHeader' && item.record.location.attempt_id != null && attempts.has(item.record.location.attempt_id)) return [];
+    const attempt = isInspectable(item) ? item.record.location.attempt_id : item.attempt_id;
+    if (item.type !== 'AttemptSectionHeader' && attempt != null && attempts.has(attempt)) return [];
     if (item.type === 'RecordRow' && hidden.has(item.owner_record_id)) return [];
     if (item.type === 'RecordRow' && calls.has(item.owner_record_id) && item.record.calls.length) {
       const executions = matching.get(item.owner_record_id) ?? [];
@@ -140,13 +168,26 @@ export function visibleItems(items: readonly TrajectoryDisplayItem[], records: r
 }
 
 /** Same semantic facet first, then same native owner, never a numeric position. */
-export function preferredItem(items: readonly TrajectoryDisplayItem[], owner: string, selection?: TrajectorySelection): OwnedDisplayItem | undefined {
-  const candidates = items.filter((item): item is OwnedDisplayItem => item.type !== 'HistoryBoundary' && item.owner_record_id === owner);
+export function preferredItem(items: readonly TrajectoryDisplayItem[], owner: string, selection?: TrajectorySelection): InspectableDisplayItem | undefined {
+  const candidates = items.filter((item): item is InspectableDisplayItem => isInspectable(item) && item.owner_record_id === owner);
   return candidates.find(item => item.display_key === selection?.display_key)
     ?? candidates.find(item => item.facet === selection?.facet && item.context_message_id === selection?.context_message_id)
     ?? candidates.find(item => item.type === 'RequestBoundary' || item.type === 'RecordRow')
     ?? candidates[0];
 }
-export function selectionOf(item: OwnedDisplayItem): TrajectorySelection {
+export function selectionOf(item: InspectableDisplayItem): TrajectorySelection {
   return { display_key: item.display_key, owner_record_id: item.owner_record_id, facet: item.facet, ...(item.context_message_id ? { context_message_id: item.context_message_id } : {}) };
+}
+
+/** Regrouping can move a segment's anchor, never its native structural identity.
+ * Membership selects the containing segment, not another segment of the same Step. */
+export function preferredStructure(items: readonly TrajectoryDisplayItem[], previous: StructuralDisplayItem): StructuralDisplayItem | undefined {
+  return items.find((item): item is StructuralDisplayItem =>
+    item.type === previous.type && !isInspectable(item)
+    && item.attempt_id === previous.attempt_id
+    && (item.type !== 'StepHeader' || previous.type !== 'StepHeader' || item.step_id === previous.step_id)
+    && item.segment_record_ids.includes(previous.segment_anchor_record_id));
+}
+export function preferredDisplayItem(items: readonly TrajectoryDisplayItem[], previous: FocusableDisplayItem): FocusableDisplayItem | undefined {
+  return isInspectable(previous) ? preferredItem(items, previous.owner_record_id, previous) : preferredStructure(items, previous);
 }

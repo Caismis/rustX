@@ -34,7 +34,7 @@ refresh does zero of all three.
 Browser display identity differs from native detail ownership. Selection is
 `{display_key, owner_record_id, facet, context_message_id?}`. SYSTEM and CONTEXT
 reuse the Request cache entry. Semantic tuple keys drive virtual rows/focus and
-pixel anchors. Step segments can merge without changing a logical Turn or moving
+pixel anchors. Structural headers have separate native structure IDs, segment anchors and local focus, with no detail owner. Step segments can merge without changing a logical Turn or moving
 records. Calls match exact conversation-cache/Attempt/Turn/ToolCall/Tool scope,
 with separate proposed/loaded/started/state counts. Search never fetches. The
 local Inspector uses React Aria and `react-resizable-panels@4.12.4`; jsdiff
@@ -53,13 +53,13 @@ Rust function names (parameterized expansions retain the listed title prefix).
 | T1-01 | N `system_prompt_state_follows_the_previous_actual_request`, `a_fresh_step_at_retry_zero_is_still_compared_with_the_previous_request`, `a_page_boundary_cannot_turn_changed_into_initial`, `shared_predecessor_compares_complete_prompt_and_tool_definitions`, `unavailable_predecessor_and_durable_read_failure_are_distinct`; W `T1-01 maps every native prompt/tool combination without reading details`. Exact predecessor/Request IDs and states, including unavailable versus no predecessor. |
 | T1-02 | N `predecessor_prompt_bounds_are_independent_and_empty_is_available`, `shared_predecessor_compares_complete_prompt_and_tool_definitions`, `unavailable_predecessor_and_durable_read_failure_are_distinct`; W `T1-02 diff distinguishes initial, unavailable, empty and complete changed content` and parameterized `T1-02 independent truncation previous=%s current=%s forbids complete diff`. Empty, current-only/previous-only/both truncation, differing suffix beyond bounds, encoded size and durable read failure. |
 | T1-03 | N `shared_predecessor_compares_complete_prompt_and_tool_definitions`, `predecessor_prompt_bounds_are_independent_and_empty_is_available`, `unavailable_predecessor_and_durable_read_failure_are_distinct`; W T1-01 mapping. Complete frozen Tool schema suffix controls equality, all four prompt/Tools combinations, initial/unavailable, one exact shared predecessor. |
-| T1-04 | W `T1-04 preserves frozen Context order and exact owner/display/facet identities`, `T1-04 controlled out-of-order owner responses cannot change a newer facet or steal focus`; N `canonical_context_is_projected_from_the_frozen_request_identities`, `two_certified_extensions_stay_distinguishable_by_exact_contributor_identity`, `all_context_assembly_semantic_pairs_project_from_durable_request_start`. Two controlled promises resolve newer owner then older owner; exact two reads, owner/facet/Message ID and focus assertions. No sleeps. |
+| T1-04 | W `T1-04 preserves frozen Context order and exact owner/display/facet identities`, `T1-04 controlled out-of-order owner responses cannot change a newer facet or steal focus`; N `canonical_context_is_projected_from_the_frozen_request_identities`, `two_certified_extensions_stay_distinguishable_by_exact_contributor_identity`, `all_context_assembly_semantic_pairs_project_from_durable_request_start`. Structural ownership and delayed-child-response regressions are mapped in the structural correction section below. Two controlled promises resolve newer owner then older owner; exact two reads, owner/facet/Message ID and focus assertions. No sleeps. |
 | T1-05 | W `T1-05 latest unchanged-only page directly discovers prompt with one lazy owner read`; latest page has no fake SYSTEM row and Summary opens the exact prompt with one read. |
-| T1-06 | W `T1-06 retries stay one logical Step; failed and running requests need no Assistant`, `T1-06/10 visible Step segments preserve native order and migrate by owner after prepend`; exact retry ordinals `[0,1,2,3]`, each boundary independently selectable for failed/failed/running/provider-completed without Assistant. |
+| T1-06 | W `T1-06 retries stay one logical Step; failed and running requests need no Assistant`, `T1-06/10 segment anchors regroup within the same structure without acquiring detail ownership`; exact retry ordinals `[0,1,2,3]`, each boundary independently selectable for failed/failed/running/provider-completed without Assistant. Mid-page and exact-native-start structural regressions are mapped below. |
 | T1-07 | W `T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page split`; exact execution IDs, unrelated same-name Tool, missing scope, ambiguous proposer, page-split owner/execution and two-proposal/one-execution distinction. |
 | T1-08 | W `T1-08 Calls summary exposes warnings and leaves native domains independent`; B `T1-08/09/15 Calls warnings, independent background, search and truncated failed Request Diff`; failed/denied/waiting/outcome_unknown, independent Background/Subagent/Workflow, running/incomplete/failed/completed compaction. |
-| T1-09 | W `T1-09 search reveals both collapsed kinds without any detail/history reads`; B T1-08/09/15; search overrides both folds, exact zero detail/history reads. `preferredItem` same-owner fallback is asserted by W T1-06/10. |
-| T1-10 | W `T1-06/10 visible Step segments preserve native order and migrate by owner after prepend`, `T1-10 512 native records plus synthetic items keep mounted rows and reads bounded`; B `T1-10/11 semantic prepend and tail isolation long`, `T1-10/11 semantic prepend and tail isolation threshold`, `T1-10 focused Step segment migrates to its exact native owner after a threshold prepend`. 512 native records, over 2,000 display items, fewer than 60 unit-test mounted items / 65 browser items; prepend removes history boundary, inserts SYSTEM, merges Step, crosses virtual threshold, preserves semantic item + pixel offset, focus migrates to same owner's boundary. Browser DOM read invocation preserves keyboard ownership; no sleep. |
+| T1-09 | W `T1-09 search reveals both collapsed kinds without any detail/history reads`; B T1-08/09/15; search overrides both folds, exact zero detail/history reads. `preferredItem` same-owner Request fallback is asserted by W T1-09; structural migration uses `preferredStructure` instead. |
+| T1-10 | W `T1-06/10 segment anchors regroup within the same structure without acquiring detail ownership`, `T1-10 512 native records plus synthetic items keep mounted rows and reads bounded`; B `T1-10/11 semantic prepend and tail isolation long`, `T1-10/11 semantic prepend and tail isolation threshold`, `T1-04/06/10 structural request anchor stays structural through threshold prepend` and its `tool` variant. 512 native records, over 2,000 display items, fewer than 60 unit-test mounted items / 65 browser items; prepend removes history boundary, inserts SYSTEM, merges Step, crosses virtual threshold, preserves semantic item + pixel offset, focus stays on the corresponding native Step structure without inspecting any child. Browser DOM read invocation preserves keyboard ownership; no sleep. |
 | T1-11 | W `T1-11 content-only updates never move an off-tail reader`; B long/threshold tests assert exact history/detail counts, unchanged off-tail offset and explicit latest/append tail following. Existing `trace-cache.test.ts` retain bounded owner cache, epoch and lifecycle repair coverage. |
 | T1-12 | `web-console/test/trajectory-timing.test.ts`: all `authoritative request phase positions` cases, `preserves measured zero separately from absent and running timing`, `T1-12 epoch zero, missing instant, parallel domains and canonical acceptance do not invent or duplicate spans`, `T1-12 four modes keep native time distinct from a shared idle-compression transform`; W `T1-12 sequence keeps equal glyph widths even when native duration is missing`; browser `trajectory-timing.spec.ts` `native phase coordinates survive browser layout at 1440px` and `390px`. Native request terminal/dispatch evidence remains separately tested by the full Trace/Agent Loop suites. |
 | T1-13 | B `T1-13/15 semantic ledger, facets and keyboard ${width} ${theme}` at 1440/390 × 844 in light/dark; `T1-13 library drag, keyboard separator, double-click reset and narrow Ledger on wide viewport` (1050 × 844). Keyboard tabs, close/focus restoration, real drag/keys/reset, 320px Inspector/340px Ledger, compact Event column and no horizontal overflow. |
@@ -252,3 +252,92 @@ were inspected before choosing these commands):
 The seven existing ignored Rust tests remain the five paid/live cases, fixture
 writer and stage profile described above. macOS execution is left to the existing
 GitHub Actions platform job; this local environment is Linux.
+
+
+## PR #401 structural identity and missing Tool facts correction
+
+Starting HEAD: `2740079e4d9d75fd75445c83a833b67a237f00ee`; fetched base remains
+`e8f700dae5b252e7cdf5b78a9e0000b05edeee04`. All seven Actions jobs passed at the
+starting head. The former common `Origin` type incorrectly assigned a segment's
+first loaded child as a header's detail owner. Partial pages exposed that error;
+the old prepend test then preserved the wrong child-inspection fallback.
+
+`InspectableDisplayItem` now exclusively owns native detail identity. Structural
+headers carry exact Attempt/Turn identity, segment anchor/membership, display key
+and optional exact loaded structural record evidence. They remain presentation-only
+whether or not that record is loaded. Structural activation/focus clears Inspector
+selection and never reads details; regrouping follows the same structure's segment
+containing the old anchor, never the child itself. Search no longer borrows an
+anchor child's content/state for structural headers. Attempt ordinals remain
+loaded-window labels. No protocol/native change is necessary: v20/v46 and SQLite
+are unchanged. See `docs/trace.md` for keyboard and disappearance behavior.
+
+Tool Input/Result/Schema render explicit unavailable states; absent bounded Tool
+payload differs from a loaded Tool with no canonical result. Code still requires
+native source evidence. No lifecycle or successful outcome is inferred.
+
+| Required regression | Exact executable test |
+| --- | --- |
+| A/B, T1-04/06 | `T1-04/06 mid-Step %s anchor never owns structural inspection` for Request and Tool: stable semantic keys, header focus/click/Enter issue zero detail/history reads; child selection issues exactly one read to that child. |
+| C, T1-06 | `T1-06 exact loaded native structures remain presentation-only and expose only their own evidence`: exact Attempt/Step record IDs, no Inspector or detail read. |
+| D, T1-06/10 | `T1-06/10 segment anchors regroup within the same structure without acquiring detail ownership`: exact segment membership, native Step evidence, split order and missing-segment behavior. Browser `T1-04/06/10 structural request anchor stays structural through threshold prepend` and `tool` variant: native starts arrive, semantic focus and pixel offset survive threshold crossing, zero detail reads, one history read, then explicit child selection. |
+| E, T1-04 | `T1-04 controlled late %s detail cannot hijack structural focus` for Request and Tool: controlled promise resolves after structural focus/Enter; exact read ID/count, Inspector absence and retained DOM focus. |
+| Nearby identity invariants | `T1-09 structural search and Attempt collapse never borrow child facts or another Attempt`; `T1-04 timeline navigation explicitly selects its native Request after structural focus`. |
+| F/G/H | `Tool facets explicitly disclose absent %s at the read cut` for result, definition, arguments and entire bounded Tool payload: every advertised Input/Result/Schema panel is nonempty; exact absence message and conditional Code. |
+
+Existing SYSTEM/CONTEXT owner/facet race, Calls scope, search/no-read, retry,
+500+ record virtualization, off-tail, timing and real T1-17 provider-emulator
+integration remain in the full suite. Provenance hashes are refreshed only for
+changed tracked source-derived files; no dependency, notice or upstream pin change.
+
+Validation commands for this correction (Linux; current CI/package scripts inspected):
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console typecheck` | Passed after fixing a stale test type import and invalid Testing Library option during development. |
+| `pnpm --dir web-console exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts` | 37 passed after the final nearby-invariant additions (earlier focused run: 35 passed). |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e trajectory.spec.ts trajectory-integration.spec.ts` | 11 passed, including actual T1-17 App Server/provider-emulator integration and both structural prepend cases. |
+| `pnpm --dir web-console test` | First run: 890 passed, Settings C09 hit its unchanged five-second timeout. Final rerun: 893 passed in 50 files, including two subsequently added nearby-invariant tests. Settings code/assertions/timeouts were unchanged. |
+| `pnpm --dir web-console check:provenance` | Passed: 114 source records and 131 production packages. |
+| `node web-console/scripts/provenance.ts --reference /tmp/rustx-394-harness` | Passed against the pinned source. |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 86 passed in normal strict screenshot comparison; includes production build and packaged-artifact checks; no screenshot reference changes. |
+| `cargo fmt --all -- --check` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo check --all-targets --all-features` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `CARGO_BUILD_JOBS=2 cargo test --lib runtime_client::trace --all-features` | 75 passed. |
+| `CARGO_BUILD_JOBS=2 cargo build --bins` | Passed. |
+| `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=8 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | Library target: 3,289 passed, 2 failed, 2 ignored; Cargo stopped before external targets. Exact failures below. |
+| `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | Interrupted: single-threaded libtest prefixes the child gate marker on the same line, so the unchanged process-death parent cannot recognize its exact-line marker. Only this run's two test processes were stopped. Not counted as passing. |
+| Final `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=8 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | 3,892 passed, 0 failed, 7 intentionally ignored; includes all 130 Tool tests. |
+| `pnpm --dir protocol/app-server check`; `pnpm --dir protocol/app-server typecheck` | Passed; generated artifacts unchanged. |
+| `pnpm --dir dev typecheck`; `pnpm --dir dev test` | Passed; 37 tests. |
+| `pnpm --dir tui typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | Passed; 852 tests. |
+| `uv sync --frozen`; `uv run --frozen pytest` in `test-support/fake-provider` | Passed; 51 tests. |
+| `git diff --check`; `git diff --cached --check` | Passed. |
+
+The first full Rust run failed `runtime::workspace::tests::concurrent_children_have_distinct_deterministic_paths_and_refs`
+with Git `worktree add` reporting “failed to read .git/worktrees/…/commondir: Success”,
+and `boundary_suites::managed_selection::fastmcp4_availability_selection_request_and_invocation_share_one_authority`
+with native managed-Python source preparation unavailable. Rust source, native
+tests and protocol artifacts are byte-for-byte unchanged from the starting HEAD;
+`git diff 2740079e -- src tests protocol` is empty. The starting HEAD's seven CI
+jobs passed. The serial retry passed managed selection but exposed the unrelated harness
+marker issue above. A bounded Python subprocess diagnostic invoked the unchanged
+`deletion_borrowed_workspace_process_gate` binary with `RUST_TEST_THREADS=1`, a
+temporary `RUSTX_260_BORROW_ROOT` and one supplied stdin byte. It exited 0 and
+captured exactly `test local_runtime::session::tests::deletion_tests::borrowed_workspace::deletion_borrowed_workspace_process_gate ... BORROW_COMMITTED`
+on one line, confirming why the parent's `line.trim() == "BORROW_COMMITTED"`
+loop did not advance. This diagnostic is not the process-death acceptance test.
+The final full run restores the normal parallel harness after other heavy suites
+finished. No native test, timeout or production behavior was changed. Failed or
+interrupted commands are not reported as passing or silently attributed to a
+specific network cause.
+
+Local execution is Linux; macOS remains the existing Actions job. The seven
+standard paid/live, fixture writer and profile ignores remain intentional.
+
+The full browser run also emits the existing React warning about updating global
+`Inspector` while rendering `SessionConfiguration` (outside Trajectory). The same
+warning appears at the prior reviewed HEAD's `/tmp/401-fix-e2e.log` and this run's
+`/tmp/401-structure-e2e.log`; both browser suites pass. That unrelated Settings
+warning was not changed by this correction.

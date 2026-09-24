@@ -771,7 +771,7 @@ Parity and deliberate differences:
 | Prompt rows and Context | Request-owned facets, exact frozen Message IDs/order; unchanged-only page has direct System Prompt access | T1-04/05 |
 | Request boundaries | Actual RequestIdentity and retry ordinal within native Turn, including no-Assistant failures; no global number | T1-06 |
 | Calls fold | Exact scoped proposal/execution match, loaded only; warnings and native domains remain visible | T1-07/08/09 |
-| Virtual rows / prepend | Semantic keys + pixel offset; bounded TanStack mount window; same-owner migration | T1-10/11 |
+| Virtual rows / prepend | Semantic keys + pixel offset; bounded TanStack mount window; inspectable items retain owners, structural focus follows the same native Attempt/Step segment without borrowing a child owner | T1-10/11 |
 | Duration and Actual time | sequence = equal operations; duration = recorded spans with shared idle compression; time = absolute-start markers; actual = absolute spans, gaps and overlap retained | T1-12 |
 | Inspector geometry | `react-resizable-panels` owns drag, keys, constraints and reset; local measured-container responsive policy | T1-13 |
 

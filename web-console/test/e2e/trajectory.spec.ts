@@ -110,21 +110,37 @@ for (const scenario of ['long', 'threshold']) {
   });
 }
 
-test('T1-10 focused Step segment migrates to its exact native owner after a threshold prepend', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?threshold');
-  const ledger = page.getByRole('table', { name: 'Trace ledger' });
-  await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-  const segment = ledger.locator('[data-display-type="StepHeader"][data-owner="trace:100"]');
-  await segment.focus(); await page.keyboard.press('Enter');
-  await expect(segment).toBeFocused();
-  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
-  // Invoke the read while keyboard ownership remains on the segment. No sleep
-  // and no click-induced focus transfer can mask migration of the removed node.
-  await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((el: HTMLButtonElement) => el.click());
-  await expect(segment).toHaveCount(0);
-  const owner = ledger.locator('[data-display-type="RequestBoundary"][data-owner="trace:100"]');
-  await expect(owner).toHaveAttribute('data-selected', 'true');
-  await expect(owner).toBeFocused();
-  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
-  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
-});
+for (const kind of ['request', 'tool']) {
+  test(`T1-04/06/10 structural ${kind} anchor stays structural through threshold prepend`, async ({ page }) => {
+    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?threshold&structure${kind === 'tool' ? '&tool' : ''}`);
+    const ledger = page.getByRole('table', { name: 'Trace ledger' });
+    await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    const segment = ledger.locator('[data-display-type="StepHeader"][data-anchor="trace:100"]');
+    await segment.focus(); await page.keyboard.press('Enter'); await segment.click();
+    await expect(segment).toBeFocused();
+    await expect(segment).not.toHaveAttribute('data-owner');
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    // Anchor the top of this structure itself. The old native starts are absent.
+    await ledger.evaluate(el => { el.scrollTop = 60; el.dispatchEvent(new Event('scroll')); });
+    const before = (await segment.boundingBox())!.y;
+    // Keep DOM keyboard ownership on the segment while invoking the controlled prepend.
+    await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((el: HTMLButtonElement) => el.click());
+    await expect(segment).toHaveCount(0);
+    const merged = ledger.locator('[data-display-type="StepHeader"][data-anchor="trace:51"]');
+    await expect(merged).toBeFocused();
+    await expect(merged).toHaveAttribute('data-selected', 'true');
+    await expect(merged).toHaveAttribute('data-attempt', 'attempt-a');
+    await expect(merged).toHaveAttribute('data-step', '1');
+    await expect.poll(async () => Math.abs((await merged.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+    // Child inspection remains an explicit, separate user action.
+    const child = ledger.locator(`[data-display-type="${kind === 'tool' ? 'RecordRow' : 'RequestBoundary'}"][data-owner="trace:100"]`);
+    await ledger.evaluate(el => { el.scrollTop = 1700; el.dispatchEvent(new Event('scroll')); });
+    await child.click();
+    await expect(page.getByRole('complementary')).toBeVisible();
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  });
+}

@@ -681,10 +681,10 @@ export function TrajectoryInspector({
           </>
         )}
 
-        {active === 'Input' && tool && (
+        {active === 'Input' && (
           <>
             <h3 className={css.sectionLabelHeading}>Recorded arguments</h3>
-            {tool.arguments ? (
+            {tool?.arguments ? (
               <Structured value={tool.arguments} label={`${tool.name ?? tool.tool_id} arguments`} />
             ) : (
               <p className={css.unavailable}>
@@ -777,7 +777,10 @@ export function TrajectoryInspector({
           </>
         )}
 
-        {active === 'Schema' && tool?.definition && <Definition definition={tool.definition} />}
+        {active === 'Result' && !tool?.result && <p className={css.unavailable}>
+          {tool ? 'No canonical Tool result is recorded at this read cut.' : 'Tool result unavailable in this bounded detail projection.'}
+        </p>}
+        {active === 'Schema' && (tool?.definition ? <Definition definition={tool.definition} /> : <p className={css.unavailable}>The historical Tool definition is unavailable at this read cut.</p>)}
 
         {active === 'Tools' && request && (
           <>

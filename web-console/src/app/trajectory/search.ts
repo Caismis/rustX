@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/trajectory-search-index.ts; see PROVENANCE.md. */
-import type { TrajectoryDisplayItem } from './layout';
+import { isInspectable, type TrajectoryDisplayItem } from './layout';
 
 /** Deterministic, bounded loaded-window filter over native previews and IDs. */
 export function searchItems(items: readonly TrajectoryDisplayItem[], query: string): ReadonlySet<string> | null {
@@ -8,6 +8,11 @@ export function searchItems(items: readonly TrajectoryDisplayItem[], query: stri
   const matches = new Set<string>();
   for (const item of items) {
     if (item.type === 'HistoryBoundary') continue;
+    if (!isInspectable(item)) {
+      const text = [item.label, item.attempt_id, item.type === 'StepHeader' ? item.step_id : '', item.native_record?.id, item.native_record?.state].join('\n').toLowerCase();
+      if (terms.every(term => text.includes(term))) matches.add(item.display_key);
+      continue;
+    }
     const record = item.record;
     const text = [item.label, item.preview, record.id, record.kind, record.state,
       record.location.attempt_id, record.location.step_id, record.request?.model, record.request?.request_id,

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { trajectoryItems, visibleItems, matchingCalls, preferredItem, selectionOf, systemLabel, type OwnedDisplayItem } from '../src/app/trajectory/layout';
+import { trajectoryItems, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v20';
@@ -137,16 +137,80 @@ it('T1-06 retries stay one logical Step; failed and running requests need no Ass
   expect(screen.queryByText('Fold Steps')).toBeNull();
 });
 
-it('T1-06/10 visible Step segments preserve native order and migrate by owner after prepend', () => {
+it('T1-06/10 segment anchors regroup within the same structure without acquiring detail ownership', () => {
   const middle = traceRecord(10);
-  const page = trajectoryItems([middle]);
-  const segment = page.find((item): item is OwnedDisplayItem => item.type === 'StepHeader')!;
-  const all = trajectoryItems([traceRecord(9), middle]);
-  const target = preferredItem(all, middle.id, selectionOf(segment))!;
-  expect(target.type).toBe('RequestBoundary'); expect(target.owner_record_id).toBe(middle.id);
+  const segment = trajectoryItems([middle]).find(item => item.type === 'StepHeader')!;
+  expect(segment.segment_anchor_record_id).toBe(middle.id);
+  expect('owner_record_id' in segment).toBe(false);
+  const nativeStep = traceRecord(8, { kind: 'step', request: null });
+  const all = trajectoryItems([nativeStep, traceRecord(9), middle]);
+  const target = preferredStructure(all, segment)!;
+  expect(target.type).toBe('StepHeader');
+  expect(target.native_record?.id).toBe(nativeStep.id);
+  expect(target.segment_anchor_record_id).toBe(nativeStep.id);
+  expect('owner_record_id' in target).toBe(false);
   const split = trajectoryItems([traceRecord(9), traceRecord(11, { kind: 'background', request: null, location: {} }), middle]);
   expect(split.filter(item => item.type === 'StepHeader')).toHaveLength(2);
+  expect(preferredStructure(split, segment)?.segment_anchor_record_id).toBe(middle.id);
+  expect(preferredStructure(trajectoryItems([traceRecord(9)]), segment)).toBeUndefined();
   expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:11', 'trace:10']);
+});
+
+it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never owns structural inspection', kind => {
+  const child = kind === 'request' ? traceRecord(10) : traceTool(10);
+  const load = vi.fn(); const select = vi.fn(); const older = vi.fn();
+  render(<Trajectory cache={cacheOf([child])} onSelect={select} onLoadDetail={load} loadEarlier={older} latest={noop} />);
+  const items = trajectoryItems([child]);
+  const step = items.find(item => item.type === 'StepHeader')!;
+  expect(step.display_key).toBe(JSON.stringify(['step-segment', 'attempt-a', '1', child.id]));
+  expect(trajectoryItems([{ ...child, state: 'running' }]).find(item => item.type === 'StepHeader')!.display_key).toBe(step.display_key);
+  for (const type of ['AttemptSectionHeader', 'StepHeader']) {
+    const header = document.querySelector<HTMLElement>(`[data-display-type="${type}"]`)!;
+    act(() => header.focus()); fireEvent.click(header); fireEvent.keyDown(header, { key: 'Enter' });
+    expect(header.hasAttribute('data-owner')).toBe(false);
+    expect(document.activeElement).toBe(header);
+    expect(screen.queryByRole('complementary')).toBeNull();
+  }
+  expect(select.mock.calls.every(([id]) => id === undefined)).toBe(true);
+  expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
+  fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
+  expect(select).toHaveBeenLastCalledWith(child.id);
+  expect(load.mock.calls).toEqual([[child.id]]);
+  expect(screen.getByRole('tab', { name: kind === 'request' ? 'System Prompt' : 'Input' })).toBeDefined();
+});
+
+it('T1-06 exact loaded native structures remain presentation-only and expose only their own evidence', () => {
+  const attempt = traceRecord(8, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' }, state: 'running' });
+  const step = traceRecord(9, { kind: 'step', request: null });
+  const records = [attempt, step, traceTool(10)];
+  const structures = trajectoryItems(records).filter(item => item.type === 'StepHeader' || item.type === 'AttemptSectionHeader');
+  expect(structures.map(item => item.native_record?.id)).toEqual([attempt.id, step.id]);
+  const load = vi.fn(); show(cacheOf(records), load);
+  for (const item of structures) fireEvent.click(document.querySelector(`[data-display-type="${item.type}"]`)!);
+  expect(screen.queryByRole('complementary')).toBeNull(); expect(load).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-display-type="AttemptSectionHeader"]')?.textContent).toContain('running');
+});
+
+it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hijack structural focus', async kind => {
+  const child = kind === 'request' ? traceRecord(10) : traceTool(10);
+  let resolve!: (detail: TraceDetail) => void;
+  const reads: string[] = []; const selections: (string | undefined)[] = [];
+  function Fixture() {
+    const [cache, setCache] = useState(cacheOf([child]));
+    const load = useCallback((id: string) => {
+      reads.push(id); setCache(current => beginTraceDetail(current, id));
+      void new Promise<TraceDetail>(done => { resolve = done; }).then(detail => setCache(current => completeTraceDetail(current, id, 1, detail)));
+    }, []);
+    return <Trajectory cache={cache} onSelect={id => { selections.push(id); setCache(current => selectTrace(current, id)); }} onLoadDetail={load} loadEarlier={noop} latest={noop} />;
+  }
+  render(<Fixture />);
+  fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
+  const step = document.querySelector<HTMLElement>('[data-display-type="StepHeader"]')!;
+  act(() => step.focus()); fireEvent.keyDown(step, { key: 'Enter' });
+  expect(selections.at(-1)).toBeUndefined();
+  await act(async () => resolve(kind === 'request' ? requestDetail(10) : toolDetail(10)));
+  expect(document.activeElement).toBe(step); expect(step.getAttribute('data-selected')).toBe('true');
+  expect(screen.queryByRole('complementary')).toBeNull(); expect(reads).toEqual([child.id]);
 });
 
 const proposal = () => traceRecord(0, { kind: 'assistant', request: null, message_id: 'assistant-0', calls: [{ call_id: 'same', tool_id: 'tool-a', name: 'same name' }, { call_id: 'not-executed', tool_id: 'tool-a', name: 'same name' }] });
@@ -174,7 +238,7 @@ it('T1-08 Calls summary exposes warnings and leaves native domains independent',
   const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
   for (const state of ['failed', 'denied', 'waiting', 'outcome_unknown']) expect(summary.preview).toContain(`1 ${state}`);
   for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(true);
-  expect(visible.find((item): item is OwnedDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe('Compacting…');
+  expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe('Compacting…');
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = trajectoryItems([traceRecord(21, { kind: 'compaction', request: null, state })]).find(item => item.type === 'RecordRow')!;
     expect(item.label).toBe(state === 'completed' ? 'COMPACTED' : `Compaction · ${state}`);
@@ -242,4 +306,53 @@ it('T1-12 Journal duration remains visible in Inspector when Model timing lacks 
   expect(facts.getByText('Journal wall duration').nextElementSibling?.textContent).toBe('9.00 s');
   expect(facts.getByText('Two authoritative durable timestamps.')).toBeDefined();
   expect(record.timing.duration_ms).toBe('9000');
+});
+
+it.each(['result', 'definition', 'arguments', 'tool'] as const)('Tool facets explicitly disclose absent %s at the read cut', missing => {
+  const record = traceTool(10, { state: missing === 'result' ? 'running' : 'completed' });
+  if (missing === 'result') record.tool!.outcome = null;
+  const detail = toolDetail(10);
+  if (missing === 'tool') { detail.tool = null; detail.truncated = true; }
+  else { detail.tool![missing] = null; detail.tool!.source = null; }
+  if (missing === 'result') detail.tool!.lifecycle = 'started';
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('RecordRow', record.id));
+  expect(screen.queryByRole('tab', { name: 'Code' })).toBeNull();
+  const expected = {
+    Input: 'The canonical proposal for this call is not loadable at this read cut.',
+    Result: missing === 'tool' ? 'Tool result unavailable in this bounded detail projection.' : 'No canonical Tool result is recorded at this read cut.',
+    Schema: 'The historical Tool definition is unavailable at this read cut.',
+  };
+  for (const facet of ['Input', 'Result', 'Schema'] as const) {
+    fireEvent.click(screen.getByRole('tab', { name: facet }));
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.textContent?.trim().length).toBeGreaterThan(0);
+    if (missing === 'tool' || (facet === 'Input' && missing === 'arguments') || (facet === 'Result' && missing === 'result') || (facet === 'Schema' && missing === 'definition')) expect(within(panel).getByText(expected[facet])).toBeDefined();
+  }
+});
+
+it('T1-09 structural search and Attempt collapse never borrow child facts or another Attempt', () => {
+  const child = traceRecord(10, { preview: { text: 'unique child preview', truncated: false } });
+  const other = traceTool(11, { location: { attempt_id: 'attempt-b', step_id: '1' } });
+  const items = trajectoryItems([child, other]);
+  const matches = searchItems(items, 'unique child preview')!;
+  expect(items.filter(item => matches.has(item.display_key)).every(item => item.type !== 'StepHeader' && item.type !== 'AttemptSectionHeader')).toBe(true);
+  const structural = items.find(item => item.type === 'StepHeader')!;
+  expect(searchItems(items, 'Step 1')?.has(structural.display_key)).toBe(true);
+  expect(preferredStructure(trajectoryItems([{ ...child, location: { attempt_id: 'attempt-b', step_id: '1' } }]), structural)).toBeUndefined();
+  const visible = visibleItems(items, [child, other], new Set(['attempt-a']), new Set(), null);
+  expect(visible.filter(item => item.type === 'RequestBoundary')).toHaveLength(0);
+  expect(visible.filter(item => item.type === 'RecordRow').map(item => item.owner_record_id)).toEqual([other.id]);
+  expect(visible.filter(item => item.type === 'StepHeader').map(item => item.attempt_id)).toEqual(['attempt-b']);
+});
+
+it('T1-04 timeline navigation explicitly selects its native Request after structural focus', () => {
+  const child = traceRecord(10); const load = vi.fn(); show(cacheOf([child]), load);
+  const header = document.querySelector<HTMLElement>('[data-display-type="StepHeader"]')!;
+  act(() => header.focus());
+  expect(load).not.toHaveBeenCalled();
+  fireEvent.click(document.querySelector('[data-record-id="trace:10"]')!);
+  expect(load.mock.calls).toEqual([[child.id]]);
+  expect(row('RequestBoundary', child.id).getAttribute('data-selected')).toBe('true');
+  expect(header.hasAttribute('data-selected')).toBe(false);
 });

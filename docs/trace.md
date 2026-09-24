@@ -471,19 +471,43 @@ and `HistoryBoundary`. None is an invented runtime event. The dense ledger has
 Event and Content columns. Successful state/duration/check chrome is absent;
 important lifecycle, uncertainty, missing history and truncation remain visible.
 
-Every owned item retains the exact native record. `owner_record_id` keys the
-existing bounded detail cache; `display_key` keys virtualization, focus, selection
-and prepend anchoring. Keys are JSON tuples, never indexes: record + native ID,
-system/request-boundary + Request ID, context + Request ID + Message ID,
-step-segment + Attempt + Turn + first native record identity, attempt-section +
-Attempt + segment anchor, collapsed-calls + canonical Assistant Message ID, and
-history-boundary + opaque cursor. One Trace cache supplies Session/Conversation
-scope. The Trajectory component lifetime is keyed by Session, Conversation and
-attachment so local folds/facets cannot leak across authority replacement.
-Selection stores display key, native owner, facet and optional Context
-Message ID. A late detail response can fill its owner's cache but cannot change
-these presentation fields or focus. Removed segments fall back to the same
-owner/facet, then the owner's Request boundary/content row, never a numeric index.
+The closed display model separates inspectable items from structural headers.
+Only `InspectableDisplayItem` retains a native `record` and `owner_record_id` for
+the bounded detail cache. SYSTEM, CONTEXT and Request boundaries retain distinct
+display keys/facets while sharing their exact Request owner.
+
+A structural header instead has native `attempt_id` (and `step_id` for Step), a
+browser-local `display_key`, a `segment_anchor_record_id` that fixes its placement,
+and loaded segment membership for regrouping. The segment anchor is the first
+visible native record, **not** the structural or detail owner. A proven loaded
+Attempt/Step record may supply `native_record` evidence by exact kind and native
+structural IDs; no child can supply it. If the native start record is outside the
+page, that evidence is absent. Both headers remain presentation-only even when
+the exact native start is loaded: no fake detail domain and no owner-fetch paging.
+
+Keys are JSON tuples, never indexes: record + native ID, system/request-boundary
++ Request ID, context + Request ID + Message ID, step-segment + Attempt + Turn +
+segment anchor, attempt-section + Attempt + segment anchor, collapsed-calls +
+canonical Assistant Message ID, and history-boundary + opaque cursor. One Trace
+cache supplies Session/Conversation scope. The Trajectory component lifetime is
+keyed by Session, Conversation and attachment so local state cannot leak across
+authority replacement.
+
+Detail selection stores display key, native owner, facet and optional Context
+Message ID. Structural focus is a separate local state with no detail owner.
+Click, focus, Enter or Space on a header selects that structure and closes any
+Inspector, clearing cache selection without a detail read. Arrow keys navigate
+display items; entering an inspectable row explicitly selects its owner. Attempt's
+fold button only folds its native Attempt. Escape clears selection. Timeline
+selection only resolves inspectable items, never a structural header.
+
+A late detail reply can populate its owner's cache but cannot replace structural
+focus or a newer detail facet. On prepend/segment merge, a structural target maps
+to the segment of the **same native structure** containing its old anchor. It
+never maps to that anchor's Request/Tool/Assistant Inspector. If no corresponding
+segment remains, structural selection is cleared. Inspectable regrouping retains
+the same owner/facet, then its corresponding Request boundary/content row; neither
+path falls back to a numeric position.
 
 Attempt numbers are loaded-window presentation ordinals, not native IDs. A
 logical Step is native `TurnId`; an unscoped record can split it into multiple
@@ -507,14 +531,20 @@ neutral uncertainty. Ordering is Step segment, SYSTEM, frozen ordered CONTEXT,
 Request boundary. No Session-start SYSTEM is fabricated. CONTEXT retains exact
 producer/source, native family, preview and truncation with Request/Message IDs.
 
-TanStack Virtual owns ordinary virtualization with semantic keys. One native
-owner/display-key + pixel-offset anchor transfers across prepend, boundary/header
+TanStack Virtual owns ordinary virtualization with semantic keys. One display
+item + pixel-offset anchor transfers across prepend, boundary/header
 insertion/removal, segment merging and the 100-display-item threshold. Tail follow
 runs only at the tail; content/lifecycle-only repair does not pull a reader down.
 
 The local Inspector uses React Aria tabs and existing safe Markdown, Shiki, JSON
 and artifact primitives. SYSTEM/CONTEXT select facets of the owning Request.
 Summary is a human-readable view; Native holds IDs and allowlisted native facts.
+Tool Input, Result and Schema always disclose absent facts explicitly. Missing
+proposal arguments are unavailable at the read cut; a loaded Tool without a
+canonical result says no result is recorded at that cut; a missing bounded Tool
+payload says the result is unavailable in the projection. Missing historical
+definitions are unavailable, never blank or inferred from current configuration.
+Code remains conditional on the native supported source contract.
 `react-resizable-panels@4.12.4` owns drag/keyboard resizing, constraints, container
 reconciliation and double-click reset. Default Inspector width is
 clamp(320px, 38%, 440px), minimum 320px; Ledger minimum is 340px. Below a measured

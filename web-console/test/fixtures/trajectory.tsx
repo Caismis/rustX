@@ -36,8 +36,9 @@ const records = [
 ];
 const params = new URLSearchParams(location.search);
 const long = params.has('long'); const threshold = params.has('threshold');
+const structure = params.has('structure'); const toolFirst = params.has('tool');
 function Fixture() {
-  const [cache, setCache] = useState(() => replaceTrace({ records: long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : records, next_cursor: 'older' }));
+  const [cache, setCache] = useState(() => replaceTrace({ records: long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : records, next_cursor: 'older' }));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
     <header style={{ padding: '8px 12px', display: 'flex', gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
@@ -47,7 +48,7 @@ function Fixture() {
     </header>
     <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))}
       latest={() => {}}
-      loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: Array.from({ length: 32 }, (_, n) => request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
+      loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: Array.from({ length: 32 }, (_, n) => structure && n < 2 ? traceRecord(n + 50, { kind: n === 0 ? 'attempt' : 'step', request: null, location: n === 0 ? { attempt_id: 'attempt-a' } : { attempt_id: 'attempt-a', step_id: '1' } }) : request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
       onLoadDetail={id => {
         setReads(n => n + 1);
         setCache(current => {
