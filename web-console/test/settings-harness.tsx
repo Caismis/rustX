@@ -175,18 +175,25 @@ export async function chooseOption(label: string, option: string, scope: { getBy
   fireEvent.click(await screen.findByRole('option', { name: option }));
 }
 
-/** Complete a destructive action through its React Aria confirmation: the
+/** Complete a removal through its React Aria confirmation: the
  * trigger opens the dialog, and only the dialog's own button submits. */
 export async function confirmAction(label: string) {
   fireEvent.click(screen.getByRole('button', { name: label }));
-  const dialog = await screen.findByRole('alertdialog');
-  fireEvent.click(within(dialog).getByRole('button', { name: label }));
+  fireEvent.click(within(await confirmation(label)).getByRole('button', { name: label }));
 }
 
-/** Open a destructive confirmation and dismiss it without confirming. */
+/** The confirmation layer a removal opens. Restoring inheritance is an
+ * ordinary dialog; a real removal is an alert dialog. Both are titled by the
+ * question they ask, which is how they are told apart from the Settings
+ * dialog underneath. */
+export function confirmation(label: string) {
+  return screen.findByRole(label.startsWith('Use global default') ? 'dialog' : 'alertdialog', { name: /\?$/ });
+}
+
+/** Open a removal confirmation and dismiss it without confirming. */
 export async function cancelAction(label: string) {
   fireEvent.click(screen.getByRole('button', { name: label }));
-  const dialog = await screen.findByRole('alertdialog');
+  const dialog = await confirmation(label);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  await waitFor(() => expect(dialog.isConnected).toBe(false));
 }

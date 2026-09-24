@@ -173,3 +173,45 @@ test('selecting a dimmed overview record clears a search that hides it', async (
   await expect(inspector.getByText('Tool · bash', { exact: true })).toBeVisible();
   await expect(span).toHaveAttribute('aria-pressed', 'true');
 });
+
+/** A JSON row's copy menu held the keyboard when the inspector body scrolled
+ * the row away. The menu closes with its anchor, and the keyboard goes to the
+ * owner the inspector names — its scrolling tab panel — without scrolling back
+ * to the row. */
+test('a JSON copy menu whose row scrolls out of the inspector leaves the keyboard on the inspector body', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await ledger.locator('[data-trace-id="trace:5"]').click();
+  const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
+  await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+  const body = inspector.getByRole('tabpanel');
+  const tree = body.getByRole('tree');
+  await expect(tree).toContainText('/workspace/rustX');
+  // A short body with room to scroll its first JSON row out, at its top.
+  expect(await body.evaluate(el => {
+    el.style.flex = 'none'; el.style.height = '96px'; el.style.paddingBottom = '400px';
+    el.scrollTop = 0; return el.scrollTop;
+  })).toBe(0);
+  const row = tree.getByRole('treeitem').first();
+  await row.hover();
+  const copy = row.locator('[data-json-copy-button]');
+  await copy.click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await copy.focus(); await page.keyboard.press('ArrowDown');
+  await expect(menu.getByRole('menuitem').first()).toBeFocused();
+
+  const scrolledTo = await body.evaluate(el => { el.scrollTop = el.scrollHeight; return el.scrollTop; });
+  expect(scrolledTo).toBeGreaterThan(0);
+  await expect(menu).toHaveCount(0);
+  expect(await body.evaluate((el, top) => ({
+    scrollTop: el.scrollTop === top,
+    body: document.activeElement === el,
+    menuitems: document.querySelectorAll('[role="menuitem"]').length,
+  }), scrolledTo)).toEqual({ scrollTop: true, body: true, menuitems: 0 });
+  await expect(body).toBeFocused();
+  expect(errors).toEqual([]);
+});

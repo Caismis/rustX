@@ -47,7 +47,7 @@ export function AdvancedPage({ source, config, closed, scope, processPolicyImpac
 
     <h4>Native diagnostics</h4>
     {view && <p>{view.path} · Revision: {view.revision}</p>}
-    {view?.diagnostic && <p role="alert">{view.diagnostic}</p>}
+    {view?.diagnostic && <p role="alert" className={css.error}>{view.diagnostic}</p>}
     {source.prospective_diagnostic && <p role="status">{source.prospective_diagnostic}</p>}
 
     <h5>Application observation</h5>

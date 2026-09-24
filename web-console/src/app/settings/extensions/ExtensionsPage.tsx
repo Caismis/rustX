@@ -67,7 +67,7 @@ export function ExtensionsPage({ source, scope, revision, models, focus, onFocus
             onOpen={id => { const entry = matches.find(item => rowId(item) === id); if (entry) onFocus({ kind: 'extension', family: entry.family, name: entry.name }); }}
             empty={query ? `No extension identity matches ${query}.` : 'No definition of this kind is present in this native projection.'} />
           {filter === 'mcp' && mcp.state === 'malformed' && <>
-            <p role="alert">{mcp.diagnostic}</p>
+            <p role="alert" className={css.error}>{mcp.diagnostic}</p>
             <p role="status">MCP editing is unavailable because this document does not parse. Correct {mcp.path}, then rescan configuration files on Advanced.</p>
           </>}
           {filter !== 'all' && admitsAuthoring(filter as ExtensionFamily) && !(filter === 'mcp' && mcp.state !== 'structured')

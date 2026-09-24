@@ -715,9 +715,10 @@ revision settles it — with no replay and no second write.
 ## Composition
 
 `presentation/settings/SettingsRoot` remains the sole modal/navigation owner. Its
-overlay, focus containment and restoration and its vertical page tabs are React
-Aria Components (`ModalOverlay`/`Modal`/`Dialog`/`Tabs`) styled by the retained
-Harness classes; the hand-written focus trap and portal it replaced are gone.
+overlay, focus containment and restoration use the shared Base UI-backed
+`DialogSurface`; vertical page tabs remain React Aria `Tabs`. Both retain the
+Harness classes. It
+also owns the narrow section menu (see *Presentation (#393)*).
 `SettingsContent.module.css` adapts the pinned Harness Models editor and Plugin
 field/inventory vocabulary: outlined identity cards, filled editing modules,
 compact field rows, disclosures, diagnostics and narrow layouts. `Switch` is the
@@ -1014,17 +1015,15 @@ ever dispatched.
 
 **React Aria is interaction semantics only.** It is imported only by
 `primitives/aria.tsx` and `presentation/settings/SettingsRoot.tsx`. It owns
-keyboard navigation, roving focus, dialog focus containment and restoration,
-tab/grid/select/menu/disclosure/switch semantics. The page tabs take their
-orientation from the viewport (`narrowSettingsLayout`): a vertical rail answers
-ArrowUp/ArrowDown on a wide viewport, a horizontal strip answers
-ArrowLeft/ArrowRight on a narrow one, and the strip layout is styled from React
-Aria's `data-orientation`, so keyboard semantics and the visual axis are one
-decision. No Spectrum stylesheet is
+keyboard navigation, roving focus and tab/grid/select/menu/disclosure/switch
+semantics. Base UI owns the shared dialog behavior. The page tabs are a vertical
+rail (ArrowUp/ArrowDown); on a narrow panel the rail is hidden and the section
+menu selects pages instead (see *Presentation (#393)*). No Spectrum stylesheet is
 loaded; every visual token is the existing `--dsw-*` family
-(`SettingsWorkflow.module.css`). Destructive confirmations are
-`ModalOverlay`+`Dialog role="alertdialog"` layers over the one Settings root,
-with initial focus on Cancel; the global WebUI modals are unchanged.
+(`SettingsWorkflow.module.css`). Removal confirmations are shared `DialogSurface`
+layers over the one Settings root — `role="alertdialog"` for a real deletion,
+`role="dialog"` for restoring inheritance — with initial focus on Cancel; the
+other application modal surfaces remain unchanged.
 
 **Removal semantics.** User Settings removes an authored definition
 (`data-removal="authored-removal"`, "Remove … from User configuration?").
@@ -1047,3 +1046,220 @@ with a separate diagnostics surface follows the Kimi Web reference docs
 `934b704a5eff1726623dd80db62907fbc1f7dd72`). Both were inspected only; no source,
 asset or text was copied, and neither product's configuration precedence,
 account or billing concepts were adopted.
+
+## Presentation (#393)
+
+#393 changes presentation only. No actor, transition, port, native DTO or
+protocol version changed; the machines above are the same owners of reads,
+mutations, settlement, fencing, navigation, observation and adoption.
+
+**One frame with explicit regions.** `SettingsPanel` is one grid: the page rail,
+a fixed header and one scrolling page pane. The header holds the owner label,
+the observation lifecycle and **Reload configuration**, so every page shares
+them and page changes never move or resize the frame (≈1000 px wide bounded by
+the viewport, `min(820 px, viewport − 48 px)` high, r24). The header lives
+outside React Aria `Tabs` on purpose: RAC renders a `Tabs` subtree a second time
+into a detached collection document to discover its tabs, and the header's
+section menu measures real DOM.
+
+**Responsive layout is CSS, not state.** The panel is a size container
+(`container: settings / inline-size`), and `@container settings (max-width:
+680px)` decides the narrow layout from the panel's own width: the rail is hidden
+and the header shows the section menu; content rules (field grids, rows, the
+header context) follow the same query. There is no media-query store, resize
+observer, breakpoint prop or machine state for it, and a narrow panel inside a
+wide window is narrow. Only the modal shell's own viewport bound stays on a
+media query. The deleted horizontal page strip, its `aria-orientation` styling
+and its strip-scrolling tab label have no replacement.
+
+**Section menu.** The narrow page selector is the shared rustX `Menu`
+(`autoFocus`), whose rows are the same six pages with the same glyphs; selecting a
+row sends the same `SELECT` the rail sends, the current row is marked with a
+check and `aria-current`, and the trigger names the current page. Its
+open/closed flag is the one transient state `SettingsPanel` holds. When the
+panel widens while the menu is open, the container query takes its trigger out
+of layout and the `Menu` itself closes through `onClose` (see *anchor
+liveness* below); `SettingsPanel` never mirrors the breakpoint.
+
+**Navigation keyboard handoff.** The rail and the section trigger share one
+keyboard. A container-query change can take the navigation control that holds
+it out of layout — a focused rail tab as the panel narrows, or the focused
+trigger of a closed section menu as it widens — and the browser's focus fixup
+then blurs that control (`focusout` with no `relatedTarget`, on a control that
+no longer renders). `SettingsPanel` answers that report, and only that: inside
+the same `focusout`, with `preventScroll`, a hidden rail tab hands the keyboard
+to the section trigger and a hidden trigger hands it to the selected rail tab,
+so the keyboard stays on the same page in the presentation now shown and no
+rendered frame finds it on the page body. A counterpart that is not rendered
+refuses focus and the Settings dialog takes it instead; the handoff never
+bounces between the two presentations. It does not measure the panel or know
+the 680px rule, so the container query stays the only layout authority, and
+it never selects a page, opens the menu or touches drafts or native state. An
+open section menu is not this path: its trigger does not hold the keyboard,
+and the menu settles on its focus owner through anchor liveness.
+
+**Floating geometry is Floating UI's.** Every `Menu` surface — the list and
+each open submenu — is portaled to the containing dialog portal (or body outside a dialog) and placed by
+`@floating-ui/react-dom` (`offset`, `flip`, `shift`, `size`, `autoUpdate`, fixed
+strategy): anchor measurement, placement, flip, shift, available size and
+anchor tracking. `side`/`align` map to one placement and `getAnchorRect` is a
+virtual reference; a submenu's reference is its own row (`right-end`, flipping
+to `left-end`). There is no other positioning path: the in-place CSS list (and
+its `portal` prop) and the CSS side card are removed. Design dimensions define
+the card; the viewport only takes room away: `size` publishes the room left as
+`--menu-available-width`/`--menu-available-height` and `Menu.module.css`
+applies `min(design bound, room)` — 218px minimum (a submenu 163px, compact
+164px) and 360px maximum — so a long label truncates at 360px on a wide
+viewport and a narrow one never pushes a card outside it; every surface
+scrolls its own rows. A submenu is its own keyboard layer: ArrowRight, Enter,
+Space or Tab on its row enter it, the arrows walk only the layer holding the
+keyboard, and Escape or ArrowLeft inside it close only it and return to its
+row. Passive pointer hover never unmounts the submenu that holds the keyboard
+— one being entered, or with focus inside its card: moving the pointer across
+the parent's other rows, with or without submenus of their own, leaves it
+open and focused. It ends only by a key that closes or selects from it, by its
+row ceasing to be a visible anchor, or by a pointer press on a parent row,
+which moves the keyboard to the pressed row before that row's submenu or
+selection replaces it; with the keyboard back on the parent list, hover shows
+submenus again. Each surface retains
+`data-react-aria-top-layer`, the attribute React Aria's overlay focus containment,
+`ariaHideOutside` and interact-outside detection honour, and Escape on an open
+menu is stopped in the document capture phase so the modal never also sees it.
+Tooltip and HoverCard keep their existing geometry.
+
+**Anchor liveness.** A floating surface exists only while its reference is a
+visible interaction anchor. Every surface carries Floating UI's `hide`
+middleware (`referenceHidden`): a reference that is fully clipped — scrolled
+out of its clipping context, or out of layout altogether, since a reference
+under a `display: none` ancestor or a detached one measures as an empty rect
+that nothing contains — is reported on the next `autoUpdate`. Floating UI is
+the only liveness authority: the Menu measures no anchor itself, and adds no
+observer of its own. The render that carries a placement reporting
+`referenceHidden` no longer presents the surface — it stays mounted, but
+`visibility: hidden`, so it can be neither seen, hit nor focused — and in
+the layout phase of that
+same commit, before the browser paints and while every row is still mounted,
+a keyboard the list held moves with `preventScroll` to the `focusOwner` its
+host names, and the owner is asked to close exactly once through `onClose`;
+the rows unmount in the commit that close produces. So once Floating UI has
+established that an anchor is hidden, no painted frame shows its surface or
+has the keyboard in it. That close is not a dismissal and never refocuses the
+hidden anchor (focusing a trigger scrolled out of view would scroll it back).
+The guarantee starts at Floating UI's placement: a layout change reaches it
+on `autoUpdate`'s next scroll, resize or layout-shift signal. The Menu does
+not infer that owner from the DOM — a nearest `[tabindex]` ancestor may be
+missing (a Workspace Session row has none up to the page) or may itself be the
+clipped row — so a host whose anchor can disappear under normal layout names
+it: the Settings section menu names the Settings dialog, Workspace project and
+Session row menus name the Session tree, and JSON copy menus name the
+Trajectory inspector body. With no owner named, the keyboard is released to the
+document, never left on a removed row or a hidden anchor. Ordinary closes
+(Escape, Shift+Tab, selection, outside press) still return the keyboard to the
+visible trigger, and use the owner only when that trigger refuses focus. A
+submenu whose row scrolls out of its card settles the same way inside the
+menu: the render reporting the row hidden stops presenting the card, and the
+layout phase of that commit moves a keyboard in the card or on the clipped row
+to its parent list, the layer's own owner, and closes only the submenu; the
+parent stays open and its rows keep their scroll. Owners state only whether a menu is open; no owner observes the
+layout rules that decide whether its anchor is rendered. jsdom has no layout, so the unit test
+setup treats every anchor as rendered; Chromium proves the contract.
+
+**Dialog behavior owns close lifecycle; Settings workflows provide the intended
+focus destination.** `DialogSurface` wraps Base UI 1.8.0 Dialog/AlertDialog for
+the one Settings panel and its transient confirmations. Base UI owns layering,
+containment, Escape, outside dismissal, initial focus and the public `finalFocus`
+lifecycle. rustX retains Harness DOM styling, tokens, icons and vocabulary.
+Portaled menus and selects share the containing dialog portal as siblings of
+the popup, keeping their own focus scopes and restoration owners. Their existing
+interaction engines, Floating UI geometry, anchor liveness and focus owners are
+unchanged. Other application modal surfaces are outside this bounded change.
+
+`ConfirmAction` owns only local open state and the dismissed/confirmed outcome.
+Cancel receives initial focus through the `initialFocus` ref. Its `finalFocus`
+callback focuses the connected, enabled, rendered invoking trigger after Cancel,
+Escape or outside dismissal; if that trigger cannot take focus, it focuses the
+caller's stable target. Confirmed actions focus that stable target directly.
+The callback returns `false` to suppress automatic restoration: Base UI's default
+can choose a tabbable child of a programmatically focusable form, while this
+workflow explicitly names the form itself. All focus settlement runs inside
+this public close callback, with no cleanup hook, timers, RAF or microtasks in
+rustX. `UnitShell` supplies its form (`tabindex="-1"`), mounted and enabled through
+the native mutation and outcome. Confirmation submits once, without owning CAS,
+transaction actors or native truth. Deletion is an alert dialog; inheritance
+restoration is a non-destructive ordinary dialog.
+
+Acceptance asserts **terminal settlement**, using the closed-dialog and exact
+focused-target observations. It does not prohibit a transient body-focused frame
+during library teardown. That earlier review assertion was stronger than #393's
+product contract and was removed only from confirmation-close tests; responsive
+navigation frame probes remain. Radix was evaluated, but its public close-focus
+lifecycle did not satisfy the tested contract; it is not a dependency.
+The old `SettleOnLeave` workaround and its React Aria cleanup/restoration timing
+assumptions are gone. No Settings/XState/native ownership or transaction semantics
+change. Held-write fixtures count User RPC writes and Workspace Product Host
+writes at their actual boundaries before releasing either response.
+
+Screenshot evidence follows the unchanged contract: a stable capture, compared
+exactly, with only same-implementation rasterizer noise excepted. Moving the
+Settings panel and its confirmations under the Base UI portal changes how
+Chromium composites the backdrop-filtered mask and the r24 panel shadow. Twenty
+Settings references (the desktop pages, workspace, conflict, loading,
+read-error, Advanced, the 390px pages and section menu, the deletion
+confirmation, and the shell Settings references) change only in the panel's
+edge/shadow coverage and in the blurred page behind the mask (maximum channel
+delta 6); the dialog content and geometry are unchanged. Each reference rendered
+one byte-identical output in nine repeated same-HEAD captures in the pinned
+container. That is deterministic implementation output, so the references were
+reviewed and regenerated through `RUSTX_SCREENSHOT_UPDATE`. The noise manifest
+gains no entry. The earlier provider-detail mobile corner entry (bimodal before
+this change) was removed, because the current implementation renders that corner
+one way in every capture.
+
+**Page vocabulary.** `SettingsContent.module.css` scopes one hierarchy to the
+Settings section (`.page`): page title and description, group headings,
+16 px-radius setting-row cards (≥ 56 px, 12 × 16 px padding) whose action row
+closes the card and sticks to the pane bottom while the card holds a draft,
+14 px-radius resource rows with the identity and its actions on one line and
+secondary badges below, and a designed pending state for a target with no
+projection. Toned badges, errors and alerts keep full-contrast text and carry
+state as border/marker color, so the words carry the meaning. A resource detail
+pins its back control to the top of the pane.
+
+**Session configuration banner.** `SessionConfiguration` renders the same
+predicates as before as compact lines — unavailable, preparing, ready, blocked,
+failed — each with its state in text, a `StateDot`, the native reason or per-unit
+detail and only its own actions; a container query moves actions below the text
+on a narrow Session. Status lines are `role="status"`, read and adoption
+failures `role="alert"`.
+
+**Browser acceptance.** `test/e2e/settings-presentation.spec.ts` drives the
+deterministic fixture through every primary page and the states above, asserting
+geometry, frame stability, clipped and unclipped horizontal overflow, focus,
+Escape ownership, touch, reduced motion and exact adoption requests, and runs
+axe (`@axe-core/playwright`, WCAG 2.1 A/AA tags, serious/critical as failures,
+no rule disabled) on each. `test/e2e/foundation.spec.ts` proves Floating UI
+placement, flip, shift, bounded height and anchor tracking on the shared Menu,
+the 218–360px design width within narrow viewports, a submenu's own flip,
+bounded scrolling height, row tracking and keyboard/pointer layer contract —
+including a keyboard-held submenu that survives the pointer gliding across
+rows with and without submenus and outside both cards, and a pointer press
+that takes it over with the keyboard on the pressed row — and anchor
+liveness: an anchor out of layout closes its list, a row scrolled out of its
+card closes its submenu, and neither keeps the keyboard. For both scroll
+paths a per-frame probe proves that from the first frame whose anchor is
+clipped the surface is never live and the keyboard is already on its owner
+(the named owner, or the parent list), that the keyboard moved exactly once
+and never to the body or the hidden anchor, that the owner was asked to close
+exactly once, and that the scroll stands. The Settings spec
+widens a narrow panel under an open section menu and proves that the menu closes,
+the Settings dialog holds the keyboard and wide navigation works; it narrows the
+panel under a focused rail tab and widens it under a focused closed section
+trigger, inside a wide window, and proves that the keyboard moves to the other
+presentation's control for the same page, no frame finds it on the body, no page
+or native request changes, and the selector, the arrows and Escape keep working
+from there; and with the
+fixture's held writes (`?write=held`) it proves that a confirmed removal and a
+confirmed restore of inheritance settle focus on the unit while the write is in
+flight and its trigger is disabled, and that Cancel and Escape return focus to
+the trigger;
+`agent.spec.ts` proves the ModelSelect submenus inside a 390px viewport.

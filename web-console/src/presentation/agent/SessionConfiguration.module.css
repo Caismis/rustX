@@ -1,0 +1,89 @@
+/* rustX-owned presentation of the Session configuration banner, in the
+   existing Harness token family. One compact line per native fact, directly
+   below the Session title; each line wraps on a narrow Session rather than
+   truncating its reason or scrolling sideways. */
+.banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 8px 0 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 20px;
+  container: session-configuration / inline-size;
+}
+
+/* State, text and the fact's own actions on one line; the dot stays beside the
+   first line of text however the text wraps. */
+.line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "dot text actions";
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 6px 8px 6px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.line[data-state="failed"] {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent);
+}
+
+.dot { grid-area: dot; align-self: start; margin-top: 5px; }
+
+.text {
+  grid-area: text;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.text p { margin: 0; }
+
+.reason { color: var(--dsw-alias-label-secondary); }
+
+.detail {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* A narrow Session puts the actions under the text instead of squeezing it. */
+@container session-configuration (max-width: 560px) {
+  .line { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "dot text" ". actions"; padding-right: 10px; }
+  .actions { justify-content: flex-start; }
+}
+
+.actions button { max-width: 100%; white-space: normal; text-align: left; height: auto; min-height: 28px; }
+
+.alert {
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 12px;
+  color: var(--dsw-alias-label-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent);
+  border-left: 3px solid var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Reduced motion: "preparing" is still written out; the dot stops chasing. */
+@media (prefers-reduced-motion: reduce) {
+  .dot rect { animation: none; opacity: 0.6; }
+}

@@ -369,7 +369,7 @@
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/settings/extensions/ExtensionDetail.tsx",
-      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain.",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain. #393: native diagnostics and alerts share the error vocabulary.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v19",
@@ -428,18 +428,19 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f01e6accb1276bca0aae2964e8e52364b1ae0c36f55bab534a061187d77cf138"
+      "local_sha256": "850d55e45491d11052af42c17c72013e86cd58b65dbcc88d570443d92d2c6f4d"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
         "../../../../protocol/app-server/v19",
         "../../client/app-server",
         "../../connection/controller",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/icons",
         "../../presentation/settings/SettingsContent.module.css",
         "../../presentation/settings/SettingsRoot",
         "../../workspaces/host",
@@ -457,7 +458,8 @@
         "./projection",
         "./source-context",
         "./tools/ToolsPage",
-        "@xstate/react"
+        "@xstate/react",
+        "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -473,7 +475,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "91a756590e175c6c766e06f8062502cbf51b6e957fd43376eea5e430576d4ac6"
+      "local_sha256": "55e00fe23b21a242ce5501321ba932cbc00550154aff1ca94b7a4348e49808de"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -548,7 +550,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: the request title reads as model plus native retry, and the native disclosure names retry_number as the retry / recovery ordinal it is.",
+      "treatment": "adapted per-kind inspector sections onto native Trace detail; Markdown, JSON tree, code and artifact rendering use the existing audited rustX primitives; refetch detail after authoritative lifecycle repair; preserve the virtualization enable boundary and bounded canonical message batches; verified inspector heading flow and timeline lane alignment/label density in desktop and mobile browsers; distinguish recorded empty text from unavailable authority; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. WEB-15 review: the request title reads as model plus native retry, and the native disclosure names retry_number as the retry / recovery ordinal it is. #393 repair: the scrolling tab panel is the focus owner of the JSON copy menus inside it.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v19",
@@ -586,7 +588,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "720f66deae6666b24b16c0fbf2a9ef20f2d20722ebd86c17d8cbec4c3acbec74"
+      "local_sha256": "064c4c87997d68479d971b9f4be0b4a82e569a17b72a2119b634355c2d483fdc"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -843,7 +845,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.tsx",
       "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Menu",
@@ -857,7 +859,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "0887c073194189918884c0df81667c29d6892c260ea180d89422525b273c5e0c"
+      "local_sha256": "d85706cc5002ffb351b5c009381311f2ceb7338aae77b1da9406762fb2048c44"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1442,7 +1444,7 @@
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
       "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #393: a comment no longer cites the removed Menu portal mode.",
       "upstream_sha256": "e4fcb43d12de00d011717b033b496f5f57fb00c297f34e0a2f03206befd03e13",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1458,7 +1460,7 @@
         "react",
         "react-dom"
       ],
-      "local_sha256": "ed5b6b4e97e981ef6fbdeb30bcad94b3f85b192c848d286b0f27129599df79db",
+      "local_sha256": "f884dd4f1c28c7a7c3c431a4e9d40884d5e0a72f8e25a0a4c3ef032bc9a2d84e",
       "classification": "A"
     },
     {
@@ -1525,7 +1527,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/JsonTree.tsx",
       "destination": "web-console/src/presentation/primitives/JsonTree.tsx",
-      "treatment": "imported read-only JSON inspector; rustX adapts its import paths and gives React 19 refs explicit initial values. No Harness runtime is introduced.",
+      "treatment": "imported read-only JSON inspector; rustX adapts its import paths and gives React 19 refs explicit initial values. No Harness runtime is introduced. #393: no longer passes the removed Menu portal prop. #393 repair: copy menus take the render site's scrolling container as their focus owner.",
       "upstream_sha256": "dbae1610448f4fe0e52f02357776ee78e1cc86497d4dc4a48e71d2216b8a943c",
       "retained_dependencies": [
         "./JsonTree.module.css",
@@ -1544,12 +1546,12 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ce48edb99f11cfe1383e4e7b8ba6986a9eb28a046761cf5d2553d309e3a1c759"
+      "local_sha256": "f6a8b61e6bacdd4cbce4215bd0a10eb1bb17c4bf205a08ffc6247a62e4ab26b1"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Menu.module.css",
       "destination": "web-console/src/presentation/primitives/Menu.module.css",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #393: a card's size is its design bounds (per-card minimum, 360px maximum) within the room Floating UI publishes (--menu-available-width/height); the in-place offset, side/align, scrollable and absolutely positioned submenu rules are removed; every floating surface shares one layer, and the submenu pointer bridge follows the side it was placed on.",
       "upstream_sha256": "62742423924c7ea62e3b5fa377c39c62b48168c1bcabcfa8dfede64ef01e2bad",
       "retained_dependencies": [
         "CSS modules",
@@ -1563,18 +1565,20 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "2ccfc4d0a72c7399f1c2e7747cdb64451307235f3af7ead270f1f95debb4f790",
-      "classification": "A"
+      "local_sha256": "02d5978fd12570c22116fc63e9938730f02cdc376e9b772675910655847badd2",
+      "classification": "B"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Menu.tsx",
       "destination": "web-console/src/presentation/primitives/Menu.tsx",
-      "treatment": "A: upstream anchored/portaled menu, submenus, keyboard and pointer grace; local imports; autofocus waits for portal placement",
+      "treatment": "A: upstream anchored menu, submenus, keyboard and pointer grace; local imports; autofocus waits for placement #393: all menu geometry is Floating UI's (@floating-ui/react-dom 2.1.9: offset, flip, shift, size, autoUpdate, fixed strategy). The hand-written portal geometry (anchor/list measurement, viewport clamping, capture-phase scroll and resize listeners), the CSS-positioned in-place list with its portal prop, and the CSS-positioned submenu card are removed. The list is always a body-portaled Floating UI surface (side/align map to one placement; getAnchorRect is a virtual reference), and each open submenu is a body-portaled Floating UI surface anchored to its own row (right-end, flipping to left-end, shifted and size-bounded, with a side-aware pointer bridge). size() publishes the room the viewport leaves as CSS custom properties that Menu.module.css combines with the design bounds. A submenu is its own keyboard layer: ArrowRight, Enter, Space or Tab on its row enter it, the arrows, Home and End walk only the focused layer, and Escape or ArrowLeft inside it return to its row. The upstream API (less portal), DOM classes, selection, disabled rows, pointer grace and focus restoration are retained; floating surfaces are React Aria top layers, Escape stops at the menu before a containing React Aria modal, and selected rows announce aria-current. #393 repair: every surface lives only while its reference is a visible interaction anchor (Floating UI hide, referenceHidden): a list whose anchor leaves layout, is detached or is clipped out closes through onClose; a submenu whose row scrolls out of its card closes. A keyboard either held goes to the trigger, the anchor's first enabled button or the nearest rendered focus container (a containing dialog), never to a hidden control or an unmounting row. #393 correction: a liveness close is not a dismissal. A list whose anchor is hidden settles a keyboard it held on the nearest containing focus owner without scrolling, never on the hidden trigger; a submenu whose row is hidden leaves the keyboard on the still-open list, never on the clipped row; Escape and ArrowLeft still return it to a visible row. #393 repair: a hidden anchor's keyboard goes to the focusOwner its host names, with no [tabindex] ancestor inference; with none named it is released, never left on a removed row or a hidden anchor. #393 repair: a submenu the keyboard holds (being entered, or focus inside its card) is never replaced or closed by passive hover; a pointer press on a parent row moves the keyboard to that row before it takes over. A placement reporting referenceHidden stops presenting its surface in the same render, and the layout phase of that commit settles the keyboard and closes the surface once, before paint. #400 focus lifecycle: portal into a containing Settings dialog scope when present; Floating UI geometry, reference-hidden settlement, keyboard behavior and owners unchanged.",
       "upstream_sha256": "e7e71f29eb88b9c11516b19ea3e9e49012fd348a995d1ebac11c23e75474c571",
       "retained_dependencies": [
+        "./DialogSurface",
         "./Menu.module.css",
         "./icons/index.tsx",
         "./pointer-grace.ts",
+        "@floating-ui/react-dom",
         "clsx",
         "react",
         "react-dom"
@@ -1587,8 +1591,8 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "74398207ecd813a4d62e43466231bc3e339b0d97f1f2a4af8ff5d562fc6bcfd6",
-      "classification": "A"
+      "local_sha256": "40b5a209fa6307a2c37f2417cc14ae6b4191381e283575a3a329f63860022353",
+      "classification": "B"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Modal.module.css",
@@ -1931,9 +1935,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own.",
+      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "3beb4d1ffd6dfe4a080780e42055aec2310ed86054d71fe92a45c75626547ab4",
+      "local_sha256": "bb24bacefc53699d56a410b0c0d0f1c71a0d9ebe33df352bbe70fb63bbb25791",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1960,7 +1964,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint. #393: the panel is 1000px bounded by the viewport, min(820px, viewport − 48px) high, r24, and a size container; rail 216px. Narrow layout is an @container query on the panel's own width; the horizontal strip rules are deleted, and the modal shell keeps only its viewport bound on a media query. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained.",
       "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1969,7 +1973,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "9860b03430cb7e8731ea48945bf5ff8eecbf374342eab156b82cb0b43dac30a2",
+      "local_sha256": "9fcb2a507c60c18c0d466edabda8eb984133f67e629587f24c5595a45d8aa84c",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -1977,7 +1981,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.tsx",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership. #392: the overlay, focus containment/restoration and vertical page tabs are React Aria Components (ModalOverlay/Modal/Dialog/Tabs) styled by the retained upstream classes; the hand-written focus trap and portal are removed. #392 repair: page tab orientation follows the viewport (vertical rail, horizontal narrow strip) so arrow-key semantics match the visual axis; the render-time missing-page fallback is removed because navigation admits only listed pages. The selected tab keeps itself inside a horizontal strip once it is committed as selected, including selections that do not move focus.",
+      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership. #392: the overlay, focus containment/restoration and vertical page tabs are React Aria Components (ModalOverlay/Modal/Dialog/Tabs) styled by the retained upstream classes; the hand-written focus trap and portal are removed. #392 repair: page tab orientation follows the viewport (vertical rail, horizontal narrow strip) so arrow-key semantics match the visual axis; the render-time missing-page fallback is removed because navigation admits only listed pages. The selected tab keeps itself inside a horizontal strip once it is committed as selected, including selections that do not move focus. #393: one grid frame (rail, fixed header, one scrolling options pane) with the header outside React Aria Tabs; distinct page glyphs from the existing icon family; the narrow panel replaces the rail with a section menu on the shared Menu primitive. The viewport media-query store, horizontal tab orientation and strip-scrolling tab label are deleted. The section menu no longer passes the removed Menu portal prop. #393 repair: the section menu closes through the shared Menu when the container query takes its trigger out of layout; the panel holds no breakpoint state. #393 repair: names the Settings dialog as the section menu's focus owner. #393 repair: when the focused rail tab or closed section trigger leaves layout, the keyboard moves to the other presentation's control for the selected page, triggered by the browser's focus fixup, with no breakpoint state. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained.",
       "upstream_sha256": "7ce55121345e28bed96b01c2e08641162d7bee4569083bad46b98c1574577ecb",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1987,6 +1991,8 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [
+        "../primitives/DialogSurface",
+        "../primitives/Menu",
         "../primitives/icons",
         "./SettingsRoot.module.css",
         "./SettingsWorkflow.module.css",
@@ -1994,7 +2000,7 @@
         "react",
         "react-aria-components"
       ],
-      "local_sha256": "75c830f92890666e97ca38215745f99438f667c198007b6533d484246309de84",
+      "local_sha256": "3bef2c9818b6e5c5a6466ce7196b0f73b641c43e5404b622c227389beeab665b",
       "classification": "B"
     },
     {
@@ -2167,7 +2173,7 @@
       "destination": "web-console/src/presentation/workspace/Rows.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/Rows.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream project, Session and search rows; native view models and callbacks; accessible open/toggle controls; omit provisional identity, archive, reorder and schedule affordances; native deletion preview replaces archive; WEB-12 review repair: Sidebar Close view menu callback and visible product observation for Session/search rows. Native authority unchanged.",
+      "treatment": "B: upstream project, Session and search rows; native view models and callbacks; accessible open/toggle controls; omit provisional identity, archive, reorder and schedule affordances; native deletion preview replaces archive; WEB-12 review repair: Sidebar Close view menu callback and visible product observation for Session/search rows. Native authority unchanged. #393: no longer passes the removed Menu portal prop. #393 repair: row action menus name the Session tree as their focus owner and announce their open state.",
       "upstream_sha256": "e61586fd63c0ae8f54ab6076905d8c96c97482576770964552c0a03acbcce6d4",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2188,7 +2194,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "3d3e83faa3ff3672aad189d440deec04419140a01b1096c171426b13b587c4cf",
+      "local_sha256": "250f1db8a8a839e1adc4e2f883a71cd2c3980fd40e3c4c9517f420e246e7edad",
       "classification": "B"
     },
     {
@@ -2212,7 +2218,7 @@
       "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work.",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. #393: no longer passes the removed Menu portal prop. #393 repair: the Session tree is the programmatically focusable owner of its row action menus.",
       "upstream_sha256": "861c3a98489e6ddb7c9383c514a0af7ce59eedd03317b09d51063b0c69c6c775",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2232,7 +2238,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "eead0e67f268c801edb5c7587cc49debd879d22ab82a1917bafad92ec0b43253",
+      "local_sha256": "91bf7955f4f8b9b62dd248c20ba841d93cc7fb078aa22e5fb1a0dd1283331cae",
       "classification": "B"
     },
     {

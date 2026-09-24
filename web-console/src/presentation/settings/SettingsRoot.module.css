@@ -66,29 +66,34 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  /* React Aria's ModalOverlay is the mask element itself: it owns the
-     dismissable backdrop, so no separate mask node is rendered. */
+  /* Base UI's DialogViewport is the mask element itself: it owns the
+     dismissable viewport, so no separate styled mask node is rendered. */
   background: var(--dsw-alias-bg-mask-1);
   backdrop-filter: var(--dsw-mask-blur);
 }
 
-/* Panel (figma Settings 501:29947): r24, white; the figma lv3 effects are
-   superseded by the shared elevation treatment; figma's 1080x700 is shrunk to 800 wide.
-   One height for every section, taken from the viewport rather than the
-   content: sections differ by hundreds of pixels (a settings list against the
-   composition editor), and a content-sized panel would resize under the
-   pointer on every nav click. Whatever does not fit scrolls in `.options`. */
+/* Panel (figma Settings 501:29947): white, the figma lv3 effects superseded by
+   the shared elevation treatment. The figma 1080x700 frame is 1000 wide,
+   bounded by the viewport, and r24. One height for every page, taken from
+   the viewport rather than the content: pages differ by hundreds of pixels (a
+   settings list against a complete Model editor), and a content-sized panel
+   would resize under the pointer on every page change. Whatever does not fit
+   scrolls in `.options`.
+
+   The panel is also the size container every inner layout decision reads:
+   `@container settings (...)` below answers the panel's own usable width,
+   never the window's, so a narrow panel in a wide window is still narrow. */
 .panel {
   position: relative;
   z-index: 1;
   display: flex;
-  width: 800px;
-  height: min(800px, calc(100vh - 48px));
-  max-width: calc(100vw - 48px);
-  border-radius: 32px;
+  width: min(1000px, 100vw - 48px);
+  height: min(820px, 100dvh - 48px);
+  border-radius: 24px;
   overflow: hidden;
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-elevation-prominent);
+  container: settings / inline-size;
   /* Elevated surface: the scrollbar thumb takes the l2 elevation tokens.
      Declared on the panel rather than the scrolling `.options` child so the
      elevation choice sits with the surface; the custom properties inherit
@@ -98,38 +103,46 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
-/* Dialog and Tabs seats. React Aria inserts one element for the dialog and one
-   for the tab group between the panel and its rail/content children; both are
-   pure layout pass-throughs so the figma panel geometry above is unchanged. */
+/* A small viewport gives the panel almost all of itself; the panel then
+   narrows as a container and its content follows. This is the modal shell's
+   viewport bound, not a layout decision about its content. */
+@media (max-width: 640px) {
+  .panel { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
+}
+
+/* The dialog is one grid with three owned regions: the rail, the fixed
+   header and the one scrolling options pane. React Aria's Tabs element is a
+   pure pass-through (`display: contents`), so the rail and the options pane it
+   owns sit in the dialog's grid next to the header, which is outside it. */
 .dialog {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "nav header" "nav options";
   width: 100%;
   outline: none;
 }
 
 .tabsRoot {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  width: 100%;
+  display: contents;
 }
 
-/* Nav rail (figma .Setting-nav 501:29958): 188 wide, pad (12,22,12,0),
-   gap 18, no own fill — the panel white shows through. */
+/* Nav rail (figma .Setting-nav 501:29958): pad (22,12,0), gap 18, no own fill
+   — the panel white shows through. 188px upstream; 216px so the longest
+   product page name, "Tools & Permissions", is never truncated. */
 .nav {
   flex: none;
   display: flex;
   flex-direction: column;
   gap: 18px;
-  /* 188px upstream; widened so the longest product page name, "Tools &
-     Permissions", is never truncated. */
-  width: 212px;
+  grid-area: nav;
+  min-height: 0;
   padding: 22px 12px 0;
   box-sizing: border-box;
+  border-right: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 /* Title row (figma 501:29959): 16/500 lh24, 12px side padding. */
@@ -141,15 +154,18 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* Cell stack (figma 501:29961): gap 4. */
+/* Cell stack (figma 501:29961): gap 4, scrolls on its own when short. */
 .navList {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 20px;
 }
 
-/* Nav cell (figma .Setting-nav-cell 501:29962): 164x40, r12, pad
-   (12,9,16,9), gap 8; label 14/400 lh22; selected fill #EBEEF2. */
+/* Nav cell (figma .Setting-nav-cell 501:29962): h40, r12, pad (9,16,9,12),
+   gap 8; label 14/400 lh22. States are SettingsWorkflow `.pageTab`. */
 .navCell {
   display: flex;
   align-items: center;
@@ -169,16 +185,14 @@
   text-align: left;
 }
 
-.navCell:hover {
-  background: var(--dsw-specific-sidebar-nav-item-hover);
-}
-
-.navCell.active {
-  background: var(--dsw-specific-sidebar-nav-item-active);
-}
-
 .navIcon {
   flex: none;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-label-secondary);
 }
 
 .navLabel {
@@ -189,34 +203,50 @@
   text-overflow: ellipsis;
 }
 
-/* Content column (figma Content 501:29980): header + options. */
-.content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Header (figma .Header 501:29981): h54, pad (10,20,14,8), close right. */
+/* Header (figma .Header 501:29981): the owner and observation context of this
+   Settings instance on the left, Close on the right. It never scrolls. The
+   section menu seat is present in the grid only on a narrow panel. */
 .header {
-  flex: none;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  height: 54px;
-  padding: 20px 14px 8px 10px;
+  grid-area: header;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "context close";
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 60px;
+  padding: 14px 16px 10px 28px;
   box-sizing: border-box;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
-.actions {
-  min-width: 0;
+.sections { grid-area: sections; display: none; min-width: 0; }
+.context { grid-area: context; min-width: 0; }
+.close { grid-area: close; }
+
+/* Section menu trigger: the nav cell geometry as one button that names the
+   current page. */
+.sectionTrigger {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
-  margin-left: auto;
+  max-width: 100%;
+  height: 40px;
+  padding: 9px 12px;
+  box-sizing: border-box;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
 }
+
+.sectionTrigger:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.sectionLabel { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sectionChevron { flex: none; color: var(--dsw-alias-label-tertiary); }
 
 /* Close button (figma .Icon_container 501:29982): 28x28, r28, 14px glyph. */
 .close {
@@ -237,12 +267,20 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* Options area (figma Options 501:29983): pad (24,0,24,24), scrolls. */
+.close:focus-visible,
+.sectionTrigger:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
+
+/* Options area (figma Options 501:29983): the one local scroll of the panel. */
 .options {
-  flex: 1;
+  grid-area: options;
+  min-width: 0;
   min-height: 0;
-  padding: 0 24px 24px;
+  padding: 20px 28px 28px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Visually-hidden text seat (close button accessible name from slot content). */
@@ -255,25 +293,17 @@
   white-space: nowrap;
 }
 
-.navList { overflow-y: auto; min-height: 0; padding-bottom: 20px; }
-/* The narrow panel geometry. The breakpoint is `narrowSettingsLayout` in
-   SettingsRoot.tsx, which also turns the page tabs horizontal; the tab strip
-   below follows that ARIA orientation rather than this breakpoint. */
-@media (max-width: 640px) {
-  .panel { flex-direction: column; max-width: calc(100vw - 24px); height: calc(100dvh - 24px); border-radius: 24px; }
-  .dialog { flex-direction: column; }
-  .content { min-height: 0; }
-  .header { height: 44px; padding-top: 8px; }
-  .options { padding: 0 16px 16px; }
+/* Narrow panel: the rail gives way to the section menu, the header takes two
+   rows (page selector and Close, then the owner context), and the options
+   lose their wide gutters. Decided by the panel's own width, see `.panel`. */
+@container settings (max-width: 680px) {
+  .dialog { grid-template-columns: minmax(0, 1fr); grid-template-areas: "header" "options"; }
+  .nav { display: none; }
+  .sections { display: block; }
+  .header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "sections close" "context context";
+    padding: 12px 12px 10px 16px;
+  }
+  .options { padding: 16px 16px 20px; }
 }
-
-.group { padding: 10px 12px 2px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
-@media (max-width: 640px) { .group { display: none; } }
-
-/* A horizontal page tab list is a strip above the content. Layout follows the
-   orientation React Aria announces, so the axis the arrow keys move along is
-   always the axis the tabs are laid out along. */
-.tabsRoot[data-orientation="horizontal"] { flex-direction: column; }
-.tabsRoot[data-orientation="horizontal"] .nav { width: 100%; padding: 16px 16px 0; gap: 8px; }
-.navList[data-orientation="horizontal"] { flex-direction: row; overflow-x: auto; padding-bottom: 6px; }
-.navList[data-orientation="horizontal"] .navCell { flex: none; }

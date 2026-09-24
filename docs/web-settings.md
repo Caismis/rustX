@@ -27,9 +27,27 @@ Settings is organized by product task into exactly six primary pages:
 | **Extensions** | One searchable inventory of MCP servers, Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
 | **Advanced** | Context and runtime limits, environment identities, App Server process policy, native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a seventh page. |
 
-The page list is a vertical rail on a wide screen (ArrowUp/ArrowDown) and a
-horizontal strip on a narrow one (ArrowLeft/ArrowRight); the selected page is
-kept in view in the strip.
+The six pages share one modal frame: about 1000 px wide, bounded by the
+viewport, `min(820 px, viewport − 48 px)` high and 24 px round, with a fixed
+header naming the owner (User or `Workspace Settings — <workspace>`), the state
+of its authoritative observation and **Reload configuration**, and one scrolling
+page pane. Changing page never resizes or moves the frame. Each page has its own
+glyph from the existing icon family; the label, never the glyph or a color,
+names it.
+
+The panel chooses its navigation from its own usable width, not the window's:
+a wide panel shows a vertical page rail (ArrowUp/ArrowDown, one tab stop); a
+narrow one (390 × 844 phones included) replaces the rail with a section menu in
+the header, which names the current page, opens from pointer, touch or keyboard,
+marks the current page, and returns focus to its trigger. If the panel widens
+while the section menu is open, the menu closes and the Settings dialog keeps
+the keyboard. Escape closes the
+topmost layer only — the section menu, then a confirmation, then Settings.
+Resource pages are list → detail at every width; a detail replaces its list and
+keeps **← Models** / **← Extensions** pinned at the top of the pane. A unit card
+with a draft keeps its **Save** / **Discard** row pinned at the bottom of the pane
+while its fields scroll, and long identities, endpoints, paths and native
+diagnostics wrap instead of widening the page.
 
 Workspace Settings is a constrained surface of the same pages without General
 (everything on General is client-owned) and without the User-only App Server
@@ -108,11 +126,15 @@ or uncertain definition never produces an aggregate success, and nothing is
 submitted automatically after an uncertain outcome.
 
 Removal is confirmed in a modal dialog that states the actual native
-consequence, and cancelling it writes nothing. In User Settings the action is
-**Remove** (the authored definition is removed from User configuration). In
-Workspace Settings it is **Use global default**, which removes only the
-Workspace override so the inherited value applies again; it is never presented
-as deleting the global definition.
+consequence, and cancelling it writes nothing and returns focus to the button
+that opened it. Confirming it moves focus to the setting's card, which reports
+the outcome while its controls stay closed until native answers. In User Settings the action is
+**Remove** (the authored definition is removed from User configuration): a
+destructive alert dialog with a trash glyph on its trigger and a destructive
+confirm action. In Workspace Settings it is **Use global default**, which removes
+only the Workspace override so the inherited value applies again; it is an
+ordinary dialog with an ordinary primary action and is never presented as
+deleting the global definition.
 MCP transport may be implicit: a URL shows the HTTP editor and a command shows
 stdio. Ordinary edits preserve that authored omission and retained credentials.
 
@@ -211,11 +233,21 @@ dialog shows. Page focus is presentation navigation only: no draft, CAS base or
 mutation identity lives there, so leaving a detail never discards editing
 intent.
 
-React Aria Components provide the interaction semantics of the Settings dialog
-(modal focus containment and restoration, page and filter tabs, resource grids,
-selects, menus, disclosures, switches and confirmation dialogs) inside the one
-Settings modal root; every visual decision stays in the existing rustX token
-family. TanStack Form provides field mechanics for the complete typed Provider,
+The shared Base UI-backed dialog primitive owns modal containment, layering,
+Escape, dismissal and the explicit close-focus lifecycle for Settings and its
+confirmations. Settings workflows provide the intended focus destination:
+dismissal returns to the usable trigger (otherwise the unit form); confirmation
+settles on the stable unit form while native writes are in flight.
+These are terminal-focus contracts, observed after the dialog closes; transient
+body focus during library teardown is not a product invariant. The public
+`finalFocus` callback focuses the exact target and disables automatic restoration.
+Cancel receives initial focus. React Aria retains page/filter tabs, resource
+grids, selects, menus, disclosures and switches. All styling stays in the
+existing rustX token family. The narrow section menu is the shared rustX Menu, whose
+geometry — placement, flip, shift, available size and following its anchor, for
+the list and for every submenu — is Floating UI's, within the Menu's design
+dimensions. Neither library holds a page, target or draft: they own
+browser mechanics only. TanStack Form provides field mechanics for the complete typed Provider,
 Model, MCP and named-Agent forms only: every change is reflected into the unit's
 XState transaction, the form is rehydrated from that actor-owned draft, and Save
 goes through the transaction. Neither library owns configuration state. TanStack
@@ -305,6 +337,70 @@ disclosure), so the ordinary pages need no protocol vocabulary.
 
 The current image references are under
 [`settings-presentation.spec.ts-snapshots`](../web-console/test/e2e/settings-presentation.spec.ts-snapshots).
-The earlier CFG3 captures above document the native contracts before the Harness
-presentation migration. Real-server browser runs continue to capture Save, CAS,
-publication failure and narrow Settings evidence in `web-console/test-results`.
+Each is a real rendered state of the deterministic Settings fixture
+(`web-console/test/fixtures/settings.tsx`; its variants are named in the query
+string: `scenario=conflict|loading|read-error`, `session=preparing|ready|blocked|failed`),
+asserted together with the interaction, geometry, overflow and axe checks in
+`web-console/test/e2e/settings-presentation.spec.ts`:
+
+| Reference | State | Viewport | Theme |
+| --- | --- | --- | --- |
+| `settings-general-light` | User General | 1440 × 1000 | light |
+| `settings-models-light` | Provider list with a long identity | 1440 × 1000 | light |
+| `settings-provider-detail-light` | Provider detail | 1440 × 1000 | light |
+| `settings-agent-light` | Agent | 1440 × 1000 | light |
+| `settings-tools-light` | Tools & Permissions | 1440 × 1000 | light |
+| `settings-extensions-light` | Extensions inventory with a native diagnostic | 1440 × 1000 | light |
+| `settings-workspace-inherited-light` | Workspace, inherited unit | 1440 × 1000 | light |
+| `settings-workspace-override-light` | Workspace, overridden unit with a draft | 1440 × 1000 | light |
+| `settings-delete-confirm-light` | Destructive removal confirmation | 1440 × 1000 | light |
+| `settings-conflict-light` | CAS conflict with the draft preserved | 1440 × 1000 | light |
+| `settings-loading-light` | Source read outstanding | 1440 × 1000 | light |
+| `settings-read-error-light` | Source read failed | 1440 × 1000 | light |
+| `settings-advanced-dark` | Advanced diagnostics | 1440 × 1000 | dark |
+| `settings-mobile-menu-dark` | Section menu open | 390 × 844 | dark |
+| `settings-mobile-dark` | Models with long identities | 390 × 844 | dark |
+| `settings-provider-detail-mobile-dark` | Provider detail, long identity | 390 × 844 | dark |
+| `settings-agent-narrow-dark` | Workspace named-Agent detail | 390 × 844 | dark |
+| `session-banner-preparing-light` | Session banner, preparing | 1440 × 1000 | light |
+| `session-configuration-banner-light` | Session banner, ready to adopt | 1440 × 1000 | light |
+| `session-banner-blocked-light` | Session banner, blocked by Session work | 1440 × 1000 | light |
+| `session-banner-failed-light` | Session banner, failed with owner actions | 1440 × 1000 | light |
+| `session-banner-failed-mobile-dark` | Session banner, failed | 390 × 844 | dark |
+
+Updating them is an explicit, reviewed action: `pnpm --dir web-console test:e2e:update`
+regenerates every reference from a stable capture in the pinned browser
+container; review each changed image before committing it. The earlier CFG3
+captures above document the native contracts before the Harness presentation
+migration. Real-server browser runs continue to capture Save, CAS, publication
+failure and narrow Settings evidence in `web-console/test-results`.
+
+## Distinct facts
+
+Settings presents seven facts that are never collapsed into one another:
+
+| Fact | Meaning |
+| --- | --- |
+| Effective | what native resolution produced for this target, or that it produced nothing |
+| Authored | what this exact scope's source holds, independent of the effective value |
+| Provenance | which native document supplied the effective value |
+| Source commit | a definitive native acknowledgement of one semantic-unit mutation |
+| Authoritative reread | the read after a commit that observes (or fails to observe) it |
+| Application / preparation | the native per-unit consumer outcome (Applied, Preparing, Failed, Restart pending) |
+| Session adoption | a Session's explicit move onto a prepared candidate, gated natively |
+
+A confirmed save is not an application, a successful read does not clear an
+unrelated application failure, a valid resource is not a prepared one, and a
+fact native did not report is shown as not observed rather than as a negative.
+
+## Session configuration banner
+
+Below the Session title, one compact line per native fact: **Preparing**, a
+prepared candidate **ready** to adopt, the same candidate **blocked** by Session
+work (with the native reason and a disabled **Adopt configuration**), or
+**failed** preparation with the native diagnostic and one **Open … Settings**
+action per native owner. Lines wrap on a narrow Session instead of truncating.
+Presentation changed; semantics did not: no banner when native confirms nothing
+is pending, unavailable is never "up to date", Adopt sends the exact candidate
+and expected binding and native revalidates it, and nothing cancels work,
+queues adoption, or adopts on reconnect, attach, reopen or reload.

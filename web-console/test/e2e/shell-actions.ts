@@ -41,21 +41,33 @@ export async function openConnectionSettings(page: Page) {
     await settings.getByRole('button', { name: 'Connection', exact: true }).click();
   }
 }
+/** The Settings page selector the panel currently shows. A wide panel shows
+ * the vertical page rail; a narrow panel hides it and shows the section menu
+ * trigger instead. Which one is decided by the panel's own width in CSS, so a
+ * test asks the rendered page rather than assuming it from the viewport. */
+export function settingsSectionMenu(page: Page) {
+  return page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: /^Settings page: / });
+}
 /** The primary Settings page currently selected. */
 export async function selectedSettingsPage(page: Page): Promise<string> {
+  const menu = settingsSectionMenu(page);
+  if (await menu.isVisible()) return (await menu.getAttribute('aria-label'))!.replace(/^Settings page: /, '');
   return page.getByRole('tablist', { name: 'Settings pages', exact: true }).getByRole('tab', { selected: true }).innerText();
 }
-/** Select one of the six primary Settings pages through its tab.
- *
- * On a narrow viewport the tabs are a horizontal scroll strip. A user can only
- * press a tab they have scrolled to, so the strip is scrolled first and the
- * frame that dispatches its `scroll` event is allowed to run: React Aria
- * restores the strip's last dispatched scroll position when focus enters it,
- * and pressing in the same task as a programmatic scroll would race that. */
+/** Select one of the six primary Settings pages the way a user can on the
+ * rendered layout: its rail tab on a wide panel, or its row in the section
+ * menu on a narrow one. Either way the selection is the navigation owner's,
+ * and the menu hands focus back to its trigger. */
 export async function openSettingsPage(page: Page, name: string) {
+  const menu = settingsSectionMenu(page);
+  if (await menu.isVisible()) {
+    await menu.click();
+    await page.getByRole('menu').getByRole('menuitem', { name, exact: true }).click();
+    await expect(menu).toHaveAccessibleName(`Settings page: ${name}`);
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    return;
+  }
   const tab = page.getByRole('tablist', { name: 'Settings pages', exact: true }).getByRole('tab', { name, exact: true });
-  await tab.scrollIntoViewIfNeeded();
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await tab.click();
   await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
@@ -65,10 +77,12 @@ export async function choose(scope: Locator, label: string, option: string) {
   await scope.getByRole('button', { name: new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).click();
   await scope.page().getByRole('listbox').getByRole('option', { name: option, exact: true }).click();
 }
-/** Complete a destructive action through its confirmation dialog. */
+/** Complete a removal through its confirmation dialog. Restoring inheritance
+ * (Use global default) is an ordinary dialog; a real deletion is an alert
+ * dialog. Both are titled by the question they ask. */
 export async function confirmSettingsAction(page: Page, label: string) {
   await page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: label, exact: true }).click();
-  const dialog = page.getByRole('alertdialog');
+  const dialog = page.getByRole(label.startsWith('Use global default') ? 'dialog' : 'alertdialog', { name: /\?$/ });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: label, exact: true }).click();
   await expect(dialog).toHaveCount(0);

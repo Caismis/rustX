@@ -32,6 +32,11 @@ window.sessionFixture = {
       await server.update('A', snapshot('A'));
       await server.client.listSessions();
     }
+    // Enough Sessions in the one Workspace for the Session list to scroll.
+    if (mode === 'many') {
+      for (let index = 1; index <= 24; index += 1) server.snapshots.set(`S${String(index).padStart(2, '0')}`, snapshot(`S${String(index).padStart(2, '0')}`));
+      await server.client.listSessions();
+    }
     if (mode === 'delete') server.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'preview', preview: { session_id: 'A', target_revision: '9007199254740999', owned_node_count: 3, owned_conversation_count: 3, owned_child_count: 1 } } }));
     if (mode === 'other-uncertain') {
       server.snapshots.get('B')!.pending_interactions = [];
@@ -54,4 +59,4 @@ window.sessionFixture = {
     if (mode === 'reconnect' || mode === 'uncertain') server.socket.close();
   },
 };
-declare global { interface Window { sessionFixture: { state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

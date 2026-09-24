@@ -1,18 +1,24 @@
-import { useId, useState, type Key, type ReactNode } from 'react';
+import { useRef, useState, type Key, type ReactNode, type RefObject } from 'react';
+import { DialogSurface, useDialogPortal } from '../../../presentation/primitives/DialogSurface';
+import clsx from 'clsx';
 import {
-  Button as AriaButton, Dialog, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
-  ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, SearchField, Select, SelectValue,
+  Button as AriaButton, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
+  ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Popover as AriaPopover, SearchField, Select, SelectValue,
   Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs,
 } from 'react-aria-components';
-import { Button } from '../../../presentation/primitives/Button';
+import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import buttonCss from '../../../presentation/primitives/Button.module.css';
 import css from '../../../presentation/settings/SettingsWorkflow.module.css';
+
+function Popover(props: React.ComponentProps<typeof AriaPopover>) {
+  const container = useDialogPortal();
+  return <AriaPopover {...props} UNSTABLE_portalContainer={container} />;
+}
 
 /** The bounded React Aria adoption of the Settings workflows.
  *
  * React Aria Components own interaction and accessibility semantics here and
- * nothing else: keyboard navigation and roving focus, dialog focus containment
- * and restoration, menu/list/select interaction, accessible tabs, disclosure
+ * nothing else: keyboard navigation and roving focus, menu/list/select interaction, accessible tabs, disclosure
  * behavior and search-field semantics. Every visual decision stays in the
  * existing Harness-derived rustX token family, so no competing design system
  * is imported and no Spectrum stylesheet is loaded.
@@ -75,11 +81,13 @@ export function ResourceList({ label, rows, selected, onOpen, empty = 'No matchi
   return <GridList className={css.list} aria-label={label} selectionMode="single"
     selectedKeys={selected ? [selected] : []} onAction={key => onOpen(String(key))}>
     {rows.map(row => <GridListItem key={row.id} id={row.id} className={css.row} textValue={row.name} aria-label={row.name}>
+      {/* The identity and its contextual actions share the first line; the
+          native facts follow as secondary badges, then any detail. */}
       <div className={css.rowTop}>
         <span className={css.rowName}>{row.name}</span>
-        <span className={css.rowFacts}>{row.facts}</span>
         {!!row.actions?.length && <RowActions label={`Actions for ${row.name}`} actions={row.actions} />}
       </div>
+      <span className={css.rowFacts}>{row.facts}</span>
       {row.detail}
     </GridListItem>)}
   </GridList>;
@@ -122,39 +130,67 @@ export function Toggle({ label, checked, onChange, disabled = false }: {
   </div>;
 }
 
-/** A destructive confirmation.
+/** A confirmation of one native removal.
  *
  * `description` must describe the actual native consequence of the exact
  * mutation the confirmation submits and nothing else — never a guess about
  * running Attempts, live runtimes, existing Sessions or adopted bindings.
  *
- * This is a transient layer over the one Settings modal root, not a second
- * Settings tree: it mounts only while the confirmation is open, React Aria
- * contains focus inside it, and dismissing it restores focus to the trigger. */
-export function ConfirmAction({ label, title, description, confirm, onConfirm, disabled = false }: {
+ * `tone` says which consequence that is. A `destructive` confirmation removes
+ * something that nothing replaces: it is an `alertdialog` whose trigger and
+ * confirm action carry the destructive color. A `restore` confirmation removes
+ * an override so that the inherited value applies again: it is an ordinary
+ * `dialog` with an ordinary primary action, and it never looks like deletion.
+ * The destructive trigger carries the existing trash glyph; its label, like
+ * every label, keeps full contrast.
+ *
+ * The workflow names the stable outcome surface; this interaction chooses
+ * dismissed versus confirmed. DialogSurface owns the close-focus lifecycle.
+ */
+export function ConfirmAction({ label, title, description, confirm, onConfirm, tone, settle, disabled = false }: {
   label: string; title: string; description: ReactNode; confirm: string;
-  onConfirm: () => void; disabled?: boolean;
+  onConfirm: () => void; tone: 'destructive' | 'restore';
+  /** The enabled element of the caller's workflow that takes focus after a
+   * confirmation: one that the confirmed action neither disables nor
+   * removes. */
+  settle: RefObject<HTMLElement | null>;
+  disabled?: boolean;
 }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const titleId = useId();
-  return <>
-    <Button type="button" disabled={disabled} onClick={() => setOpen(true)}>{label}</Button>
-    <ModalOverlay className={css.confirmOverlay} isOpen={open} onOpenChange={setOpen} isDismissable>
-      <Modal className={css.confirmModal}>
-        <Dialog className={css.confirmDialog} role="alertdialog" aria-labelledby={titleId}>
-          {({ close }) => <>
-            <Heading slot="title" id={titleId}>{title}</Heading>
-            {description}
-            <div className={css.confirmActions}>
-              {/* The least destructive action takes initial focus. */}
-              <Button type="button" autoFocus onClick={close}>Cancel</Button>
-              <Button type="button" variant="primary" onClick={() => { onConfirm(); close(); }}>{confirm}</Button>
-            </div>
-          </>}
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
-  </>;
+  const closing = useRef<'dismissed' | 'confirmed'>('dismissed');
+  const destructive = tone === 'destructive';
+  return <span className={css.removal} data-tone={tone}>
+    <button type="button" ref={trigger} disabled={disabled}
+      className={clsx(buttonCss.button, buttonCss.ghost, buttonCss.md, destructive && css.dangerTrigger)}
+      onClick={() => { closing.current = 'dismissed'; setOpen(true); }}>
+      {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{label}
+    </button>
+    <DialogSurface open={open} onClose={() => setOpen(false)} title={title}
+      role={destructive ? 'alertdialog' : 'dialog'} overlayClassName={css.confirmOverlay}
+      panelClassName={css.confirmModal} className={css.confirmDialog} initialFocus={cancel}
+      finalFocus={() => {
+        const targets = closing.current === 'confirmed' ? [settle.current] : [trigger.current, settle.current];
+        for (const target of targets) {
+          if (!target?.isConnected || target.matches(':disabled, [aria-disabled="true"]')
+            || !target.checkVisibility({ visibilityProperty: true })) continue;
+          target.focus({ preventScroll: true });
+          if (document.activeElement === target) break;
+        }
+        // Custom focus is complete. In particular, a programmatically focusable
+        // unit form must not be replaced by its first tabbable descendant.
+        return false;
+      }}>
+      <h2>{title}</h2>
+      {description}
+      <div className={css.confirmActions}>
+        <button type="button" ref={cancel} className={`${buttonCss.button} ${buttonCss.outline} ${buttonCss.md}`} onClick={() => setOpen(false)}>Cancel</button>
+        <button type="button" className={`${buttonCss.button} ${buttonCss.primary} ${buttonCss.md} ${destructive ? css.destructive : ''}`}
+          onClick={() => { closing.current = 'confirmed'; setOpen(false); onConfirm(); }}>{confirm}</button>
+      </div>
+    </DialogSurface>
+  </span>;
 }
 
 /** A secondary filter strip, used by the one Extensions resource surface. */

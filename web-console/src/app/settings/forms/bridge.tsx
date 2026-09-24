@@ -270,6 +270,12 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   removalNotice?: ReactNode; children: ReactNode;
 }) {
   const workspace = unit.scope === 'workspace';
+  /** The unit's own card: the region that owns its in-flight mutation and
+   * presents the outcome. A confirmed removal submits, which closes every
+   * control in the card — its trigger included — until native answers, so
+   * focus settles on the card itself, which stays mounted and enabled through
+   * the whole write. */
+  const card = useRef<HTMLFormElement>(null);
   const preserved = unit.draft ? 'Your draft and original revision are preserved.'
     : unit.committed ? 'Your committed revision is no longer the current source.'
       : 'Your removal and its original revision are preserved.';
@@ -279,7 +285,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   // that shadows nothing is a real deletion and is named as one.
   const restoresInherited = workspace && (unit.definition === undefined || unit.shadowed !== undefined);
   const owner = workspace ? 'Workspace' : 'User';
-  return <form aria-label={title} className={css.unit} data-definition={unit.definition}
+  return <form ref={card} tabIndex={-1} aria-label={title} className={css.unit} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
     onSubmit={event => { event.preventDefault(); unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
@@ -287,8 +293,8 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
           {authoredStateLabel(unit.facts.authored, unit.scope)} · {effectiveStateLabel(unit.facts.effective)} · {provenanceLabel(unit.facts.origin)}
         </p>
-        {unit.facts.authored.state === 'invalid' && <p role="alert">Authored source is invalid. {unit.facts.authored.diagnostic}</p>}
-        {unit.facts.effective.state === 'invalid' && <p role="alert">Native effective resolution failed. {unit.facts.effective.diagnostic}</p>}
+        {unit.facts.authored.state === 'invalid' && <p role="alert" className={css.error}>Authored source is invalid. {unit.facts.authored.diagnostic}</p>}
+        {unit.facts.effective.state === 'invalid' && <p role="alert" className={css.error}>Native effective resolution failed. {unit.facts.effective.diagnostic}</p>}
         {unit.inheritance && <Advanced title="Native resolved value (not Session adoption)">
           <pre>{unit.facts.effective.state === 'available' ? JSON.stringify(unit.facts.effective.value, null, 2) : effectiveStateLabel(unit.facts.effective)}</pre>
         </Advanced>}
@@ -306,6 +312,12 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
       {unit.reviewNeeded && <div className={css.review}>
         <p role="status">Source revision changed. {preserved} Review the current source before replacing it.</p>
       </div>}
+      {/* Two different facts, reported separately: the native write is
+          definitively committed, and the authoritative reread that settles it
+          has been observed. Neither is ever presented as the other. Both sit
+          above the actions, which close the card. */}
+      {unit.committed && <p role="status">Saved. Native application proceeds automatically.</p>}
+      <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       <div className={css.actions}>
         <Button variant="primary" type="submit" disabled={!unit.draft || !unit.admitted}>Save {title}</Button>
         {/* Authoring an absent unit is always an explicit gesture, never
@@ -324,23 +336,18 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           // unit this Workspace authors, through exact CAS, and the native
           // inherited value becomes effective again. The effective resource
           // survives, so this is never presented as deleting it.
-          ? <span data-removal="override-removal"><ConfirmAction label={`Use global default ${title}`} disabled={!unit.admitted}
+          ? <span data-removal="override-removal"><ConfirmAction tone="restore" label={`Use global default ${title}`} disabled={!unit.admitted}
             title={`Use the global default for ${title}?`} confirm={`Use global default ${title}`}
             description={<><p>This removes the semantic unit this Workspace authors, through exact CAS. The native inherited value becomes effective again.</p><p>Nothing is removed from the global source, and no other scope is changed.</p></>}
-            onConfirm={() => unit.submit(true)} /></span>
+            settle={card} onConfirm={() => unit.submit(true)} /></span>
           // Otherwise the removal really removes this scope's authored unit.
-          : <span data-removal="authored-removal"><ConfirmAction label={`Remove ${title}`} disabled={!unit.admitted}
+          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={`Remove ${title}`} disabled={!unit.admitted}
             title={`Remove ${title} from ${owner} configuration?`} confirm={`Remove ${title}`}
             description={<><p>This removes the value this {owner} source authors, through exact CAS on its current revision.</p>{removalNotice ?? <p>The native default for this unit applies once it is absent.</p>}</>}
-            onConfirm={() => unit.submit(true)} /></span>)}
+            settle={card} onConfirm={() => unit.submit(true)} /></span>)}
         {unit.intent && <Button type="button" onClick={unit.discard}>Discard draft</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>Use reviewed revision</Button>}
       </div>
-      {/* Two different facts, reported separately: the native write is
-          definitively committed, and the authoritative reread that settles it
-          has been observed. Neither is ever presented as the other. */}
-      {unit.committed && <p role="status">Saved. Native application proceeds automatically.</p>}
-      <UnitOutcomeNotice title={title} outcome={unit.outcome} />
     </fieldset>
   </form>;
 }
@@ -357,7 +364,7 @@ function DefinitionNotice<T>({ unit, owner }: { unit: UnitEditing<T>; owner: str
     case 'inherited': return <>
       <p role="status" data-definition-state="inherited">Inherited from User ({shadowed!.path}). This Workspace authors no definition, so these fields are read-only. Override in this Workspace to author one that replaces the whole User definition.</p>
       {shadowed!.seed === undefined && <p role="status">The User definition's content is not available to this browser, so an override starts from an empty definition.</p>}
-      {shadowed!.diagnostic && <p role="alert">{shadowed!.diagnostic}</p>}
+      {shadowed!.diagnostic && <p role="alert" className={css.error}>{shadowed!.diagnostic}</p>}
       {withheld}
     </>;
     case 'overriding': return <>
@@ -382,9 +389,9 @@ function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: Mutatio
     // here as one.
     case 'submitting': case 'committed': return null;
     case 'saved': return <p role="status">{title} saved. Native coordination owns application.</p>;
-    case 'conflict': return <p role="alert">{title} was not saved: the source changed. Your draft and base revision are preserved.</p>;
-    case 'rejected': return <p role="alert">{title} was not saved. {outcome.detail}</p>;
-    case 'uncertain': return <p role="alert">The outcome of saving {title} is unknown. Authority is reread; the write is never replayed. Review the current source before saving again.</p>;
+    case 'conflict': return <p role="alert" className={css.error}>{title} was not saved: the source changed. Your draft and base revision are preserved.</p>;
+    case 'rejected': return <p role="alert" className={css.error}>{title} was not saved. {outcome.detail}</p>;
+    case 'uncertain': return <p role="alert" className={css.error}>The outcome of saving {title} is unknown. Authority is reread; the write is never replayed. Review the current source before saving again.</p>;
     default: return null;
   }
 }

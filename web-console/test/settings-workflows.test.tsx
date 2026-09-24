@@ -368,8 +368,12 @@ it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance r
   const trigger = screen.getByRole('button', { name: 'Use global default Provider transport' });
   expect(trigger.closest('[data-removal]')!.getAttribute('data-removal')).toBe('override-removal');
   fireEvent.click(trigger);
-  expect(within(await screen.findByRole('alertdialog')).getByText('Use the global default for Provider transport?')).toBeTruthy();
-  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Use global default Provider transport' }));
+  // Restoring inheritance is not a deletion: an ordinary dialog, never an
+  // alert dialog, and no destructive styling on either action.
+  const restore = await screen.findByRole('dialog', { name: 'Use the global default for Provider transport?' });
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  expect(trigger.closest('[data-tone]')!.getAttribute('data-tone')).toBe('restore');
+  fireEvent.click(within(restore).getByRole('button', { name: 'Use global default Provider transport' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: null } } });
   // User-only process policy and the client-owned Connection are not here.
@@ -904,7 +908,7 @@ it('S2-10 cancelling a deletion writes nothing and returns focus; confirming per
   fireEvent.click(trigger);
   const dialog = await screen.findByRole('alertdialog');
   // The dialog states the actual removal: this User definition, nothing else.
-  expect(within(dialog).getByText('Remove Provider transport from User configuration?')).toBeTruthy();
+  expect(within(dialog).getByRole('heading', { name: 'Remove Provider transport from User configuration?' })).toBeTruthy();
   expect(within(dialog).getByText(/Models that name this Provider identity are not changed/)).toBeTruthy();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
@@ -965,9 +969,11 @@ it('S2-12 React Aria and TanStack Form stay bounded to Settings interaction and 
     'src/app/settings/primitives/aria.tsx',
     'src/presentation/settings/SettingsRoot.tsx',
   ]);
+  expect(importers('@base-ui/react/dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);
+  expect(importers('@base-ui/react/alert-dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);
   expect(importers('@tanstack/react-form')).toEqual(['src/app/settings/forms/bridge.tsx']);
   // One Settings modal root.
-  const modalRoots = sources(join(root, 'src')).filter(path => readFileSync(path, 'utf8').includes('<Modal className={css.panel}>'));
+  const modalRoots = sources(join(root, 'src')).filter(path => readFileSync(path, 'utf8').includes('title="Settings" overlayClassName={css.overlay}'));
   expect(modalRoots.map(path => relative(root, path))).toEqual(['src/presentation/settings/SettingsRoot.tsx']);
   // Settings keeps no browser storage and no URL state.
   for (const path of sources(join(root, 'src/app/settings'))) {

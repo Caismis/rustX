@@ -110,3 +110,77 @@ test('Session product states stay concise and recovery evidence remains in Inspe
   }
   expect(errors).toEqual([]);
 });
+
+/** A Session row's actions menu held the keyboard when the row was scrolled
+ * out of the Session list. The menu closes because its anchor is no longer a
+ * visible interaction anchor, and the keyboard goes to the owner the Workspace
+ * browser names — the Session tree, which stays rendered and visible around
+ * the row — without scrolling the list back to the hidden row, and never to
+ * the page body, the hidden row or its trigger, or a removed menu row. */
+test('a Session row scrolled out from under its open actions menu leaves the keyboard on the Session tree', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await page.evaluate(() => window.sessionFixture.presentation('many'));
+  const tree = page.getByRole('tree', { name: 'Session browser' });
+  await expect(tree.locator('button[data-session-id="S24"]')).toBeAttached();
+  // A known starting point: the list at its top, with room to scroll.
+  expect(await tree.evaluate(el => { el.scrollTop = 0; return el.scrollTop; })).toBe(0);
+  expect(await tree.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
+  const id = (await tree.locator('button[data-session-id]').first().getAttribute('data-session-id'))!;
+  const title = tree.locator(`button[data-session-id="${id}"]`);
+  const actions = tree.locator(`button[data-session-actions="${id}"]`);
+  const menu = page.getByRole('menu');
+  /** The list's scroll, whether the row lies wholly above the list's clipping
+   * region, where the keyboard is, and how many menu rows remain. */
+  const observe = () => tree.evaluate((el, id) => {
+    const row = el.querySelector(`button[data-session-id="${id}"]`)!.closest('[role="treeitem"]')!;
+    const trigger = el.querySelector(`button[data-session-actions="${id}"]`)!;
+    const active = document.activeElement!;
+    return {
+      scrollTop: el.scrollTop,
+      pageScroll: window.scrollY,
+      clipped: row.getBoundingClientRect().bottom <= el.getBoundingClientRect().top,
+      keyboard: active === el ? 'tree' : active === document.body ? 'body' : active === trigger ? 'trigger' : row.contains(active) ? 'row' : active.getAttribute('role') ?? active.tagName,
+      menuitems: document.querySelectorAll('[role="menuitem"]').length,
+    };
+  }, id);
+
+  // From the keyboard: the row's title, Tab to its actions, Enter opens the
+  // menu, ArrowDown moves the keyboard into it.
+  await title.focus(); await page.keyboard.press('Tab');
+  await expect(actions).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(menu).toBeVisible();
+  await expect(actions).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('ArrowDown');
+  await expect(menu.getByRole('menuitem').first()).toBeFocused();
+  expect(await observe()).toMatchObject({ scrollTop: 0, clipped: false, keyboard: 'menuitem' });
+
+  // The Session list scrolls the row wholly out of its clipping region.
+  const scrolledTo = await tree.evaluate(el => { el.scrollTop = el.scrollHeight; return el.scrollTop; });
+  expect(scrolledTo).toBeGreaterThan(200);
+  await expect(menu).toHaveCount(0);
+  // The owner's open state settled closed with it.
+  await expect(actions).toHaveAttribute('aria-expanded', 'false');
+  // The scroll stands, nothing scrolled back to the row, no menu row remains,
+  // and the keyboard is on the Session tree: rendered, visible and enabled.
+  expect(await observe()).toEqual({ scrollTop: scrolledTo, pageScroll: 0, clipped: true, keyboard: 'tree', menuitems: 0 });
+  await expect(tree).toBeFocused();
+  await expect(tree).toBeInViewport();
+  await expect(tree).toBeEnabled();
+
+  // The Workspace browser stays keyboard-operable from there: Tab enters the
+  // tree at its first row, the Workspace header, and Enter collapses it.
+  await page.keyboard.press('Tab');
+  const workspace = tree.locator('[role="treeitem"][aria-expanded]').first();
+  await expect(workspace).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(workspace).toHaveAttribute('aria-expanded', 'false');
+  await expect(title).toHaveCount(0);
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+});

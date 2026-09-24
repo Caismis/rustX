@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppFrame } from '../../src/presentation/layout/AppFrame';
 import { Button } from '../../src/presentation/primitives/Button';
@@ -14,8 +14,23 @@ import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';
 
+/** A long, non-wrapping dynamic label, a submenu too tall for a short
+ * viewport and a short one with a disabled row: the shared Menu geometry
+ * cases. */
+const nestedItems = [
+  { id: 'long', label: 'A deliberately long dynamic label that must truncate at the design width of the shared menu card' },
+  { id: 'more', label: 'More options', submenu: Array.from({ length: 40 }, (_, index) => ({ id: `option-${index + 1}`, label: `Option ${index + 1}` })) },
+  { id: 'sort', label: 'Sort by', submenu: [{ id: 'name', label: 'Name' }, { id: 'size', label: 'Size', disabled: true }, { id: 'date', label: 'Date' }] },
+  ...['Tango', 'Uniform', 'Victor', 'Whiskey', 'X-ray', 'Yankee'].map(label => ({ id: label.toLowerCase(), label })),
+];
+
 function Fixture() {
   const [menu, setMenu] = useState(false);
+  const [nested, setNested] = useState(false);
+  const [nestedSelected, setNestedSelected] = useState('None');
+  const [scrolled, setScrolled] = useState(false);
+  const [scrolledCloses, setScrolledCloses] = useState(0);
+  const paneOwner = useRef<HTMLButtonElement>(null);
   const [modal, setModal] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState('None');
@@ -26,13 +41,29 @@ function Fixture() {
       <Input aria-label="Form value" /><Button>Ordinary button</Button><Button type="submit">Submit form</Button><Button disabled>Disabled button</Button>
       <output aria-label="Submissions">{submitted}</output>
     </form>
-    <Menu open={menu} onClose={() => setMenu(false)} autoFocus portal anchor={<Button onClick={() => setMenu(!menu)}>Actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'b', label: 'Blocked', disabled: true }, { id: 'c', label: 'Charlie' }]} onSelect={id => { setSelected(id); setMenu(false); }} />
+    <Menu open={menu} onClose={() => setMenu(false)} autoFocus anchor={<Button onClick={() => setMenu(!menu)}>Actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'b', label: 'Blocked', disabled: true }, { id: 'c', label: 'Charlie' }]} onSelect={id => { setSelected(id); setMenu(false); }} />
     <output aria-label="Selection">{selected}</output>
+    <Menu open={nested} onClose={() => setNested(false)} autoFocus anchor={<Button onClick={() => setNested(!nested)}>Nested actions</Button>} items={nestedItems} onSelect={id => { setNestedSelected(id); setNested(false); }} />
+    <output aria-label="Nested choice">{nestedSelected}</output>
     <HoverCard anchor={<Button>Details</Button>} content={<p>Hover details</p>} copyLabel="Copy" copiedLabel="Copied" />
     <Button onClick={() => setModal(true)}>Open dialog</Button>
     <Modal closeLabel="Close dialog" open={modal} onClose={() => setModal(false)} title="Example dialog" footer={<Button onClick={() => setModal(false)}>Done</Button>}><Input aria-label="Dialog value" /></Modal>
     <DisclosureRow icon={null} title="Expand details" expandable open={expanded} expandOnRowClick onToggle={() => setExpanded(value => !value)}><p>Expanded content</p></DisclosureRow>
     <Button>Outside target</Button>
+    {/* A scrolling pane whose menu trigger can be scrolled out of its
+        clipping region while the menu is open. The host names where the
+        keyboard continues then: the pane's header, outside the pane and never
+        scrolled away. The trigger sits in a focusable row, as a Workspace
+        project row's does; that row scrolls out with it and is no owner. */}
+    <button type="button" ref={paneOwner}>Scrolled pane header</button>
+    <div role="region" aria-label="Scrolled pane" style={{ height: 160, overflowY: 'auto' }}>
+      <div role="group" aria-label="Scrolled row" tabIndex={0}>
+        <Menu open={scrolled} onClose={() => { setScrolledCloses(count => count + 1); setScrolled(false); }} autoFocus focusOwner={paneOwner} anchor={<Button onClick={() => setScrolled(!scrolled)}>Scrolled actions</Button>} items={[{ id: 'a', label: 'Alpha' }, { id: 'c', label: 'Charlie' }]} onSelect={() => setScrolled(false)} />
+      </div>
+      <div style={{ height: 600 }}>Pane content</div>
+    </div>
+    {/* How many times the scrolled menu asked its owner to close. */}
+    <output aria-label="Scrolled closes">{scrolledCloses}</output>
     <MarkdownText text={'# Rich content\n\n**Strong** and `inline` with [a link](https://example.com).\n\n| First | Second |\n| - | - |\n| Value | Other |\n\n```rust\nfn main() { println!("hello"); }\n```\n\nMath $E=mc^2$.'} />
   </AppFrame>;
 }

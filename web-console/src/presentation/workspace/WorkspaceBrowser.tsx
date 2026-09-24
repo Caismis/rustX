@@ -24,7 +24,12 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
   const [searchExpanded, setSearchExpanded] = useState(false), [flat, setFlat] = useState(false), [menu, setMenu] = useState(false);
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const searchInput = useRef<HTMLInputElement>(null);
-  const row = (node: SessionNode) => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onClose={node.viewOpen ? closeView : undefined} flat={flat || !!query} t={t} />;
+  // The Session tree is where keyboard navigation continues when a row's
+  // actions menu loses its anchor: the row scrolled out of the tree, which
+  // stays rendered and visible around it. Programmatically focusable, never a
+  // Tab stop of its own; Tab from it enters its rows.
+  const tree = useRef<HTMLDivElement>(null);
+  const row = (node: SessionNode) => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onClose={node.viewOpen ? closeView : undefined} flat={flat || !!query} menuFocusOwner={tree} t={t} />;
   return <section className={clsx(css.root, !wide && css.rail)} aria-label="Workspaces and Sessions">
     <div className={css.sectionHeader}>
       {wide && <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? 'Sessions' : 'Workspaces'}</span>}
@@ -34,17 +39,17 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
         {searchExpanded && <button type="button" className={css.clearButton} aria-label="Clear search" onClick={e => { e.stopPropagation(); search(''); setSearchExpanded(false); }}><IconCloseFill14 /></button>}
       </div></div>}
       <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
-        {wide && <Menu open={menu} onClose={() => setMenu(false)} portal autoFocus anchor={<button type="button" className={css.iconButton} aria-label="View options" onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
+        {wide && <Menu open={menu} onClose={() => setMenu(false)} autoFocus anchor={<button type="button" className={css.iconButton} aria-label="View options" onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
           items={[{ id: 'group', label: flat ? 'Grouped view' : 'Flat view' }, { id: 'refresh', label: 'Refresh list' }, ...(closeAllViews ? [{ id: 'close-views', label: 'Close all views' }] : [])]}
           onSelect={id => { setMenu(false); if (id === 'group') setFlat(!flat); else if (id === 'close-views') closeAllViews?.(); else refresh(); }} />}
         {addWorkspace && <Tooltip label="Add Workspace"><button type="button" className={css.iconButton} aria-label="Add Workspace" onClick={addWorkspace}><IconProjectAddOutline16 size={wide ? 16 : 18} /></button></Tooltip>}
       </div>
     </div>
     {!wide && <button type="button" className={css.searchButton} aria-label="Search Sessions" onClick={() => { expand(); setSearchExpanded(true); }}><IconSearchOutline16 size={18} /></button>}
-    <div className={css.listArea}>{wide && <div className={clsx(css.treeBody, css.wide)}><div className={css.list} role="tree" aria-label="Session browser">
+    <div className={css.listArea}>{wide && <div className={clsx(css.treeBody, css.wide)}><div ref={tree} className={css.list} role="tree" aria-label="Session browser" tabIndex={-1}>
       {notices}
       {query ? sessions.map(node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={t} />) : flat ? sessions.map(row) : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
-        <ProjectRowItem group={{ ...group, expanded: !collapsed.includes(group.key) }} t={t}
+        <ProjectRowItem group={{ ...group, expanded: !collapsed.includes(group.key) }} menuFocusOwner={tree} t={t}
           onToggle={() => setCollapsed(value => value.includes(group.key) ? value.filter(id => id !== group.key) : [...value, group.key])}
           onSelect={() => group.workspaceId && selectWorkspace(group.workspaceId)} onCreate={() => group.workspaceId && create(group.workspaceId)}
           actions={group.workspaceId ? { settings: workspaceSettings ? () => workspaceSettings(group.workspaceId!, group.label) : undefined, rename: () => renameWorkspace(group.workspaceId!, group.label), delete: () => removeWorkspace(group.workspaceId!, group.label) } : undefined} />

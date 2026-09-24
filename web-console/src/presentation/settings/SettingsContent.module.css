@@ -4,16 +4,21 @@
 .settings h3 { margin: 18px 0 10px; font-size: 16px; font-weight: 500; }
 .settings h4 { margin: 14px 0 8px; font-size: 14px; font-weight: 500; }
 .settings p { margin: 8px 0; }
-.settings header, .actions, .generation, .rowHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.settings header, .generation { justify-content: space-between; }
+.settings header, .actions, .rowHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings header { justify-content: space-between; }
 .actions { margin-top: 12px; }
 .hint, .settings dt { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
-.rows { list-style: none; padding: 0; margin: 12px 0; display: flex; flex-direction: column; gap: 8px; }
 .card { border: .5px solid var(--dsw-alias-border-l4); border-radius: 16px; padding: 12px 14px; min-width: 0; overflow-wrap: anywhere; }
 .rowHead > strong { font-size: 14px; font-weight: 500; flex: 1; }
-.badge { display: inline-flex; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l3); border-radius: 4px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
-.badge[data-tone=error] { color: var(--dsw-alias-state-error-primary); }
-.badge[data-tone=success] { color: var(--dsw-alias-state-success-primary); }
+.badge { display: inline-flex; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l3); border-radius: 4px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
+/* A toned badge keeps full-contrast text: the word carries the meaning, and the
+   state color is a border and a leading marker, never the text itself. */
+.badge[data-tone] { align-items: center; gap: 4px; color: var(--dsw-alias-label-primary); }
+.badge[data-tone]::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.badge[data-tone=error] { border-color: var(--dsw-alias-state-error-primary); }
+.badge[data-tone=error]::before { background: var(--dsw-alias-state-error-primary); }
+.badge[data-tone=success] { border-color: var(--dsw-alias-state-success-primary); }
+.badge[data-tone=success]::before { background: var(--dsw-alias-state-success-primary); }
 .unit { margin: 14px 0; border-radius: 12px; background: var(--dsw-alias-bg-module-platform); padding: 14px 16px; }
 .unit > fieldset, .editor { border: 0; margin: 0; padding: 0; min-width: 0; }
 .unit fieldset.fields { border: 0; margin: 0; padding: 0; min-width: 0; }
@@ -35,18 +40,84 @@
 .settings table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .settings th, .settings td { text-align: left; padding: 8px; border-bottom: .5px solid var(--dsw-alias-border-l2); overflow-wrap: anywhere; }
 .settings footer { border-top: .5px solid var(--dsw-alias-border-l2); margin-top: 20px; }
-.tabs { display: flex; gap: 4px; padding: 4px; border-radius: 20px; background: var(--dsw-alias-bg-module-platform); width: fit-content; }
-.tabs button { border: 0; background: transparent; color: var(--dsw-alias-label-secondary); padding: 6px 14px; border-radius: 16px; font: inherit; font-size: 13px; cursor: pointer; }
-.tabs button[aria-selected=true] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-elevation-stroke); }
-.generation { padding: 10px 12px; border-radius: 12px; background: var(--dsw-alias-bg-module-platform); font-size: 12px; }
-.error { color: var(--dsw-alias-state-error-primary); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); padding: 10px 12px; border-radius: 8px; }
+/* A native error: full-contrast text on an error-tinted fill, marked by an
+   error-colored edge, so the message stays readable in both themes. */
+.error { color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); border-left: 3px solid var(--dsw-alias-state-error-primary); padding: 10px 12px; border-radius: 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .review { border: .5px solid var(--dsw-alias-state-warn-label); border-radius: 8px; padding: 10px 12px; margin: 12px 0; }
-.content { min-width: 0; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.model { min-width: 0; }
 .names { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
 .names input { flex: 1; }
 @media (max-width: 680px) { .grid, .settings dl { grid-template-columns: minmax(0, 1fr); } .actions { align-items: stretch; } .settings th, .settings td { padding: 4px; } }
 
-.model fieldset > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
-.model fieldset > div label { padding: 4px 0; }
+/* ---- The Settings dialog's page vocabulary (#393) ----------------------
+   Scoped to `.page` (the Settings section) so the Inspector, which shares
+   the `.settings` field vocabulary, keeps its own density. One hierarchy on
+   every page: page title and description, group headings, setting-row cards
+   with their actions inside the card, and secondary badges. Narrow rules are
+   decided by the Settings panel's container width, never the window's. */
+
+/* Fixed header context: the owner of this Settings instance and the state of
+   its authoritative observation, with the reread beside them. */
+.context { display: flex; align-items: center; gap: 12px; min-width: 0; color: var(--dsw-alias-label-primary); }
+.contextTitle { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.context h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; overflow-wrap: anywhere; }
+.lifecycle { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.lifecycle[data-lifecycle=stale], .lifecycle[data-lifecycle=failed] { color: var(--dsw-alias-label-primary); font-weight: 500; }
+.context > button { flex: none; }
+
+.page { gap: 16px; }
+.page p { margin: 0; overflow-wrap: anywhere; }
+.page section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* Page title and description. */
+.page h3 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; overflow-wrap: anywhere; }
+.page h3 + p { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+/* Group heading: what the cards below it are about. */
+.page h4 { margin: 12px 0 0; font-size: 14px; line-height: 22px; font-weight: 500; }
+.page h4 + p { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+.page h5 { margin: 8px 0 0; font-size: 13px; font-weight: 500; }
+.page ul { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+
+/* Setting row card: one native semantic unit — its title, its native facts,
+   its fields and its actions. A restrained outline over the module fill;
+   groups nested inside it are separated by hairlines, never by more cards. */
+.page .unit {
+  margin: 0; min-height: 56px; box-sizing: border-box; padding: 12px 16px;
+  border: .5px solid var(--dsw-alias-border-l2); border-radius: 16px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+.page .unit legend { margin: 0 0 4px; padding: 0; font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
+.page .unit fieldset fieldset { margin: 12px 0 0; padding: 12px 0 0; border: 0; border-top: .5px solid var(--dsw-alias-border-l2); border-radius: 0; }
+.page .unit fieldset fieldset legend { font-size: 13px; }
+/* The unit's own field wrapper is not a nested group: no hairline, no inset. */
+.page .unit fieldset.fields { margin: 4px 0 0; padding: 0; border-top: 0; }
+.page .unit .actions { margin-top: 12px; }
+/* A card with a draft keeps its Save / Discard row in reach while its fields
+   scroll past: the row sticks to the bottom of the one scrolling pane for as
+   long as the card itself is on screen, and never outlives it. */
+.page .unit[data-draft] .actions {
+  position: sticky; bottom: -1px; z-index: 1; margin: 12px -16px -12px; padding: 12px 16px;
+  border-top: .5px solid var(--dsw-alias-border-l2); border-radius: 0 0 16px 16px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+.page label { padding: 8px 0; }
+/* Secondary text in the Settings pages sits on the card fill as often as on the
+   panel, so it takes the secondary label color, which keeps WCAG AA contrast
+   on both in both themes; the tertiary color does not on the card fill. */
+.page .hint, .page dt { color: var(--dsw-alias-label-secondary); }
+.page .review { margin: 12px 0 0; }
+/* An identity input and the action that adds it share one baseline. */
+.page .actions:has(> label) { align-items: flex-end; }
+.page .actions > label { padding-bottom: 0; }
+.page dl { margin: 0; }
+
+/* A designed state for a target with nothing to present yet. */
+.pending { padding: 24px 16px; border: .5px dashed var(--dsw-alias-border-l3); border-radius: 16px; color: var(--dsw-alias-label-secondary); font-size: 13px; text-align: center; }
+
+@container settings (max-width: 680px) {
+  .page .grid, .page dl { grid-template-columns: minmax(0, 1fr); }
+  .page .actions { align-items: stretch; }
+  .page .unit { padding: 12px; }
+  .page .unit[data-draft] .actions { margin-inline: -12px; padding-inline: 12px; margin-bottom: -12px; }
+  .page th, .page td { padding: 4px; }
+  .context { align-items: flex-start; flex-wrap: wrap; }
+}

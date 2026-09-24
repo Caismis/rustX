@@ -107,7 +107,7 @@ export function ToolsPage({ source, document, scope, revision }: {
         {(value, change) => <PolicyFields value={value} change={change} />}
       </UnitForm>}
     </Advanced>
-    {sourceView(source, scope) === undefined && <p role="alert">This scope has no source view.</p>}
+    {sourceView(source, scope) === undefined && <p role="alert" className={css.error}>This scope has no source view.</p>}
   </section>;
 }
 

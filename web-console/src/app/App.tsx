@@ -280,7 +280,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     </section>}
     {view ? <section className={`session-panel ${agentCss.root}`} data-phase="active" id="session-view" role="region" aria-labelledby="session-title">
       <header className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong id="session-title" aria-label="Session title">{sessionDisplayTitle(state.sessions.find(session => session.id === view.id) ?? view.summary)}</strong><small aria-label="Session location" title={view.settings?.cwd}>{view.settings?.cwd ?? 'Location unavailable'}</small></div>
-        <div className="row"><Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus portal
+        <div className="row"><Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus
           anchor={<Button aria-label="Session actions" aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}>•••</Button>}
           items={[{ id: 'settings', label: 'Session settings' }, { id: 'export', label: 'Export', disabled: state.connection !== 'connected' }, { id: 'tree', label: 'Session tree', disabled: !attached || commandOpen || !lineageSwitchSafe(view) }]}
           onSelect={id => { setSessionMenuOpen(false); if (id === 'settings') setSessionSettingsOpen(value => !value); else if (id === 'tree') invokeCommand({ id: 'tree' }); else if (id === 'export') run(() => client.exportSession(view.id)); }} />
