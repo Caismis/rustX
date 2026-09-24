@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Dialog, Modal, ModalOverlay, Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import clsx from 'clsx';
 import { Menu } from '../primitives/Menu';
@@ -37,6 +37,13 @@ export interface SettingsPageEntry { id: string; label: string; icon: ReactNode 
  * dialog, exactly where a freshly opened Settings starts, and Tab continues
  * from there into the header and the rail.
  *
+ * The two presentations share one keyboard. When the navigation control that
+ * holds it — a rail tab, or the closed section menu's trigger — leaves
+ * rendered layout, the keyboard moves to the other presentation's control for
+ * the same selected page (see `useNavigationFocusHandoff`). The panel never
+ * asks whether it is narrow or wide; it answers the browser's report that a
+ * focused control stopped being rendered, and the page selection is untouched.
+ *
  * There is exactly one of these in the application. A confirmation inside a
  * page opens its own transient layer over this one; it never builds a second
  * Settings tree.
@@ -52,6 +59,8 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
 }) {
   const [sections, setSections] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
+  const sectionTriggerRef = useRef<HTMLButtonElement>(null);
+  useNavigationFocusHandoff(dialogRef, sectionTriggerRef);
   const active = pages.find(page => page.id === activeId)!;
   return (
     <ModalOverlay className={css.overlay} isOpen isDismissable onOpenChange={open => { if (!open) onClose(); }}>
@@ -65,7 +74,7 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
               <Menu open={sections} onClose={() => setSections(false)} autoFocus focusOwner={dialogRef}
                 items={pages.map(page => ({ id: page.id, label: page.label, icon: page.icon }))} selectedId={activeId}
                 onSelect={id => { setSections(false); onSelect(id); }}
-                anchor={<button type="button" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}
+                anchor={<button ref={sectionTriggerRef} type="button" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}
                   aria-label={`Settings page: ${active.label}`} onClick={() => setSections(open => !open)}>
                   <span className={css.navIcon} aria-hidden="true">{active.icon}</span>
                   <span className={css.sectionLabel}>{active.label}</span>
@@ -79,7 +88,7 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
             </button>
           </header>
           <Tabs className={css.tabsRoot} orientation="vertical" selectedKey={activeId} onSelectionChange={key => { onSelect(String(key)); }}>
-            <nav className={css.nav} aria-label="Settings navigation">
+            <nav className={css.nav} aria-label={RAIL_LABEL}>
               <div className={css.navTitle}>Settings</div>
               <TabList className={clsx(css.navList, workflow.pageTabs)} aria-label="Settings pages">
                 {pages.map(page => (
@@ -98,6 +107,53 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
       </Modal>
     </ModalOverlay>
   );
+}
+
+const RAIL_LABEL = 'Settings navigation';
+/** A page tab on the rail — not a tab list inside a page's content. */
+const RAIL_TAB = `nav[aria-label="${RAIL_LABEL}"] [role="tab"]`;
+
+/**
+ * Keyboard continuity across the panel's two navigation presentations.
+ *
+ * The container query alone decides which presentation is rendered. When it
+ * takes the one holding the keyboard out of layout, the browser's focus fixup
+ * blurs that control: `focusout` with no `relatedTarget`, on a control that no
+ * longer renders. That report — the focused navigation control is gone — is
+ * the only trigger; nothing here measures the panel or knows the 680px rule,
+ * so there is no second responsive authority to disagree with the CSS.
+ *
+ * A hidden rail tab hands the keyboard to the section trigger, and a hidden
+ * section trigger (its menu closed; an open menu settles on its own focus
+ * owner) to the selected rail tab: the same page, in the presentation that is
+ * now shown, focused without scrolling. The handoff runs inside the fixup's
+ * own `focusout`, so the keyboard is back on a Settings control before
+ * anything renders or React Aria's containment looks for it. A counterpart
+ * that is not rendered refuses focus, and the dialog — where a freshly opened
+ * Settings starts — takes it instead, so the handoff never lands on a hidden
+ * control and never bounces between the two. Selection, the section menu,
+ * drafts and native state are not touched.
+ */
+function useNavigationFocusHandoff(dialogRef: RefObject<HTMLElement | null>, sectionTriggerRef: RefObject<HTMLButtonElement | null>): void {
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    const onFocusOut = (event: FocusEvent) => {
+      const control = event.target;
+      // A focus move to somewhere, a window blur, or a removal is not this.
+      if (event.relatedTarget !== null || !(control instanceof HTMLElement) || !control.isConnected || control.checkVisibility()) return;
+      const counterpart = control === sectionTriggerRef.current
+        ? dialog.querySelector<HTMLElement>(`${RAIL_TAB}[aria-selected="true"]`)
+        : control.matches(RAIL_TAB) ? sectionTriggerRef.current : undefined;
+      if (counterpart === undefined) return;
+      for (const owner of [counterpart, dialog]) {
+        owner?.focus({ preventScroll: true });
+        if (document.activeElement === owner) return;
+      }
+    };
+    dialog.addEventListener('focusout', onFocusOut);
+    return () => { dialog.removeEventListener('focusout', onFocusOut); };
+  }, [dialogRef, sectionTriggerRef]);
 }
 
 export function SettingsTrigger({ wide, onClick }: { wide: boolean; onClick: () => void }) {

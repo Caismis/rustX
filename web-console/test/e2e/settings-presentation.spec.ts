@@ -416,6 +416,116 @@ test('an open section menu settles closed when the panel widens under it', async
   expect(errors).toEqual([]);
 });
 
+/** Record, on every animation frame from now on, whether the keyboard sat on
+ * the page body; `bodyFrames` reads (and stops) the record. A presentation
+ * change may take a focused control out of layout, but no rendered frame may
+ * find the keyboard dropped to the document. */
+const watchBodyFrames = (page: Page) => page.evaluate(() => {
+  const record = window as unknown as { rustxBodyFrames: number; rustxBodyWatch: boolean };
+  record.rustxBodyFrames = 0; record.rustxBodyWatch = true;
+  const frame = () => {
+    if (!record.rustxBodyWatch) return;
+    if (document.activeElement === document.body) record.rustxBodyFrames++;
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+});
+const bodyFrames = (page: Page) => page.evaluate(() => {
+  const record = window as unknown as { rustxBodyFrames: number; rustxBodyWatch: boolean };
+  record.rustxBodyWatch = false;
+  return record.rustxBodyFrames;
+});
+
+// The two tests below take the focused navigation control itself out of
+// layout. Nothing in the panel knows the container is narrow or wide: the
+// container query alone swaps the presentations, and the panel answers only
+// the fact that the control holding the keyboard is no longer rendered.
+test('a focused rail tab hands the keyboard to the section trigger when the panel narrows', async ({ page }) => {
+  const errors = await start(page);
+  await openUserSettings(page);
+  const settings = dialog(page), trigger = settingsSectionMenu(page);
+  const rail = page.getByRole('tablist', { name: 'Settings pages' });
+  const constrain = (width: string) => settings.evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
+  await openSettingsPage(page, 'Extensions');
+  const extensions = rail.getByRole('tab', { name: 'Extensions' });
+  await extensions.focus(); await expect(extensions).toBeFocused();
+  await expect(settings.getByRole('heading', { level: 3, name: 'Extensions', exact: true })).toBeVisible();
+  const requests = (await nativeRequests(page)).length;
+
+  // The window stays 1440px wide; only the panel narrows under the rail.
+  await watchBodyFrames(page);
+  await constrain('480px');
+  await expect(rail).toBeHidden(); await expect(trigger).toBeVisible();
+  // The keyboard continues on the visible selector for the same page: not on
+  // the hidden tab, and at no rendered frame on the page body.
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAccessibleName('Settings page: Extensions');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await settled(page);
+  expect(await bodyFrames(page)).toBe(0);
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  // Presentation only: the same page, no menu opened, no native traffic.
+  expect(await selectedSettingsPage(page)).toBe('Extensions');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(settings.getByRole('heading', { level: 3, name: 'Extensions', exact: true })).toBeVisible();
+  expect(await nativeRequests(page)).toHaveLength(requests);
+
+  // The selector works from where the keyboard landed, and Escape closes
+  // only its menu, handing the keyboard back to it inside Settings.
+  await page.keyboard.press('Enter');
+  const menu = page.getByRole('menu');
+  await expect(menu.getByRole('menuitem', { name: 'Extensions', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(settings).toBeVisible();
+  expect(await selectedSettingsPage(page)).toBe('Extensions');
+  expect(errors).toEqual([]);
+});
+
+test('a focused closed section trigger hands the keyboard to the selected rail tab when the panel widens', async ({ page }) => {
+  const errors = await start(page);
+  await openUserSettings(page);
+  const settings = dialog(page), trigger = settingsSectionMenu(page);
+  const rail = page.getByRole('tablist', { name: 'Settings pages' });
+  const constrain = (width: string) => settings.evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
+  await constrain('480px');
+  await expect(rail).toBeHidden(); await expect(trigger).toBeVisible();
+  await openSettingsPage(page, 'Extensions');
+  // The menu is closed and its trigger holds the keyboard.
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  const requests = (await nativeRequests(page)).length;
+
+  // With no menu open there is no floating surface to report its anchor
+  // hidden: the trigger alone leaves layout as the panel widens.
+  await watchBodyFrames(page);
+  await constrain('');
+  await expect(trigger).toBeHidden(); await expect(rail).toBeVisible();
+  const extensions = rail.getByRole('tab', { name: 'Extensions' });
+  await expect(extensions).toBeFocused();
+  await expect(extensions).toHaveAttribute('aria-selected', 'true');
+  await settled(page);
+  expect(await bodyFrames(page)).toBe(0);
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  expect(await nativeRequests(page)).toHaveLength(requests);
+
+  // Rail navigation continues from there at once: the arrows move between
+  // pages, and Escape, with no transient layer open, closes Settings.
+  await page.keyboard.press('ArrowUp');
+  await expect(rail.getByRole('tab', { name: 'Tools & Permissions' })).toBeFocused();
+  await expect(rail.getByRole('tab', { name: 'Tools & Permissions' })).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowDown');
+  await expect(extensions).toBeFocused();
+  await expect(extensions).toHaveAttribute('aria-selected', 'true');
+  await expect(settings.getByRole('heading', { level: 3, name: 'Extensions', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
 /** Two animation frames: every focus restoration React Aria schedules after a
  * layer unmounts has run by then. */
 const settled = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

@@ -1081,6 +1081,23 @@ panel widens while the menu is open, the container query takes its trigger out
 of layout and the `Menu` itself closes through `onClose` (see *anchor
 liveness* below); `SettingsPanel` never mirrors the breakpoint.
 
+**Navigation keyboard handoff.** The rail and the section trigger share one
+keyboard. A container-query change can take the navigation control that holds
+it out of layout — a focused rail tab as the panel narrows, or the focused
+trigger of a closed section menu as it widens — and the browser's focus fixup
+then blurs that control (`focusout` with no `relatedTarget`, on a control that
+no longer renders). `SettingsPanel` answers that report, and only that: inside
+the same `focusout`, with `preventScroll`, a hidden rail tab hands the keyboard
+to the section trigger and a hidden trigger hands it to the selected rail tab,
+so the keyboard stays on the same page in the presentation now shown and no
+rendered frame finds it on the page body. A counterpart that is not rendered
+refuses focus and the Settings dialog takes it instead; the handoff never
+bounces between the two presentations. It does not measure the panel or know
+the 680px rule, so the container query stays the only layout authority, and
+it never selects a page, opens the menu or touches drafts or native state. An
+open section menu is not this path: its trigger does not hold the keyboard,
+and the menu settles on its focus owner through anchor liveness.
+
 **Floating geometry is Floating UI's.** Every `Menu` surface — the list and
 each open submenu — is portaled to the body and placed by
 `@floating-ui/react-dom` (`offset`, `flip`, `shift`, `size`, `autoUpdate`, fixed
@@ -1198,7 +1215,12 @@ bounded scrolling height, row tracking and keyboard/pointer layer contract, and
 anchor liveness: an anchor out of layout closes its list, a row scrolled out of
 its card closes its submenu, and neither keeps the keyboard. The Settings spec
 widens a narrow panel under an open section menu and proves that the menu closes,
-the Settings dialog holds the keyboard and wide navigation works; and with the
+the Settings dialog holds the keyboard and wide navigation works; it narrows the
+panel under a focused rail tab and widens it under a focused closed section
+trigger, inside a wide window, and proves that the keyboard moves to the other
+presentation's control for the same page, no frame finds it on the body, no page
+or native request changes, and the selector, the arrows and Escape keep working
+from there; and with the
 fixture's held writes (`?write=held`) it proves that a confirmed removal and a
 confirmed restore of inheritance settle focus on the unit while the write is in
 flight and its trigger is disabled, and that Cancel and Escape return focus to
