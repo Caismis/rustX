@@ -1076,7 +1076,10 @@ and its strip-scrolling tab label have no replacement.
 (`autoFocus`), whose rows are the same six pages with the same glyphs; selecting a
 row sends the same `SELECT` the rail sends, the current row is marked with a
 check and `aria-current`, and the trigger names the current page. Its
-open/closed flag is the one transient state `SettingsPanel` holds.
+open/closed flag is the one transient state `SettingsPanel` holds. When the
+panel widens while the menu is open, the container query takes its trigger out
+of layout and the `Menu` itself closes through `onClose` (see *anchor
+liveness* below); `SettingsPanel` never mirrors the breakpoint.
 
 **Floating geometry is Floating UI's.** Every `Menu` surface — the list and
 each open submenu — is portaled to the body and placed by
@@ -1100,6 +1103,22 @@ row. Inside a React Aria modal each surface is marked
 menu is stopped in the document capture phase so the modal never also sees it.
 Tooltip and HoverCard keep their existing geometry.
 
+**Anchor liveness.** A floating surface exists only while its reference is a
+visible interaction anchor. Every surface carries Floating UI's `hide`
+middleware (`referenceHidden`): a reference that is fully clipped — scrolled
+out of its clipping context, or out of layout altogether, since a reference
+under a `display: none` ancestor or a detached one measures as an empty rect
+that nothing contains — is reported on the next `autoUpdate`. An open list
+whose anchor is hidden asks its owner to close through `onClose`, exactly as an
+outside press does; a keyboard it held goes where every close hands it — the
+trigger, else the anchor's first enabled button, else the nearest rendered
+ancestor that takes focus (the Settings dialog) — and never stays on a row
+about to unmount or on a hidden trigger. A submenu whose row scrolls out of its
+card closes the same way and returns a keyboard inside it to the row. Owners
+state only whether a menu is open; no owner observes the layout rules that
+decide whether its anchor is rendered. jsdom has no layout, so the unit test
+setup treats every anchor as rendered; Chromium proves the contract.
+
 **Modal mechanics stay React Aria's.** The nested-dialog and focus contracts
 pass in real Chromium on React Aria (`settings-presentation.spec.ts`), so no
 Radix Dialog or second modal runtime was added. Two focus defects of the nested
@@ -1109,12 +1128,35 @@ confirmation were found in Chromium and fixed inside `ConfirmAction`:
   confirmation's focus scope registered as a child of the Settings scope, so
   the Settings scope took focus back; RAC `Button autoFocus` focuses from an
   effect after registration;
-- closing it let focus fall to `<body>`, where React Aria's restoration and
-  the Settings scope's containment raced over the next animation frame
-  (occasionally landing on the Settings dialog or its first control — the
-  long-standing intermittent failure of the keyboard reachability test). The
-  layer now unmounts synchronously on close and hands focus straight back to
-  its trigger, so focus never reaches `<body>` and nothing is left to race.
+- closing it could leave focus on `<body>`. A hand-written restoration (a
+  synchronous unmount, then focusing the trigger) avoided that on dismissal,
+  but it assumed the trigger could still take focus. After a real Confirm it
+  cannot: `UNIT.SUBMIT` moves the unit to `mutation.submitting`, which disables
+  the unit's fieldset and the trigger with it, so focus fell to `<body>` for
+  the whole in-flight write.
+
+The confirmation is now a React Aria `DialogTrigger`. React Aria owns its open
+state, dismissal (Cancel, Escape, a press outside), containment and initial
+focus. Its two exits are two focus contracts. A dismissal changes nothing and
+returns focus to the trigger, or to the workflow target below if the trigger
+can no longer take it. A confirmation may disable or remove its trigger, so
+`ConfirmAction` requires a `settle` target from its caller and focuses that.
+React Aria's own restoration is not relied on for either exit, for two reasons
+found in Chromium. It refocuses a connected trigger without asking whether it
+is enabled. It also runs a frame after the layer unmounts, leaving the keyboard
+on `<body>` for that frame. In the full application that frame lasted long
+enough for the Settings dialog's own `useDialog` refocus timer to take focus to
+the dialog: the keyboard reachability test failed 3 in 20 runs with it. A
+component inside the layer (`SettleOnLeave`) places focus from its passive
+cleanup instead. React Aria lifts the modal's `inert` from a passive effect of
+an ancestor, and an unmounting tree's passive cleanups run ancestors first and,
+for the discrete input that closed the layer, in the same task as the commit.
+Focus is therefore never on `<body>` between frames, and React Aria's later
+restoration finds it placed. `ConfirmAction` knows nothing of the transaction,
+CAS or the actors. The unit editor names its own card (the `<form>`,
+`tabindex="-1"`): the region that owns the in-flight mutation and presents its
+outcome, mounted and enabled through the whole write. The mutation semantics
+are unchanged: the unit's controls stay closed while it submits.
 
 **Page vocabulary.** `SettingsContent.module.css` scopes one hierarchy to the
 Settings section (`.page`): page title and description, group headings,
@@ -1140,6 +1182,14 @@ Escape ownership, touch, reduced motion and exact adoption requests, and runs
 axe (`@axe-core/playwright`, WCAG 2.1 A/AA tags, serious/critical as failures,
 no rule disabled) on each. `test/e2e/foundation.spec.ts` proves Floating UI
 placement, flip, shift, bounded height and anchor tracking on the shared Menu,
-the 218–360px design width within narrow viewports, and a submenu's own flip,
-bounded scrolling height, row tracking and keyboard/pointer layer contract;
+the 218–360px design width within narrow viewports, a submenu's own flip,
+bounded scrolling height, row tracking and keyboard/pointer layer contract, and
+anchor liveness: an anchor out of layout closes its list, a row scrolled out of
+its card closes its submenu, and neither keeps the keyboard. The Settings spec
+widens a narrow panel under an open section menu and proves that the menu closes,
+the Settings dialog holds the keyboard and wide navigation works; and with the
+fixture's held writes (`?write=held`) it proves that a confirmed removal and a
+confirmed restore of inheritance settle focus on the unit while the write is in
+flight and its trigger is disabled, and that Cancel and Escape return focus to
+the trigger;
 `agent.spec.ts` proves the ModelSelect submenus inside a 390px viewport.

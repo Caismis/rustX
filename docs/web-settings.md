@@ -39,7 +39,9 @@ The panel chooses its navigation from its own usable width, not the window's:
 a wide panel shows a vertical page rail (ArrowUp/ArrowDown, one tab stop); a
 narrow one (390 × 844 phones included) replaces the rail with a section menu in
 the header, which names the current page, opens from pointer, touch or keyboard,
-marks the current page, and returns focus to its trigger. Escape closes the
+marks the current page, and returns focus to its trigger. If the panel widens
+while the section menu is open, the menu closes and the Settings dialog keeps
+the keyboard. Escape closes the
 topmost layer only — the section menu, then a confirmation, then Settings.
 Resource pages are list → detail at every width; a detail replaces its list and
 keeps **← Models** / **← Extensions** pinned at the top of the pane. A unit card
@@ -124,7 +126,9 @@ or uncertain definition never produces an aggregate success, and nothing is
 submitted automatically after an uncertain outcome.
 
 Removal is confirmed in a modal dialog that states the actual native
-consequence, and cancelling it writes nothing. In User Settings the action is
+consequence, and cancelling it writes nothing and returns focus to the button
+that opened it. Confirming it moves focus to the setting's card, which reports
+the outcome while its controls stay closed until native answers. In User Settings the action is
 **Remove** (the authored definition is removed from User configuration): a
 destructive alert dialog with a trash glyph on its trigger and a destructive
 confirm action. In Workspace Settings it is **Use global default**, which removes

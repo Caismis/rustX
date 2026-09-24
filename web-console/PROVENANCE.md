@@ -19,10 +19,16 @@ only, each with a new local hash, import closure and a `#393` treatment note:
   bounds within it. A submenu is its own keyboard layer. Every surface is
   marked as a React Aria top layer, Escape stops before a containing React Aria
   modal, and the selected row is announced. Its callers drop the `portal` prop.
+  Every surface lives only while its reference is a visible anchor (Floating
+  UI `hide`): a list whose anchor leaves layout closes through `onClose`, a
+  submenu whose row scrolls out closes, and a keyboard either held goes to the
+  trigger or the nearest rendered focus container, never to a hidden control.
 - `presentation/settings/SettingsRoot.tsx` and `SettingsRoot.module.css` keep
   the Harness mask/panel/rail/content frame and classes. The viewport
   media-query store, the horizontal tab orientation and the strip-scrolling tab
-  label are deleted; the narrow layout is a container query on the panel.
+  label are deleted; the narrow layout is a container query on the panel. The
+  section menu closes through the shared Menu when that query takes its
+  trigger out of layout.
 - `presentation/settings/SettingsContent.module.css`, `app/settings/Settings.tsx`
   and `app/settings/extensions/ExtensionDetail.tsx` carry the converged page
   vocabulary.

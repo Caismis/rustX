@@ -365,6 +365,152 @@ test('layout follows the Settings panel width, not the window', async ({ page })
   expect(errors).toEqual([]);
 });
 
+test('an open section menu settles closed when the panel widens under it', async ({ page }) => {
+  const errors = await start(page);
+  await openUserSettings(page);
+  const settings = dialog(page), trigger = settingsSectionMenu(page);
+  const rail = page.getByRole('tablist', { name: 'Settings pages' });
+  const constrain = (width: string) => settings.evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
+  await constrain('480px');
+  await expect(trigger).toBeVisible(); await expect(rail).toBeHidden();
+  // Opened from the keyboard: the portaled menu holds focus on its current row.
+  await trigger.focus(); await page.keyboard.press('Enter');
+  const menu = page.getByRole('menu');
+  await expect(menu.getByRole('menuitem', { name: 'General', exact: true })).toBeFocused();
+
+  // The panel widens while the menu is still open. The container query moves
+  // navigation to the rail and takes the trigger out of layout; the menu has
+  // no anchor left, so it settles closed rather than floating over the rail.
+  await constrain('');
+  await expect(rail).toBeVisible();
+  await expect(trigger).toBeHidden();
+  await expect(menu).toHaveCount(0);
+  // Its owner's open state settled with it: the hidden trigger says closed.
+  await expect(settings.getByRole('button', { name: /^Settings page: /, includeHidden: true })).toHaveAttribute('aria-expanded', 'false');
+  // The keyboard is on no removed row, not on the hidden trigger and not on
+  // the page body: the Settings dialog holds it, as when it first opened.
+  await expect(settings).toBeFocused();
+  const focus = await page.evaluate(() => {
+    const active = document.activeElement!;
+    return { body: active === document.body, menuitem: active.getAttribute('role') === 'menuitem', rendered: active.getClientRects().length > 0 };
+  });
+  expect(focus).toEqual({ body: false, menuitem: false, rendered: true });
+
+  // Wide Settings keyboard navigation works from there exactly as from a
+  // freshly opened dialog: Tab walks the header and reaches the current page
+  // on the rail, the arrows move between pages, and Escape still closes
+  // Settings and returns focus to its global entry.
+  await page.keyboard.press('Tab');
+  await expect(settings.getByRole('button', { name: 'Reload configuration' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Close Settings' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(rail.getByRole('tab', { name: 'General' })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(rail.getByRole('tab', { name: 'Models' })).toHaveAttribute('aria-selected', 'true');
+  await expect(settings.getByRole('heading', { level: 3, name: 'Models', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+/** Two animation frames: every focus restoration React Aria schedules after a
+ * layer unmounts has run by then. */
+const settled = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+/** Where the keyboard is: never the page body, never a disabled control,
+ * always inside the Settings dialog. */
+const keyboard = (page: Page) => page.evaluate(() => {
+  const active = document.activeElement!;
+  return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[role="dialog"][aria-label="Settings"]') !== null, rendered: active.getClientRects().length > 0 };
+});
+const releaseWrites = (page: Page) => page.evaluate(() => (window as unknown as { rustxReleaseWrites: () => void }).rustxReleaseWrites());
+
+test('confirming a removal settles focus on its unit while the write is in flight; dismissal returns it to the trigger', async ({ page }) => {
+  const errors = await start(page, '?write=held');
+  const settings = dialog(page);
+  await openUserSettings(page);
+  await openSettingsPage(page, 'Models');
+  await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  const unit = settings.getByRole('form', { name: 'Provider transport' });
+  const remove = unit.getByRole('button', { name: 'Remove Provider transport', exact: true });
+  const deletion = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?' });
+  const cancel = deletion.getByRole('button', { name: 'Cancel', exact: true });
+  const writes = async () => (await nativeRequests(page)).filter(request => request.method === 'configuration/sourceWrite').length;
+
+  // Cancel: nothing is written and focus returns to the trigger.
+  await remove.focus(); await page.keyboard.press('Enter');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(deletion).toHaveCount(0);
+  await settled(page);
+  await expect(remove).toBeFocused();
+  // Escape: only the confirmation closes, and focus returns to the trigger.
+  await page.keyboard.press('Enter');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(deletion).toHaveCount(0); await expect(settings).toBeVisible();
+  await settled(page);
+  await expect(remove).toBeFocused();
+  expect(await writes()).toBe(0);
+
+  // Confirm: the removal is submitted and held in flight. The unit's controls,
+  // the trigger among them, are closed until native answers, so focus settles
+  // on the unit itself — not the body, not the disabled trigger.
+  await page.keyboard.press('Enter');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(deletion.getByRole('button', { name: 'Remove Provider transport', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(deletion).toHaveCount(0);
+  expect(await writes()).toBe(1);
+  await expect(remove).toBeDisabled();
+  await settled(page);
+  await expect(unit).toBeFocused();
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  // Still in flight after every scheduled restoration has run.
+  await expect(remove).toBeDisabled();
+  await expect(unit).toBeFocused();
+
+  // Native answers: the removal settles normally, exactly once, and the
+  // keyboard is still inside the unit's workflow.
+  await releaseWrites(page);
+  await expect(unit.getByText('Provider transport saved. Native coordination owns application.')).toBeVisible();
+  await expect(remove).toHaveCount(0);
+  expect(await writes()).toBe(1);
+  await expect(unit).toBeFocused();
+  // Tab continues from the unit into its now-enabled controls.
+  await page.keyboard.press('Tab');
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+});
+
+test('confirming a restore of inheritance settles focus on its unit while the write is in flight', async ({ page }) => {
+  const errors = await start(page, '?write=held');
+  const settings = dialog(page);
+  await openWorkspaceSettings(page, 'Workspace A');
+  await openSettingsPage(page, 'Agent');
+  const unit = settings.getByRole('form', { name: 'Root identity' });
+  const restore = unit.getByRole('button', { name: 'Use global default Root identity', exact: true });
+  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Root identity?' });
+  await restore.focus(); await page.keyboard.press('Enter');
+  await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(confirmation.getByRole('button', { name: 'Use global default Root identity', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(confirmation).toHaveCount(0);
+  await expect(restore).toBeDisabled();
+  await settled(page);
+  await expect(unit).toBeFocused();
+  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true });
+
+  await releaseWrites(page);
+  await expect(unit.getByText('Root identity saved. Native coordination owns application.')).toBeVisible();
+  await expect(unit.locator('[data-authored="absent"]')).toContainText('Inherited — no Workspace override');
+  await expect(unit).toBeFocused();
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+});
+
 test('reduced motion removes Settings and banner motion', async ({ page }) => {
   const errors = await start(page, '?session=preparing');
   const dot = page.getByRole('region', { name: 'Session configuration' }).locator('svg rect').first();

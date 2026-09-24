@@ -29,7 +29,10 @@ export interface SettingsPageEntry { id: string; label: string; icon: ReactNode 
  * accessibility tree and the tab order. The section menu is the shared rustX
  * `Menu`, portaled and placed by Floating UI; like the rail, it only asks the
  * owner of navigation to select a page. Its open/closed state is the one
- * transient fact this component holds.
+ * transient fact this component holds. When the panel widens while that menu
+ * is open, its trigger leaves layout and the `Menu` closes itself through
+ * `onClose`, so the open state never outlives the layout that shows it and
+ * this component never mirrors the container query.
  *
  * There is exactly one of these in the application. A confirmation inside a
  * page opens its own transient layer over this one; it never builds a second

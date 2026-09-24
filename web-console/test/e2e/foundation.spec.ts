@@ -226,6 +226,55 @@ test('Menu submenu flips, bounds its height, scrolls and follows its row', async
   expect(errors).toEqual([]);
 });
 
+/** A floating surface lives only while its reference is a visible
+ * interaction anchor: when the reference leaves rendered layout, or scrolls
+ * out of its clipping context, the surface settles closed and keeps no
+ * keyboard. */
+test('Menu surfaces close when their anchor leaves layout', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  const trigger = page.getByRole('button', { name: 'Actions', exact: true });
+  const hideAnchor = (hidden: boolean) => page.getByRole('button', { name: 'Actions', exact: true, includeHidden: true }).evaluate((el, value) => { el.parentElement!.style.display = value ? 'none' : ''; }, hidden);
+  const keyboard = () => page.evaluate(() => { const active = document.activeElement!; return { menuitem: active.getAttribute('role') === 'menuitem', rendered: active === document.body || active.getClientRects().length > 0 }; });
+
+  // The anchor leaves layout while the list holds the keyboard: the list
+  // closes through its owner, and the keyboard stays on no row and on no
+  // hidden trigger.
+  await trigger.click(); await expect(page.getByRole('menuitem', { name: 'Alpha' })).toBeFocused();
+  await hideAnchor(true);
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  expect(await keyboard()).toEqual({ menuitem: false, rendered: true });
+  // The owner's state settled closed with it: the anchor back in layout does
+  // not bring the list back, and one press opens it again.
+  await hideAnchor(false);
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await trigger.click(); await expect(page.getByRole('menuitem', { name: 'Alpha' })).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
+
+  // A submenu's row scrolled out of the parent card: only the submenu closes.
+  await page.setViewportSize({ width: 900, height: 300 });
+  const menu = nestedMenu(page);
+  await menu.pin('position: fixed; left: 200px; top: 8px;');
+  await menu.open();
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
+  await expect(menu.row('Sort by')).toBeFocused(); await expect(menu.submenu).toBeVisible();
+  await menu.parent.evaluate(el => { el.firstElementChild!.scrollTop = el.firstElementChild!.scrollHeight; });
+  await expect(menu.submenu).toHaveCount(0);
+  await expect(menu.row('Sort by')).toHaveAttribute('aria-expanded', 'false');
+  await expect(menu.parent).toBeVisible();
+  // With the keyboard inside the submenu, it goes back to the row.
+  await menu.parent.evaluate(el => { el.firstElementChild!.scrollTop = 0; });
+  await menu.row('Sort by').focus(); await page.keyboard.press('ArrowRight');
+  await expect(menu.row('Name')).toBeFocused();
+  await menu.parent.evaluate(el => { el.firstElementChild!.scrollTop = el.firstElementChild!.scrollHeight; });
+  await expect(menu.submenu).toHaveCount(0);
+  await expect(menu.row('Sort by')).toBeFocused();
+  await expect(menu.parent).toBeVisible();
+  await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(menu.trigger).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
 /** One keyboard and pointer contract across the two layers. */
 test('Menu submenu keyboard layers, pointer crossing and focus return', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

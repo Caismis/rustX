@@ -4,7 +4,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { ConfigurationApplication } from '../../../protocol/app-server/v19';
+import type { ConfigurationApplication, SourceMutation } from '../../../protocol/app-server/v19';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -19,6 +19,9 @@ const server = new Server(), source = cfg3Source(), effective = cfg3Effective();
 //   scenario=conflict    a User save meets an external edit (source_conflict)
 //   scenario=loading     the User source read never answers
 //   scenario=read-error  the User source read fails natively
+//   write=held           every source write commits only once the page calls
+//                        `rustxReleaseWrites()`, so the browser is observed
+//                        while the write is in flight
 //   session=preparing|ready|blocked|failed  the focused Session's application
 const variant = new URLSearchParams(location.search);
 // Long identities, endpoints, paths and native diagnostics are part of the
@@ -78,6 +81,44 @@ server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
   return { kind: operation.kind, projection };
 };
+// A held write stays in flight — the User request unanswered, the Workspace
+// host call unresolved — until the test releases it. Only then does native
+// commit it: the removal is applied, the revision advances and the projection
+// the write acknowledges is the one every later read observes.
+if (variant.get('write') === 'held') {
+  const commit = (scope: 'user' | 'workspace', mutation: SourceMutation) => {
+    const view = source[scope]!, authored = view.authored!;
+    if (mutation.kind !== 'config' || !('authored' in mutation.mutation) || mutation.mutation.authored !== null) throw new Error('The held-write fixture commits removals only');
+    if (mutation.mutation.unit === 'provider') delete authored.providers![mutation.mutation.id];
+    else if (mutation.mutation.unit === 'agent_identity') delete authored.agent_id;
+    else throw new Error(`The held-write fixture has no removal of ${mutation.mutation.unit}`);
+    view.revision = `${scope}-committed`;
+    source.resolved = { ...source.user.authored, ...source.workspace!.authored };
+  };
+  server.handlers.set('configuration/sourceWrite', request => {
+    if (request.method !== 'configuration/sourceWrite') throw new Error('Unreachable');
+    commit('user', request.params.mutation);
+    return { type: 'source_settings', projection: { ...structuredClone(source), target: { kind: 'user' } } };
+  });
+  server.held.add('configuration/sourceWrite');
+  const releases: (() => void)[] = [];
+  const configure = server.workspaceHost.configureWorkspace!;
+  server.workspaceHost.configureWorkspace = async (id, at, operation) => {
+    if (operation.kind === 'write') {
+      await new Promise<void>(resolve => releases.push(resolve));
+      commit('workspace', operation.mutation);
+    }
+    return configure(id, at, operation);
+  };
+  const answered = new WeakSet<object>();
+  (window as unknown as { rustxReleaseWrites: () => void }).rustxReleaseWrites = () => {
+    for (const { request, socket } of server.requests) {
+      if (request.method !== 'configuration/sourceWrite' || answered.has(request)) continue;
+      answered.add(request); server.reply(request, socket);
+    }
+    for (const release of releases.splice(0)) release();
+  };
+}
 server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: effective }));
 // The native requests this page issued, for browser assertions of exact
 // identity, ordering and request counts. Test fixture only.

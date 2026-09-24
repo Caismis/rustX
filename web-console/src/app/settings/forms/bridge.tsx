@@ -270,6 +270,12 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   removalNotice?: ReactNode; children: ReactNode;
 }) {
   const workspace = unit.scope === 'workspace';
+  /** The unit's own card: the region that owns its in-flight mutation and
+   * presents the outcome. A confirmed removal submits, which closes every
+   * control in the card — its trigger included — until native answers, so
+   * focus settles on the card itself, which stays mounted and enabled through
+   * the whole write. */
+  const card = useRef<HTMLFormElement>(null);
   const preserved = unit.draft ? 'Your draft and original revision are preserved.'
     : unit.committed ? 'Your committed revision is no longer the current source.'
       : 'Your removal and its original revision are preserved.';
@@ -279,7 +285,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   // that shadows nothing is a real deletion and is named as one.
   const restoresInherited = workspace && (unit.definition === undefined || unit.shadowed !== undefined);
   const owner = workspace ? 'Workspace' : 'User';
-  return <form aria-label={title} className={css.unit} data-definition={unit.definition} data-draft={unit.draft || undefined}
+  return <form ref={card} tabIndex={-1} aria-label={title} className={css.unit} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
     onSubmit={event => { event.preventDefault(); unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
@@ -333,12 +339,12 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           ? <span data-removal="override-removal"><ConfirmAction tone="restore" label={`Use global default ${title}`} disabled={!unit.admitted}
             title={`Use the global default for ${title}?`} confirm={`Use global default ${title}`}
             description={<><p>This removes the semantic unit this Workspace authors, through exact CAS. The native inherited value becomes effective again.</p><p>Nothing is removed from the global source, and no other scope is changed.</p></>}
-            onConfirm={() => unit.submit(true)} /></span>
+            settle={card} onConfirm={() => unit.submit(true)} /></span>
           // Otherwise the removal really removes this scope's authored unit.
           : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={`Remove ${title}`} disabled={!unit.admitted}
             title={`Remove ${title} from ${owner} configuration?`} confirm={`Remove ${title}`}
             description={<><p>This removes the value this {owner} source authors, through exact CAS on its current revision.</p>{removalNotice ?? <p>The native default for this unit applies once it is absent.</p>}</>}
-            onConfirm={() => unit.submit(true)} /></span>)}
+            settle={card} onConfirm={() => unit.submit(true)} /></span>)}
         {unit.intent && <Button type="button" onClick={unit.discard}>Discard draft</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>Use reviewed revision</Button>}
       </div>
