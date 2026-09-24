@@ -251,8 +251,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v20 (`rustx.app-server.v20` and generated
-`protocol/app-server/v20.ts` / `v20.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v21 (`rustx.app-server.v21` and generated
+`protocol/app-server/v21.ts` / `v21.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -332,7 +332,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v20, Runtime Client v46, SQLite v43, and Session catalog v12, with no
+App Server v21, Runtime Client v47, SQLite v44, and Session catalog v12, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -347,3 +347,47 @@ Presentation follows Harness `ddefc45f`: compact 28px icon actions, 8px gaps,
 hover/focus reveal for older rows, always visible actions on no-hover devices,
 36px narrow-layout action targets, existing accessible Tooltip/Modal primitives,
 and separate code-block copying. No additional icon library is introduced.
+
+## New Conversation and completed process (#402)
+
+`App` owns a center route: New Conversation is an explicit draft route, distinct
+from a native Session route. Its text, File objects, selected registered Workspace
+handle and optional Session model intent are presentation data. Opening it or
+changing its Workspace creates nothing native. The Product Host lists, adopts and
+resolves Workspace handles; the browser never supplies an arbitrary path.
+
+The `firstSubmitMachine` owns one non-replayable submission. It creates one native
+Session, records that acknowledgement as an irreversible fact, attaches its exact
+Conversation, applies explicit Session model intent and fences on authoritative
+model observation, uploads files one at a time, then starts the turn. Every
+acknowledged upload receipt remains in the machine context. Later failures retain
+the committed Session and report their actual stage; they never rewind to a
+pre-creation state. An uncertain mutation has no automatic retry transition.
+Navigation, endpoint, authority revision, connection generation and attachment
+identity fence continuations. The actor is retired when its route/authority leaves.
+
+The composer permission seat binds the same Workspace target actor and semantic
+approval unit as Settings. It offers only native `policy` and `full_access`, uses
+the exact Host Workspace handle and revision, and rereads confirmed commits through
+the existing transaction coordinator. A confirmation gates elevation. The source
+controls future admission; an already-admitted Attempt remains frozen. Composer
+model intent is different: it never authors the Workspace default model.
+
+App Server v21 / Runtime Client v47 project `completed_process` from the native
+Attempt evidence fold. It carries original execution provenance and the local
+final-message identity, including through remapped lineage. SQLite v44 persists
+the bounded member identities in bootstrap provenance; it refuses older stores.
+The browser groups only those exact identities. Steering messages, final answers,
+response actions and independent canonical rows stay outside the fold. Live rows
+have no completed membership. Disclosure state never edits or reorders canonical
+history or its pagination cursors. Agent Status keeps its native anchor even when
+that anchor is inside a folded process.
+
+Reasoning uses the compact variant of the existing Markdown renderer; ordinary
+answers use normal Markdown. Parsing, streaming and sanitization are shared.
+Exact native Tool IDs select adapted Harness Terminal, Diff, Read and Search
+bodies. Bash uses its native JSON `combined` field, never output-text inference.
+Write/Edit show explicitly labelled requested changes, not an invented filesystem
+baseline. Read/Search preserve bounded opaque native output without fabricating
+line coordinates, match counts or parsed structure. Unknown Tool IDs retain the
+bounded generic body and all renderers retain native lifecycle and artifacts.

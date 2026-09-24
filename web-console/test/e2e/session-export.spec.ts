@@ -1,10 +1,11 @@
+import { openEmptySession } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, chooseWorkspace, showInspector, expectSettled } from './shell-actions';
+import { connectRemote, showInspector, expectSettled } from './shell-actions';
 import { wireProbe } from './wire-probe';
 function logicalArchive(path: string) {
   // Test-only decoder. Production has no import/restore path.
@@ -20,8 +21,7 @@ test('browser native download and remote TUI consume the same authenticated nati
   try {
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Archive this Session');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Archive fixture settled.', { exact: true })).toBeVisible();

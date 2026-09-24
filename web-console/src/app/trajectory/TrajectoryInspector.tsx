@@ -26,7 +26,7 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v20';
+} from '../../../../protocol/app-server/v21';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';

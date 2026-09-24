@@ -1,4 +1,4 @@
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v20';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v21';
 import type { AppServerClient, ClientView } from '../../../client/app-server';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../../../workspaces/host';
 import { applicationScope } from '../projection';

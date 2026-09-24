@@ -1263,3 +1263,20 @@ confirmed restore of inheritance settle focus on the unit while the write is in
 flight and its trigger is disabled, and that Cancel and Escape return focus to
 the trigger;
 `agent.spec.ts` proves the ModelSelect submenus inside a 390px viewport.
+
+## Harness Models cards and shared composer ownership (#402)
+
+The Models landing page uses pinned Harness provider-card geometry and React Aria
+GridList actions. It emphasizes provider identity and authored/inherited facts.
+Endpoint, credential and complete typed model configuration remain in the existing
+Provider/Model details; defaults and additional model authoring use disclosures.
+No status implies endpoint health or reachability. Built-in/custom provider
+categories from Harness are not imported because rustX has no such native taxonomy.
+
+The permission seat outside Settings acquires the same configuration target actor.
+`ConfigurationSystem` counts target presentation holders so closing Settings does
+not detach a still-visible composer, or vice versa. Native transaction lifetime,
+exact CAS, confirmed-write/reread-failure distinctions and authority retirement
+remain unchanged. Session configuration presentations acquire their actor at React
+commit, avoiding a synchronous read/Inspector notification during rendering; the
+actor still owns all subsequent transport observation and adoption semantics.

@@ -115,7 +115,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     if (references[name]) await expectStableScreenshot(settings, references[name]);
   }
 
-  // Setting rows and resource rows share one geometry.
+  // Settings forms retain their geometry; Provider cards use pinned Harness ModelsSection geometry.
   await openSettingsPage(page, 'Agent');
   const unit = await settings.getByRole('form', { name: 'Root identity' }).evaluate(el => {
     const style = getComputedStyle(el);
@@ -127,7 +127,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
   });
-  expect(row.height).toBeGreaterThanOrEqual(56); expect(row.padding).toBe('12px 16px'); expect(row.radius).toBe('14px');
+  expect(row.height).toBeGreaterThanOrEqual(56); expect(row.padding).toBe('12px 14px'); expect(row.radius).toBe('16px');
 
   // Provider → detail keeps status and actions next to the object.
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
@@ -775,4 +775,26 @@ test('Session configuration banner: preparing, ready, blocked and failed, compac
   expect(requests.slice(adoptionAt).filter(request => request.method === 'session/configuration').length).toBeGreaterThanOrEqual(1);
   expect(requests.filter(request => request.method === 'session/configuration').length).toBeGreaterThan(before);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+});
+
+test('Provider card Delete preserves exact unit CAS and returns focus to the surviving landing page', async ({ page }) => {
+  const errors = await start(page, '?write=held');
+  await openUserSettings(page); await openSettingsPage(page, 'Models');
+  const settings = dialog(page);
+  const remove = settings.getByRole('button', { name: 'Delete Provider transport', exact: true });
+  await remove.focus(); await page.keyboard.press('Enter');
+  const confirmation = page.getByRole('alertdialog', { name: 'Delete Provider transport?', exact: true });
+  await expect(confirmation).toBeVisible();
+  await page.keyboard.press('Escape'); await expect(remove).toBeFocused();
+  await page.keyboard.press('Enter');
+  await confirmation.getByRole('button', { name: 'Delete Provider transport', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(settings.getByRole('region', { name: 'Models', exact: true })).toBeFocused();
+  await expect.poll(async () => (await nativeRequests(page)).filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(1);
+  const write = (await nativeRequests(page)).find(request => request.method === 'configuration/sourceWrite')!;
+  expect(write.params).toMatchObject({ target: { kind: 'user' }, expected_revision: 'user-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: null } } });
+  await releaseWrites(page);
+  await expect(settings.getByRole('row', { name: 'transport', exact: true })).toHaveCount(0);
+  await expect(settings.getByRole('row', { name: longProvider, exact: true })).toBeVisible();
+  await expectAccessible(page, settingsScope); expect(errors).toEqual([]);
 });

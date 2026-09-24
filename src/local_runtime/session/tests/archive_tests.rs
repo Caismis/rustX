@@ -513,6 +513,7 @@ async fn archive_preserves_native_inherited_response_provenance_without_executio
         closing_message_id: MessageId::new("answer"),
     };
     source.completed_responses = vec![CompletedResponseProvenance {
+        process_message_ids: vec![MessageId::new("answer")],
         closing_message_id: MessageId::new("answer"),
         origin: origin.clone(),
         completed_at: Utc::now(),

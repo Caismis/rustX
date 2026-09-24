@@ -146,6 +146,7 @@ export class ConfigurationSystem {
    * settlement point, at which the transaction that submitted it has recorded
    * the outcome — and is then stopped and dropped at once. */
   private retireTarget(actor: SettingsTargetActor) {
+    this.presentations.delete(actor);
     if (!mutationInFlight(actor.getSnapshot())) {
       actor.stop();
       return;
@@ -160,6 +161,24 @@ export class ConfigurationSystem {
       next: snapshot => { if (!mutationInFlight(snapshot)) release(); },
       error: release,
     }));
+  }
+
+  private readonly presentations = new Map<SettingsTargetActor, number>();
+  /** Composer and Settings share one target. Detaching either must not suspend
+   * observation while the other still presents it. Transactions remain owned
+   * by the target even when the last presentation leaves. */
+  retainTarget(actor: SettingsTargetActor) {
+    const count = this.presentations.get(actor) ?? 0;
+    this.presentations.set(actor, count + 1);
+    // Each newly opened presentation owes a fresh source observation. The
+    // actor preserves an in-flight Workspace reread reservation itself.
+    actor.send({ type: 'ATTACH' });
+  }
+  releaseTarget(actor: SettingsTargetActor) {
+    const count = this.presentations.get(actor);
+    if (count === undefined) return;
+    if (count > 1) this.presentations.set(actor, count - 1);
+    else { this.presentations.delete(actor); if (actor.getSnapshot().status === 'active') actor.send({ type: 'DETACH' }); }
   }
 
   /** The Settings authority actor of one exact target, created on demand. */

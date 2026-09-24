@@ -333,10 +333,12 @@
 }
 
 .collapsed .toggle:hover .railMark {
+  color: var(--dsw-alias-label-primary);
   display: none;
 }
 
 .railMark {
+  color: var(--dsw-alias-label-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;

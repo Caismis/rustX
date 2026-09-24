@@ -6,7 +6,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v20';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v21';
 import { chooseOption, confirmAction, renderEditor } from './settings-harness';
 afterEach(cleanup);
 
@@ -137,6 +137,7 @@ it('replaces default model intent and project guidance as independent native uni
   const { writes: write, rerender } = await renderEditor(
     <ModelsPage source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} onFocus={noop} />,
     { source, context: source });
+  fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
   await chooseOption('Reasoning profile', 'Named profile', model);
   fireEvent.change(model.getByLabelText('Profile identity'), { target: { value: 'deep' } });
@@ -173,6 +174,7 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
     ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
   }
+  if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
   const saveName = owner === 'default' ? 'Save Default model' : 'Save Agent reviewer';
   const commit = async (expected: ModelLayer) => {

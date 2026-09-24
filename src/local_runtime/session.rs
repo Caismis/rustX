@@ -2739,6 +2739,11 @@ pub(crate) fn remap_seed(
             let closing = message_ids.get(&response.closing_message_id)?;
             let mut response = response.clone();
             response.closing_message_id = closing.clone();
+            response.process_message_ids = response
+                .process_message_ids
+                .iter()
+                .filter_map(|id| message_ids.get(id).cloned())
+                .collect();
             response.retry_message_id = response
                 .retry_message_id
                 .as_ref()

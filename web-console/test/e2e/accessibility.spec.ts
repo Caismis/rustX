@@ -1,7 +1,8 @@
+import { expandModelAuthoring } from './shell-actions';
 import { expect, test, type Locator } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { selectedSettingsPage, settingsSectionMenu } from './shell-actions';
+import { openEmptySession, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
 const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
 
@@ -59,10 +60,12 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await tabTo(page.getByRole('button', { name: 'Close Settings', exact: true })); await page.keyboard.press('Enter');
-    await tabTo(page.getByRole('button', { name: 'New Session', exact: true }).first()); await page.keyboard.press('Enter');
+    await tabTo(page.getByRole('button', { name: 'New Conversation', exact: true }).first()); await page.keyboard.press('Enter');
     const workspace = page.getByLabel('Choose Workspace');
-    await tabTo(workspace); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
-    await tabTo(page.getByRole('button', { name: 'Create Session', exact: true })); await page.keyboard.press('Enter');
+    await tabTo(workspace); await page.keyboard.press('Enter');
+    await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).focus(); await page.keyboard.press('Enter');
+    await expect(page.getByRole('region', { name: 'New Conversation' })).toBeVisible();
+    await openEmptySession(page, fixture, 'Workspace A');
     const message = page.getByLabel('Message', { exact: true }); await expect(message).toBeEnabled();
     const expandSidebar = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
     const wasCollapsed = await expandSidebar.isVisible();
@@ -92,7 +95,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByRole('button', { name: 'Settings', exact: true })); await page.keyboard.press('Enter');
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
-    await keyboardPage('Models');
+    await keyboardPage('Models'); await expandModelAuthoring(page);
     // A resource list is one grid: the row opens its detail with Enter.
     await tabTo(settings.getByRole('row', { name: 'fixture', exact: true })); await page.keyboard.press('Enter');
     const endpoint = settings.getByLabel('Endpoint', { exact: true });

@@ -1,4 +1,6 @@
-import { chooseWorkspace, connectionAction, connectRemote, openSettingsPage, selectedSettingsPage } from './shell-actions';
+import { expandModelAuthoring } from './shell-actions';
+import { openEmptySession } from './shell-actions';
+import { connectionAction, connectRemote, openSettingsPage, selectedSettingsPage } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,8 +14,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
@@ -26,7 +27,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     };
     const openModel = async () => {
-      await openSettingsPage(page, 'Models');
+      await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
       if (await settings.getByRole('button', { name: '← Models', exact: true }).isVisible()) await settings.getByRole('button', { name: '← Models', exact: true }).click();
       await settings.getByRole('button', { name: /^All Models/ }).click();
       await settings.getByRole('row', { name: 'fixture/console-model', exact: true }).click();
@@ -78,8 +79,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await openMcp();
     await settings.getByRole('row', { name: 'loss-fixture', exact: true }).click();
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
-    await chooseWorkspace(page, 'Workspace B');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceB);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     expect(await selectedSettingsPage(page)).toBe('General');

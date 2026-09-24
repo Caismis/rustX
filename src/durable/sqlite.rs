@@ -240,7 +240,7 @@ fn count_conversation_store_open() {
 /// recovery of the unresolved resource state, so it is rejected rather than
 /// guessed.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v15/v15/v16/v17/v18/v19/v20/v21 database
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v15/v15/v16/v17/v18/v19/v21/v21 database
 /// must fail at store open; there is no migration or compatibility path.
 /// Version 23 preserves Denied in detached terminal facts (Issue #206).
 /// Version 24 adds Workflow block/node instance lifecycle facts (Issue #217).
@@ -301,7 +301,7 @@ fn count_conversation_store_open() {
 /// Version 40 makes Tool-result occurrence ownership canonical; prior shapes are refused.
 /// Version 41 adds generation evidence to persisted request terminal events.
 /// Version 42 retains immutable completed-response provenance in lineage bootstrap.
-pub const SQLITE_SCHEMA_VERSION: i64 = 43;
+pub const SQLITE_SCHEMA_VERSION: i64 = 44;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -13506,7 +13506,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 43);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 44);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13575,7 +13575,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 43);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 44);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

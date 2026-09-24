@@ -42,6 +42,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await routeWorkspaceHost(page, a); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, a.endpoint, a.token);
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeVisible();
+    await page.getByText("Sessions outside registered Workspaces", { exact: true }).click();
     await expect(page.locator(`button[data-session-id="${denied.session.id}"]`)).toBeVisible();
     await page.locator(`button[data-session-id="${denied.session.id}"]`).click();
     await expect(page.getByRole('alert')).toContainText('not authorized');
@@ -91,6 +92,8 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await a.workspaceHost.host.removeWorkspace(wa.id);
     await page.getByRole('button', { name: 'View options' }).click();
     await page.getByRole('menuitem', { name: 'Refresh list' }).click();
+    await expect(page.getByRole('button', { name: 'Select Workspace Workspace A', exact: true })).toHaveCount(0);
+    await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeVisible();
     expect(await read()).toEqual(original);
     expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(1);

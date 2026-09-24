@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v20';
+import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v21';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { findOnAdvanced, openResourceRow, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
@@ -157,6 +157,8 @@ const allModels = () => {
  * explicit-model selector, in that order, for one rendered Settings surface. */
 async function reachableModels() {
   open('Models');
+  const defaultToggle = screen.queryByRole('button', { name: 'Default model for new Sessions', expanded: false });
+  if (defaultToggle) fireEvent.click(defaultToggle);
   const catalog = allModels().queryAllByRole('row').map(row => row.getAttribute('aria-label')!);
   const root = options(screen.getByRole('form', { name: 'Default model' }), /Model$/);
   open('Extensions');
@@ -184,6 +186,8 @@ it('ID-03 Workspace-authored models stay reachable in every selector when a malf
   expect(await reachableModels()).toEqual({ catalog: ['workspace-model'], root: ['workspace-model'], named: ['workspace-model'] });
   // No effective value is fabricated for the identity.
   open('Models');
+  const defaultToggle = screen.queryByRole('button', { name: 'Default model for new Sessions', expanded: false });
+  if (defaultToggle) fireEvent.click(defaultToggle);
   const rootForm = within(screen.getByRole('form', { name: 'Default model' }));
   expect(rootForm.getByText(/Inherited — no Workspace override/).getAttribute('data-effective')).toBe('invalid');
   expect(rootForm.queryByText(/Native effective value available/)).toBeNull();

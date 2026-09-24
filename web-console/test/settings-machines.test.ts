@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v20';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v21';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
@@ -3297,4 +3297,25 @@ it('N09 legal per-page focus is restored after leaving a page, and illegal attem
   expect(actor.getSnapshot().context.focus.advanced).toEqual({ kind: 'connection' });
   expect(actor.getSnapshot().context.focus).not.toHaveProperty('agent');
   expectLegal(actor);
+});
+
+it('composer and Settings holders share one target transaction owner; opening rereads and closing one keeps the other observing', async () => {
+  const native = scriptedClient();
+  const actor = native.system.settingsTarget(userSettingsTarget, () => undefined);
+  native.system.retainTarget(actor);
+  native.pending('configuration/sourcesRead')[0].resolve({ projection: projection('r1') });
+  await flush();
+  native.system.retainTarget(actor);
+  expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
+  native.pending('configuration/sourcesRead')[1].resolve({ projection: projection('r2') });
+  await flush();
+  native.system.releaseTarget(actor);
+  native.reconnect();
+  expect(native.pending('configuration/sourcesRead')).toHaveLength(3);
+  native.pending('configuration/sourcesRead')[2].resolve({ projection: projection('r3') });
+  await flush();
+  expect(actor.getSnapshot().context.observation).toMatchObject(projection('r3'));
+  native.system.releaseTarget(actor);
+  native.reconnect();
+  expect(native.pending('configuration/sourcesRead')).toHaveLength(3);
 });

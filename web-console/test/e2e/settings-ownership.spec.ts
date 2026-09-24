@@ -1,8 +1,9 @@
+import { openEmptySession } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, connectionAction, chooseWorkspace, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { connectRemote, connectionAction, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
@@ -89,7 +90,7 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
  const remote = await AppServerHost.connectRemote({ endpoint: f.endpoint, token: f.token });
  try {
    await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
-   await chooseWorkspace(page, 'Workspace A'); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+   await openEmptySession(page, f, 'Workspace A');
    const message = page.getByRole('textbox', { name: 'Message', exact: true }); await expect(message).toBeEnabled();
    const id = (await remote.client.call('session/list', { offset: 0, limit: 32 }, 'sessions')).sessions[0].id;
    const selection = await remote.client.call('session/settings', { session_id: id }, 'settings');

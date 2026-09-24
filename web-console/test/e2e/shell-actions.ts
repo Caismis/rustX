@@ -10,8 +10,9 @@ export async function closeSettings(page: Page) {
 }
 export async function chooseWorkspace(page: Page, label: string) {
   await closeSettings(page);
-  await page.getByRole('button', { name: 'New Session', exact: true }).first().click();
-  await page.getByLabel('Choose Workspace').selectOption({ label });
+  await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+  await page.getByRole('menuitem', { name: label, exact: true }).click();
 }
 /** Enter Workspace Settings from the exact Workspace object action. */
 export async function openWorkspaceSettings(page: Page, label: string) {
@@ -112,4 +113,36 @@ export async function sessionTree(page: Page) {
 export async function expectSettled(page: Page) {
   await showInspector(page);
   await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).attempt?.phase.type).toBe('settled');
+}
+
+/** Native fixture setup for scenarios that begin with an existing empty Session.
+ * Creation UX is exercised separately by convergence.spec.ts. This performs the
+ * real native create and normal catalog refresh and attachment, without a browser-only ID. */
+export async function openEmptySession(page: Page, fixture: { endpoint: string; token: string; workspaceHost: { host: import('../../src/workspaces/host').ProductHostWorkspaces } }, label: string) {
+  const { AppServerHost } = await import('../../../tui/src/app-server/host');
+  const catalog = await fixture.workspaceHost.host.listWorkspaces();
+  const workspace = catalog.workspaces.find(row => row.displayName === label);
+  if (!workspace) throw new Error(`Fixture Workspace unavailable: ${label}`);
+  const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+  let id: string;
+  try { id = (await remote.createSession(await fixture.workspaceHost.host.resolveWorkspace(workspace.id, fixture.endpoint))).session.id; }
+  finally { await remote.shutdown(); }
+  await closeSettings(page);
+  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  const wasCollapsed = await expand.isVisible();
+  if (wasCollapsed) await expand.click();
+  await page.getByRole('button', { name: 'View options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Refresh list', exact: true }).click();
+  await page.locator(`button[data-session-id="${id}"]`).click();
+  await expect(page.getByLabel('Session location', { exact: true })).toHaveText(workspace.displayPath);
+  if (wasCollapsed) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  return id;
+}
+
+/** Reach advanced model authoring through the landing page disclosures. */
+export async function expandModelAuthoring(page: Page) {
+  for (const name of ['New Provider', 'Default model for new Sessions']) {
+    const toggle = page.getByRole('button', { name, exact: true, expanded: false });
+    if (await toggle.isVisible()) await toggle.click();
+  }
 }
