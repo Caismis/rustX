@@ -232,3 +232,178 @@ fn cli08_production_static_dispatch_has_zero_prohibited_effects() {
     }
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn exact_paths_survive_public_cli_conversion() {
+    for value in [" /tmp/rustx config ", "/tmp/rustx config ", " "] {
+        for prefix in [vec![], vec!["config", "check"]] {
+            let command = parse(
+                &[
+                    prefix,
+                    vec![
+                        "--config",
+                        value,
+                        "--workspace",
+                        value,
+                        "--runtime-root",
+                        value,
+                    ],
+                ]
+                .concat(),
+            )
+            .unwrap();
+            let (Command::Launch(request) | Command::Check { request, .. }) = command else {
+                panic!()
+            };
+            for path in [request.config, request.workspace, request.runtime_root] {
+                assert_eq!(path.unwrap().as_os_str(), std::ffi::OsStr::new(value));
+            }
+        }
+        let Command::Init { request, .. } = parse(&[
+            "init",
+            "--template=custom",
+            "--provider=local",
+            "--endpoint=http://localhost",
+            "--credential-env=KEY",
+            "--model-document",
+            value,
+        ])
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            request.model_document.unwrap().as_os_str(),
+            std::ffi::OsStr::new(value)
+        );
+    }
+}
+
+#[test]
+fn exact_init_strings_reach_native_credential_policy() {
+    for value in [" RUSTX_TEST_KEY ", " "] {
+        let Command::Init { request, .. } = parse(&[
+            "init",
+            "--template=anthropic",
+            "--provider",
+            value,
+            "--endpoint",
+            value,
+            "--credential-env",
+            value,
+            "--model-id",
+            value,
+        ])
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(request.provider, value);
+        assert_eq!(request.endpoint, value);
+        assert_eq!(request.credential_env, value);
+        assert_eq!(request.model_id.as_deref(), Some(value));
+        assert!(
+            super::super::initialization::documents(&request)
+                .unwrap_err()
+                .contains("--credential-env requires an environment variable name")
+        );
+    }
+    let Command::Show { agent, .. } = parse(&["config", "show", "--agent", " main "]).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(agent.as_deref(), Some(" main "));
+}
+
+#[test]
+fn exact_empty_values_are_rejected_without_blanket_whitespace_rejection() {
+    for args in [
+        vec!["--config="],
+        vec!["--workspace="],
+        vec!["--runtime-root="],
+        vec!["app-server", "--listen="],
+        vec!["app-server", "--listen=stdio", "--token-file="],
+    ] {
+        assert!(parse(&args).is_err(), "{args:?}");
+    }
+    for flag in ["--provider", "--endpoint", "--credential-env"] {
+        let mut args = vec![
+            "init",
+            "--template=custom",
+            "--provider",
+            "local",
+            "--endpoint",
+            "http://localhost",
+            "--credential-env",
+            "KEY",
+        ];
+        let index = args.iter().position(|arg| *arg == flag).unwrap();
+        args[index + 1] = "";
+        assert!(parse(&args).is_err());
+    }
+    assert!(
+        parse(&[
+            "init",
+            "--template=custom",
+            "--provider=local",
+            "--endpoint=http://localhost",
+            "--credential-env=KEY",
+            "--model-document="
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn launch_normalization_is_explicit_after_exact_lexical_parsing() {
+    let session = " ses_eb278475-f606-7143-87df-8cb657e1c7ee ";
+    let node = " node_c346d387-9a21-70f0-8e5c-7422521183b3 ";
+    let args = [
+        "--model",
+        " local/model ",
+        "--name",
+        " display ",
+        "--session",
+        session,
+        "--node",
+        node,
+    ];
+    let lexical = Cli::try_parse_from(std::iter::once("rustx").chain(args)).unwrap();
+    assert_eq!(
+        lexical.launch.selection.model.as_deref(),
+        Some(" local/model ")
+    );
+    assert_eq!(lexical.launch.name.as_deref(), Some(" display "));
+    assert_eq!(lexical.launch.session.as_deref(), Some(session));
+    assert_eq!(lexical.launch.node.as_deref(), Some(node));
+    let Command::Launch(request) = parse(&args).unwrap() else {
+        panic!()
+    };
+    assert_eq!(request.model.as_deref(), Some("local/model"));
+    assert_eq!(request.session_name.as_deref(), Some("display"));
+    assert_eq!(
+        request.startup_session,
+        StartupSession::Select {
+            session: SessionId::new(session.trim()),
+            node: Some(SessionNodeId::new(node.trim())),
+        }
+    );
+    let conversation = " conv_eb278475-f606-7143-87df-8cb657e1c7ee ";
+    let Command::Launch(request) = parse(&["--inspect-conversation", conversation]).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        request.startup_session,
+        StartupSession::InspectConversation {
+            conversation_id: crate::runtime::identity::ConversationId::parse(conversation.trim())
+                .unwrap(),
+        }
+    );
+    for flag in ["--model", "--name", "--session", "--inspect-conversation"] {
+        assert!(parse(&[flag, " "]).is_err());
+    }
+    let Command::Check { request, .. } =
+        parse(&["config", "check", "--model", " local/model "]).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(request.model.as_deref(), Some("local/model"));
+}

@@ -421,3 +421,66 @@ fn cli09_internal_child_rejects_all_extra_arguments() {
     assert!(!String::from_utf8_lossy(&output.stderr).contains("Usage:"));
     assert!(!root.path().join("home").exists());
 }
+
+#[test]
+fn exact_values_reach_native_process_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    // The trimmed path names an invalid document; only the exact path is valid.
+    let exact = workspace.join("settings.toml ");
+    std::fs::write(workspace.join("settings.toml"), "unknown_field = true").unwrap();
+    std::fs::write(
+        &exact,
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+    )
+    .unwrap();
+    let checked = report(
+        &run(
+            root.path(),
+            &[
+                "config",
+                "check",
+                "--config",
+                exact.to_str().unwrap(),
+                "--json",
+            ],
+        ),
+        3,
+    );
+    assert_eq!(checked["validity"], "valid");
+
+    let invalid = report(
+        &run(
+            root.path(),
+            &[
+                "init",
+                "--template=anthropic",
+                "--provider=local",
+                "--endpoint=http://localhost",
+                "--credential-env",
+                " RUSTX_TEST_KEY ",
+                "--json",
+            ],
+        ),
+        2,
+    );
+    assert!(
+        invalid["diagnostics"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("--credential-env requires an environment variable name")
+    );
+
+    // The token also keeps a regressed normalized stdio invocation finite:
+    // it would fail with the *different* native stdio/token diagnostic.
+    let transport = run(
+        root.path(),
+        &["app-server", "--listen", " stdio ", "--token-file=/unused"],
+    );
+    lexical_failure(&transport);
+    assert!(
+        String::from_utf8_lossy(&transport.stderr).contains("listen must be stdio or ws://IP:PORT")
+    );
+    assert!(!root.path().join("home").exists());
+}

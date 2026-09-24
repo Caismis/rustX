@@ -1,8 +1,9 @@
 # Public CLI contract (issue #396)
 
 Base audit: e8f700dae5b252e7cdf5b78a9e0000b05edeee04. Reviewed the three
-parsers, serve/main, their callers and CI. Open PR #401 concerns Trajectory,
-including protocol process fixtures, not CLI ownership; this branch uses main.
+parsers, serve/main, their callers and CI. Review correction rebased the existing
+branch without conflicts onto da43450b77d3c195d95b06818be8142317663c91, including
+merged PR #401 and its protocol v20, Trajectory, TUI and Product Host changes.
 
 ## Command/parameter matrix frozen before implementation
 
@@ -33,8 +34,16 @@ mostly failed. These incidental differences are replaced together:
   model, workspace, Session, source, or transport intent.
 - Both `--flag value` and `--flag=value` work. A dash-leading value requires
   equals syntax (`--workspace=--json`); `--workspace --json` is invalid.
-- Empty/whitespace-only text/path values are rejected. Compatibility TOML may
-  be explicitly empty, since an empty document is a meaningful declaration.
+- Empty lexical text/path values are rejected, but opaque non-empty values are
+  never globally trimmed. Clap's inferred PathBuf parser preserves exact paths;
+  NonEmptyStringValueParser preserves Init declarations, App Server listen and
+  diagnostic agent names. Native owners validate their domains. Compatibility
+  TOML may be explicitly empty, since an empty document is meaningful.
+- Historical launch text normalization is explicitly scoped to conversion into
+  LaunchRequest: model selection (also used by diagnostics), Session display
+  name, Session/node/conversation identities trim surrounding whitespace and
+  reject blank/invalid results. The lexical representation retains the original
+  strings. Paths and Init/App Server strings never use this launch policy.
 - Integers use u64 context-window and u32 max-output; booleans require explicit
   `true` or `false`. Domain validity (including positive limits) remains native.
 - Duplicate options/switches, unknown flags/commands and extra positional values
@@ -131,7 +140,7 @@ and passed all 82 tests. No test assertions or image references were relaxed.
 macOS was not executed locally. Existing ignored/live-provider tests remain
 ignored; no live-provider credentials or external model calls were used.
 
-### Completed validation commands
+### Completed validation commands (original pre-rebase run)
 
 Commands below run from the isolated worktree root unless a directory is shown.
 All use the committed dependency lockfiles. Normal Rust validation uses Linux
@@ -173,4 +182,112 @@ Additional mandatory boundary gates:
 
 - `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`: passed, 410 total (durable 129, process 55, subagent 43, tools 130, conformance 22, catalog 26, managed-output 5).
 
-No unresolved validation failure remains. Local macOS execution, ignored live-provider tests and release/startup performance benchmarking were not performed. The implementation changes no platform gates.
+The original pre-rebase run had no unresolved validation failure. Local macOS execution, ignored live-provider tests and release/startup performance benchmarking were not performed. The implementation changes no platform gates.
+
+## Review correction: exact values and current-main integration
+
+Starting head: 810e000876c810342fed155f6864e0a966e53a19. Rebased implementation:
+5fc617431af947791b159e75445041ff818e7174. Integration base:
+da43450b77d3c195d95b06818be8142317663c91. No conflicts; no protocol v20 or newer
+client/test behavior was reverted. No dependencies changed in this correction.
+
+The shared `text_value`/`path_value` helpers incorrectly made lexical parsing
+own normalization: they could change the filesystem object named by a path,
+make an invalid credential environment name valid, or turn `" stdio "` into
+`stdio`. Both helpers are removed. Exact typed CLI values now reach explicit
+field/native conversion. Init still owns credential/template/model policy;
+App Server still owns transport/path policy. Historical launch trimming remains
+only in LaunchRequest conversion, verified against the pre-clap parser on main.
+
+Pre-validation architecture review: clap owns only lexical grammar; opaque
+values round-trip unchanged; credential names and transports cannot be repaired
+by CLI parsing; paths are neither trimmed nor canonicalized; launch-only
+normalization is explicit after parsing. There remains one public grammar,
+with no fallback, flag tables, raw Init parser, App Server loop or JSON scan.
+
+New regressions:
+
+- `cli::tests::exact_paths_survive_public_cli_conversion`: all launch/diagnostic
+  path fields and Init model-document, including leading/trailing/only spaces.
+- `cli::tests::exact_init_strings_reach_native_credential_policy`: exact Init
+  strings and native rejection of padded/blank credential names; exact agent.
+- `cli::tests::exact_empty_values_are_rejected_without_blanket_whitespace_rejection`:
+  genuinely empty values remain invalid.
+- `cli::tests::launch_normalization_is_explicit_after_exact_lexical_parsing`:
+  exact lexical strings followed by intentional launch normalization.
+- App Server `app_server_paths_and_listen_survive_public_cli_conversion`: exact
+  config/runtime-root/token paths and padded listen value.
+- Process `configuration_commands::exact_values_reach_native_process_owners`:
+  distinct real padded/unpadded configuration files, native credential rejection
+  and native rejection of padded stdio, with stream and zero-publication checks.
+
+The earlier validation results above describe the original implementation run;
+post-rebase validation is recorded below.
+
+### Post-rebase validation finding
+
+`pnpm test` in web-console: 898 passed, 1 failed. The failure is
+`test/settings-sensitive.test.tsx:120`, “S1-15 a Provider credential is never
+read back from a shadowed definition”: after Escape, `getByLabelText('Endpoint')`
+cannot find the field. `pnpm exec vitest run test/settings-sensitive.test.tsx`
+reproduces it (5 passed, 1 failed). The test calls the mocked `cfg3Client` and
+never invokes the Rust CLI. `git diff --exit-code origin/main -- web-console`
+passes, confirming the entire Web source, fixtures, configuration and lockfile
+are identical to the integration base. This existing frontend-only failure was
+not repaired or hidden by the bounded CLI correction.
+
+### Post-rebase validation commands
+
+All commands run against the rebased implementation plus this correction on
+Linux. The table distinguishes the new run from the original evidence above.
+
+| Command (worktree root unless noted) | Result |
+| --- | --- |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo check --all-targets --all-features --locked` | Pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Pass |
+| `cargo build --bins --locked` | Pass |
+| `cargo +1.92 check --all-targets --all-features --locked --target-dir target/msrv` | Pass |
+| `cargo test --lib --all-features --locked local_runtime::cli::tests` | Pass: 11 |
+| `cargo test --test process --all-features --locked configuration_commands` | Pass: 8 |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | Pass: 3,070; 2 existing ignored |
+| `cargo test --test contracts --test provider --all-features --locked` | Pass: 28 contracts, 166 provider; 5 live-provider ignored |
+| fake-provider: `uv sync --frozen`, `uv run --frozen pytest` | Pass: 51 |
+| tui, dev, protocol/app-server, web-console: `pnpm install --frozen-lockfile`, `pnpm typecheck` | All pass |
+| tui: `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Pass: 852, including real child launch |
+| dev: `pnpm test` | Pass: 37 |
+| protocol/app-server: `pnpm check`, `pnpm typecheck` | Pass: protocol v20 generated fixtures have no drift |
+| web-console: `pnpm test` | Fail: 898 passed, 1 unrelated Settings failure described above |
+| web-console: `pnpm exec vitest run test/settings-sensitive.test.tsx` | Same failure: 5 passed, 1 failed |
+| web-console: `pnpm check:provenance`, `pnpm build` | Pass |
+| web-console: `CONTAINER_ENGINE=podman pnpm test:e2e` | 86 passed, 1 navigation interruption described below |
+| web-console: `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh test/e2e/agent.spec.ts --grep 'composer primary seat, uploads and context stack light 390'` | Pass: 1 |
+
+The browser failure was `page.evaluate: Execution context was destroyed, most
+likely because of a navigation` in `screenshot.ts:46` while capturing the
+composer fixture. Its targeted rerun passed with unchanged assertions and
+references. All real-binary Product Host, App Server, TUI integration and
+PR #401 Trajectory scenarios passed in the full browser run. The pinned
+Playwright Linux image was used through the supported Podman override.
+
+The first post-rebase in-crate boundary run passed 223 and failed 2:
+`managed_selection::fastmcp4_availability_selection_request_and_invocation_share_one_authority`
+and `runtime_client::python_capability::capability_projection_covers_python_origins`.
+Both failed with native managed-Python `SourceUnavailable` / `source preparation
+failed`. These tests call native capability preparation directly, without the
+public CLI; their fixtures and capability code are unchanged from main.
+The fresh full run passed all 225 tests, including both preparation failures
+from the first run, without code or assertion changes. The precise cause of
+the first preparation failures was not established; they are not hidden by
+the successful rerun.
+
+- `cargo test --lib --all-features --locked -- boundary_suites::`: rerun passed,
+  225 tests. The initial 223/2 outcome is documented above.
+
+- `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`: passed, 411 total (129 durable, 56 process, 43 subagent, 130 tools, 22 conformance, 26 catalog, 5 managed-output).
+
+No macOS execution, ignored live-provider tests or performance benchmarks were
+run locally. The remaining validation failure is the unrelated reproducible Web
+Settings unit test documented above. All requested Rust gates passed on the
+rebased correction; initial failures and reruns remain disclosed.

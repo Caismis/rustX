@@ -21,15 +21,15 @@ use tokio_util::sync::CancellationToken;
 /// App Server lexical arguments deliberately exclude ordinary Session launch flags.
 #[derive(Debug, clap::Args)]
 pub(crate) struct AppServerArgs {
-    #[arg(long, value_parser = crate::local_runtime::cli::path_value)]
+    #[arg(long)]
     config: Option<PathBuf>,
-    #[arg(long, value_parser = crate::local_runtime::cli::path_value)]
+    #[arg(long)]
     runtime_root: Option<PathBuf>,
     /// Explicit transport: stdio or ws://IP:PORT
-    #[arg(long, value_parser = crate::local_runtime::cli::text_value)]
+    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     listen: String,
     /// Dedicated WebSocket credential file; forbidden for stdio
-    #[arg(long, value_parser = crate::local_runtime::cli::path_value)]
+    #[arg(long)]
     token_file: Option<PathBuf>,
 }
 impl AppServerArgs {
@@ -324,5 +324,34 @@ mod tests {
         };
         assert!(request.config.is_none() && request.root.is_none() && request.token.is_none());
         assert_eq!(request.listen, "stdio");
+    }
+
+    #[test]
+    fn app_server_paths_and_listen_survive_public_cli_conversion() {
+        for value in [" /tmp/rustx path ", "/tmp/rustx path ", " "] {
+            let crate::local_runtime::cli::Command::AppServer(request) =
+                crate::local_runtime::cli::parse_command(
+                    [
+                        "app-server",
+                        "--config",
+                        value,
+                        "--runtime-root",
+                        value,
+                        "--token-file",
+                        value,
+                        "--listen",
+                        " stdio ",
+                    ]
+                    .map(str::to_owned),
+                )
+                .unwrap()
+            else {
+                panic!("App Server intent")
+            };
+            for path in [request.config, request.root, request.token] {
+                assert_eq!(path.unwrap().as_os_str(), std::ffi::OsStr::new(value));
+            }
+            assert_eq!(request.listen, " stdio ");
+        }
     }
 }
