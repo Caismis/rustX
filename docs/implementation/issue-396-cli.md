@@ -329,15 +329,10 @@ Unix regressions:
 The previous exact-value and CLI-01–CLI-10 assertions remain unchanged.
 
 
-The initial config-file variant of the real-process regression exposed a
-separate native limitation: `configuration.rs` serializes a PathBuf-keyed source
-revision map with `serde_json::to_vec(...).expect("source manifest")`, which
-panics for a non-Unicode path after it has reached the native owner. The final
-successful path regression uses Init's model-document read/publication path.
-This correction does not redesign configuration revision encoding and does not
-claim that every native subsystem supports non-Unicode paths. The CLI preserves
-them exactly; the pre-clap argv decoding panic is removed.
-
+The initial config-file regression exposed a native source-manifest encoding
+panic. The subsequent source-revision correction below fixes that defect and
+restores the real non-Unicode config-file regression; it is no longer an
+accepted limitation. The Init model-document regression remains in place.
 
 ### OS-native correction validation
 
@@ -361,7 +356,7 @@ Linux only. Current CI was inspected. No dependency or generated protocol change
 | protocol/app-server: `pnpm check`; `pnpm typecheck` | Pass; no generated drift |
 | web-console: `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh test/e2e/dev-launcher.spec.ts test/e2e/workspaces.spec.ts` | 2 passed; real binaries/hosts |
 
-The first new-process run exposed the native config-manifest limitation above
+The first new-process run exposed the native config-manifest defect (fixed below)
 (2 passed, 1 failed). The first Init variant also needed its assertion corrected
 for native-added default fields; the final assertion checks every declared model
 field and the final run passed all 3. Existing assertions were not weakened.
@@ -381,5 +376,105 @@ conversion; PathBuf values stay OS-native; text Unicode checks belong to clap;
 child dispatch uses OsStr equality only; one public parser; no path normalization;
 protocol stdout stays clean; help/error exits are unchanged; native semantic
 owners and the prior PR architecture remain intact. All final executed gates
-passed. The native config-manifest limitation discovered during development is
-explicitly recorded above and remains outside this argv-boundary correction.
+passed. The source-manifest defect discovered during this run is corrected below.
+
+
+## Native source-revision correction
+
+Starting head: `5e5bfcfaeb23d711db50d0b673a3fb375e7451ca`; base remains
+`da43450b77d3c195d95b06818be8142317663c91`. OS-native argv and clap are unchanged.
+The configuration owner now computes source revisions directly with SHA-256 over:
+
+1. The fixed ASCII domain/version tag `rustx-source-manifest-v1`.
+2. Entry count as unsigned 64-bit big-endian bytes.
+3. For each entry in existing PathBuf BTreeMap order: path byte length (u64 BE),
+   exact Unix OsStr bytes, revision byte length (u64 BE), revision UTF-8 bytes.
+
+The internal encoding is infallible on supported Linux/macOS pointer widths,
+independent of JSON representability, and unambiguous across fields and entries.
+No lossy path identity, new dependency, source discovery or precedence change.
+Identical manifests hash identically independent of insertion order; framing
+prevents concatenation ambiguity before SHA-256. Normal cryptographic collision
+properties still apply; this is not a mathematical claim of collision freedom.
+
+Restoring `configuration_commands::os_argv_non_unicode_config_selects_exact_file`
+also exposed path serialization in diagnostic provenance. The diagnostic owner
+now uses the existing `projection_omitted` contract if a path-bearing report
+cannot be represented in JSON: projections and file labels are absent, a
+`projection_encoding` warning is present, and native validity/readiness/exit
+classification and causal diagnostic text remain unchanged. No path is rewritten.
+The real process test proves valid exact-file selection (exit 3, empty stderr),
+invalid lossy-sibling selection (exit 2), normal structured reports and unchanged
+filesystem state. The non-Unicode source reaches source revision calculation.
+
+Native tests in `configuration::source_manifest_tests` cover same-input
+repeatability, distinct byte paths with equal lossy projections, revision changes,
+field/entry boundary distinctions and reversed insertion order. Diagnostic test
+`path_projection_tests::non_unicode_projection_preserves_native_failure_and_cause`
+proves native failure classification and causal text survive partial projection.
+All earlier OS-argv/model-document/text/child and exact-space tests remain.
+
+Bounded path audit: launch config and workspace sources, and App Server config
+when resolving Sessions, share this source-revision owner. Runtime-root bindings
+are not source-manifest keys; workspace identity already uses exact Unix bytes.
+Init model-document and App Server token-file are native file reads outside this
+manifest. Diagnostic workspace/runtime-root/provenance paths use the bounded
+projection behavior above. No equivalent JSON serialization of this manifest
+exists elsewhere; unrelated resource, protocol and filesystem identities were
+not redesigned. No broader filesystem guarantee is claimed.
+
+
+### Source-revision correction validation
+
+Linux only; current CI was reread. No dependencies, protocol fixtures, frontend
+source, CLI grammar or native resolution precedence changed.
+
+| Command | Final result |
+| --- | --- |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo check --all-targets --all-features --locked` | Pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Pass |
+| `cargo build --bins --locked` | Pass |
+| `cargo +1.92 check --all-targets --all-features --locked --target-dir target/msrv` | Pass |
+| `cargo test --lib --all-features --locked local_runtime::configuration::` | 8 passed, including both new manifest tests |
+| `cargo test --lib --all-features --locked path_projection_tests` | 1 passed |
+| `cargo test --lib --all-features --locked local_runtime::cli::tests` | 12 passed |
+| `cargo test --test process --all-features --locked os_argv_non_unicode_config_selects_exact_file` | 1 passed |
+| `cargo test --test process --all-features --locked configuration_commands` | 12 passed |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | 3,074 passed; 2 ignored |
+| `cargo test --test contracts --test provider --all-features --locked` | 28 + 166 passed; 5 live-provider ignored |
+| fake-provider: `uv sync --frozen`; `uv run --frozen pytest` | Pass; 51 tests |
+| tui: `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 852 passed |
+| protocol/app-server: `pnpm check`; `pnpm typecheck` | Pass; no generated drift |
+| web-console: `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh --config .manifest-review.config.ts test/e2e/dev-launcher.spec.ts test/e2e/workspaces.spec.ts test/e2e/trajectory-integration.spec.ts` | 3 passed |
+
+The default browser command initially could not start because port 5173 was
+occupied. The successful run used a temporary config inheriting the repository
+config and changing only preview/dev ports to 52831/52832 and baseURL accordingly.
+Assertions and pinned browser image were unchanged. The temporary file was
+removed; existing listeners and unrelated worktrees were untouched.
+
+The first restored config regression exposed the additional diagnostic-projection
+panic; it now passes with explicit partial projection as described above. Initial
+Clippy documentation/function-length findings were corrected before the final run.
+A bounded Python subprocess audit also exercised non-Unicode workspace and
+runtime-root arguments through the real binary: both returned valid partial
+JSON, exit 3, empty stderr, and no home/runtime publication.
+
+No macOS, ignored live-provider tests or full Web unit/screenshot suites were run
+locally for this correction. Affected real-binary configuration adoption and
+launcher cases were run. Prior local Web findings remain historical evidence,
+not changes included in this correction.
+
+
+- `cargo test --lib --all-features --locked -- boundary_suites::`: 225 passed.
+- `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`: 415 passed (129 durable, 60 process, 43 subagent, 130 tools, 22 conformance, 26 catalog, 5 managed-output).
+
+Final source review: args_os and the single OS-native clap boundary are unchanged;
+source identity uses exact Unix bytes, deterministic BTreeMap order and fixed-width
+framing; JSON source-manifest serialization and its panic are removed. Restored
+config-file and retained model-document/text/child process tests pass. Paths are
+not normalized or converted to lossy identity. Diagnostic partial projection is
+explicit and retains native outcomes. No unrelated architecture changed. All
+final executed validation gates passed; the former config panic is fixed.

@@ -1438,10 +1438,7 @@ impl UserConfigManager {
         diagnostics.dedup();
         diagnostics.truncate(256);
         inspection.resource_diagnostics = diagnostics;
-        let revision = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&revisions).expect("source manifest"))
-        );
+        let revision = source_manifest_revision(&revisions);
         Ok(ProspectiveSessionConfig {
             component_revisions: [
                 application::ApplyUnit::ExecutionPolicy,
@@ -1635,5 +1632,78 @@ impl std::fmt::Debug for SessionConfigInput {
             .field("cwd", &self.cwd)
             .field("selections", &"<redacted>")
             .finish_non_exhaustive()
+    }
+}
+
+/// Internal source identity: version tag, u64 big-endian entry count, then
+/// length-prefixed Unix path bytes and revision bytes in `PathBuf` `BTreeMap` order.
+/// Framing distinguishes both field and entry boundaries without requiring
+/// filesystem paths to be Unicode or allocating a serialized manifest.
+fn source_manifest_revision(revisions: &BTreeMap<PathBuf, String>) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"rustx-source-manifest-v1");
+    hash.update((revisions.len() as u64).to_be_bytes());
+    for (path, revision) in revisions {
+        for bytes in [path.as_os_str().as_bytes(), revision.as_bytes()] {
+            hash.update((bytes.len() as u64).to_be_bytes());
+            hash.update(bytes);
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
+
+#[cfg(test)]
+mod source_manifest_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn exact_path_bytes_and_revisions_determine_identity() {
+        let a = PathBuf::from(OsString::from_vec(b"/config-\xfe".to_vec()));
+        let b = PathBuf::from(OsString::from_vec(b"/config-\xff".to_vec()));
+        assert_eq!(a.to_string_lossy(), b.to_string_lossy());
+        let manifest = BTreeMap::from([(a.clone(), "revision-x".into())]);
+        let identity = source_manifest_revision(&manifest);
+        assert_eq!(identity, source_manifest_revision(&manifest));
+        assert_ne!(
+            identity,
+            source_manifest_revision(&BTreeMap::from([(b, "revision-x".into())]))
+        );
+        assert_ne!(
+            identity,
+            source_manifest_revision(&BTreeMap::from([(a, "revision-y".into())]))
+        );
+    }
+
+    #[test]
+    fn field_and_entry_boundaries_are_unambiguous() {
+        let manifest = |entries: &[(&str, &str)]| {
+            entries
+                .iter()
+                .map(|(path, revision)| (PathBuf::from(path), (*revision).to_owned()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        // Same concatenated payload, different path/revision split.
+        assert_ne!(
+            source_manifest_revision(&manifest(&[("ab", "c")])),
+            source_manifest_revision(&manifest(&[("a", "bc")]))
+        );
+        // Same concatenated payload, different entry boundaries/count.
+        assert_ne!(
+            source_manifest_revision(&manifest(&[("a", "bcde")])),
+            source_manifest_revision(&manifest(&[("a", "b"), ("c", "de")]))
+        );
+        // Same count and concatenated payload, different revision boundaries.
+        assert_ne!(
+            source_manifest_revision(&manifest(&[("a", "bc"), ("d", "e")])),
+            source_manifest_revision(&manifest(&[("a", "b"), ("cd", "e")]))
+        );
+        let ordered = manifest(&[("a", "b"), ("c", "de")]);
+        let reversed = manifest(&[("c", "de"), ("a", "b")]);
+        assert_eq!(
+            source_manifest_revision(&ordered),
+            source_manifest_revision(&reversed)
+        );
     }
 }

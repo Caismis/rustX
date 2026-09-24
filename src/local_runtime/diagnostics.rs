@@ -277,8 +277,45 @@ impl Report {
         }
     }
 
+    fn value_without_paths(&self) -> Value {
+        // Native path identity is OS-native; JSON report projections are
+        // textual. Preserve the native outcome and causal diagnostics when
+        // a path cannot be represented, without rewriting any path.
+        let mut diagnostics = self.diagnostics.clone();
+        for diagnostic in &mut diagnostics {
+            diagnostic.file = None;
+        }
+        diagnostics.push(Diagnostic {
+            classification: "warning",
+            category: "projection_encoding",
+            file: None,
+            path: "$".into(),
+            reason: concat!(
+                "path-bearing projection omitted because it is not representable in JSON; ",
+                "validity/readiness are unchanged",
+            )
+            .into(),
+            correction: "this report is partial; native source identity preserves exact OS paths"
+                .into(),
+            line: None,
+            column: None,
+        });
+        // All projections and file paths are absent in this reduced report.
+        // Its remaining fields are Unicode strings, enums and numbers.
+        serde_json::to_value(Self {
+            version: self.version,
+            scope: self.scope,
+            validity: self.validity,
+            readiness: self.readiness,
+            diagnostics,
+            projection_omitted: true,
+            ..Self::new(self.operation)
+        })
+        .expect("path-free report serializes")
+    }
+
     fn bounded_value(&self, header_bytes: usize) -> Value {
-        let mut value = serde_json::to_value(self).expect("report serializes");
+        let mut value = serde_json::to_value(self).unwrap_or_else(|_| self.value_without_paths());
         // One structured value for both renderers. Reserve the human header and
         // the command's trailing newline, and measure escaped, pretty JSON.
         let fits = |value: &Value| {
@@ -505,5 +542,31 @@ fn redact(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod path_projection_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn non_unicode_projection_preserves_native_failure_and_cause() {
+        let report = Report::failure(
+            "config_check",
+            Some(PathBuf::from(OsString::from_vec(vec![0xff]))),
+            "agent.model",
+            "invalid declaration",
+            "correct the declaration",
+        );
+        let value: Value = serde_json::from_str(&report.render(true)).unwrap();
+        assert_eq!(report.exit_code(), 2);
+        assert_eq!(value["validity"], "invalid");
+        assert_eq!(value["projection_omitted"], true);
+        assert_eq!(value["diagnostics"][0]["file"], Value::Null);
+        assert_eq!(value["diagnostics"][0]["path"], "agent.model");
+        assert_eq!(value["diagnostics"][0]["reason"], "invalid declaration");
+        assert_eq!(value["diagnostics"][1]["category"], "projection_encoding");
     }
 }

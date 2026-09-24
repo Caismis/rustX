@@ -603,3 +603,60 @@ fn os_argv_private_child_discriminator_is_exact() {
     );
     assert_eq!(state_tree(root.path()), before);
 }
+
+#[cfg(unix)]
+#[test]
+fn os_argv_non_unicode_config_selects_exact_file() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let exact = workspace.join(OsString::from_vec(b"settings-\xff.toml".to_vec()));
+    let lossy = std::path::PathBuf::from(exact.to_string_lossy().into_owned());
+    assert_ne!(exact, lossy);
+    std::fs::write(&lossy, "unknown_field = true").unwrap();
+    std::fs::write(
+        &exact,
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+    )
+    .unwrap();
+    let before = state_tree(root.path());
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("config"),
+            OsString::from("check"),
+            OsString::from("--config"),
+            exact.into_os_string(),
+            OsString::from("--json"),
+        ],
+    );
+    let checked = report(&output, 3);
+    assert_eq!(checked["validity"], "valid");
+    assert_eq!(checked["readiness"], "unresolved");
+    assert_eq!(checked["projection_omitted"], true);
+    assert!(
+        checked["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["category"] == "projection_encoding")
+    );
+    let sibling = report(
+        &run(
+            root.path(),
+            &[
+                "config",
+                "check",
+                "--config",
+                lossy.to_str().unwrap(),
+                "--json",
+            ],
+        ),
+        2,
+    );
+    assert_eq!(sibling["validity"], "invalid");
+    assert_eq!(state_tree(root.path()), before);
+}
