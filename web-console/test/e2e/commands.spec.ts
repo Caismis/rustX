@@ -84,7 +84,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
       expect(JSON.parse(await facts.innerText()).SessionId).toBe(originalId);
       expect(JSON.parse(await facts.innerText()).ConversationId).not.toBe(originalConversation);
       await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByText(/^Deep diving/).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
       await expect(page.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
     });
     phase = 'validated retry request reached; awaiting provider output and canonical settlement';

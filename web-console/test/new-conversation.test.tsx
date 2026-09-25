@@ -108,6 +108,7 @@ it('offers exactly the native Session catalog, in native order, never a configur
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
   // The native default reasoning profile is shown as published, not invented.
   expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toBe('fixture/nativehigh');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
   expect(['low', 'high'].map(name => !!screen.queryByRole('menuitem', { name }))).toEqual([true, true]);
   expect(screen.queryByRole('menuitem', { name: 'fixture/configuration-only' })).toBeNull();
@@ -116,6 +117,7 @@ it('a model choice is draft Session intent: nothing is written, created or start
   const { host } = await mount();
   await openModelMenu();
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'low' })));
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);

@@ -5,7 +5,7 @@ import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Button } from '../../presentation/primitives/Button';
 import { activeAttempt } from '../../bindings/projection';
 import { catalogAdmits, catalogChoices } from '../../bindings/model-catalog';
-import { modelPreferences } from '../model-preference';
+import { selectSessionModel } from '../model-preference';
 
 /** Replaceable read cache scoped to one native attachment. Mutations never update
  * displayed selection; only a subsequent authoritative read unlocks controls. */
@@ -50,10 +50,8 @@ export function AgentControls({ client, view, draft }: { client: AppServerClient
    choose={(selected, profile) => { if (!catalogAdmits(choices, selected, profile)) return;
      const selection = { model: selected, ...(profile === undefined ? {} : { reasoningProfile: profile }) };
      if (draft) { draft.choose(selection); return; }
-     const at = epoch.current;
      void mutate(async () => {
-       await client.setAgentModel(view!.id, selection);
-       if (current(at)) modelPreferences().select(client.getSnapshot().endpoint ?? '', selection);
+       await selectSessionModel(client, view!.id, selection);
      }); }}/>
    {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective.model && <small>Running: {view?.snapshot?.attempt?.model?.primary.model}</small>}
    {!draft && blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={load}>Reread models</Button>}

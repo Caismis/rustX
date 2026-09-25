@@ -122,7 +122,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByText(/^Deep diving/).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);

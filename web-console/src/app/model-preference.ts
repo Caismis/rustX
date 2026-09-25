@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { SessionModelConfig } from '../../../protocol/app-server/v22';
+import { type AppServerClient, sameTarget } from '../client/app-server';
 
 const KEY = 'rustx-new-session-model-v1';
 /** Browser product preference, scoped by App Server authority. It is only
@@ -39,4 +40,17 @@ export function modelPreferences() {
 export function useModelPreference(authority: string) {
   const preference = modelPreferences();
   return useSyncExternalStore(preference.subscribe, () => preference.read(authority));
+}
+
+/** A successful native selection commits the product preference even if its
+ * initiating control has since unmounted. Transport/attachment changes fence
+ * the authority, not navigation. Rejections and lost acknowledgements never seed. */
+export async function selectSessionModel(client: AppServerClient, id: string, selection: SessionModelConfig) {
+  const { generation, endpoint } = client.getSnapshot();
+  const target = client.target(id);
+  await client.setAgentModel(id, selection);
+  const current = client.getSnapshot();
+  if (current.generation === generation && current.endpoint === endpoint && sameTarget(current.views[id]?.target, target)) {
+    modelPreferences().select(endpoint ?? '', selection);
+  }
 }

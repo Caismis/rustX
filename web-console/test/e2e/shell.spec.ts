@@ -1,6 +1,32 @@
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { choose } from './shell-actions';
+test('stream publications and a turn-local clock preserve chrome identity, geometry and caret', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-09-25T00:00:00Z') });
+  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await page.evaluate(() => window.sessionFixture.stream('Token zero'));
+  await expect(page.getByText('Token zero', { exact: true })).toBeVisible();
+  const input = page.getByRole('textbox', { name: 'Message', exact: true });
+  await input.fill('Keep this draft'); await input.focus();
+  await input.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(3, 7));
+  const inputNode = await input.elementHandle();
+  const header = await page.locator('#session-view > header').elementHandle();
+  const card = page.locator('[data-composer-card]');
+  const geometry = { header: await header!.boundingBox(), card: await card.boundingBox() };
+  for (let index = 1; index <= 5; index++) {
+    const text = `Token ${index}: ` + 'streamed content '.repeat(index * 20);
+    await page.evaluate(text => window.sessionFixture.stream(text), text);
+    await expect(page.getByLabel('Streaming response')).toContainText(`Token ${index}:`);
+    expect(await inputNode!.evaluate(node => node === document.querySelector('textarea[aria-label="Message"]'))).toBe(true);
+    expect(await header!.evaluate(node => node === document.querySelector('#session-view > header'))).toBe(true);
+    expect({ header: await header!.boundingBox(), card: await card.boundingBox() }).toEqual(geometry);
+  }
+  await page.clock.runFor(5000);
+  await expect(page.getByRole('button', { name: 'Deep diving for 5s', exact: true })).toBeVisible();
+  expect({ header: await header!.boundingBox(), card: await card.boundingBox() }).toEqual(geometry);
+  await expect(input).toBeFocused(); await expect(input).toHaveValue('Keep this draft');
+  expect(await input.evaluate((node: HTMLTextAreaElement) => [node.selectionStart, node.selectionEnd])).toEqual([3, 7]);
+});
 for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'background'] as const) test(`Sidebar-only Session surface: ${mode}`, async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -18,7 +44,7 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   }
   if (mode === 'other-uncertain') {
     await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByText(/^Deep diving/).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
     await expect(page.locator('button[data-session-id="B"]')).toContainText('Needs verification');
   }
   if (mode === 'delete') {
@@ -93,7 +119,7 @@ test('Session product states stay concise and recovery evidence remains in Inspe
   for (const mode of ['idle', 'queued', 'stopping', 'reconnect', 'uncertain'] as const) {
     await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
     await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByText(/^Deep diving/).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
     const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: 'Connection interrupted', uncertain: 'Needs verification' }[mode];
     if (expected) await expect(page.getByLabel('Session status')).toContainText(expected);

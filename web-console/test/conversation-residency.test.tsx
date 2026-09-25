@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { AppFrame } from '../src/presentation/layout/AppFrame';
-import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
+import { modelPreferences, NewSessionModelPreference, selectSessionModel } from '../src/app/model-preference';
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
@@ -140,7 +140,7 @@ it.each(['/model', 'unrelated prose'])('hero model selection settles the command
   expect(document.activeElement).toBe(message);
 });
 
-it('a confirmed native model selection seeds the next Session without modifying other Sessions', async () => {
+it.each([false, true])('a confirmed native model selection seeds the next Session without modifying other Sessions (navigate before acknowledgement=%s)', async navigate => {
   const projection = { configured: { model: 'fixture/root' }, effective: { model: 'fixture/root' } } as NonNullable<RuntimeClientSnapshot['model']>;
   server.snapshots.set('A', { ...snapshot('A'), model: projection });
   server.snapshots.set('B', { ...snapshot('B'), model: structuredClone(projection) });
@@ -153,10 +153,16 @@ it('a confirmed native model selection seeds the next Session without modifying 
   fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  if (navigate) server.held.add('session/setModel');
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));
+  if (navigate) {
+    const request = await server.waitFor('session/setModel', 1);
+    await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
+    await act(async () => server.reply(request));
+  }
   expect(modelPreferences().read(endpoint)).toEqual({ model: 'fixture/chosen' });
   expect(server.client.getSnapshot().views.B.snapshot!.model!.configured).toEqual({ model: 'fixture/root' });
-  await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
+  if (!navigate) await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toContain('fixture/chosen'));
   expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
   expect(server.requests.some(row => row.request.method === 'configuration/sourceWrite')).toBe(false);
@@ -175,4 +181,18 @@ it('an unavailable saved selection remains visibly invalid and cannot submit a s
   fireEvent.keyDown(input(), { key: 'Enter' });
   expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
   expect(modelPreferences().read(endpoint)!.model).toBe('removed/provider-model');
+});
+
+it('a lost model acknowledgement cannot seed the preference or replay the selection', async () => {
+  await server.attached('A');
+  modelPreferences().select(endpoint, { model: 'fixture/root' });
+  server.held.add('session/setModel');
+  const selection = selectSessionModel(server.client, 'A', { model: 'fixture/chosen' });
+  const rejected = expect(selection).rejects.toThrow();
+  await server.waitFor('session/setModel', 1);
+  server.socket.close();
+  await rejected;
+  expect(modelPreferences().read(endpoint)).toEqual({ model: 'fixture/root' });
+  await server.connect();
+  expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
 });
