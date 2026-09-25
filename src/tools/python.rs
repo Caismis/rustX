@@ -221,7 +221,7 @@ pub(crate) fn discover_package(
             "the package has no {REQUIREMENTS_FILE} (required, even when empty)"
         )));
     };
-    let requirements = parse_requirements(requirements_bytes)
+    let requirements = parse_requirements(requirements_bytes, root)
         .map_err(|message| invalid(format!("{REQUIREMENTS_FILE}: {message}")))?;
     Ok(PythonToolPackage {
         name: name.to_owned(),
@@ -329,12 +329,13 @@ pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolErro
 /// rustX-pinned, so a package may never declare it. Everything else is
 /// validated only far enough to become a `pyproject.toml` dependency entry;
 /// real dependency semantics (resolution, markers, indexes) belong to uv.
-fn parse_requirements(bytes: &[u8]) -> Result<Vec<String>, String> {
+fn parse_requirements(bytes: &[u8], package_root: &Path) -> Result<Vec<String>, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "the file is not valid UTF-8".to_owned())?;
     let mut requirements = Vec::new();
     for (index, raw_line) in text.lines().enumerate() {
-        // Strip end-of-line comments the way pip does (a `#` preceded by
-        // whitespace or at line start).
+        // A requirements-file comment starts at `#` following whitespace,
+        // outside quoted marker text. URL fragments have no preceding
+        // whitespace and remain part of the declaration.
         let line = strip_requirement_comment(raw_line).trim();
         if line.is_empty() {
             continue;
@@ -345,9 +346,28 @@ fn parse_requirements(bytes: &[u8]) -> Result<Vec<String>, String> {
                 index + 1
             ));
         }
-        let name = requirement_name(line)
-            .ok_or_else(|| format!("line {}: not a requirement line: {line:?}", index + 1))?;
-        if name.eq_ignore_ascii_case("fastmcp") {
+        if line.ends_with('\\') {
+            return Err(format!(
+                "line {}: line continuations are not supported",
+                index + 1
+            ));
+        }
+        if line.contains("${") {
+            return Err(format!(
+                "line {}: environment-variable expansion is not supported",
+                index + 1
+            ));
+        }
+        let requirement =
+            pep508_rs::Requirement::<pep508_rs::VerbatimUrl>::parse(line, package_root).map_err(
+                |_| {
+                    format!(
+                        "line {}: not a valid PEP 508 dependency declaration",
+                        index + 1
+                    )
+                },
+            )?;
+        if requirement.name.as_ref() == "fastmcp" {
             return Err(format!(
                 "line {}: the `fastmcp` dependency is managed by rustX \
                  (pinned to fastmcp=={MANAGED_FASTMCP_VERSION}); remove it",
@@ -360,34 +380,29 @@ fn parse_requirements(bytes: &[u8]) -> Result<Vec<String>, String> {
 }
 
 fn strip_requirement_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
     let mut previous: Option<char> = None;
     for (index, character) in line.char_indices() {
-        if character == '#' && (index == 0 || previous.is_some_and(char::is_whitespace)) {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' && quote.is_some() {
+            escaped = true;
+        } else if matches!(character, '\'' | '\"') {
+            if quote == Some(character) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(character);
+            }
+        } else if quote.is_none()
+            && character == '#'
+            && (index == 0 || previous.is_some_and(char::is_whitespace))
+        {
             return &line[..index];
         }
         previous = Some(character);
     }
     line
-}
-
-/// The requirement name of one PEP 508 line: everything before the extras,
-/// version specifier, direct reference, or environment marker.
-fn requirement_name(line: &str) -> Option<&str> {
-    let end = line
-        .find(|character: char| {
-            matches!(character, '[' | '=' | '<' | '>' | '!' | '~' | ';' | '@')
-                || character.is_whitespace()
-        })
-        .unwrap_or(line.len());
-    let name = &line[..end];
-    if name.is_empty()
-        || !name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-        })
-    {
-        return None;
-    }
-    Some(name)
 }
 
 /// The deterministic content digest of the package source bytes alone.
@@ -1392,6 +1407,7 @@ mod tests {
     fn requirements_parse_normalizes_comments_and_blank_lines() {
         let parsed = parse_requirements(
             b"# heading\n\nsix==1.16.0  # pinned\nrequests[socks]>=2 ; python_version >= '3.10'\n",
+            Path::new("/tmp"),
         )
         .expect("valid requirements");
         assert_eq!(
@@ -1406,7 +1422,8 @@ mod tests {
     #[test]
     fn requirements_reject_the_managed_fastmcp_dependency() {
         for line in ["fastmcp", "fastmcp==4.0.0", "FastMCP[cli]>=2"] {
-            let error = parse_requirements(line.as_bytes()).expect_err("fastmcp is managed");
+            let error = parse_requirements(line.as_bytes(), Path::new("/tmp"))
+                .expect_err("fastmcp is managed");
             assert!(
                 error.contains(MANAGED_FASTMCP_VERSION),
                 "the diagnostic names the managed pin: {error}"
@@ -1416,20 +1433,96 @@ mod tests {
 
     #[test]
     fn requirements_reject_option_lines_and_unparseable_lines() {
-        let error = parse_requirements(b"-r other.txt\n").expect_err("option line");
+        let error =
+            parse_requirements(b"-r other.txt\n", Path::new("/tmp")).expect_err("option line");
         assert!(
             error.contains("line 1"),
             "the diagnostic locates the line: {error}"
         );
         assert!(error.contains("option lines"), "{error}");
-        let error =
-            parse_requirements(b"\nsix==1.16.0\n=== garbage ===\n").expect_err("unparseable");
+        let error = parse_requirements(b"\nsix==1.16.0\n=== garbage ===\n", Path::new("/tmp"))
+            .expect_err("unparseable");
         assert!(
             error.contains("line 3"),
             "the diagnostic locates the line: {error}"
         );
-        let error = parse_requirements(b"\xff\xfe").expect_err("not UTF-8");
+        let error = parse_requirements(b"\xff\xfe", Path::new("/tmp")).expect_err("not UTF-8");
         assert!(error.contains("UTF-8"), "{error}");
+    }
+
+    #[test]
+    fn pep508_requirements_corpus_preserves_effective_declarations() {
+        let root = tempfile::tempdir().expect("package root");
+        let declarations = [
+            "requests",
+            "requests[socks]>=2,<3",
+            "requests; python_version >= '3.10'",
+            "demo @ https://example.invalid/demo-1.whl#sha256=deadbeef",
+            "demo @ git+https://example.invalid/demo.git@main",
+            "demo @ file:///tmp/demo-1.whl",
+            "demo @ ../demo-1.whl",
+        ];
+        let input = declarations.join("\n");
+        assert_eq!(
+            parse_requirements(input.as_bytes(), root.path()).expect("supported corpus"),
+            declarations,
+            "validated declarations remain the original effective text"
+        );
+    }
+
+    #[test]
+    fn pep508_requirements_reject_invalid_grammar_and_file_directives() {
+        for (label, input) in [
+            ("bad name", "bad/name"),
+            ("broken extras", "demo[extra"),
+            ("broken version", "demo=>1"),
+            ("broken marker", "demo; python_version === '3.12'"),
+            ("broken URL", "demo @ https://[broken"),
+            ("include", "-r other.txt"),
+            ("long include", "--requirement other.txt"),
+            ("editable", "-e ../demo"),
+            ("long editable", "--editable ../demo"),
+            ("index", "--index-url https://example.invalid/simple"),
+            ("continuation", "demo \\\\"),
+            ("expansion", "demo @ https://example.invalid/${TOKEN}.whl"),
+        ] {
+            let error = parse_requirements(input.as_bytes(), Path::new("/tmp")).expect_err(label);
+            assert!(error.starts_with("line 1:"), "{label}: {error}");
+        }
+    }
+
+    #[test]
+    fn requirements_file_comments_crlf_and_quoted_markers_are_bounded() {
+        let parsed = parse_requirements(
+            b"\r\n# comment\r\ndemo @ https://example.invalid/demo.whl#sha256=deadbeef\r\nrequests; os_name == 'hash # stays' # comment\r\n",
+            Path::new("/tmp"),
+        )
+        .expect("comments and CRLF are accepted");
+        assert_eq!(
+            parsed,
+            [
+                "demo @ https://example.invalid/demo.whl#sha256=deadbeef",
+                "requests; os_name == 'hash # stays'",
+            ]
+        );
+    }
+
+    #[test]
+    fn managed_fastmcp_uses_pep503_normalized_identity_without_marker_evaluation() {
+        for declaration in [
+            "FastMCP",
+            "fastmcp[cli]>=2",
+            "FASTmcp @ https://example.invalid/fastmcp.whl",
+            "fastmcp; python_version < '0'",
+        ] {
+            let error = parse_requirements(declaration.as_bytes(), Path::new("/tmp"))
+                .expect_err("managed FastMCP declaration");
+            assert!(error.contains("managed by rustX"), "{declaration}: {error}");
+        }
+        assert_eq!(
+            parse_requirements(b"fast_mcp\n", Path::new("/tmp")).expect("distinct package"),
+            ["fast_mcp"]
+        );
     }
 
     #[test]

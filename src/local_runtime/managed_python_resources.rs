@@ -186,6 +186,37 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn managed_fastmcp_policy_applies_to_user_and_workspace_discovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().canonicalize().unwrap();
+        let user = workspace.join("user/.agents");
+        for (root, name, declaration) in [
+            (&user, "user-tool", "FastMCP[cli]>=2"),
+            (
+                &workspace.join(".agents"),
+                "workspace-tool",
+                "fastmcp; python_version < '0'",
+            ),
+        ] {
+            let package = root.join("tools").join(name);
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(package.join("server.py"), "mcp = None\n").unwrap();
+            std::fs::write(package.join("requirements.txt"), declaration).unwrap();
+        }
+        let catalog = discover(Some(&workspace), &user).unwrap();
+        for source in ["user-tool", "workspace-tool"] {
+            assert!(
+                matches!(
+                    &catalog.packages()[&ToolSourceId::ManagedPython(source.into())],
+                    Err(crate::tools::python::PythonToolError::InvalidPackage(message))
+                        if message.contains("managed by rustX")
+                ),
+                "{source} applies the same normalized managed-dependency policy"
+            );
+        }
+    }
     #[test]
     fn python_catalog_order_does_not_depend_on_creation_order() {
         for names in [["zeta", "alpha"], ["alpha", "zeta"]] {
