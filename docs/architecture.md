@@ -1,5 +1,11 @@
 # Architecture
 
+The current Web conversation/composer lifecycle and subscription boundaries are
+specified in [WEB-16 resident conversation ownership](issue-406/conversation-surface.md).
+Terminal Attempt journal facts have ordered native transcript references;
+execution subscribers live below the typed shell boundary. See the
+[review corrections and feedback audit](issue-406/conversation-surface.md#pr-409-review-corrections).
+
 ## App Server product topology
 
 In externally managed deployments, one authenticated user maps to one rustX
@@ -60,7 +66,7 @@ native workspace managers derive storage from their composed Conversation access
 `SessionArchiveProducer` in the native library reads catalog/lineage, immutable
 SQLite history and ArtifactStore bytes. It owns one finite cut and one versioned
 inspection archive, without loading runtimes or depending on transport/Trace.
-App Server v21 prepares a scoped streaming-download capability; Web consumes it
+App Server v23 prepares a scoped streaming-download capability; Web consumes it
 through the browser download manager and TUI writes bytes to a client-local file.
 Neither client composes the archive. Execution coordination ends before history
 serialization, compression or transport backpressure. See the exact authority,
@@ -4635,7 +4641,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v21](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v23](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4660,7 +4666,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v21
+       App Server protocol v23
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4677,7 +4683,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v21, and
+which after #290 has no external client: `rustx-tui` speaks App Server v23, and
 `src/runtime_client` is an internal projection foundation the App Server reuses.
 App Server clients never negotiate or nest it. Its local version is
 `RUNTIME_CLIENT_PROTOCOL_VERSION`.
@@ -5755,7 +5761,7 @@ not stdio as a transport choice. The following describes the current #38 adapter
 
 #### Runtime Client configuration projection
 
-App Server v21 projects authored sources, effective configuration and composable
+App Server v23 projects authored sources, effective configuration and composable
 per-unit application state. Save transfers work to native reconciliation; clients
 render native cache impact and submit explicit adoption intent. Scope/version
 notifications and authoritative rereads repair reconnect without mutation replay.
@@ -5792,7 +5798,7 @@ as future authority.
 
 ### Layer 9: TUI and Web
 
-Both are thin App Server v21 clients. TUI `/settings` authors User/Workspace
+Both are thin App Server v23 clients. TUI `/settings` authors User/Workspace
 sources, `/session settings` inspects Session state, `/session adopt` submits the
 inspected candidate, and `/model` changes Session intent. Web Settings separates
 source authoring from Session adoption. Save automatically transfers work to the
@@ -6941,7 +6947,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v21](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v23](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership
@@ -7013,4 +7019,4 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v21).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v23).

@@ -37,10 +37,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.locator('[data-harness-frame]')).toBeVisible();
     await connect();
     await openEmptySession(page, fixture, 'Workspace A');
-    await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceA}`);
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     const idA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
     await openEmptySession(page, fixture, 'Workspace B');
-    await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceB}`);
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     const idB = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
     await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
     await expect(page.getByRole('tablist', { name: 'Open Session views' })).toHaveCount(0);
@@ -149,7 +149,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await closeSettings(page);
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceA);
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
     await page.getByLabel('Method filter').fill('session/attach');
     await expect(page.locator('.protocol-log')).toContainText('session/attach');
@@ -165,9 +165,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.locator(`button[data-session-id="${idB}"]`).hover();
     await page.locator(`button[data-session-actions="${idB}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Confirm Session deletion' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toBeVisible();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Session deleted.');
+    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toHaveCount(0);
+    await expect(page.getByText('Session deleted.', { exact: true })).toHaveCount(0);
     await expect(page.locator(`button[data-session-id="${idB}"]`)).toHaveCount(0);
     await expect(page.getByLabel('Session title')).toHaveText('Long action in A');
     await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId).toBe(idA);

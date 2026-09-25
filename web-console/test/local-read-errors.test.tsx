@@ -1,0 +1,42 @@
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { App } from '../src/app/App';
+import { RpcFailure } from '../src/client/app-server';
+import { Server, endpoint, snapshot } from './fixture';
+let server: Server;
+beforeEach(() => { localStorage.clear(); server = new Server(); });
+afterEach(() => { cleanup(); server.client.disconnect(); });
+it.each(['history', 'trace'] as const)('%s pagination failure has one local error and no App notice', async kind => {
+  const value = snapshot();
+  value.transcript.next_cursor = '5'; value.trace.next_cursor = '5';
+  server.snapshots.set('A', value);
+  await server.attached('A');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  if (kind === 'trace') fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' }));
+  server.handlers.set(kind === 'history' ? 'session/transcript' : 'session/trace', () => { throw new RpcFailure({ code: -32000, message: `${kind} read failed` }); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: /Load earlier/ })));
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(screen.getByRole('alert').textContent).toContain(`${kind} read failed`);
+  expect(screen.getByRole('alert').closest('#conversation-view')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Dismiss notice' })).toBeNull();
+});
+it('connection and durable authority failures retain blocking recovery presentation', async () => {
+  const value = snapshot();
+  value.durability_failure = { operation: 'commit', diagnostic: 'durable write failed' };
+  server.snapshots.set('A', value);
+  await server.attached('A');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  expect(screen.getByLabelText('Session status').textContent).toContain('Changes may not be saved');
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+  await act(async () => server.socket.close());
+  expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+});
+it('active surface attachment failure still reaches the global notice', async () => {
+  await server.connect();
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'active surface unavailable' }); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(screen.getByRole('button', { name: 'Dismiss notice' }).closest('[role="alert"]')?.textContent).toContain('active surface unavailable');
+});

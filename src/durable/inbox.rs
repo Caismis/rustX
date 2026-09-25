@@ -645,6 +645,8 @@ pub struct RequestSnapshotPage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TranscriptItem {
+    /// Terminal execution fact, resolved from its Event Journal owner.
+    AttemptTerminal { event: RuntimeEventEnvelope },
     /// A user, Assistant, or Tool message resolved from the canonical owner.
     Message {
         /// The canonical or durably accepted message body.
@@ -1565,6 +1567,18 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         through: SurfaceRevision,
     ) -> Result<Vec<SurfaceOp>, ConversationStoreError>;
+
+    /// Exact native transcript position of a canonical process message.
+    fn message_transcript_cursor(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError>;
+
+    /// Exact transcript position of a journal-backed terminal control.
+    fn event_transcript_cursor(
+        &self,
+        event_id: &EventId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError>;
 
     /// Exact immutable revision that first appended this canonical message.
     /// Compaction and later appends do not change this historical boundary.

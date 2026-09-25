@@ -25,7 +25,8 @@ it('switching and unmounting open Session views remains presentation-only', asyn
   await act(async () => { ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   const baseline = server.requests.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
-  expect(screen.getByLabelText('Session location').textContent).toBe('/workspace/B');
+  expect(screen.queryByLabelText('Session location')).toBeNull();
+  expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(screen.getAllByRole('tree', { name: 'Session browser' })).toHaveLength(1);
   expect(screen.queryByRole('tablist', { name: 'Open Session views' })).toBeNull();

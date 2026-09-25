@@ -134,7 +134,9 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
   await page.getByRole('button', { name: 'View options', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Refresh list', exact: true }).click();
   await page.locator(`button[data-session-id="${id}"]`).click();
-  await expect(page.getByLabel('Session location', { exact: true })).toHaveText(workspace.displayPath);
+  await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
+  await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
   if (wasCollapsed) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   return id;
 }

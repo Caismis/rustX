@@ -155,3 +155,55 @@ fn remapping_drops_missing_retry_input_and_bootstrap_rejects_invalid_response_ad
             .is_err()
     );
 }
+
+#[test]
+fn unfinished_process_content_crosses_lineage_without_source_execution_outcome() {
+    let source = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    user(&source, "input");
+    process_content(&source, "stopped");
+    append(
+        &source,
+        "stopped",
+        RuntimeEvent::AttemptCancelled {
+            attempt_id: AttemptId::new("stopped"),
+            reason: crate::runtime::types::CancellationReason::UserRequested,
+        },
+    );
+    let original = page(&source, None, 64);
+    assert_eq!(
+        original
+            .entries
+            .iter()
+            .filter(|entry| entry.turn_process.is_some())
+            .count(),
+        4
+    );
+    let canonical = source.load_canonical().unwrap();
+    let provenance = lineage_provenance(&source, &canonical).unwrap();
+    assert!(provenance.is_empty());
+    let history = source
+        .load_surface_history(source.load_head().unwrap().revision)
+        .unwrap();
+    let child_id = ConversationId::generate();
+    let seed = remap_seed(&child_id, &canonical, &history, &provenance).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("child.sqlite");
+    let child = SqliteConversationStore::open(child_id.clone(), &path).unwrap();
+    child.initialize_lineage(&seed).unwrap();
+    drop(child);
+    let child = SqliteConversationStore::open_existing(child_id, &path).unwrap();
+    let projected = page(&child, None, 64);
+    assert_eq!(projected.entries.len(), canonical.len());
+    assert!(
+        projected
+            .entries
+            .iter()
+            .all(|entry| entry.turn_process.is_none())
+    );
+    assert_eq!(
+        projected.statistics,
+        Some(ConversationStatistics::default())
+    );
+    assert_eq!(source.load_canonical().unwrap(), canonical);
+    assert_eq!(page(&source, None, 64), original);
+}

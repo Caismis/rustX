@@ -1,4 +1,4 @@
-import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v21';
+import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v23';
 
 export const HISTORY_LIMIT = 512;
 export const HISTORY_MAX_BYTES = 8 * 1024 * 1024;
@@ -13,6 +13,7 @@ export interface TranscriptCache {
 export function entryIdentity(entry: RuntimeClientTranscriptEntry): string {
   const item = entry.item;
   return item.type === 'message' ? `message:${item.message.id}`
+    : item.type === 'attempt_terminal' ? `attempt:${item.turn.conversation_id}:${item.turn.attempt_id}`
     : item.type === 'publication_audit' ? `publication:${entry.cursor}` : `interaction:${item.event_id}`;
 }
 function merge(older: RuntimeClientTranscriptEntry[], newer: RuntimeClientTranscriptEntry[]) {

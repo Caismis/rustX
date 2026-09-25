@@ -385,7 +385,9 @@ pub enum RuntimeClientSessionRequest {
 /// Version 47 adds mandatory shared predecessor identity, frozen Tool-catalog
 /// classification and bounded predecessor prompt detail for Trace (#394).
 /// Version 45 clients are rejected without a compatibility projection.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 47;
+/// Version 48 adds native whole-conversation Turn/Step counts and Turn clocks.
+/// Version 49 unifies native Turn process ownership, counts and control seats.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 49;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1367,7 +1369,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 47);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 49);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

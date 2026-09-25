@@ -1,5 +1,11 @@
 # Agent Composer and native controls
 
+WEB-16 uses one resident ConversationComposer/AgentComposer for both the hero
+and native Session. First submission changes an explicit binding without a key
+or remount. Draft/attachment and input-trigger state remain in that composer;
+only explicit navigation resets the draft. See
+[the ownership contract](../docs/issue-406/conversation-surface.md).
+
 The composer column is one stack with a fixed order:
 
 ```text
@@ -13,7 +19,8 @@ Composer
 rhythm. Each dock owns only its own presentation state (Todo/Queue disclosure,
 the Goal draft, action feedback and a control lock pending authority). A dock
 appearing or disappearing transfers nothing to another dock, and the whole stack is
-keyed by Session, so no dock state crosses Session views. Presentation is adapted
+owned by a Session-keyed ConversationDocks child, so no dock state crosses Session
+views. The composer itself is not keyed by Session. Presentation is adapted
 from the pinned DeepSeek Harness `TodoPanel`, `GoalBar`, `QueueDock` and
 composer-stack geometry; see [PROVENANCE.md](PROVENANCE.md).
 

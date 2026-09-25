@@ -42,7 +42,7 @@ repeated output are retry evidence. Tool joins include Attempt, logical Step,
 ToolCall ID and Tool ID; parallel physical completion never changes start order.
 Detached executions, Subagents and Workflows retain their own native identities.
 
-Native Runtime Client version 47 and App Server version 21 carry this mandatory
+Native Runtime Client version 49 and App Server version 23 retain this mandatory
 summary/detail vocabulary, including the shared predecessor and frozen Tool
 catalog classification added by #394. Required fields change the strict vocabulary;
 both negotiated versions advance, with no aliases or alternate decoder. SQLite schema 44 gates the persisted request terminal vocabulary including

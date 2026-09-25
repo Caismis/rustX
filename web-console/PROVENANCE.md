@@ -1,5 +1,57 @@
 # Harness presentation provenance — WEB-RESET-01
 
+## #406 current Harness conversation contract
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness`, read-only; fetched
+HEAD/master/origin/master all `477b4f420553e8a52c2fbccc464d7561b239c443`.
+This is a bounded current-source adaptation, not a blanket repin of the earlier
+inventory. Existing primary records retain their original commits/hashes;
+changed descendants name current `additional_sources`, updated local hashes,
+imports and treatments. No Harness runtime, Cordis, assets or packages were added.
+
+Material source/CSS adaptations at this commit:
+
+| Harness file | rustX descendant / material |
+| --- | --- |
+| `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` | AgentComposer resident editor/launcher interaction adapted to native textarea and receipts |
+| `packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx` | ConversationComposer unconditional seat and explicit binding |
+| `packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css` | Conversation.module.css resident hero geometry; HeroShell workspace column alignment |
+| `packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx` | TurnProcess local clock and terminal vocabulary |
+| `packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css` | TurnProcess.module.css current row typography, chevron, hover/disabled and reduced-motion rules |
+| `packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx` | TurnTail direct action/usage/clock ownership; native branch/fork identities |
+| `packages/client/ui-chat/src/client/chat/StatsPills.tsx` | ConversationStats hierarchy and details over native totals |
+| `packages/client/ui-chat/src/client/chat/StatsPills.module.css` | TurnTail.module.css centered footer pills, typography, spacing and tabular figures |
+| `packages/client/ui-model-selection/src/client/ModelSelect.tsx` | ModelSelect binding/default/unavailable-selection presentation |
+| `packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx` | WorkspaceNavigation dialog-local mutation pending/error treatment |
+
+The existing ResponseTail CSS/module source lineage is retained under TurnTail;
+MessageIconActions-derived copy feedback now resets locally. No entire upstream
+package was copied. New selector, input-trigger reducer, preference, native
+projection, Turn-node binding and deletion code are rustX-authored conceptual
+adaptations, not copied Harness implementation or runtime authority.
+
+Additional files studied as behavioral/type references (no new copied source):
+
+- `packages/client/ui-conversation/src/client/skeleton/InputBar.module.css`
+  and `ConversationSession.tsx`;
+- `packages/client/ui-conversation/src/client/input/{hub,facade,machine,submission-policy}.ts`,
+  `input/editor/view-binding.ts`, and
+  `contract/{input,conversation,draft-editor,composer-submission}.ts`;
+- `packages/client/ui-input-trigger/src/client/{controller.ts,MenuView.tsx}`,
+  `src/core/{detect,menu}.ts`;
+- `packages/client/ui-commands/src/client/{directory,resolution,popup,service,contract,presentation}.ts`;
+- `packages/client/ui-model-selection/src/client/{directory,service}.ts`;
+- `packages/core/agent-default-model/src/index.ts`,
+  `packages/core/agent/src/model-selection.ts`, `apps/web/tests/default-model.e2e.ts`;
+- `packages/client/ui-chat/src/client/chat/{MessageIconActions,ChatView,ReasoningRow}.tsx`;
+- `packages/client/ui-primitives/src/Toast.tsx`;
+- `packages/client/ui-workspace/src/client/session-actions/{RenameSession,ArchiveSession}.tsx`.
+
+See [the ownership report](../docs/issue-406/conversation-surface.md) for semantic
+differences. Native deletion is not upstream archiving; native uncertainty is
+never discarded as a transient notice. Earlier provenance sections describe
+their historical changes, not a competing current conversation implementation.
+
 ## #393 Settings visual convergence, responsive UX and browser acceptance
 
 This change imports no new upstream source and repins nothing; the Harness pin
@@ -852,7 +904,7 @@ opaque text seat is used for rustX's current projection.
 
 Harness conversation controllers, event assembly, runtime stores, permission
 catalogs and browser Session ownership are excluded. TurnProcess uses only
-native `completed_process` membership, never Harness event reduction or browser
+native `turn_process` membership, never Harness event reduction or browser
 adjacency. Independent subagent lifecycles are not assigned a parent process by
 provider call-ID coincidence; only native-owned process rows are folded. The
 upstream fish logo/wordmark is deliberately excluded in favor of rustX branding.
@@ -863,3 +915,24 @@ content without invented line numbers. Models retains rustX's complete typed
 configuration details and distinguishes unobserved application from availability.
 The Agent Status status-section definition list replaces Harness ContextBody,
 while its disclosure axes, separator and indentation reuse ContextInjectionRow.
+
+PR #409 review corrections retain the existing Harness source pins and notices.
+`WorkspaceBrowser` gains a presentation render slot so native per-row activity
+subscriptions do not invalidate the browser; `WorkspaceNavigation` supplies that
+binding. Their local hashes and import closure are updated in the inventory.
+`ConversationSeat`, `ConversationHeader`, and `SettingsNavigationFeedback` split
+existing rustX App ownership; they add no copied upstream source. Journal-owned
+terminal transcript facts and failure routing are native rustX adaptations.
+
+
+PR #409 terminal-process follow-up re-inspected Harness commit
+`477b4f420553e8a52c2fbccc464d7561b239c443`, specifically
+`packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx`,
+`packages/client/ui-chat/src/client/contract/turn-process.ts`,
+`packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts`, and
+`packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts`.
+These are behavioral references for whole-Turn ownership, control placement,
+counts and always-open stopped/failed disclosure. No additional upstream source
+was copied. The existing adapted TurnProcess presentation is unchanged. Native
+Journal projection and cursor-based Web composition are rustX-authored. Generated
+App Server v23 imports and their local hashes/import closures move together.

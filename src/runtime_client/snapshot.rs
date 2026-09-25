@@ -254,10 +254,10 @@ pub struct RuntimeClientTranscriptPage {
 /// One derived transcript item and its stable durable cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptEntry {
-    /// Exact successful Attempt process membership, derived by native owners.
+    /// Exact native Attempt process membership, derived by native owners.
     /// Absence is not permission for a client to infer a process boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_process: Option<super::response::CompletedProcessView>,
+    pub turn_process: Option<super::response::TurnProcessView>,
     /// The native Attempt has not yet settled this accepted Assistant candidate.
     /// A client retaining this row outside a refresh must reread it, not freeze absence.
     #[serde(default)]
@@ -314,6 +314,10 @@ pub struct RuntimeClientTranscriptInteractionSettled {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientTranscriptItem {
+    /// Journal-owned terminal execution history, including attempts without messages.
+    AttemptTerminal {
+        turn: super::response::TurnProcessView,
+    },
     /// A user, Assistant, or Tool message body from Pending Inbound or Ledger.
     Message {
         /// The canonical or durably accepted message.
@@ -410,6 +414,12 @@ fn transcript_entry_view(
     entry: crate::durable::TranscriptEntry,
 ) -> Result<RuntimeClientTranscriptEntry, String> {
     let item = match entry.item {
+        crate::durable::TranscriptItem::AttemptTerminal { event } => {
+            RuntimeClientTranscriptItem::AttemptTerminal {
+                turn: super::response::terminal_turn(event, entry.cursor.into())?,
+            }
+        }
+
         crate::durable::TranscriptItem::Message { message } => {
             RuntimeClientTranscriptItem::Message { message }
         }
@@ -472,7 +482,7 @@ fn transcript_entry_view(
         }
     };
     Ok(RuntimeClientTranscriptEntry {
-        completed_process: None,
+        turn_process: None,
         completed_response: None,
         response_pending: false,
         cursor: entry.cursor.into(),

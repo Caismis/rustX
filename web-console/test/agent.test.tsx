@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v21';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v23';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -104,7 +104,7 @@ it('one Stop gesture issues one request, and only native snapshot settlement rel
 it('pending approval restores after browser absence; accepted response cannot settle a still-pending snapshot', async () => {
  await server.attached('A'); server.socket.close();
  server.snapshots.get('A')!.pending_interactions = [interaction('approval')]; await server.connect();
- function Pending() { const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot); return <Interactions client={server.client} state={state} view={state.views.A} run={work => { void work().catch(() => {}); }}/>; }
+ function Pending() { const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot); return <Interactions client={server.client} state={state} view={state.views.A}/>; }
  render(<Pending/>); server.held.add('interaction/respond');
  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); });
  const request = await server.waitFor('interaction/respond', 1);

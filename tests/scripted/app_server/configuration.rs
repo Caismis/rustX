@@ -4081,7 +4081,11 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
                 .unwrap()
                 .contains_key("local/unpublished")
         );
-        let Some(SessionModelsView::Available { catalog }) = source.session_models else {
+        let Some(SessionModelsView::Available {
+            catalog,
+            default_model,
+        }) = source.session_models
+        else {
             panic!("Workspace Session catalog: {:?}", source.session_models)
         };
         let listed: Vec<_> = catalog
@@ -4090,6 +4094,7 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
             .map(|model| model.model.to_string())
             .collect();
         assert_eq!(listed, ["local/a", "local/b"]);
+        assert_eq!(default_model.model.to_string(), "local/a");
 
         let created = create(directory).await.unwrap().session.id;
         fixture.manager.load(&created, None).await.unwrap();

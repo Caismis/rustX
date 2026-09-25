@@ -1,19 +1,23 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions and TurnUsagePanel; see PROVENANCE.md. */
-import { useState } from 'react';
-import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from '../../../../protocol/app-server/v21';
+import { useEffect, useState } from 'react';
+import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from '../../../../protocol/app-server/v23';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Modal } from '../../presentation/primitives/Modal';
-import { Button } from '../../presentation/primitives/Button';
 import { IconClockOutline16, IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconDatabaseOutline16 } from '../../presentation/primitives/icons';
 import type { HistoryAction } from '../commands/native';
-import css from './ResponseTail.module.css';
+import css from './TurnTail.module.css';
 
 export function MessageTime({ time }: { time?: string | null }) {
   return time ? <time className={css.time} dateTime={time} title={new Date(time).toLocaleString()}>{new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time> : null;
 }
 export function CopyMessage({ text }: { text: string }) {
   const [status, setStatus] = useState('Copy');
+  useEffect(() => {
+    if (status === 'Copy') return;
+    const timer = setTimeout(() => setStatus('Copy'), 3000);
+    return () => clearTimeout(timer);
+  }, [status]);
   return <Tooltip label={status} side="bottom"><button type="button" className={css.action} aria-label={status} onClick={() => {
     void writeClipboard(text).then(ok => setStatus(ok ? 'Copied' : 'Copy failed'));
   }}>{status === 'Copied' ? <IconCheckOutline16/> : <IconCopyOutline16/>}</button></Tooltip>;
@@ -44,16 +48,14 @@ function Timing({ timing }: { timing: CompletedResponseTiming }) {
       {timing.output_tokens_per_second != null && <><dt>Output speed</dt><dd>{timing.output_tokens_per_second.toLocaleString(undefined, { maximumFractionDigits: 1 })} tok/s</dd></>}
     </dl></Modal></>;
 }
-export function ResponseTail({ text, response, onHistorical, disabled, lineageSwitchSafe }: { text: string; response: CompletedResponseView; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean }) {
-  const [open, setOpen] = useState(false);
-  return <div className={css.actions} aria-label="Completed response">
+export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false }: { text: string; response: CompletedResponseView; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean }) {
+  return <div className={css.actions} aria-label="Completed Turn" data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={JSON.stringify([response.origin.conversation_id, response.origin.attempt_id])}>
     <CopyMessage text={text}/>
-    {onHistorical && <><Tooltip label="Lineage" side="bottom"><button className={css.action} type="button" aria-label="Lineage" aria-haspopup="dialog" aria-expanded={open} disabled={disabled} onClick={() => setOpen(true)}><IconBranchOutline16/></button></Tooltip>
-      <Modal open={open} title="Continue this conversation" closeLabel="Close lineage" onClose={() => setOpen(false)}><div className={css.menu}>
-        <Button disabled={disabled || !lineageSwitchSafe} onClick={() => { setOpen(false); onHistorical('branch', response); }}>Branch in this Session</Button>
-        <Button disabled={disabled} onClick={() => { setOpen(false); onHistorical('fork', response); }}>Fork to new Session</Button>
-        {response.retry_message_id && <Button disabled={disabled || !lineageSwitchSafe} onClick={() => { setOpen(false); onHistorical('retry', response); }}>Retry / Regenerate</Button>}
-      </div></Modal></>}
+    {onHistorical && <>
+      <Tooltip label="Fork to new Session" side="bottom"><button className={css.action} type="button" aria-label="Fork to new Session" disabled={disabled} onClick={() => onHistorical('fork', response)}><IconBranchOutline16/></button></Tooltip>
+      <Tooltip label="Branch in this Session" side="bottom"><button className={css.action} type="button" aria-label="Branch in this Session" disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('branch', response)}><IconBranchOutline16/></button></Tooltip>
+      {response.retry_message_id && <Tooltip label="Retry / Regenerate" side="bottom"><button className={css.action} type="button" aria-label="Retry / Regenerate" disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}>↻</button></Tooltip>}
+    </>}
     {response.usage && <Usage usage={response.usage}/>}
     {response.timing && <Timing timing={response.timing}/>}
     <MessageTime time={response.completed_at}/>

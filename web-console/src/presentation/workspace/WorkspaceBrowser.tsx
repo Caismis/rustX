@@ -11,7 +11,8 @@ import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
 export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView, closeAllViews,
-  selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices }: {
+  selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
+  renderSession?: (node: SessionNode, render: (node: SessionNode) => ReactNode) => ReactNode;
   workspaceSettings?: (id: string, label: string) => void;
   wide: boolean; expand: () => void; groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
   query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string, title: string) => void;
@@ -29,7 +30,7 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
   // stays rendered and visible around it. Programmatically focusable, never a
   // Tab stop of its own; Tab from it enters its rows.
   const tree = useRef<HTMLDivElement>(null);
-  const row = (node: SessionNode) => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onClose={node.viewOpen ? closeView : undefined} flat={flat || !!query} menuFocusOwner={tree} t={t} />;
+  const row = (node: SessionNode) => renderSession(node, node => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onClose={node.viewOpen ? closeView : undefined} flat={flat || !!query} menuFocusOwner={tree} t={t} />);
   return <section className={clsx(css.root, !wide && css.rail)} aria-label="Workspaces and Sessions">
     <div className={css.sectionHeader}>
       {wide && <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? 'Sessions' : 'Workspaces'}</span>}
@@ -48,7 +49,7 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
     {!wide && <button type="button" className={css.searchButton} aria-label="Search Sessions" onClick={() => { expand(); setSearchExpanded(true); }}><IconSearchOutline16 size={18} /></button>}
     <div className={css.listArea}>{wide && <div className={clsx(css.treeBody, css.wide)}><div ref={tree} className={css.list} role="tree" aria-label="Session browser" tabIndex={-1}>
       {notices}
-      {query ? sessions.map(node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={t} />) : flat || groups.length === 0 ? sessions.map(row) : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
+      {query ? sessions.map(node => renderSession(node, node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={t} />)) : flat || groups.length === 0 ? sessions.map(row) : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
         <ProjectRowItem group={{ ...group, expanded: !collapsed.includes(group.key) }} menuFocusOwner={tree} t={t}
           onToggle={() => setCollapsed(value => value.includes(group.key) ? value.filter(id => id !== group.key) : [...value, group.key])}
           onSelect={() => group.workspaceId && selectWorkspace(group.workspaceId)} onCreate={() => group.workspaceId && create(group.workspaceId)}

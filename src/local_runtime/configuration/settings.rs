@@ -179,6 +179,7 @@ pub enum SessionModelsView {
     /// The validated credential-free catalog of the Session creation binding.
     Available {
         catalog: crate::model::catalog::ModelCatalogView,
+        default_model: Box<crate::model::session::SessionModelConfig>,
     },
     /// Session creation would fail here; no catalog exists to select from.
     Unavailable { diagnostic: String },

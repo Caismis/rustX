@@ -1535,6 +1535,12 @@ export type TraceContentBlock =
  */
 export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
 /**
+ * Identifies one durable runtime event.
+ */
+export type EventId = string;
+export type TurnProcessOutcome =
+  'running' | 'completed' | 'cancelled' | 'failed' | 'timed_out' | 'limit_exceeded';
+/**
  * A content block inside a `UserMessageBlock`.
  */
 export type UserContentBlock =
@@ -2423,6 +2429,7 @@ export type ProcessPolicyImpact = 'hot' | 'restart';
 export type SessionModelsView =
   | {
       catalog: ModelCatalogView;
+      default_model: SessionModelConfig;
       kind: 'available';
     }
   | {
@@ -5625,6 +5632,19 @@ export interface RuntimeClientTranscriptPage {
  * Forked Conversations start a fresh execution epoch, as native lineage does.
  */
 export interface ConversationStatistics {
+  /**
+   * Harness-style Turn and Step counts: native Attempt starts and Loop turns.
+   */
+  turns: string;
+  steps: string;
+  /**
+   * Latest native Turn clock; never a browser receipt timestamp.
+   */
+  latest_turn?: ConversationTurnClock | null;
+  /**
+   * Complete measured request timing, separate from usage coverage.
+   */
+  timing?: CompletedResponseTiming | null;
   completed_responses: string;
   model_requests: string;
   /**
@@ -5633,15 +5653,42 @@ export interface ConversationStatistics {
   requests_with_usage: string;
   reported_usage?: ModelUsage | null;
 }
+export interface ConversationTurnClock {
+  attempt_id: AttemptId;
+  started_at: string;
+  ended_at?: string | null;
+}
+/**
+ * Historical product timing derived from native lifecycle and generation evidence.
+ * Missing evidence stays absent; these are not destination execution facts.
+ */
+export interface CompletedResponseTiming {
+  /**
+   * Authoritative successful Attempt completion minus its start timestamp.
+   */
+  total_duration_ms?: number | null;
+  /**
+   * First actual request's adapter-dispatch-to-first-output duration.
+   */
+  ttft_ms?: number | null;
+  /**
+   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   */
+  generation_ms?: number | null;
+  /**
+   * Fully covered output usage divided by fully covered positive generation work.
+   */
+  output_tokens_per_second?: number | null;
+}
 /**
  * One derived transcript item and its stable durable cursor.
  */
 export interface RuntimeClientTranscriptEntry {
   /**
-   * Exact successful Attempt process membership, derived by native owners.
+   * Exact native Attempt process membership, derived by native owners.
    * Absence is not permission for a client to infer a process boundary.
    */
-  completed_process?: CompletedProcessView | null;
+  turn_process?: TurnProcessView | null;
   /**
    * The native Attempt has not yet settled this accepted Assistant candidate.
    * A client retaining this row outside a refresh must reread it, not freeze absence.
@@ -5665,6 +5712,10 @@ export interface RuntimeClientTranscriptEntry {
    */
   item:
     | {
+        turn: TurnProcessView;
+        type: 'attempt_terminal';
+      }
+    | {
         /**
          * The canonical or durably accepted message.
          */
@@ -5686,7 +5737,7 @@ export interface RuntimeClientTranscriptEntry {
       }
     | {
         /**
-         * Durable Event Journal event identity.
+         * Identifies one durable runtime event.
          */
         event_id: string;
         /**
@@ -5754,7 +5805,7 @@ export interface RuntimeClientTranscriptEntry {
       }
     | {
         /**
-         * Durable Event Journal event identity.
+         * Identifies one durable runtime event.
          */
         event_id: string;
         /**
@@ -5820,23 +5871,26 @@ export interface RuntimeClientTranscriptEntry {
       };
 }
 /**
- * Native ownership of a completed Attempt's process. Destination final address
- * and immutable origin are distinct, including through lineage copies.
+ * One native process owner shared by live, successful and unsuccessful Turns.
+ * Repeated on each exact member so bounded pages are independently resolvable.
  */
-export interface CompletedProcessView {
-  origin: ResponseOrigin;
-  final_message_id: MessageId;
-}
-/**
- * Original execution owner, unchanged through arbitrarily deep lineage copies.
- */
-export interface ResponseOrigin {
+export interface TurnProcessView {
   conversation_id: ConversationId;
   attempt_id: AttemptId;
   /**
-   * Identifies a committed canonical message block.
+   * Original terminal Journal identity, absent while running or inherited.
    */
-  closing_message_id: string;
+  event_id?: EventId | null;
+  /**
+   * The cursor domain of durable transcript paging.
+   */
+  control_cursor: string;
+  final_message_id?: MessageId | null;
+  message_count: number;
+  tool_call_count: number;
+  outcome: TurnProcessOutcome;
+  started_at?: string | null;
+  ended_at?: string | null;
 }
 /**
  * Derived response view over local execution or inherited lineage provenance.
@@ -5844,7 +5898,7 @@ export interface ResponseOrigin {
  */
 export interface CompletedResponseView {
   closing_message_id: MessageId;
-  origin: ResponseOrigin1;
+  origin: ResponseOrigin;
   /**
    * Durable completion timestamp; never a browser receipt time.
    */
@@ -5874,37 +5928,15 @@ export interface CompletedResponseView {
   timing?: CompletedResponseTiming | null;
 }
 /**
- * Original execution owner, unchanged through arbitrarily deep lineage copies.
+ * Original execution owner, including for inherited historical responses.
  */
-export interface ResponseOrigin1 {
+export interface ResponseOrigin {
   conversation_id: ConversationId;
   attempt_id: AttemptId;
   /**
    * Identifies a committed canonical message block.
    */
   closing_message_id: string;
-}
-/**
- * Historical product timing derived from native lifecycle and generation evidence.
- * Missing evidence stays absent; these are not destination execution facts.
- */
-export interface CompletedResponseTiming {
-  /**
-   * Authoritative successful Attempt completion minus its start timestamp.
-   */
-  total_duration_ms?: number | null;
-  /**
-   * First actual request's adapter-dispatch-to-first-output duration.
-   */
-  ttft_ms?: number | null;
-  /**
-   * Sum of output-producing requests' first-output-to-provider-terminal spans.
-   */
-  generation_ms?: number | null;
-  /**
-   * Fully covered output usage divided by fully covered positive generation work.
-   */
-  output_tokens_per_second?: number | null;
 }
 /**
  * The foreground tool execution read model of one logical tool call.
@@ -9074,7 +9106,7 @@ export interface InteractionRef3 {
  */
 export interface RuntimeClientTranscriptInteractionRequested {
   /**
-   * Durable Event Journal event identity.
+   * Identifies one durable runtime event.
    */
   event_id: string;
   /**
@@ -9144,7 +9176,7 @@ export interface RuntimeClientTranscriptInteractionRequested {
  */
 export interface RuntimeClientTranscriptInteractionSettled {
   /**
-   * Durable Event Journal event identity.
+   * Identifies one durable runtime event.
    */
   event_id: string;
   /**

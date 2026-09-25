@@ -34,6 +34,12 @@ createRoot(document.getElementById('root')!).render(<App client={server.client} 
 
 // Isolated fixture controls, never reachable from the production application.
 window.sessionFixture = {
+  async stream(text) {
+    const next = structuredClone(server.snapshots.get('A')!);
+    next.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, in_flight: { message_id: 'stream-A', blocks: [{ type: 'text', block_index: 0, text }] } };
+    next.transcript.statistics = { turns: '1', steps: '1', completed_responses: '0', model_requests: '1', requests_with_usage: '0', latest_turn: { attempt_id: 'attempt-A', started_at: '2026-09-25T00:00:00Z' } };
+    await server.update('A', next);
+  },
   async presentation(mode) {
     if (mode === 'empty' || mode === 'preview' || mode === 'named' || mode === 'delete') {
       server.summaries.set('A', { name: mode === 'named' ? 'Architecture review' : null, preview: mode === 'empty' ? null : 'Inspect the Session ownership boundary' });
@@ -67,4 +73,4 @@ window.sessionFixture = {
     if (mode === 'reconnect' || mode === 'uncertain') server.socket.close();
   },
 };
-declare global { interface Window { sessionFixture: { state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

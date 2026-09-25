@@ -19,10 +19,10 @@
       "destination": "web-console/src/app/agent/AgentComposer.tsx",
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
-      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative.",
+      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. Issue #406: Resident input/editor and launcher interaction adapted to native textarea, native first-submit transactions and upload receipts.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/agent/Composer.module.css",
@@ -32,6 +32,7 @@
         "../commands/matching",
         "../commands/registry",
         "../composer/editor-content",
+        "../composer/input-trigger",
         "../composer/submission-policy",
         "../composer/useTextareaAutosize",
         "react"
@@ -42,7 +43,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "1fd4858d8fb26d621e475eec585dc693e65a61aad9d10da033da9f75c45295d0"
+      "local_sha256": "a72ea7cd41dcdeceb1f6a80089f73f9cd567d0ac711d8c71dbbb142b1dbb5439",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "cdb7cb6b592b85e696d3046b560d4fddf8fbd54ca9bd5deef41767588f27e60c",
+          "treatment": "Resident input/editor and launcher interaction adapted to native textarea, native first-submit transactions and upload receipts."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -50,10 +59,10 @@
       "destination": "web-console/src/app/agent/Questionnaire.tsx",
       "upstream_sha256": "b4ff56bd18dfef03299dd7dc43f928b7ac2a7d5253ecf65a5fbe64ca9b65ec8e",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../bindings/questionnaire",
         "../../presentation/agent/Question.module.css",
         "../../presentation/primitives/Button",
@@ -67,7 +76,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "e0b6f4d8cd8a52dd0f7ea485484ea2d9f1cff69cea2ed113e8a9526fe7a5c655"
+      "local_sha256": "4b9389363911277f8f160576eaff746e54274863316490a1d26b65add91e0838"
     },
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
@@ -92,10 +101,10 @@
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
       "destination": "web-console/src/app/commands/CommandPanel.tsx",
-      "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -113,7 +122,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "acfe2c3d439ee3b60f98c2ae51a2a614688c2558dc82f10b102f068d2e8bd80b"
+      "local_sha256": "394bb85b6e134de189c1508f7bcd4ef90f00dc3442b18bce758ed51fe8ff3a41"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -212,10 +221,10 @@
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.tsx",
       "destination": "web-console/src/app/composer/GoalDock.tsx",
-      "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -232,7 +241,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "deac892476d6bb796642d561624baed606e1ea1f731c9974323c70b0b33871e4"
+      "local_sha256": "ebfed150c43a7a074ee102fe3c899d4e2a286342c757683818b18492d3593012"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -251,10 +260,10 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
       "destination": "web-console/src/app/composer/QueueDock.tsx",
-      "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -269,7 +278,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4d64e473d62026aac5efe8456e27c7dac372a55f8b1afbbcf34874a4563010ca"
+      "local_sha256": "30ae6918034a3d8eaf6d57fe00ed488516ee34645b5eb64221778a75387d5eb9"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -288,10 +297,10 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
       "destination": "web-console/src/app/composer/TodoDock.tsx",
-      "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -305,7 +314,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "04bd918003967a0d2418d5bbf9dcd220adf7845c4f9e4fd4aab65740d1fa3c5e"
+      "local_sha256": "babe089c66ac270bfee1adc15f71a9fdf6a54d9864c8957713ae54fba9efb4c0"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -334,10 +343,10 @@
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
       "destination": "web-console/src/app/settings/models/ModelsPage.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../../protocol/app-server/v21",
+        "../../../../../protocol/app-server/v23",
         "../../../presentation/primitives/Button",
         "../../../presentation/settings/ModelsCards.module.css",
         "../../../presentation/settings/SettingsContent",
@@ -378,15 +387,15 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fe882a5064912d8526072df4eaa7ab011c0d2bcd04b2696e0fe31815e4bcda2a"
+      "local_sha256": "98d8ecd6430adcc60bb1d07048f80a99459b2ad9527c5cbd3f728f57b6e666c3"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/settings/extensions/ExtensionDetail.tsx",
-      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain. #393: native diagnostics and alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain. #393: native diagnostics and alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../../protocol/app-server/v21",
+        "../../../../../protocol/app-server/v23",
         "../../../bindings/mcp",
         "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent",
@@ -442,15 +451,15 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c2bb625128620c801e46cc76c674fe86ad4ecec58163a8904a8a926389ade499"
+      "local_sha256": "97d06d65bce9a39502da3d31987de1fba7cd99ff6f4022f49e7e5464e90612b9"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../client/app-server",
         "../../connection/controller",
         "../../presentation/primitives/Button",
@@ -489,7 +498,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c8267cec75dd6a287c8ae7ff92de79535693901edde49b2ca7893e83f2181380"
+      "local_sha256": "11b06347f43da1dbd32b8d4852bdd6704cb15cda648eaf44e3a0a8f222657452"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -563,10 +572,10 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../presentation/markdown/CodeBlock",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
@@ -603,7 +612,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "e9f6f05f034a64e9e082ff90c8fdbe6031cc4eea72ccd0d21eed285c4513e64c"
+      "local_sha256": "d829de28721f72354c227dcb371ec09799cae20acc6663687b1826d3fec10a84"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -628,10 +637,10 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Tooltip",
         "./TrajectoryTimeline.module.css",
@@ -648,15 +657,15 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "a229dc39d253dee310452fb554b784d4b7ecf132ec63c75d2b265a42fd0d3ae6"
+      "local_sha256": "213e6cfe737cb156acbc81115b5cf50a2defb687a1888eab7dd32b174fb91e1a"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
       "destination": "web-console/src/app/trajectory/layout.ts",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21"
+        "../../../../protocol/app-server/v23"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -668,7 +677,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "83317e57cce0eeda9ba83c5936d92ab4d8d732e2df2c13c930d9e3b618db117e"
+      "local_sha256": "2f97df9724a2b9ad25b61d8b57aab5d83f8c6ecd0dedc0e50f5388cc7a418cb4"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -693,10 +702,10 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
       "destination": "web-console/src/app/trajectory/timeline.ts",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21"
+        "../../../../protocol/app-server/v23"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -708,7 +717,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "72dd3ba56442dee0557d09c04e38bd3b5a5d1fe926bc21eec21ea500ccb50d0b"
+      "local_sha256": "3205bcc890a6981fbf2f7e033b228e31f39d2c30ee88d2b4291a9859774621ba"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -788,7 +797,7 @@
       "destination": "web-console/src/presentation/agent/Conversation.module.css",
       "upstream_sha256": "03880a4702978e8403a882f9036205ab7ff791f80cc06e47fdafa4fef6971c67",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Issue #406: Resident hero centering and composer seat geometry; no lifecycle masking.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -797,7 +806,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "fe97caacd86c6d1c0dc3b9f959757596e6deee4bc78f263dd87dd45b1f4be071"
+      "local_sha256": "bd53db264e19a46a09a1499554e854e4d36f0597cddcfd24bdbe868c39d95960",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "d9d856868adfdc8a300600e060e6262afa42fc3bfc8019b5a597dec326b0c59c",
+          "treatment": "Resident hero centering and composer seat geometry; no lifecycle masking."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -859,7 +876,7 @@
       "destination": "web-console/src/presentation/agent/ModelSelect.tsx",
       "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/Menu",
@@ -873,7 +890,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d85706cc5002ffb351b5c009381311f2ceb7338aae77b1da9406762fb2048c44"
+      "local_sha256": "8adda39f28e56ba842af4f35cedbe771f61eff8a68db3687d282eef066a75b76",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "60eb0495369c9c24956e1e68e77672d145c82ee63bb61b3869899feaf41a209a",
+          "treatment": "One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2264,13 +2289,13 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "8b33a8c6093d89b1b4d22f8ea70aac471e0d655f51d07d0ff9b4f2aa3d675044",
+      "local_sha256": "d573bea737f151e5a9c60c3d5825e1c14f1466ce46d65feb73441f097704a60a",
       "classification": "B"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work.",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
         "../app/commands/native",
@@ -2278,6 +2303,7 @@
         "../bindings/session-product",
         "../bindings/session-title",
         "../client/app-server",
+        "../client/selectors",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
         "../presentation/primitives/Modal",
@@ -2309,10 +2335,16 @@
           "upstream": "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
           "treatment": "inspected and adapted presentation only",
           "upstream_sha256": "e42beb178c3c9bd6f102f6c1693895b18161ce824393daabd95f96dc47b6e9e3"
+        },
+        {
+          "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "21549a2c39407538e3793822862903e95f56119253d9e6daa38b9a58c2df4650",
+          "treatment": "Mutation feedback belongs inside its dialog; pending dismissal is guarded."
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "2bb320fa64d2888692470ab4d019c546dbe6714155befc8275f90556d8adecf1"
+      "local_sha256": "e846c56cdcd2b825f6ccec7a9570ff022249401bdea265eea67021dfad62b1e5"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -2351,10 +2383,10 @@
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
       "destination": "web-console/test/trajectory.test.tsx",
-      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
-        "../../protocol/app-server/v21",
+        "../../protocol/app-server/v23",
         "../src/app/trajectory/Trajectory",
         "../src/app/trajectory/layout",
         "../src/app/trajectory/search",
@@ -2381,29 +2413,34 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "beda3f86233b82e77bbdbaa5fff2c07f6715a9d8a677b7513b19bb1644679e65"
+      "local_sha256": "5a9b06e310fb904637f46b35507990e7a7a9f8f06f3d303c6558b13526baf15f"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
-      "destination": "web-console/src/app/agent/ResponseTail.tsx",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "destination": "web-console/src/app/agent/TurnTail.tsx",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: Turn-owned direct actions, usage and end clock; native response boundary and origin identities retained.",
       "upstream_sha256": "43d2e3e5713b6f08a33ce20a918eb8c73497f894438805413ef925f9e5437c5d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnUsagePanel.tsx",
           "upstream_sha256": "57cbd0a8c43cfad5826c8d802c9feca7ad4b6240abe53f171def80463815f014",
           "treatment": "Adapted compact product statistics and detail presentation only"
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "4b493845e7d28b93a2db2198e70deffcf4b290c31218923fc7c945af737b56d1",
+          "treatment": "Turn-owned direct actions, usage and end clock; native response boundary and origin identities retained."
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
-        "../../presentation/primitives/Button",
+        "../../../../protocol/app-server/v23",
         "../../presentation/primitives/Modal",
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
         "../commands/native",
-        "./ResponseTail.module.css",
+        "./TurnTail.module.css",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2413,18 +2450,24 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "85970abd24d070990c98bf22bdbf91177b8419f72206129048942dd84e39271a"
+      "local_sha256": "302bd8dfc15ea1163a04af791a1444e0f15c663d3f4e2caf92825406cef39690"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
-      "destination": "web-console/src/app/agent/ResponseTail.module.css",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal.",
+      "destination": "web-console/src/app/agent/TurnTail.module.css",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "ee0015510141e0a14b9a7c10a7acecede962a2d6480076f2638842bf1875ac05",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnUsagePanel.module.css",
           "upstream_sha256": "69f8658378b025c0837c83db17655cc5be07afd6811de84433106fa0af3e87cc",
           "treatment": "Adapted compact product statistics and detail presentation only"
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "409248425512a70d9287d0a67d2a045b9cd025e4cefb09c908e97c0ab5edb211",
+          "treatment": "Centered conversation pills, 12/20 tertiary typography, pill spacing and tabular figures; retained message-action styles now serve Turn tails."
         }
       ],
       "retained_dependencies": [],
@@ -2435,25 +2478,32 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "918e2df15263aa8a98e070da09fb19dfadbdc75936bebff5cd0050ce27ef4505"
+      "local_sha256": "a792e0683b5ea930a3dbfa4b9020e5e799808b01d133ce247940196aed2177f9"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.tsx",
       "destination": "web-console/src/app/agent/ConversationStats.tsx",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: Turn/Step, decode speed, token/cache summary and local details over native whole-conversation aggregates only.",
       "upstream_sha256": "ed5c05a63cdedb339a3dc00e67e30ef3ebed2ac6a7511becd5ea857641bc82aa",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx",
           "upstream_sha256": "84e568164bb26fadc8cae50d82de7dbd4d14be0d957f5ae7fd9c4575a1f1568d",
           "treatment": "Adapted compact product statistics and detail presentation only"
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "7c74b7b3538e297d6f3352508f4d17a424c962dcd1bc61d13f70093e0b02667c",
+          "treatment": "Turn/Step, decode speed, token/cache summary and local details over native whole-conversation aggregates only."
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
-        "../../presentation/primitives/Tooltip",
-        "./ResponseTail",
-        "./ResponseTail.module.css"
+        "../../../../protocol/app-server/v23",
+        "../../presentation/primitives/Modal",
+        "./TurnTail",
+        "./TurnTail.module.css",
+        "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2462,15 +2512,15 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "89f1e0547057210537b2818b02e42304815ab9ffa6fbd7173e46be0c1c68345a"
+      "local_sha256": "7727cb4b7e1a292776a9f27a644aef8ab95d88cfa12a972beae97c982d53f75a"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryCell.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/icons",
         "./Trajectory.module.css"
@@ -2486,19 +2536,20 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "additional_sources": [],
-      "local_sha256": "5536702907b834d731267991c861bcd505db2f7c8ac3b98ff805e532733e90a3"
+      "local_sha256": "30e0a77405b4c8ec76432bc58c21c9d91d8826a25f6fb8ba6376ba1a34200966"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
-      "destination": "web-console/src/app/new-conversation/NewConversation.tsx",
+      "destination": "web-console/src/app/new-conversation/ConversationComposer.tsx",
       "upstream_sha256": "6111132201e2e88ab7c68761db588b38dca1c500af14a2e0314a706f1315f28f",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. #402 review: model choices consume only the native Session-creation ModelCatalogView; each submission binds its own authority, so transport transitions never remount the draft. A submission port fences only native continuation; acknowledged Session recovery uses the current navigation epoch.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. #402 review: model choices consume only the native Session-creation ModelCatalogView; each submission binds its own authority, so transport transitions never remount the draft. A submission port fences only native continuation; acknowledged Session recovery uses the current navigation epoch. Issue #406: One unconditional composer seat with explicit no-Session/native Session binding; native creation remains first-submit-owned.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../client/app-server",
+        "../../client/selectors",
         "../../presentation/agent/HeroShell.module.css",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/DialogSurface",
@@ -2508,6 +2559,9 @@
         "../../workspaces/endpoint",
         "../../workspaces/host",
         "../agent/AgentComposer",
+        "../agent/AgentControls",
+        "../composer/ComposerContextStack",
+        "../model-preference",
         "./WorkspaceControls",
         "./first-submit",
         "./port",
@@ -2519,13 +2573,19 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "2a270046d9e4cc8bb4b5efb7c1cd2c30dda04a3b92bca03341eb40c7a9146fff",
+      "local_sha256": "3fff8690bd3086bd7cb69cda6f4c3d55ee30977ed65f528477b7e9f07e9262e6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
           "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
           "upstream_sha256": "465952b8488857e437739b72585295d28535e3cd7f593c2d02aaf3ad14fcfab5",
           "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "3dfcc635e128f9b798673ba4dfb91a5e25ef96d001124603c672e7beafefa204",
+          "treatment": "One unconditional composer seat with explicit no-Session/native Session binding; native creation remains first-submit-owned."
         }
       ]
     },
@@ -2535,7 +2595,7 @@
       "destination": "web-console/src/presentation/agent/HeroShell.module.css",
       "upstream_sha256": "66d4dd75e428e7d956bbffa896714ea0709bd8350b09658a0f6f7fe9e9158ad7",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Workspace context shares the resident composer column width.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2543,7 +2603,15 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "423589acdf27a221dc33bdbfe44115de07b96118293e476b53727a355d45b1e7"
+      "local_sha256": "0e020066128ecca068f94bb98d8a869d1dba33e7d2132008bba97dc3dadbf727",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "d9d856868adfdc8a300600e060e6262afa42fc3bfc8019b5a597dec326b0c59c",
+          "treatment": "Workspace context shares the resident composer column width."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2616,18 +2684,27 @@
       "destination": "web-console/src/presentation/agent/TurnProcess.tsx",
       "upstream_sha256": "d397f1e92f76585fa49b924b3d43d829ad503a4ffa821660234d4b51e5cc743f",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Turn-local clock, duration and terminal vocabulary adapted to native Attempt timestamps and outcomes.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/icons",
-        "./TurnProcess.module.css"
+        "./TurnProcess.module.css",
+        "react"
       ],
       "excluded_dependencies": [
         "Cordis slots and runtime authority",
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "97bf1c0c997dd2e1bc571bce72efc8e72dac22e6be8b6fb217918a6cb84bd2d0"
+      "local_sha256": "147f0a8498be1118e84dde150e599032a2af5b4792c76c69348dc33b854c2142",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "731a879e517c9ff28c7d833863e774745666cffe3a2fd2f9aa3fff1adcbc4a17",
+          "treatment": "Turn-local clock, duration and terminal vocabulary adapted to native Attempt timestamps and outcomes."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2635,7 +2712,7 @@
       "destination": "web-console/src/presentation/agent/TurnProcess.module.css",
       "upstream_sha256": "94f400f0120a6a773fd65be6869c9b7d895590e31cc3cc8943e5d63eec7173d5",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2643,7 +2720,15 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "9b3695bb9351f49217e736e0b47501e22fb2d0b52d122db5328a9ebf9ceece8b"
+      "local_sha256": "6a30a10e045170ea1ae11978634fdcb7d43f24d7ce8b8c5c6646632296163353",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "7c86bb575337bb661714c72c1776bcfbf81519b0d8b37f5f432c786b774d5945",
+          "treatment": "Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2873,13 +2958,13 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx",
       "destination": "web-console/src/app/agent/AgentStatus.tsx",
-      "treatment": "Adapted disclosure axes, separator and indentation; native anchored status sections replace Harness context producer/forms.",
+      "treatment": "Adapted disclosure axes, separator and indentation; native anchored status sections replace Harness context producer/forms. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness context projection and producer forms"
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v21",
+        "../../../../protocol/app-server/v23",
         "../../bindings/agent-status",
         "../../presentation/primitives/DisclosureRow",
         "../../presentation/primitives/icons",
@@ -2887,7 +2972,7 @@
         "react"
       ],
       "upstream_sha256": "bb87019d9291d93af6e69ed02ca4f47f040272244af0d023112ec565be9e3427",
-      "local_sha256": "887f3a0446861d306ec3bb5e6003b7e669ee0959f8b62f4af128e44872717ce4"
+      "local_sha256": "24e1c66035a16dfad452b386ba0e610beec7c6a5642223fe49cf0e1fc0c33c8c"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3449,6 +3534,24 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "37139b4b7341fd6692e8b7cfc02ab39ea631d37deb7eedb3d97cf067f2561239",
       "treatment": "Issue #402 inspected, excluded: Harness Tool identity and metadata contracts do not authorize parsing rustX human output. Exact rustX Tool IDs and typed native lifecycle stay authoritative."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/contract/turn-process.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "7d7143b39b0fd8b940033dcb9b62e8b55035192ae8bff476af3ba0824e80b561",
+      "treatment": "Behavioral reference only: native Attempt process ownership, exact control boundary, counts and always-open terminal disclosure; no source copied."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "abe53ea43138a6b6850ab51ac975a9ec63670c16bce60c6e6f081d261fdd1983",
+      "treatment": "Behavioral reference only: native Attempt process ownership, exact control boundary, counts and always-open terminal disclosure; no source copied."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "ebd46e6345ba0998315b8810c2faaee47b3c46290e227a999e7cd69a1010d883",
+      "treatment": "Behavioral reference only: native Attempt process ownership, exact control boundary, counts and always-open terminal disclosure; no source copied."
     }
   ],
   "historical_inspection": {
