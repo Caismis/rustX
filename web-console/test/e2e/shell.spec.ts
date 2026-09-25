@@ -2,8 +2,9 @@ import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { choose } from './shell-actions';
 test('stream publications and a turn-local clock preserve chrome identity, geometry and caret', async ({ page }) => {
-  await page.clock.install({ time: new Date('2026-09-25T00:00:00Z') });
+  await page.clock.install({ time: new Date('2026-09-24T23:00:00Z') });
   await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await page.clock.pauseAt(new Date('2026-09-25T00:00:00Z'));
   await page.evaluate(() => window.sessionFixture.stream('Token zero'));
   await expect(page.getByText('Token zero', { exact: true })).toBeVisible();
   const input = page.getByRole('textbox', { name: 'Message', exact: true });
