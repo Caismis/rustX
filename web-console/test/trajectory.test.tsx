@@ -7,7 +7,7 @@ import { beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type 
 import { trajectoryItems, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v22';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v23';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);

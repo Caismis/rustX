@@ -1,5 +1,11 @@
 # WEB-16 validation evidence
 
+PR #409 terminal-process follow-up: [current ownership contract](terminal-process-ownership.md).
+The earlier terminal-marker representation described below is superseded by
+native `TurnProcessView` in App Server v23 / Runtime Client v49. Follow-up
+validation is recorded in the PR report.
+
+
 ## Deterministic architecture coverage
 
 `web-console/test/conversation-residency.test.tsx` instruments the actual

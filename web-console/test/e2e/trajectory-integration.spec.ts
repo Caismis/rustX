@@ -6,7 +6,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
-import type { TraceRequestDetail } from '../../../protocol/app-server/v22';
+import type { TraceRequestDetail } from '../../../protocol/app-server/v23';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;

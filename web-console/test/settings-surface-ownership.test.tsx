@@ -8,7 +8,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v22';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v23';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);

@@ -555,11 +555,12 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
     assistant(&store, "b", "b-live");
     assistant(&store, "a", "a-final");
     let live = page(&store, None, 64);
-    assert!(
-        live.entries
-            .iter()
-            .all(|entry| entry.completed_process.is_none())
-    );
+    assert!(live.entries.iter().all(|entry| {
+        entry
+            .turn_process
+            .as_ref()
+            .is_none_or(|process| process.outcome == TurnProcessOutcome::Running)
+    }));
     finish(&store, "a");
     let completed = page(&store, None, 64);
     for entry in &completed.entries {
@@ -568,11 +569,16 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
         };
         match message.id().as_str() {
             "a-intermediate" | "a-final" => {
-                let process = entry.completed_process.as_ref().unwrap();
-                assert_eq!(process.origin.attempt_id, AttemptId::new("a"));
-                assert_eq!(process.final_message_id, MessageId::new("a-final"));
+                let process = entry.turn_process.as_ref().unwrap();
+                assert_eq!(process.attempt_id, AttemptId::new("a"));
+                assert_eq!(process.final_message_id, Some(MessageId::new("a-final")));
             }
-            _ => assert!(entry.completed_process.is_none()),
+            _ => assert!(
+                entry
+                    .turn_process
+                    .as_ref()
+                    .is_none_or(|process| process.outcome == TurnProcessOutcome::Running)
+            ),
         }
     }
     let last = page(&store, None, 1);
@@ -584,58 +590,19 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
     );
     let member = earlier.entries.iter().find(|entry| matches!(&entry.item,
         RuntimeClientTranscriptItem::Message { message } if message.id().as_str() == "a-intermediate")).unwrap();
-    assert_eq!(member.completed_process, last.entries[0].completed_process);
+    assert_eq!(member.turn_process, last.entries[0].turn_process);
     assert_eq!(store.load_canonical().unwrap().len(), 5);
 }
 
 #[test]
 fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
-    use crate::events::types::{AttemptFailure, AttemptLimit};
-    use crate::runtime::types::{CancellationReason, RuntimeError};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("terminal.sqlite");
     let id = ConversationId::new("conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f");
     let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-    let outcomes = [
-        (
-            "cancelled",
-            RuntimeEvent::AttemptCancelled {
-                attempt_id: AttemptId::new("cancelled"),
-                reason: CancellationReason::UserRequested,
-            },
-            TerminalTurnOutcome::Cancelled,
-        ),
-        (
-            "failed",
-            RuntimeEvent::AttemptFailed {
-                attempt_id: AttemptId::new("failed"),
-                error: AttemptFailure::Runtime {
-                    error: RuntimeError::Internal {
-                        message: "fixture".into(),
-                    },
-                },
-            },
-            TerminalTurnOutcome::Failed,
-        ),
-        (
-            "timeout",
-            RuntimeEvent::AttemptTimedOut {
-                attempt_id: AttemptId::new("timeout"),
-            },
-            TerminalTurnOutcome::TimedOut,
-        ),
-        (
-            "limit",
-            RuntimeEvent::AttemptLimitExceeded {
-                attempt_id: AttemptId::new("limit"),
-                limit: AttemptLimit::MaxTurns,
-            },
-            TerminalTurnOutcome::LimitExceeded,
-        ),
-    ];
     let mut expected = Vec::new();
-    for (attempt, terminal, outcome) in outcomes {
-        // No Assistant output is required to own a terminal Turn.
+    for (attempt, terminal, outcome) in terminal_cases() {
+        user(&store, &format!("user-{attempt}"));
         append(
             &store,
             attempt,
@@ -643,6 +610,11 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
                 attempt_id: AttemptId::new(attempt),
             },
         );
+        append(&store, attempt, RuntimeEvent::TurnStarted);
+        process_content(&store, attempt);
+        let running = page(&store, None, 3);
+        let live_owner = running.entries[0].turn_process.as_ref().unwrap();
+        assert_eq!(live_owner.outcome, TurnProcessOutcome::Running);
         let mut terminal = event(&store, attempt, terminal);
         terminal.timestamp += chrono::Duration::seconds(7);
         store.append_event(terminal).unwrap();
@@ -655,10 +627,27 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
         assert_eq!(turn.attempt_id, AttemptId::new(attempt));
         assert_eq!(turn.outcome, outcome);
         assert_eq!(
-            turn.ended_at - turn.started_at.unwrap(),
+            turn.ended_at.unwrap() - turn.started_at.unwrap(),
             chrono::Duration::seconds(7)
         );
-        expected.push(entry);
+        assert_eq!(turn.control_cursor, live_owner.control_cursor);
+        assert_eq!(turn.message_count, 2);
+        assert_eq!(turn.tool_call_count, 1);
+        assert_eq!(turn.final_message_id, None);
+        let members = page(&store, None, 4);
+        assert!(
+            members
+                .entries
+                .iter()
+                .all(|member| member.turn_process.as_ref() == Some(turn))
+        );
+        assert!(
+            members.entries[..3]
+                .iter()
+                .all(|member| member.cursor != entry.cursor)
+        );
+        assert_eq!(members.entries[0].cursor, turn.control_cursor);
+        expected = page(&store, None, 64).entries;
     }
     // A later successful Attempt and a new running Attempt cannot rewrite history.
     assistant(&store, "later", "later-response");
@@ -674,20 +663,147 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
     let reopened = SqliteConversationStore::open_existing(id, &path).unwrap();
     let full = page(&reopened, None, 64);
     assert_eq!(&full.entries[..expected.len()], expected.as_slice());
-    let mut before = None;
-    let mut paged = Vec::new();
-    loop {
-        let current = page(&reopened, before, 1);
-        paged.extend(current.entries);
-        before = current.next_cursor.map(Into::into);
-        if before.is_none() {
-            break;
+    for size in [1, 2, 5, 64] {
+        let mut before = None;
+        let mut paged = Vec::new();
+        loop {
+            let current = page(&reopened, before, size);
+            // Reverse each ascending page, then reverse the newest-to-oldest walk.
+            paged.extend(current.entries.into_iter().rev());
+            before = current.next_cursor.map(Into::into);
+            if before.is_none() {
+                break;
+            }
         }
+        paged.reverse();
+        assert_eq!(paged, full.entries);
     }
-    paged.reverse();
-    assert_eq!(paged, full.entries);
     // Repeated resubscription reads are identical, with no live Attempt involved.
     assert_eq!(full, page(&reopened, None, 64));
     let wire = serde_json::to_string(&full).unwrap();
     assert_eq!(full, serde_json::from_str(&wire).unwrap());
+}
+
+/// Real committed reasoning, canonical Tool occurrence/result and intermediate text.
+fn process_content(store: &dyn ConversationStore, attempt: &str) {
+    use crate::message::types::{
+        ContentBlockIndex, ReasoningBlock, ToolCallOccurrenceRef, ToolMessageBlock,
+    };
+    use crate::runtime::identity::{ToolCallId, ToolId};
+    use crate::tools::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
+    let id = MessageId::new(format!("{attempt}-process"));
+    let call = ToolCall {
+        id: ToolCallId::new("reused-provider-call"),
+        tool_id: ToolId::new("bash"),
+        name: "same-name".into(),
+        arguments: serde_json::json!({}),
+    };
+    store
+        .append_canonical_with_event(
+            &MessageBlock::Assistant(AssistantMessageBlock {
+                id: id.clone(),
+                content: vec![
+                    AssistantContentBlock::Reasoning(ReasoningBlock {
+                        text: Some("thinking".into()),
+                        provider_state: None,
+                    }),
+                    AssistantContentBlock::ToolCall(call.clone()),
+                ],
+            }),
+            event(
+                store,
+                attempt,
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: id.clone(),
+                },
+            ),
+        )
+        .unwrap();
+    store
+        .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new(format!("{attempt}-result")),
+            occurrence: ToolCallOccurrenceRef::new(id, ContentBlockIndex::new(1)),
+            tool_call_id: call.id,
+            tool_id: call.tool_id,
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![],
+                duration_ms: 1,
+                exit_code: Some(0),
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+        }))
+        .unwrap();
+    assistant(store, attempt, &format!("{attempt}-intermediate"));
+}
+
+#[test]
+fn empty_terminal_uses_its_own_native_cursor() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    append(
+        &store,
+        "empty",
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("empty"),
+        },
+    );
+    append(
+        &store,
+        "empty",
+        RuntimeEvent::AttemptTimedOut {
+            attempt_id: AttemptId::new("empty"),
+        },
+    );
+    let projected = page(&store, None, 1);
+    let entry = &projected.entries[0];
+    let owner = entry.turn_process.as_ref().unwrap();
+    assert_eq!(owner.control_cursor, entry.cursor);
+    assert_eq!(owner.message_count, 0);
+    assert_eq!(owner.tool_call_count, 0);
+    assert!(owner.started_at.is_some());
+}
+
+fn terminal_cases() -> [(&'static str, RuntimeEvent, TurnProcessOutcome); 4] {
+    use crate::events::types::{AttemptFailure, AttemptLimit};
+    use crate::runtime::types::{CancellationReason, RuntimeError};
+    [
+        (
+            "cancelled",
+            RuntimeEvent::AttemptCancelled {
+                attempt_id: AttemptId::new("cancelled"),
+                reason: CancellationReason::UserRequested,
+            },
+            TurnProcessOutcome::Cancelled,
+        ),
+        (
+            "failed",
+            RuntimeEvent::AttemptFailed {
+                attempt_id: AttemptId::new("failed"),
+                error: AttemptFailure::Runtime {
+                    error: RuntimeError::Internal {
+                        message: "fixture".into(),
+                    },
+                },
+            },
+            TurnProcessOutcome::Failed,
+        ),
+        (
+            "timeout",
+            RuntimeEvent::AttemptTimedOut {
+                attempt_id: AttemptId::new("timeout"),
+            },
+            TurnProcessOutcome::TimedOut,
+        ),
+        (
+            "limit",
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: AttemptId::new("limit"),
+                limit: AttemptLimit::MaxTurns,
+            },
+            TurnProcessOutcome::LimitExceeded,
+        ),
+    ]
 }

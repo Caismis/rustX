@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
-import type { SourceMutation } from '../../../../../protocol/app-server/v22';
+import type { SourceMutation } from '../../../../../protocol/app-server/v23';
 import { Button } from '../../../presentation/primitives/Button';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';

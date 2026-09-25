@@ -1,11 +1,11 @@
-import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v22';
+import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v23';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v22';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v23';
 import type { ReactNode } from 'react';
 
 export function Content({ blocks, markdown = false, streaming = false, tools = [] }: { tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[] }) {

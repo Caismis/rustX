@@ -11,7 +11,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v22';
+import type { CatalogModelView, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v23';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -234,7 +234,7 @@ it.each(['cancelled', 'failed', 'timed_out', 'limit_exceeded'] as const)('execut
   await act(async () => server.update('A', live('streamed transition')));
   expect(screen.getByText('streamed transition')).toBeTruthy();
   const terminal: RuntimeClientSnapshot = { ...snapshot(), transcript: { entries: [{ cursor: '1', item: { type: 'attempt_terminal', turn: {
-    conversation_id: 'conversation-A', attempt_id: 'exact-attempt', event_id: 'terminal-event', outcome,
+    conversation_id: 'conversation-A', attempt_id: 'exact-attempt', event_id: 'terminal-event', outcome, control_cursor: '1', message_count: 0, tool_call_count: 0,
     started_at: '2026-09-25T00:00:00Z', ended_at: '2026-09-25T00:00:07Z',
   } } }] } };
   terminal.attempt = { attempt_id: 'exact-attempt', turn: 2, phase: { type: 'settled', outcome:

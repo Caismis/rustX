@@ -1775,6 +1775,32 @@ impl ConversationStore for SqliteConversationStore {
         ids.iter().map(|id| load_message(&connection, id)).collect()
     }
 
+    fn message_transcript_cursor(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        let position: Option<i64> = self.lock()?.query_row(
+            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+            [message_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("process control position: {error}")))?;
+        position
+            .map(|value| nonnegative(value, "process control position").map(TranscriptCursor::new))
+            .transpose()
+    }
+
+    fn event_transcript_cursor(
+        &self,
+        event_id: &EventId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        let position: Option<i64> = self.lock()?.query_row(
+            "SELECT position FROM transcript_order WHERE reference_kind='attempt_terminal' AND reference_id=?1",
+            [event_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("terminal control position: {error}")))?;
+        position
+            .map(|value| nonnegative(value, "terminal control position").map(TranscriptCursor::new))
+            .transpose()
+    }
+
     fn message_append_revision(
         &self,
         message_id: &MessageId,

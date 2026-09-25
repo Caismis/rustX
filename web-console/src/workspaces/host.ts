@@ -1,5 +1,5 @@
 import { carrierFetch } from '../carrier/http.ts';
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v22.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v23.ts';
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */

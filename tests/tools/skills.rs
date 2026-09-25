@@ -1062,7 +1062,7 @@ fn environment_digests_are_deterministic() {
     let node_deps: BTreeMap<String, String> = [("pdf-lib".to_owned(), "1.17.1".to_owned())]
         .into_iter()
         .collect();
-    let node_digest = node_environment_digest("linux", "x86_64", "v22.1.0", "10.2.3", &node_deps);
+    let node_digest = node_environment_digest("linux", "x86_64", "v23.1.0", "10.2.3", &node_deps);
     assert_ne!(
         node_digest.as_str(),
         digest.as_str(),

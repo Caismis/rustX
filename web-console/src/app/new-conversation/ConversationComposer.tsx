@@ -2,7 +2,7 @@ import { useClientSelector, transportSelection, sameValue } from '../../client/s
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
 import { useEffect, useState, useRef, type ComponentProps, type ReactNode } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import type { SessionModelConfig } from '../../../../protocol/app-server/v22';
+import type { SessionModelConfig } from '../../../../protocol/app-server/v23';
 import type { AppServerClient, SessionView } from '../../client/app-server';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../../workspaces/host';
 import { sameEndpoint } from '../../workspaces/endpoint';

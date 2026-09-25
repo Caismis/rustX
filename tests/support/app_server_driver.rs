@@ -121,14 +121,14 @@ pub async fn socket(
     let mut request = url.into_client_request().unwrap();
     request.headers_mut().insert(
         "sec-websocket-protocol",
-        format!("rustx.app-server.v22, rustx-token.{TOKEN}")
+        format!("rustx.app-server.v23, rustx-token.{TOKEN}")
             .parse()
             .unwrap(),
     );
     let (socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
     assert_eq!(
         response.headers()["sec-websocket-protocol"],
-        "rustx.app-server.v22"
+        "rustx.app-server.v23"
     );
     socket
 }

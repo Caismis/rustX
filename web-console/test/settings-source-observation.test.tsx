@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v22';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v23';
 import { findOnAdvanced, openSettingsPage, queryOnAdvanced, settingsReady, SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/app-server';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';

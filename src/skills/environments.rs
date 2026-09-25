@@ -137,7 +137,7 @@ const MATERIALIZATION_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeVersions {
     /// The resolved runtime version identity (e.g. `Python 3.12.3`,
-    /// `v22.1.0`).
+    /// `v23.1.0`).
     pub runtime: String,
     /// The resolved package-manager version identity (e.g.
     /// `pip 24.0 ...`, `10.2.3`).

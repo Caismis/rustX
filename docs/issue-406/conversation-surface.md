@@ -1,5 +1,11 @@
 # WEB-16: resident conversation ownership
 
+PR #409 terminal-process follow-up: [current ownership contract](terminal-process-ownership.md).
+The earlier terminal-marker representation described below is superseded by
+native `TurnProcessView` in App Server v23 / Runtime Client v49. Follow-up
+validation is recorded in the PR report.
+
+
 Starting rustX: `ada60feccd6d3bd058a10f8e9b6418aa3f148a61` (`origin/main`).
 Reference checkout: `/home/caismis/Documents/codes/deepseek-harness`, read-only.
 Reviewed Harness: `477b4f420553e8a52c2fbccc464d7561b239c443`; local HEAD,

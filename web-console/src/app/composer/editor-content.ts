@@ -1,4 +1,4 @@
-import type { UserInputBlock } from '../../../../protocol/app-server/v22';
+import type { UserInputBlock } from '../../../../protocol/app-server/v23';
 
 /** The flat Web editor represents uploads* followed by at most one nonempty
  * text block. Reject all other native shapes before decomposing, never reorder

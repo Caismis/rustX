@@ -1,4 +1,4 @@
-import type { ModelCatalogView } from '../../../protocol/app-server/v22';
+import type { ModelCatalogView } from '../../../protocol/app-server/v23';
 import type { ModelChoice } from '../presentation/agent/ModelSelect';
 /** Native catalog order, reasoning profiles and default profile, unchanged. */
 export function catalogChoices(catalog?: ModelCatalogView): ModelChoice[] {

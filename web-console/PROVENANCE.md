@@ -904,7 +904,7 @@ opaque text seat is used for rustX's current projection.
 
 Harness conversation controllers, event assembly, runtime stores, permission
 catalogs and browser Session ownership are excluded. TurnProcess uses only
-native `completed_process` membership, never Harness event reduction or browser
+native `turn_process` membership, never Harness event reduction or browser
 adjacency. Independent subagent lifecycles are not assigned a parent process by
 provider call-ID coincidence; only native-owned process rows are folded. The
 upstream fish logo/wordmark is deliberately excluded in favor of rustX branding.
@@ -923,3 +923,16 @@ binding. Their local hashes and import closure are updated in the inventory.
 `ConversationSeat`, `ConversationHeader`, and `SettingsNavigationFeedback` split
 existing rustX App ownership; they add no copied upstream source. Journal-owned
 terminal transcript facts and failure routing are native rustX adaptations.
+
+
+PR #409 terminal-process follow-up re-inspected Harness commit
+`477b4f420553e8a52c2fbccc464d7561b239c443`, specifically
+`packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx`,
+`packages/client/ui-chat/src/client/contract/turn-process.ts`,
+`packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts`, and
+`packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts`.
+These are behavioral references for whole-Turn ownership, control placement,
+counts and always-open stopped/failed disclosure. No additional upstream source
+was copied. The existing adapted TurnProcess presentation is unchanged. Native
+Journal projection and cursor-based Web composition are rustX-authored. Generated
+App Server v23 imports and their local hashes/import closures move together.

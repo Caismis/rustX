@@ -1538,7 +1538,8 @@ export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
  * Identifies one durable runtime event.
  */
 export type EventId = string;
-export type TerminalTurnOutcome = 'cancelled' | 'failed' | 'timed_out' | 'limit_exceeded';
+export type TurnProcessOutcome =
+  'running' | 'completed' | 'cancelled' | 'failed' | 'timed_out' | 'limit_exceeded';
 /**
  * A content block inside a `UserMessageBlock`.
  */
@@ -5684,10 +5685,10 @@ export interface CompletedResponseTiming {
  */
 export interface RuntimeClientTranscriptEntry {
   /**
-   * Exact successful Attempt process membership, derived by native owners.
+   * Exact native Attempt process membership, derived by native owners.
    * Absence is not permission for a client to infer a process boundary.
    */
-  completed_process?: CompletedProcessView | null;
+  turn_process?: TurnProcessView | null;
   /**
    * The native Attempt has not yet settled this accepted Assistant candidate.
    * A client retaining this row outside a refresh must reread it, not freeze absence.
@@ -5711,7 +5712,7 @@ export interface RuntimeClientTranscriptEntry {
    */
   item:
     | {
-        turn: TerminalTurnView;
+        turn: TurnProcessView;
         type: 'attempt_terminal';
       }
     | {
@@ -5870,23 +5871,26 @@ export interface RuntimeClientTranscriptEntry {
       };
 }
 /**
- * Native ownership of a completed Attempt's process. Destination final address
- * and immutable origin are distinct, including through lineage copies.
+ * One native process owner shared by live, successful and unsuccessful Turns.
+ * Repeated on each exact member so bounded pages are independently resolvable.
  */
-export interface CompletedProcessView {
-  origin: ResponseOrigin;
-  final_message_id: MessageId;
-}
-/**
- * Original execution owner, unchanged through arbitrarily deep lineage copies.
- */
-export interface ResponseOrigin {
+export interface TurnProcessView {
   conversation_id: ConversationId;
   attempt_id: AttemptId;
   /**
-   * Identifies a committed canonical message block.
+   * Original terminal Journal identity, absent while running or inherited.
    */
-  closing_message_id: string;
+  event_id?: EventId | null;
+  /**
+   * The cursor domain of durable transcript paging.
+   */
+  control_cursor: string;
+  final_message_id?: MessageId | null;
+  message_count: number;
+  tool_call_count: number;
+  outcome: TurnProcessOutcome;
+  started_at?: string | null;
+  ended_at?: string | null;
 }
 /**
  * Derived response view over local execution or inherited lineage provenance.
@@ -5894,7 +5898,7 @@ export interface ResponseOrigin {
  */
 export interface CompletedResponseView {
   closing_message_id: MessageId;
-  origin: ResponseOrigin1;
+  origin: ResponseOrigin;
   /**
    * Durable completion timestamp; never a browser receipt time.
    */
@@ -5924,9 +5928,9 @@ export interface CompletedResponseView {
   timing?: CompletedResponseTiming | null;
 }
 /**
- * Original execution owner, unchanged through arbitrarily deep lineage copies.
+ * Original execution owner, including for inherited historical responses.
  */
-export interface ResponseOrigin1 {
+export interface ResponseOrigin {
   conversation_id: ConversationId;
   attempt_id: AttemptId;
   /**
@@ -6098,17 +6102,6 @@ export interface ToolExecutionResult1 {
    * consumes only this typed field, never arbitrary JSON keys.
    */
   managed_output?: ManagedOutputContinuation | null;
-}
-/**
- * Durable terminal Turn identity and clock. Transcript cursor owns ordering.
- */
-export interface TerminalTurnView {
-  conversation_id: ConversationId;
-  attempt_id: AttemptId;
-  event_id: EventId;
-  outcome: TerminalTurnOutcome;
-  started_at?: string | null;
-  ended_at: string;
 }
 /**
  * Inbound information supplied to the current agent.

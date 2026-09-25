@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { SourceTarget } from '../../../../protocol/app-server/v22';
+import type { SourceTarget } from '../../../../protocol/app-server/v23';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';

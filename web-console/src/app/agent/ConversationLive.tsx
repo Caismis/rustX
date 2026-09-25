@@ -11,7 +11,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { HistoryAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v22';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v23';
 
 export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;

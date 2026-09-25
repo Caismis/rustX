@@ -10075,11 +10075,11 @@
       "description": "One derived transcript item and its stable durable cursor.",
       "type": "object",
       "properties": {
-        "completed_process": {
-          "description": "Exact successful Attempt process membership, derived by native owners.\nAbsence is not permission for a client to infer a process boundary.",
+        "turn_process": {
+          "description": "Exact native Attempt process membership, derived by native owners.\nAbsence is not permission for a client to infer a process boundary.",
           "anyOf": [
             {
-              "$ref": "#/$defs/CompletedProcessView"
+              "$ref": "#/$defs/TurnProcessView"
             },
             {
               "type": "null"
@@ -10124,25 +10124,8 @@
         "item"
       ]
     },
-    "CompletedProcessView": {
-      "description": "Native ownership of a completed Attempt's process. Destination final address\nand immutable origin are distinct, including through lineage copies.",
-      "type": "object",
-      "properties": {
-        "origin": {
-          "$ref": "#/$defs/ResponseOrigin"
-        },
-        "final_message_id": {
-          "$ref": "#/$defs/MessageId"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "origin",
-        "final_message_id"
-      ]
-    },
-    "ResponseOrigin": {
-      "description": "Original execution owner, unchanged through arbitrarily deep lineage copies.",
+    "TurnProcessView": {
+      "description": "One native process owner shared by live, successful and unsuccessful Turns.\nRepeated on each exact member so bounded pages are independently resolvable.",
       "type": "object",
       "properties": {
         "conversation_id": {
@@ -10151,16 +10134,84 @@
         "attempt_id": {
           "$ref": "#/$defs/AttemptId"
         },
-        "closing_message_id": {
-          "description": "Provenance only; never a destination content address.",
-          "$ref": "#/$defs/MessageId"
+        "event_id": {
+          "description": "Original terminal Journal identity, absent while running or inherited.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "control_cursor": {
+          "description": "Control sorts immediately before this immutable native transcript position.\nNo-content terminal Attempts use their terminal event position.",
+          "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+        },
+        "final_message_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "tool_call_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "outcome": {
+          "$ref": "#/$defs/TurnProcessOutcome"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
         }
       },
       "additionalProperties": false,
       "required": [
         "conversation_id",
         "attempt_id",
-        "closing_message_id"
+        "control_cursor",
+        "message_count",
+        "tool_call_count",
+        "outcome"
+      ]
+    },
+    "EventId": {
+      "description": "Identifies one durable runtime event.",
+      "type": "string"
+    },
+    "TurnProcessOutcome": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "cancelled",
+        "failed",
+        "timed_out",
+        "limit_exceeded"
       ]
     },
     "CompletedResponseView": {
@@ -10222,6 +10273,28 @@
         "origin",
         "completed_at",
         "surface_revision"
+      ]
+    },
+    "ResponseOrigin": {
+      "description": "Original execution owner, unchanged through arbitrarily deep lineage copies.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "closing_message_id": {
+          "description": "Provenance only; never a destination content address.",
+          "$ref": "#/$defs/MessageId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id",
+        "closing_message_id"
       ]
     },
     "ForegroundToolExecution": {
@@ -10356,7 +10429,7 @@
           "type": "object",
           "properties": {
             "turn": {
-              "$ref": "#/$defs/TerminalTurnView"
+              "$ref": "#/$defs/TurnProcessView"
             },
             "type": {
               "type": "string",
@@ -10497,56 +10570,6 @@
             "settlement"
           ]
         }
-      ]
-    },
-    "TerminalTurnView": {
-      "description": "Durable terminal Turn identity and clock. Transcript cursor owns ordering.",
-      "type": "object",
-      "properties": {
-        "conversation_id": {
-          "$ref": "#/$defs/ConversationId"
-        },
-        "attempt_id": {
-          "$ref": "#/$defs/AttemptId"
-        },
-        "event_id": {
-          "$ref": "#/$defs/EventId"
-        },
-        "outcome": {
-          "$ref": "#/$defs/TerminalTurnOutcome"
-        },
-        "started_at": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "date-time"
-        },
-        "ended_at": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "conversation_id",
-        "attempt_id",
-        "event_id",
-        "outcome",
-        "ended_at"
-      ]
-    },
-    "EventId": {
-      "description": "Identifies one durable runtime event.",
-      "type": "string"
-    },
-    "TerminalTurnOutcome": {
-      "type": "string",
-      "enum": [
-        "cancelled",
-        "failed",
-        "timed_out",
-        "limit_exceeded"
       ]
     },
     "MessageBlock": {

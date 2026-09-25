@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { GridList, GridListItem, Button as AriaButton } from 'react-aria-components';
 import type {
   Model, ModelLayer, Modality, ProviderView, ProviderWrite, SourceScope, SourceSettings,
-} from '../../../../../protocol/app-server/v22';
+} from '../../../../../protocol/app-server/v23';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { TypedUnitForm, UnitForm, useUnitEditing, type TypedUnitForm as TypedForm } from '../forms/bridge';

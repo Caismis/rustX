@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord } from '../../../protocol/app-server/v22';
+import type { TraceRecord } from '../../../protocol/app-server/v23';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
