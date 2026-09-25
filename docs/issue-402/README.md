@@ -1,13 +1,16 @@
 # Issue #402 implementation and acceptance
 
 [PR #404 review corrections and regression evidence](review-corrections.md).
+[Final integration with merged PR #403](integration-403.md).
 
 ## Repository and inspection
 
 Implementation worktree: `/home/caismis/Documents/codes/rustX-issue-402`.
 Branch: `issue-402-harness-conversation-models`.
-Implementation base: `da43450b77d3c195d95b06818be8142317663c91` (latest fetched
-`origin/main`, including #401/#394). Other worktrees were not modified.
+Original implementation base: `da43450b77d3c195d95b06818be8142317663c91`
+(including #401/#394). Final integration base:
+`5df40f29c72ee5179864bf2f4671c3f8d32dbc18` (including merged #403/#396).
+Other worktrees were not modified.
 
 The complete issue was read before implementation. Inspection covered App,
 WorkspaceNavigation/Host/navigation, AgentControls/Composer/Transcript/Status/Tool,
