@@ -126,7 +126,7 @@ async fn initialize_alone_establishes_the_attachment() {
     assert_eq!(response["error"]["type"], "not_attached");
     assert!(response.get("result").is_none());
 
-    let response = adapter.exchange(r#"{"method":"initialize","id":2,"protocol_version":48}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":2,"protocol_version":49}"#);
     assert_eq!(response["id"], 2, "the response correlates the request id");
     assert!(response.get("error").is_none());
     assert_eq!(response["result"]["type"], "initialized");
@@ -167,7 +167,7 @@ async fn initialize_alone_establishes_the_attachment() {
 async fn retained_workspace_disposal_uses_the_typed_client_boundary() {
     let host = host("conv_d4327a4c-3131-790b-bf58-3841b09ab786", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
-    let initialized = adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":48}"#);
+    let initialized = adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":49}"#);
     assert!(initialized.get("error").is_none());
 
     let response = adapter
@@ -365,7 +365,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // The runtime is still attachable at the supported version.
-    let response = adapter.exchange(r#"{"method":"initialize","id":9,"protocol_version":48}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":9,"protocol_version":49}"#);
     assert_eq!(response["result"]["type"], "initialized");
 }
 
@@ -377,21 +377,21 @@ async fn a_second_initialize_is_rejected_without_eviction() {
     let first = FramingAdapter::new(&host);
     let second = FramingAdapter::new(&host);
 
-    let response = first.exchange(r#"{"method":"initialize","id":1,"protocol_version":48}"#);
+    let response = first.exchange(r#"{"method":"initialize","id":1,"protocol_version":49}"#);
     let first_id = response["result"]["attachment_id"]
         .as_str()
         .expect("attachment identity")
         .to_owned();
 
     // A second connection: rejected with the active identity, not admitted.
-    let response = second.exchange(r#"{"method":"initialize","id":1,"protocol_version":48}"#);
+    let response = second.exchange(r#"{"method":"initialize","id":1,"protocol_version":49}"#);
     assert_eq!(response["error"]["type"], "attachment_in_use");
     assert_eq!(response["error"]["existing_attachment_id"], first_id);
     assert_eq!(second.endpoint.attachment_id(), None);
 
     // Re-initializing the same connection is invalid, and equally
     // non-destructive.
-    let response = first.exchange(r#"{"method":"initialize","id":2,"protocol_version":48}"#);
+    let response = first.exchange(r#"{"method":"initialize","id":2,"protocol_version":49}"#);
     assert_eq!(response["error"]["type"], "invalid_request");
 
     // The first attachment was never evicted: it still serves requests
@@ -412,7 +412,7 @@ async fn a_second_initialize_is_rejected_without_eviction() {
     let response = first.exchange(r#"{"method":"detach","id":4}"#);
     assert_eq!(response["result"]["type"], "detached");
     assert_eq!(first.endpoint.attachment_id(), None);
-    let response = second.exchange(r#"{"method":"initialize","id":2,"protocol_version":48}"#);
+    let response = second.exchange(r#"{"method":"initialize","id":2,"protocol_version":49}"#);
     let second_id = response["result"]["attachment_id"]
         .as_str()
         .expect("attachment identity");
@@ -431,7 +431,7 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     .await;
     let adapter = FramingAdapter::new(&host);
 
-    let response = adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":48}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":49}"#);
     let cursor = response["result"]["cursor"]
         .as_u64()
         .expect("initialize returns the cursor to resume after");
@@ -480,7 +480,7 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     let response = adapter.exchange(r#"{"method":"snapshot_get","id":7}"#);
     assert_eq!(response["error"]["type"], "not_attached");
 
-    let response = adapter.exchange(r#"{"method":"initialize","id":8,"protocol_version":48}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":8,"protocol_version":49}"#);
     assert_eq!(response["result"]["cursor"].as_u64(), Some(expected));
     let messages = response["result"]["snapshot"]["messages"]
         .as_array()
@@ -503,11 +503,11 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
 async fn dropping_the_endpoint_releases_the_attachment() {
     let host = host("conv_1c8d2cd1-ed58-70cb-a610-ed7d8d4744b8", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
-    adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":48}"#);
+    adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":49}"#);
     drop(adapter);
 
     let reconnected = FramingAdapter::new(&host);
-    let response = reconnected.exchange(r#"{"method":"initialize","id":1,"protocol_version":48}"#);
+    let response = reconnected.exchange(r#"{"method":"initialize","id":1,"protocol_version":49}"#);
     assert_eq!(
         response["result"]["type"], "initialized",
         "the dropped connection released the attachment"
@@ -521,7 +521,7 @@ async fn dropping_the_endpoint_releases_the_attachment() {
 async fn shutdown_is_not_detach_and_reaches_quiescence() {
     let host = host("conv_8347b205-5919-7d09-84a7-c99c982d1162", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
-    adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":48}"#);
+    adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":49}"#);
 
     let before: Vec<MessageBlock> = host.snapshot().expect("snapshot").0.messages;
     let response = adapter
