@@ -1,26 +1,32 @@
 # App Server protocol v23
 
-The #409 follow-up replaces separate successful/terminal process DTOs with native
+App Server v23 / Runtime Client v49 complete the reviewed #406 contract. The
+#409 follow-up replaces separate successful/terminal process DTOs with native
 `TurnProcessView`: exact Attempt ownership on each committed process member,
-whole-process counts, immutable control cursor, outcome and native clock. Failed
-and stopped processes remain open across reconstruction and bounded paging.
-`CompletedResponseView` retains successful answer/TurnTail provenance and actions.
-See [the ownership contract](issue-406/terminal-process-ownership.md).
+whole-process message/tool counts, immutable `control_cursor`, native clock and
+one semantic owner for running, completed, cancelled, failed, timed-out and
+limit-exceeded outcomes. Native evidence seats the control; bounded pages resolve
+ownership without browser adjacency inference. Failed/stopped processes remain
+open across reconstruction and paging. `CompletedResponseView` retains finalized
+answer/TurnTail provenance and actions. Lineage remains selective: finalized
+completed-response provenance may cross into children; unsuccessful source
+execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
+Only v23/v49 are supported; v22/v48 and earlier peers are rejected without a
+compatibility path, and generated v22 artifacts are removed.
 
-App Server v23 / Runtime Client v49 add native conversation Turn/Step totals,
-measured request timing and the latest exact Attempt clock. Workspace
-`SessionModelsView::Available` also publishes the authored `default_model` from
-the same creation capture as its catalog. A browser product preference can seed
-new Session intent; it does not alter authored configuration or existing Sessions.
-v21/v47 peers are rejected; generated v21 artifacts are removed.
+The earlier v22/v48 revision introduced native whole-conversation Turn/Step
+totals, measured request timing, the latest exact Attempt clock, and authored
+`SessionModelsView::Available.default_model` from the same creation capture as
+its catalog. v23/v49 retain these capabilities. A browser product preference can
+seed new Session intent; it does not alter authored configuration or existing
+Sessions.
 
-The retained v21/v47 contract adds `completed_process` to transcript entries.
-Native committed Assistant identities and exact Tool occurrence owners identify
-one successful Attempt and its final response. Clients fold presentation only;
-User input, independent audits, live work, final answer and response actions stay
-visible. SQLite schema 44 retains exact process members in lineage provenance,
-remapped by the native copy owner. v20/v46 and older peers and older stores are
-rejected without compatibility paths. Generated v20 artifacts are removed.
+The historical v21/v47 revision introduced `completed_process` on transcript
+entries, using committed Assistant identities and exact Tool occurrence owners
+to identify a successful Attempt and its final response. v23/v49 replace that
+field with `turn_process`, extending the semantic owner across outcomes. SQLite
+schema 44 retains exact completed-process members in lineage provenance,
+remapped by the native copy owner; this selective lineage policy is unchanged.
 
 The v20 Trace predecessor/catalog vocabulary from #394 is retained unchanged.
 
@@ -794,8 +800,8 @@ Complete = terminal
 
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
-`Active + disarmed`. Native Runtime Client version 43 carries this vocabulary;
-version 38 clients are rejected by strict negotiation. This remains mandatory
+`Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
+version 49 retains it under strict negotiation. This remains mandatory
 App Server protocol v23, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,

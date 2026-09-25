@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v21 envelope and method vocabulary.
+//! Rust authority for the current mandatory App Server protocol envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.

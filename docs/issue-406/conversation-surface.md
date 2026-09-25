@@ -50,7 +50,7 @@ App / conversation surface (bounded chrome subscription)
 | Model selection | Native Session projection after creation; pre-creation intent must pass Workspace catalog admission |
 | Last-used model | NewSessionModelPreference, separate authority-scoped browser product storage `rustx-new-session-model-v1` |
 | Streaming | AppServerClient authoritative replaceable snapshots; selected subscriptions at live transcript/docks/statistics/Inspector |
-| Turn process | Exact native Attempt clock and completed-process membership; presentation disclosure local |
+| Turn process | Exact native Attempt clock and TurnProcessView membership; presentation disclosure local |
 | Elapsed clock | TurnProcess interval, no AppServer publication or App state |
 | Completed Turn tail | turnPresentation nodes keyed by native Conversation/Attempt origin; native closing boundary and retry identity |
 | Conversation statistics | Native presentation-event fold across the complete Conversation, independent of transcript page |
@@ -109,7 +109,8 @@ same production client rather than a second UI implementation.
 - First-submit phase-copy rows and normal shell `Working…` / model-update rows.
 - Raw cwd from the ordinary header.
 - Old statistics footer hierarchy and confirmed-delete generic success banner.
-- App Server v21 generated artifacts (mandatory v22, no compatibility shim).
+- App Server v21 generated artifacts in the initial v22/v48 change; v22 artifacts
+  were subsequently replaced by mandatory v23/v49, without a compatibility shim.
 
 ## Convergence and deliberate native differences
 
@@ -145,11 +146,25 @@ Native adaptations, not legacy concessions:
 
 ## Protocol boundary
 
-App Server v22 / Runtime Client v48 add required Turn/Step statistics and optional
-measured timing/latest Turn clock. `SessionModelsView::Available.default_model`
-is required. Generator, Web, TUI, transports and exact-version fixtures move
-together. There is no Agent Loop semantic change, new execution store or database
-migration. SQLite's presentation-event query already contains native Turn starts.
+App Server v22 / Runtime Client v48 introduced the initial #406 additions:
+whole-conversation Turn/Step statistics, measured request timing/latest Turn
+clock, and required authored `SessionModelsView::Available.default_model`.
+That revision used the earlier split successful/terminal process vocabulary.
+
+The final mandatory contract is App Server v23 / Runtime Client v49. It retains
+those capabilities and replaces the split representation with `TurnProcessView`:
+exact Attempt ownership on committed process members, an immutable native
+`control_cursor`, whole-process message/tool counts, and one semantic owner for
+running, completed, cancelled, failed, timed-out and limit-exceeded outcomes.
+Native evidence determines membership and the control seat; bounded pages resolve
+ownership independently, without browser adjacency inference. Failed/stopped
+processes remain open. `CompletedResponseView` still owns finalized-answer and
+TurnTail provenance. Lineage remains selective: finalized completed-response
+provenance may cross into children; unsuccessful source execution outcomes do not.
+
+Generator, Web, TUI, transports and exact-version fixtures use v23/v49 together.
+There is no Agent Loop semantic change, new execution store or database migration.
+SQLite's presentation-event query already contains native Turn starts.
 
 See [Web provenance](../../web-console/PROVENANCE.md#406-current-harness-conversation-contract)
 for the exact studied and materially adapted source inventory. Validation and
