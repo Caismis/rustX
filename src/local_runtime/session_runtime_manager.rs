@@ -1134,18 +1134,12 @@ impl SessionRuntimeManager {
         target: &super::configuration::settings::SourceTarget,
     ) {
         use super::configuration::settings::SourceTarget;
-        use sha2::Digest;
-        let captured = self.configuration.read_source_settings(target);
-        let revision = captured.as_ref().ok().map(|projection| {
-            format!(
-                "{:x}",
-                sha2::Sha256::digest(serde_json::to_vec(projection).expect("source projection"))
-            )
-        });
+        let captured = self.configuration.capture_source_settings(target);
+        let revision = captured.as_ref().ok().map(|(_, revision)| revision.clone());
         let process = captured
             .as_ref()
             .ok()
-            .and_then(|projection| projection.user.authored.as_ref())
+            .and_then(|(settings, _)| settings.user.authored.as_ref())
             .map(|document| document.app_server.clone().unwrap_or_default())
             .ok_or_else(|| "User process policy source is invalid or unreadable".into())
             .and_then(|policy| policy.validate().map(|()| policy));

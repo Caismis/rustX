@@ -2,7 +2,7 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-fn run(root: &Path, arguments: &[&str]) -> Output {
+fn run(root: &Path, arguments: &[impl AsRef<std::ffi::OsStr>]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rustx"))
         .current_dir(root.join("workspace"))
         .env_clear()
@@ -14,6 +14,7 @@ fn run(root: &Path, arguments: &[&str]) -> Output {
 }
 
 fn report(output: &Output, exit: i32) -> serde_json::Value {
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     assert_eq!(
         output.status.code(),
         Some(exit),
@@ -87,20 +88,17 @@ workflows = ['human_plan']
                 .stdout
                 .starts_with(format!("workflow_{operation}:").as_bytes())
         );
-        report(
-            &run(
-                root.path(),
-                &[
-                    "workflow",
-                    operation,
-                    "human_plan",
-                    "--trust",
-                    "grant",
-                    "--json",
-                ],
-            ),
-            2,
-        );
+        lexical_failure(&run(
+            root.path(),
+            &[
+                "workflow",
+                operation,
+                "human_plan",
+                "--trust",
+                "grant",
+                "--json",
+            ],
+        ));
         assert_eq!(std::fs::read(&file).unwrap(), valid);
     }
     std::fs::write(&file, "description: [\n").unwrap();
@@ -130,8 +128,7 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     assert_eq!(incomplete["validity"], "incomplete");
     assert!(incomplete["launch"].is_null());
     assert!(incomplete["partial"].is_object());
-    let arguments_error = report(&run(root.path(), &["config", "show", "--json"]), 2);
-    assert_eq!(arguments_error["diagnostics"][0]["path"], "arguments");
+    lexical_failure(&run(root.path(), &["config", "show", "--json"]));
     let arguments = [
         "init",
         "--template",
@@ -199,7 +196,7 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     assert!(!Path::new(runtime_root).exists());
     let help = run(root.path(), &["--help"]);
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("3 incomplete or unresolved"));
+    assert!(String::from_utf8_lossy(&help.stderr).contains("3 incomplete or unresolved"));
 }
 
 #[test]
@@ -305,4 +302,465 @@ fn cfg275_agent_inspection_and_removed_flags_are_offline() {
         );
     }
     assert_eq!(before, state_tree(&root.path().join("home")));
+}
+
+fn lexical_failure(output: &Output) {
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+    assert!(!output.stderr.is_empty());
+    assert!(!output.stderr.contains(&0x1b));
+}
+
+#[test]
+fn cli01_cli02_cli06_cli07_public_entry_stream_matrix() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    for args in [
+        vec!["--model"],
+        vec!["--model="],
+        vec!["--model=a", "--model=b"],
+        vec!["--unknown"],
+        vec!["--", "--model=x"],
+        vec!["config", "check", "--workspace", "--json"],
+        vec!["config", "check", "--unknown", "--json"],
+        vec!["config", "check", "--json", "--unknown"],
+        vec!["config", "unknown", "--json"],
+        vec!["config", "show", "--agent", "--json"],
+        vec!["doctor", "--prepare", "--json"],
+        vec!["workflow", "check", "--json"],
+        vec!["workflow", "check", "review", "--runtime-root=x", "--json"],
+        vec!["init", "--json"],
+        vec!["init", "--template=unknown", "--json"],
+        vec!["app-server", "--listen"],
+        vec!["app-server", "--listen=stdio", "--workspace=x"],
+    ] {
+        lexical_failure(&run(root.path(), &args));
+    }
+    let human = run(root.path(), &["config", "check", "--workspace=--json"]);
+    assert_eq!(human.status.code(), Some(2));
+    assert!(human.stderr.is_empty());
+    assert!(human.stdout.starts_with(b"config_check:"));
+    report(
+        &run(
+            root.path(),
+            &["config", "check", "--workspace=--json", "--json"],
+        ),
+        2,
+    );
+    for args in [
+        vec!["--config=/nonexistent/rustx.toml"],
+        vec![
+            "app-server",
+            "--listen=stdio",
+            "--config=/nonexistent/rustx.toml",
+        ],
+        vec!["app-server", "--listen=invalid"],
+        vec!["app-server", "--listen=stdio", "--token-file=x"],
+    ] {
+        lexical_failure(&run(root.path(), &args));
+    }
+    assert!(!root.path().join("home").exists());
+}
+
+#[test]
+fn cli07_cli08_help_precedes_host_capture_and_has_no_effects() {
+    let root = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["--help"],
+        vec!["-h"],
+        vec!["config", "--help"],
+        vec!["config", "check", "--help"],
+        vec!["config", "show", "--help"],
+        vec!["workflow", "--help"],
+        vec!["workflow", "check", "--help"],
+        vec!["workflow", "explain", "--help"],
+        vec!["doctor", "--help"],
+        vec!["init", "--help"],
+        vec!["app-server", "--help"],
+        vec!["help", "config", "show"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rustx"))
+            .current_dir(root.path())
+            .env_clear()
+            .env("HOME", "relative-invalid-home")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {:?}",
+            output.stderr
+        );
+        assert!(output.stdout.is_empty());
+        let help = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            help.contains("Usage:") && !help.contains("subagent-child") && !help.contains('\u{1b}')
+        );
+    }
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn cli09_internal_child_rejects_all_extra_arguments() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    for args in [
+        vec!["--subagent-child", "--help"],
+        vec!["--subagent-child", "--model=x"],
+        vec!["app-server", "--subagent-child"],
+        vec!["--subagent-child", "--subagent-child"],
+    ] {
+        let output = run(root.path(), &args);
+        lexical_failure(&output);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("internal mode"));
+    }
+    let output = run(root.path(), &["--subagent-child"]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+    assert!(!root.path().join("home").exists());
+}
+
+#[test]
+fn exact_values_reach_native_process_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    // The trimmed path names an invalid document; only the exact path is valid.
+    let exact = workspace.join("settings.toml ");
+    std::fs::write(workspace.join("settings.toml"), "unknown_field = true").unwrap();
+    std::fs::write(
+        &exact,
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+    )
+    .unwrap();
+    let checked = report(
+        &run(
+            root.path(),
+            &[
+                "config",
+                "check",
+                "--config",
+                exact.to_str().unwrap(),
+                "--json",
+            ],
+        ),
+        3,
+    );
+    assert_eq!(checked["validity"], "valid");
+
+    let invalid = report(
+        &run(
+            root.path(),
+            &[
+                "init",
+                "--template=anthropic",
+                "--provider=local",
+                "--endpoint=http://localhost",
+                "--credential-env",
+                " RUSTX_TEST_KEY ",
+                "--json",
+            ],
+        ),
+        2,
+    );
+    assert!(
+        invalid["diagnostics"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("--credential-env requires an environment variable name")
+    );
+
+    // The token also keeps a regressed normalized stdio invocation finite:
+    // it would fail with the *different* native stdio/token diagnostic.
+    let transport = run(
+        root.path(),
+        &["app-server", "--listen", " stdio ", "--token-file=/unused"],
+    );
+    lexical_failure(&transport);
+    assert!(
+        String::from_utf8_lossy(&transport.stderr).contains("listen must be stdio or ws://IP:PORT")
+    );
+    assert!(!root.path().join("home").exists());
+}
+
+// Materializing arbitrary filename bytes is a Linux filesystem fixture contract.
+#[cfg(target_os = "linux")]
+#[test]
+fn os_argv_non_unicode_model_document_selects_exact_file() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let exact = workspace.join(OsString::from_vec(b"model-\xff.toml".to_vec()));
+    let lossy = std::path::PathBuf::from(exact.to_string_lossy().into_owned());
+    assert_ne!(exact, lossy);
+    std::fs::write(&lossy, "unknown_field = true").unwrap();
+    let fixture: toml::Value = toml::from_str(include_str!(
+        "../../examples/local-runtime/minimal/rustx.toml"
+    ))
+    .unwrap();
+    std::fs::write(
+        &exact,
+        toml::to_string(&fixture["models"]["example/demo-model"]).unwrap(),
+    )
+    .unwrap();
+    let before = state_tree(&workspace);
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("init"),
+            OsString::from("--template=custom"),
+            OsString::from("--provider=example"),
+            OsString::from("--endpoint=http://localhost"),
+            OsString::from("--credential-env=RUSTX_TEST_KEY"),
+            OsString::from("--model-document"),
+            exact.into_os_string(),
+            OsString::from("--json"),
+        ],
+    );
+    let initialized = report(&output, 0);
+    assert_eq!(
+        initialized["initialization"]["written"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let published: toml::Value = toml::from_str(
+        &std::fs::read_to_string(root.path().join("home/rustx/rustx.toml")).unwrap(),
+    )
+    .unwrap();
+    for (field, expected) in fixture["models"]["example/demo-model"].as_table().unwrap() {
+        assert_eq!(&published["models"]["example/demo-model"][field], expected);
+    }
+    assert_eq!(state_tree(&workspace), before);
+    assert!(!root.path().join("home/.local/state").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn os_argv_non_unicode_text_is_a_lexical_failure() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    let before = state_tree(root.path());
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("app-server"),
+            OsString::from("--listen"),
+            OsString::from_vec(b"stdio-\xff".to_vec()),
+        ],
+    );
+    lexical_failure(&output);
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("invalid UTF-8"), "{error}");
+    assert!(!error.contains("panicked"));
+    assert_eq!(state_tree(root.path()), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn os_argv_private_child_discriminator_is_exact() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    let before = state_tree(root.path());
+    let child = OsString::from("--subagent-child");
+    // Without an inherited control socket, the exact mode reaches its native
+    // startup failure. It must not reach public clap parsing.
+    let output = run(root.path(), std::slice::from_ref(&child));
+    lexical_failure(&output);
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("subagent child:")
+    );
+    let invalid = OsString::from_vec(vec![0xff]);
+    for args in [vec![child.clone(), invalid.clone()], vec![invalid, child]] {
+        let output = run(root.path(), &args);
+        lexical_failure(&output);
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("internal mode")
+        );
+    }
+    let output = run(root.path(), &[OsString::from("--help")]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(
+        !String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("subagent-child")
+    );
+    assert_eq!(state_tree(root.path()), before);
+}
+
+// Materializing arbitrary filename bytes is a Linux filesystem fixture contract.
+#[cfg(target_os = "linux")]
+#[test]
+fn os_argv_non_unicode_config_selects_exact_file() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let exact = workspace.join(OsString::from_vec(b"settings-\xff.toml".to_vec()));
+    let lossy = std::path::PathBuf::from(exact.to_string_lossy().into_owned());
+    assert_ne!(exact, lossy);
+    std::fs::write(&lossy, "unknown_field = true").unwrap();
+    std::fs::write(
+        &exact,
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+    )
+    .unwrap();
+    let before = state_tree(root.path());
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("config"),
+            OsString::from("check"),
+            OsString::from("--config"),
+            exact.into_os_string(),
+            OsString::from("--json"),
+        ],
+    );
+    let checked = report(&output, 3);
+    assert_eq!(checked["validity"], "valid");
+    assert_eq!(checked["readiness"], "unresolved");
+    assert_eq!(checked["projection_omitted"], true);
+    assert!(
+        checked["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["category"] == "projection_encoding")
+    );
+    let sibling = report(
+        &run(
+            root.path(),
+            &[
+                "config",
+                "check",
+                "--config",
+                lossy.to_str().unwrap(),
+                "--json",
+            ],
+        ),
+        2,
+    );
+    assert_eq!(sibling["validity"], "invalid");
+    assert_eq!(state_tree(root.path()), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn os_argv_non_unicode_missing_config_reaches_native_owner() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    // No invalid-byte filename is created. Unix argv can carry the value even
+    // when the host filesystem cannot materialize it (including macOS).
+    let missing = workspace.join(OsString::from_vec(b"missing-\xff.toml".to_vec()));
+    let before = state_tree(root.path());
+    let output = run(
+        root.path(),
+        &[
+            OsString::from("config"),
+            OsString::from("check"),
+            OsString::from("--config"),
+            missing.into_os_string(),
+            OsString::from("--json"),
+        ],
+    );
+    // The filesystem may reject this spelling or report an absent optional
+    // source. Both are native diagnostic outcomes, never a clap Unicode error.
+    let code = output.status.code().unwrap();
+    assert!(matches!(code, 2 | 3));
+    let checked = report(&output, code);
+    assert_eq!(checked["operation"], "config_check");
+    assert_eq!(
+        checked["validity"],
+        if code == 2 { "invalid" } else { "incomplete" }
+    );
+    let diagnostics = checked["diagnostics"].as_array().unwrap();
+    assert!(diagnostics.iter().any(|d| {
+        d["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty())
+            && d["category"] != "projection_encoding"
+            && d["classification"] == if code == 2 { "error" } else { "warning" }
+    }));
+    let encoding_warning = diagnostics
+        .iter()
+        .any(|d| d["category"] == "projection_encoding");
+    if code == 3 {
+        // Resolution retained the non-Unicode source in its partial projection.
+        assert!(encoding_warning);
+        assert_eq!(checked["projection_omitted"], true);
+    }
+    if encoding_warning {
+        assert_eq!(checked["projection_omitted"], true);
+        assert!(checked["launch"].is_null() && checked["partial"].is_null());
+    }
+    assert_eq!(state_tree(root.path()), before);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn app_server_non_unicode_bindings_fail_before_readiness() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let exact = workspace.join(OsString::from_vec(b"settings-\xff.toml".to_vec()));
+    std::fs::write(
+        &exact,
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+    )
+    .unwrap();
+    let alias = workspace.join("unicode-config.toml");
+    std::os::unix::fs::symlink(&exact, &alias).unwrap();
+    let runtime = workspace.join(OsString::from_vec(b"runtime-\xff".to_vec()));
+    let before = state_tree(root.path());
+    for (flag, path) in [
+        ("--config", exact),
+        ("--config", alias),
+        ("--runtime-root", runtime),
+    ] {
+        let output = run(
+            root.path(),
+            &[
+                OsString::from("app-server"),
+                OsString::from("--listen=stdio"),
+                OsString::from(flag),
+                path.into_os_string(),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error = std::str::from_utf8(&output.stderr).unwrap();
+        assert!(
+            error.contains("App Server")
+                && error.contains("lossless UTF-8")
+                && error.contains("JSON protocol"),
+            "{error}"
+        );
+        assert!(!error.contains('\u{fffd}') && !error.contains("panicked") && error.len() < 512);
+        assert_eq!(state_tree(root.path()), before);
+    }
 }

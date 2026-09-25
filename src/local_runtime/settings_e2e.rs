@@ -355,3 +355,25 @@ fn resource_diagnostics_are_attributed_by_identity_never_by_shared_file() {
     );
     assert_eq!(mcp_diagnostics[0].file.as_deref(), Some(mcp.as_path()));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn application_capture_preserves_non_unicode_source_identity() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let (_root, host, mut request) = fixture();
+    let source = host.config_directory.join("rustx.toml");
+    let exact = host
+        .config_directory
+        .join(OsString::from_vec(b"settings-\xff.toml".to_vec()));
+    std::fs::rename(source, &exact).unwrap();
+    request.config = Some(exact);
+    let (manager, input) = request.session_input(&host).unwrap();
+    let captured = manager.capture_application(&input).unwrap();
+    assert!(captured.context.is_ok());
+    assert_eq!(
+        captured.revision,
+        manager.capture_application(&input).unwrap().revision
+    );
+}
