@@ -133,6 +133,9 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+# Issue #398: executable architecture evidence only; no production adoption.
+cap-std = { version = "=4.0.3", default-features = false }
+cap-fs-ext = { version = "=4.0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }
