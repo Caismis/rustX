@@ -12,7 +12,7 @@
  * use provider evidence; Journal terminal timing cannot replace a missing bridge.
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
-import type { TraceRecord } from '../../../../protocol/app-server/v23';
+import type { TrajectoryProjection } from './layout';
 import {
   TRAJECTORY_LANES,
   formatDuration,
@@ -96,7 +96,7 @@ function EarlierHistoryBoundary({
 
 /** Props for the Trajectory timing overview. */
 export interface TrajectoryTimelineProps {
-  records: readonly TraceRecord[];
+  projection: TrajectoryProjection;
   mode: TrajectoryTimelineMode;
   range: TrajectoryTimeRange | null;
   selectedId: string | null;
@@ -104,8 +104,6 @@ export interface TrajectoryTimelineProps {
   searchMatches: ReadonlySet<string> | null;
   onRangeChange: (range: TrajectoryTimeRange | null) => void;
   onSelect: (id: string) => void;
-  /** Section boundary label for a record that opens one, else undefined. */
-  boundaryLabel: (record: TraceRecord, index: number) => string | undefined;
   /** True when the Trace cache reports an older page beyond this window. */
   hasEarlierRecords: boolean;
   /** True while that older page is already being fetched. */
@@ -127,14 +125,13 @@ export interface TrajectoryTimelineProps {
  * @returns the overview element, or an explicit empty state.
  */
 export function TrajectoryTimeline({
-  records,
+  projection,
   mode,
   range,
   selectedId,
   searchMatches,
   onRangeChange,
   onSelect,
-  boundaryLabel,
   hasEarlierRecords,
   loadingEarlier,
   canLoadEarlier,
@@ -147,8 +144,8 @@ export function TrajectoryTimeline({
   const [viewport, setViewport] = useState<TrajectoryTimeRange | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const model = useMemo(
-    () => trajectoryTimeline(records, mode, boundaryLabel),
-    [records, mode, boundaryLabel],
+    () => trajectoryTimeline(projection, mode),
+    [projection, mode],
   );
 
   // A rebuilt domain invalidates a viewport expressed in the old one.
@@ -318,7 +315,7 @@ export function TrajectoryTimeline({
         )}
         {model.boundaries.map(boundary => (
           <div
-            key={`${boundary.label}:${boundary.at}`}
+            key={boundary.nativeAttemptId}
             className={css.boundary}
             aria-hidden="true"
             style={{ left: `${percent(boundary.at)}%` } as CSSProperties}

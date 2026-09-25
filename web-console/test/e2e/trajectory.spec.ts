@@ -17,7 +17,7 @@ for (const width of [1440, 390]) {
       await expect(ledger.getByText('System Prompt and Tools Updated', { exact: false })).toBeVisible();
       await expect(ledger.locator('[data-display-type="ContextRow"]')).toHaveCount(2);
       await expectStableScreenshot(page, `trajectory-ledger-${width}-${theme}.png`);
-      const system = ledger.locator('[data-display-type="SystemRow"][data-owner="trace:3"]');
+      const system = ledger.locator('[data-display-type="SystemPromptCell"][data-owner="trace:3"]');
       await system.focus(); await page.keyboard.press('Enter');
       const inspector = page.getByRole('complementary', { name: 'Trace record inspector' });
       await expect(inspector.getByRole('tab', { name: 'System Prompt', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -27,7 +27,7 @@ for (const width of [1440, 390]) {
       await expect(inspector.getByRole('tab', { name: 'Context', exact: true })).toHaveAttribute('aria-selected', 'true');
       await expect(inspector.locator('[data-context-message-id="context-agent"][data-selected]').first()).toBeVisible();
       await inspector.getByRole('tab', { name: 'Context', exact: true }).focus(); await page.keyboard.press('ArrowRight');
-      await expect(inspector.getByRole('tab', { name: 'Tools', exact: true })).toBeFocused();
+      await expect(inspector.getByRole('tab', { name: 'Summary', exact: true })).toBeFocused();
       await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
       await inspector.getByRole('button', { name: 'Close record' }).click(); await expect(context).toBeFocused();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -97,7 +97,8 @@ for (const scenario of ['long', 'threshold']) {
     await expect(page.locator('[data-native-count]')).toHaveAttribute('data-native-count', String(expected + 32));
     await expect.poll(async () => Math.abs((await selected.boundingBox())!.y - anchor.top)).toBeLessThan(2);
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
-    expect(await ledger.locator('[data-display-key]').count()).toBeLessThan(65);
+    // 20px request rows permit more visible rows; overscan stays finite.
+    expect(await ledger.locator('[data-display-key]').count()).toBeLessThan(85);
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
     const offset = await ledger.evaluate(el => el.scrollTop);
     await page.getByRole('button', { name: 'Update', exact: true }).click();
@@ -115,7 +116,7 @@ for (const kind of ['request', 'tool']) {
     await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?threshold&structure${kind === 'tool' ? '&tool' : ''}`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    const segment = ledger.locator('[data-display-type="StepHeader"][data-anchor="trace:100"]');
+    const segment = ledger.locator('[data-display-type="GroupHeader"][data-anchor="trace:100"]');
     await segment.focus(); await page.keyboard.press('Enter'); await segment.click();
     await expect(segment).toBeFocused();
     await expect(segment).not.toHaveAttribute('data-owner');
@@ -127,7 +128,7 @@ for (const kind of ['request', 'tool']) {
     // Keep DOM keyboard ownership on the segment while invoking the controlled prepend.
     await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((el: HTMLButtonElement) => el.click());
     await expect(segment).toHaveCount(0);
-    const merged = ledger.locator('[data-display-type="StepHeader"][data-anchor="trace:51"]');
+    const merged = ledger.locator('[data-display-type="GroupHeader"][data-anchor="trace:51"]');
     await expect(merged).toBeFocused();
     await expect(merged).toHaveAttribute('data-selected', 'true');
     await expect(merged).toHaveAttribute('data-attempt', 'attempt-a');
@@ -164,3 +165,78 @@ test('T1-04 Calls summary keeps its display identity until explicit expansion', 
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
   await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
 });
+
+for (const width of [1440, 390]) {
+  test(`407: native identity survives renumbering, search and timeline navigation at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?renumber');
+    const ledger = page.getByRole('table', { name: 'Trace ledger' });
+    const selected = ledger.locator('[data-display-type="SystemPromptCell"][data-owner="trace:3"]');
+    await selected.click();
+    const inspector = page.getByRole('complementary');
+    await expect(inspector.getByText('You are the historical agent.')).toBeVisible();
+    await ledger.getByRole('button', { name: 'Fold Turn 1', exact: true }).click();
+    await expect(selected).toHaveCount(0);
+    await expect(inspector).toBeVisible();
+    await page.getByRole('button', { name: 'Load earlier records into the overview' }).click();
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+    await expect(ledger.getByRole('button', { name: 'Expand Turn 2' })).toBeVisible();
+    await expect(selected).toHaveCount(0);
+    const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+    await search.fill('request-3');
+    await expect(selected).toHaveAttribute('aria-selected', 'true');
+    await expect(ledger.getByRole('row', { name: 'Turn 2', exact: true })).toBeVisible();
+    await search.fill('request-50');
+    await expect(selected).toHaveCount(0);
+    await search.fill('');
+    await expect(selected).toHaveCount(0);
+    await expect(inspector.getByText('You are the historical agent.')).toBeVisible();
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+    await page.getByRole('button', { name: 'Inspect Request · deepseek-chat · request-3', exact: true }).click();
+    const request = ledger.locator('[data-display-type="RequestBoundary"][data-owner="trace:3"]');
+    await expect(request).toHaveAttribute('aria-selected', 'true');
+    await expect(request).toBeFocused();
+    await expect(ledger.getByRole('button', { name: 'Fold Turn 2' })).toBeVisible();
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
+test('407: virtual sticky Turn and drag focus retain native ownership through prepend', async ({ page }) => {
+  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?long&renumber');
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await ledger.evaluate(el => { el.scrollTop = 1000; el.dispatchEvent(new Event('scroll')); });
+  const header = ledger.locator('[data-display-type="TurnHeader"]');
+  await expect(header).toHaveCount(1);
+  await expect.poll(async () => Math.abs((await header.boundingBox())!.y - (await ledger.boundingBox())!.y)).toBeLessThan(2);
+  const canvas = page.getByLabel('Timeline navigation: arrow keys pan, Escape clears focus');
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + box.width * .35, box.y + 30);
+  await page.mouse.down(); await page.mouse.move(box.x + box.width * .45, box.y + 30); await page.mouse.up();
+  await ledger.evaluate(el => { el.scrollTop = el.scrollHeight * .4; el.dispatchEvent(new Event('scroll')); });
+  await expect(ledger.locator('[data-owner="trace:300"][data-timeline-focus="inside"]').first()).toBeAttached();
+  const before = await ledger.locator('[data-timeline-focus="inside"]').evaluateAll(rows => rows.map(row => row.getAttribute('data-owner')));
+  expect(before.length).toBeGreaterThan(0);
+  await page.getByRole('button', { name: 'Load earlier records into the overview' }).click();
+  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+  for (const owner of before) await expect(ledger.locator(`[data-owner="${owner}"][data-timeline-focus="inside"]`).first()).toBeAttached();
+  await expect(header).toHaveAttribute('aria-label', 'Turn 2');
+});
+
+for (const kind of ['request', 'tool']) {
+  test(`407: selected ${kind} cell and detail retain focus across virtual threshold`, async ({ page }) => {
+    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?threshold${kind === 'tool' ? '&tool' : ''}`);
+    const ledger = page.getByRole('table', { name: 'Trace ledger' });
+    await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    const row = ledger.locator(`[data-display-type="${kind === 'tool' ? 'RecordRow' : 'RequestBoundary'}"][data-owner="trace:100"]`);
+    await row.focus(); await page.keyboard.press('Enter');
+    await expect(page.getByRole('complementary')).toBeVisible();
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+    await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((button: HTMLButtonElement) => button.click());
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+    await expect(row).toHaveAttribute('aria-selected', 'true');
+    await expect(row).toBeFocused();
+    await expect(page.getByRole('complementary')).toBeVisible();
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  });
+}

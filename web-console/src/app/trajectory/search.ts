@@ -9,7 +9,7 @@ export function searchItems(items: readonly TrajectoryDisplayItem[], query: stri
   for (const item of items) {
     if (item.type === 'HistoryBoundary') continue;
     if (!isInspectable(item)) {
-      const text = [item.label, item.attempt_id, item.type === 'StepHeader' ? item.step_id : '', item.native_record?.id, item.native_record?.state].join('\n').toLowerCase();
+      const text = [item.label, item.attempt_id, item.type === 'GroupHeader' ? item.step_id : '', item.native_record?.id, item.native_record?.state].join('\n').toLowerCase();
       if (terms.every(term => text.includes(term))) matches.add(item.display_key);
       continue;
     }

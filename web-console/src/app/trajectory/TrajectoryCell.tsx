@@ -7,6 +7,7 @@ import type {
 } from '../../../../protocol/app-server/v23';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
+import type { InspectableDisplayItem } from './layout';
 import css from './Trajectory.module.css';
 
 /** Display choices only. Native kind, location, lifecycle and identity stay on the record. */
@@ -156,4 +157,11 @@ export function CellContent({ record }: { record: TraceRecord }) {
     <CellRelations record={record} />
     <CellArtifacts artifacts={record.attachments} />
   </>;
+}
+
+/** Dedicated prompt cell: its request identity and native classification survive paging. */
+export function SystemPromptCell({ cell }: { cell: Extract<InspectableDisplayItem, { type: 'SystemPromptCell' }> }) {
+  return <span className={css.preview} data-system-prompt-state={cell.record.request?.system_prompt.state}>
+    <strong>{cell.label}</strong> · {cell.preview || 'Empty'}
+  </span>;
 }

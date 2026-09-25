@@ -23,6 +23,7 @@ function request(n: number, prompt: 'initial' | 'changed' | 'unchanged', tools: 
 const records = [
   traceRecord(0, { kind: 'user', request: null, location: {}, preview: text('Inspect **the workspace** and summarize what changed.') }),
   traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' }, preview: null }),
+  traceRecord(14, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' }, preview: text('Use the native Trace facts for this review.') }),
   traceRecord(2, { kind: 'step', request: null, preview: null }),
   request(3, 'initial', 'initial'),
   traceRecord(4, { kind: 'assistant', request: null, message_id: 'assistant-4', preview: text('I’ll inspect the **working tree**.'), calls: [{ call_id: 'call-5', tool_id: 'tool-bash', name: 'bash' }, { call_id: 'proposed-only', tool_id: 'tool-read', name: 'read' }] }),
@@ -36,6 +37,7 @@ const records = [
 ];
 const params = new URLSearchParams(location.search);
 const long = params.has('long'); const threshold = params.has('threshold');
+const renumber = params.has('renumber');
 const structure = params.has('structure'); const toolFirst = params.has('tool');
 function Fixture() {
   const [cache, setCache] = useState(() => replaceTrace({ records: long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : records, next_cursor: 'older' }));
@@ -48,7 +50,7 @@ function Fixture() {
     </header>
     <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))}
       latest={() => {}}
-      loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: Array.from({ length: 32 }, (_, n) => structure && n < 2 ? traceRecord(n + 50, { kind: n === 0 ? 'attempt' : 'step', request: null, location: n === 0 ? { attempt_id: 'attempt-a' } : { attempt_id: 'attempt-a', step_id: '1' } }) : request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
+      loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: renumber ? [traceRecord(50, { location: { attempt_id: 'older-attempt', step_id: 'old-step' } })] : Array.from({ length: 32 }, (_, n) => structure && n < 2 ? traceRecord(n + 50, { kind: n === 0 ? 'attempt' : 'step', request: null, location: n === 0 ? { attempt_id: 'attempt-a' } : { attempt_id: 'attempt-a', step_id: '1' } }) : request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
       onLoadDetail={id => {
         setReads(n => n + 1);
         setCache(current => {

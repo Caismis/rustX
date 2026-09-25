@@ -1,10 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted interaction contracts; see PROVENANCE.md. */
+import { trajectoryTimeline } from '../src/app/trajectory/timeline';
 import { useCallback, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
-import { beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { trajectoryItems, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
+import { prependTrace, beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
+import { isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v23';
@@ -17,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
+const trajectoryItems = (records: readonly TraceRecord[]) => flattenTrajectory(projectTrajectory(records));
 const cacheOf = (records: TraceRecord[]) => replaceTrace({ records, next_cursor: null });
 function show(cache: TraceCache, load = vi.fn(), older = vi.fn()) {
   return render(<Trajectory cache={cache} loadEarlier={older} latest={noop} onSelect={noop} onLoadDetail={load} />);
@@ -35,29 +37,29 @@ function row(type: string, id = 'trace:0') { return document.querySelector<HTMLE
 it('T1-01 maps every native prompt/tool combination without reading details', () => {
   for (const [prompt, tools, label, facet] of [
     ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],
-    ['changed', 'unchanged', 'System Prompt Updated', 'System Prompt'],
+    ['changed', 'unchanged', 'System Prompt Updated', 'Diff'],
     ['unchanged', 'changed', 'Tools Updated', 'Tools'],
-    ['changed', 'changed', 'System Prompt and Tools Updated', 'Summary'],
+    ['changed', 'changed', 'System Prompt and Tools Updated', 'Diff'],
     ['unchanged', 'unchanged', undefined, undefined],
     ['previous_unavailable', 'previous_unavailable', 'Previous input unavailable', 'Summary'],
   ] as const) {
     const record = richRequest(); record.request!.system_prompt.state = prompt; record.request!.tool_catalog = tools;
     expect(systemLabel(record)).toEqual(label ? { label, facet } : undefined);
     const items = trajectoryItems([record]);
-    expect(items.filter(item => item.type === 'SystemRow')).toHaveLength(label ? 1 : 0);
+    expect(items.filter(item => item.type === 'SystemPromptCell')).toHaveLength(label ? 1 : 0);
   }
 });
 
 it('T1-04 preserves frozen Context order and exact owner/display/facet identities', () => {
   const record = richRequest();
   const items = trajectoryItems([record]);
-  expect(items.map(item => item.type)).toEqual(['AttemptSectionHeader', 'StepHeader', 'SystemRow', 'ContextRow', 'ContextRow', 'RequestBoundary']);
+  expect(items.map(item => item.type)).toEqual(['TurnHeader', 'GroupHeader', 'SystemPromptCell', 'ContextRow', 'ContextRow', 'RequestBoundary']);
   const contexts = items.filter(item => item.type === 'ContextRow');
   expect(contexts.map(item => item.context_message_id)).toEqual(['context-z', 'context-a']);
   expect(contexts.map(item => item.owner_record_id)).toEqual(['trace:0', 'trace:0']);
   expect(new Set(items.map(item => item.display_key)).size).toBe(items.length);
   const load = vi.fn(); show(cacheOf([record]), load);
-  fireEvent.click(row('SystemRow')); expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+  fireEvent.click(row('SystemPromptCell')); expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
   fireEvent.click(document.querySelector('[data-display-type="ContextRow"][data-display-key*="context-a"]')!);
   expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
   expect(document.querySelector('[data-context-message-id="context-a"][data-selected]')).not.toBeNull();
@@ -77,7 +79,7 @@ it('T1-04 controlled out-of-order owner responses cannot change a newer facet or
     return <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))} onLoadDetail={load} loadEarlier={noop} latest={noop} />;
   }
   render(<Fixture />);
-  fireEvent.click(row('SystemRow'));
+  fireEvent.click(row('SystemPromptCell'));
   fireEvent.click(row('RequestBoundary', 'trace:1'));
   fireEvent.click(row('ContextRow', 'trace:1'));
   const selected = row('ContextRow', 'trace:1'); selected.focus();
@@ -87,7 +89,7 @@ it('T1-04 controlled out-of-order owner responses cannot change a newer facet or
   expect(screen.getByRole('tab', { name: 'Context' }).getAttribute('aria-selected')).toBe('true');
   expect(selected.getAttribute('aria-selected')).toBe('true');
   expect(document.activeElement).toBe(selected);
-  fireEvent.click(row('SystemRow', 'trace:1'));
+  fireEvent.click(row('SystemPromptCell', 'trace:1'));
   fireEvent.click(row('RequestBoundary', 'trace:1'));
   expect(reads).toEqual(['trace:0', 'trace:1']);
   expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true');
@@ -95,7 +97,7 @@ it('T1-04 controlled out-of-order owner responses cannot change a newer facet or
 
 it('T1-05 latest unchanged-only page directly discovers prompt with one lazy owner read', () => {
   const load = vi.fn(); show(cacheOf([traceRecord(9), traceRecord(10)]), load);
-  expect(load).not.toHaveBeenCalled(); expect(document.querySelector('[data-display-type="SystemRow"]')).toBeNull();
+  expect(load).not.toHaveBeenCalled(); expect(document.querySelector('[data-display-type="SystemPromptCell"]')).toBeNull();
   fireEvent.click(row('RequestBoundary', 'trace:10'));
   fireEvent.click(screen.getByRole('button', { name: 'View System Prompt' }));
   expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
@@ -107,7 +109,7 @@ it.each([[false, true], [true, false], [true, true]])('T1-02 independent truncat
   const detail = requestDetail(0); detail.request!.previous_system_prompt!.truncated = previous; detail.request!.effective_system_prompt.truncated = current;
   detail.request!.previous_system_prompt!.text = detail.request!.effective_system_prompt.text;
   show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
-  fireEvent.click(row('SystemRow')); fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
+  fireEvent.click(row('SystemPromptCell')); fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
   expect(screen.getByText(/A complete diff cannot be produced:/)).toBeDefined();
   expect(screen.queryByText(/No changes/)).toBeNull();
 });
@@ -116,7 +118,7 @@ it('T1-02 diff distinguishes initial, unavailable, empty and complete changed co
   const record = richRequest(); record.request!.system_prompt.state = 'changed';
   const detail = requestDetail(0); detail.request!.previous_system_prompt = { text: '', truncated: false }; detail.request!.effective_system_prompt = { text: 'new prompt\n', truncated: false };
   const cache = completeTraceDetail(cacheOf([record]), record.id, 1, detail);
-  const view = show(cache); fireEvent.click(row('SystemRow')); fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
+  const view = show(cache); fireEvent.click(row('SystemPromptCell')); fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
   expect(screen.getByLabelText('System prompt diff').textContent).toBe('+ new prompt\n');
   const update = (availability: 'not_applicable' | 'unavailable') => {
     const next = requestDetail(0); next.request!.previous_system_prompt = null;
@@ -130,7 +132,7 @@ it('T1-02 diff distinguishes initial, unavailable, empty and complete changed co
 it('T1-06 retries stay one logical Step; failed and running requests need no Assistant', () => {
   const records = ['failed', 'failed', 'running', 'completed'].map((state, n) => traceRecord(n, { state: state as TraceRecord['state'] }));
   const items = trajectoryItems(records);
-  expect(items.filter(item => item.type === 'StepHeader')).toHaveLength(1);
+  expect(items.filter(item => item.type === 'GroupHeader')).toHaveLength(1);
   expect(items.filter(item => item.type === 'RequestBoundary').map(item => item.record.request!.retry_number)).toEqual([0, 1, 2, 3]);
   show(cacheOf(records));
   for (const record of records) { fireEvent.click(row('RequestBoundary', record.id)); expect(row('RequestBoundary', record.id).getAttribute('aria-selected')).toBe('true'); }
@@ -139,21 +141,21 @@ it('T1-06 retries stay one logical Step; failed and running requests need no Ass
 
 it('T1-06/10 segment anchors regroup within the same structure without acquiring detail ownership', () => {
   const middle = traceRecord(10);
-  const segment = trajectoryItems([middle]).find(item => item.type === 'StepHeader')!;
-  expect(segment.segment_anchor_record_id).toBe(middle.id);
+  const segment = trajectoryItems([middle]).find(item => item.type === 'GroupHeader')!;
+  expect(segment.anchor_record_id).toBe(middle.id);
   expect('owner_record_id' in segment).toBe(false);
   const nativeStep = traceRecord(8, { kind: 'step', request: null });
   const all = trajectoryItems([nativeStep, traceRecord(9), middle]);
   const target = preferredStructure(all, segment)!;
-  expect(target.type).toBe('StepHeader');
+  expect(target.type).toBe('GroupHeader');
   expect(target.native_record?.id).toBe(nativeStep.id);
-  expect(target.segment_anchor_record_id).toBe(nativeStep.id);
+  expect(target.anchor_record_id).toBe(nativeStep.id);
   expect('owner_record_id' in target).toBe(false);
   const split = trajectoryItems([traceRecord(9), traceRecord(11, { kind: 'background', request: null, location: {} }), middle]);
-  expect(split.filter(item => item.type === 'StepHeader')).toHaveLength(2);
-  expect(preferredStructure(split, segment)?.segment_anchor_record_id).toBe(middle.id);
-  expect(preferredStructure(trajectoryItems([traceRecord(9)]), segment)).toBeUndefined();
-  expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:11', 'trace:10']);
+  expect(split.filter(item => item.type === 'GroupHeader')).toHaveLength(1);
+  expect(preferredStructure(split, segment)?.anchor_record_id).toBe('trace:9');
+  expect(preferredStructure(trajectoryItems([traceRecord(9)]), segment)?.display_key).toBe(segment.display_key);
+  expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:10', 'trace:11']);
 });
 
 it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never owns structural inspection', kind => {
@@ -161,10 +163,10 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never owns st
   const load = vi.fn(); const select = vi.fn(); const older = vi.fn();
   render(<Trajectory cache={cacheOf([child])} onSelect={select} onLoadDetail={load} loadEarlier={older} latest={noop} />);
   const items = trajectoryItems([child]);
-  const step = items.find(item => item.type === 'StepHeader')!;
-  expect(step.display_key).toBe(JSON.stringify(['step-segment', 'attempt-a', '1', child.id]));
-  expect(trajectoryItems([{ ...child, state: 'running' }]).find(item => item.type === 'StepHeader')!.display_key).toBe(step.display_key);
-  for (const type of ['AttemptSectionHeader', 'StepHeader']) {
+  const step = items.find(item => item.type === 'GroupHeader')!;
+  expect(step.display_key).toBe(JSON.stringify(['group', 'attempt-a', '1']));
+  expect(trajectoryItems([{ ...child, state: 'running' }]).find(item => item.type === 'GroupHeader')!.display_key).toBe(step.display_key);
+  for (const type of ['TurnHeader', 'GroupHeader']) {
     const header = document.querySelector<HTMLElement>(`[data-display-type="${type}"]`)!;
     act(() => header.focus()); fireEvent.click(header); fireEvent.keyDown(header, { key: 'Enter' });
     expect(header.hasAttribute('data-owner')).toBe(false);
@@ -183,12 +185,12 @@ it('T1-06 exact loaded native structures remain presentation-only and expose onl
   const attempt = traceRecord(8, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' }, state: 'running' });
   const step = traceRecord(9, { kind: 'step', request: null });
   const records = [attempt, step, traceTool(10)];
-  const structures = trajectoryItems(records).filter(item => item.type === 'StepHeader' || item.type === 'AttemptSectionHeader');
+  const structures = trajectoryItems(records).filter(item => item.type === 'GroupHeader' || item.type === 'TurnHeader');
   expect(structures.map(item => item.native_record?.id)).toEqual([attempt.id, step.id]);
   const load = vi.fn(); show(cacheOf(records), load);
   for (const item of structures) fireEvent.click(document.querySelector(`[data-display-type="${item.type}"]`)!);
   expect(screen.queryByRole('complementary')).toBeNull(); expect(load).not.toHaveBeenCalled();
-  expect(document.querySelector('[data-display-type="AttemptSectionHeader"]')?.textContent).toContain('running');
+  expect(document.querySelector('[data-display-type="TurnHeader"]')?.textContent).toContain('running');
 });
 
 it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hijack structural focus', async kind => {
@@ -205,7 +207,7 @@ it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hi
   }
   render(<Fixture />);
   fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
-  const step = document.querySelector<HTMLElement>('[data-display-type="StepHeader"]')!;
+  const step = document.querySelector<HTMLElement>('[data-display-type="GroupHeader"]')!;
   act(() => step.focus()); fireEvent.keyDown(step, { key: 'Enter' });
   expect(selections.at(-1)).toBeUndefined();
   await act(async () => resolve(kind === 'request' ? requestDetail(10) : toolDetail(10)));
@@ -223,7 +225,7 @@ it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page
   const visible = visibleItems(trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
   const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
   expect(summary.preview).toContain('2 proposed · 1 loaded matching executions');
-  expect(visible.filter(item => item.type === 'RecordRow').map(item => item.record.id)).toEqual(['trace:0', 'trace:2', 'trace:3', 'trace:4', 'trace:5']);
+  expect(visible.filter(item => item.type === 'RecordRow').map(item => item.record.id)).toEqual(['trace:0', 'trace:4', 'trace:3', 'trace:2', 'trace:5']);
   expect(matchingCalls([execution(1)]).size).toBe(0);
   expect(matchingCalls([assistant]).size).toBe(0);
   expect(matchingCalls([assistant, { ...assistant, id: 'other-proposer' }, execution(1)]).size).toBe(0);
@@ -249,7 +251,7 @@ it('T1-09 search reveals both collapsed kinds without any detail/history reads',
   const records = [proposal(), execution(1)]; const load = vi.fn(); const older = vi.fn();
   show(cacheOf(records), load, older);
   fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Collapse Calls' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Fold Attempts' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turns' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'ls -la' } });
   expect(row('RecordRow', 'trace:1')).not.toBeNull(); expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
   const items = trajectoryItems([richRequest()]);
@@ -337,19 +339,19 @@ it('T1-09 structural search and Attempt collapse never borrow child facts or ano
   const other = traceTool(11, { location: { attempt_id: 'attempt-b', step_id: '1' } });
   const items = trajectoryItems([child, other]);
   const matches = searchItems(items, 'unique child preview')!;
-  expect(items.filter(item => matches.has(item.display_key)).every(item => item.type !== 'StepHeader' && item.type !== 'AttemptSectionHeader')).toBe(true);
-  const structural = items.find(item => item.type === 'StepHeader')!;
+  expect(items.filter(item => matches.has(item.display_key)).every(item => item.type !== 'GroupHeader' && item.type !== 'TurnHeader')).toBe(true);
+  const structural = items.find(item => item.type === 'GroupHeader')!;
   expect(searchItems(items, 'Step 1')?.has(structural.display_key)).toBe(true);
   expect(preferredStructure(trajectoryItems([{ ...child, location: { attempt_id: 'attempt-b', step_id: '1' } }]), structural)).toBeUndefined();
   const visible = visibleItems(items, [child, other], new Set(['attempt-a']), new Set(), null);
   expect(visible.filter(item => item.type === 'RequestBoundary')).toHaveLength(0);
   expect(visible.filter(item => item.type === 'RecordRow').map(item => item.owner_record_id)).toEqual([other.id]);
-  expect(visible.filter(item => item.type === 'StepHeader').map(item => item.attempt_id)).toEqual(['attempt-b']);
+  expect(visible.filter(item => item.type === 'GroupHeader').map(item => item.attempt_id)).toEqual(['attempt-b']);
 });
 
 it('T1-04 timeline navigation explicitly selects its native Request after structural focus', () => {
   const child = traceRecord(10); const load = vi.fn(); show(cacheOf([child]), load);
-  const header = document.querySelector<HTMLElement>('[data-display-type="StepHeader"]')!;
+  const header = document.querySelector<HTMLElement>('[data-display-type="GroupHeader"]')!;
   act(() => header.focus());
   expect(load).not.toHaveBeenCalled();
   fireEvent.click(document.querySelector('[data-record-id="trace:10"]')!);
@@ -475,4 +477,95 @@ it.each(['resolve', 'reject'] as const)('Tool facets distinguish pending histori
     }
     expect(reads).toEqual(['trace:10']);
   }
+});
+
+it('407: exact Attempt and Step identity own one Turn/group across interleaved records and retries', () => {
+  const records = [
+    traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'outside input', truncated: false } }),
+    traceRecord(1, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' } }),
+    traceRecord(2, { location: { attempt_id: 'attempt-a', step_id: 'opaque-step' } }),
+    traceRecord(3, { location: { attempt_id: 'attempt-b', step_id: 'other-step' } }),
+    traceRecord(4, { location: { attempt_id: 'attempt-a', step_id: 'opaque-step' }, state: 'failed' }),
+    traceRecord(5, { location: { attempt_id: 'attempt-a', step_id: 'next-step' } }),
+  ];
+  const projection = projectTrajectory(records);
+  expect(projection.sections.map(section => section.kind)).toEqual(['outside', 'turn', 'turn']);
+  const turn = projection.sections[1]!;
+  expect(turn.kind).toBe('turn');
+  if (turn.kind !== 'turn') throw new Error('Expected Turn');
+  expect(turn.groups.map(group => [group.kind, group.nativeStepId, group.label])).toEqual([
+    ['message', undefined, 'Message'], ['step', 'opaque-step', 'Step 1'], ['step', 'next-step', 'Step 2'],
+  ]);
+  expect(turn.groups[1]!.cells.map(cell => cell.owner_record_id)).toEqual(['trace:2', 'trace:4']);
+  const items = flattenTrajectory(projection);
+  expect(items.filter(item => item.type === 'TurnHeader').map(item => item.label)).toEqual(['Turn 1', 'Turn 2']);
+  expect(items.filter(item => item.type === 'GroupHeader').map(item => item.label)).toEqual(['Message', 'Step 1', 'Step 2', 'Step 1']);
+  const folded = visibleItems(items, records, new Set(['attempt-a', 'attempt-b']), new Set(), null);
+  expect(folded.filter(isInspectable).map(item => item.owner_record_id)).toEqual(['trace:0']);
+  expect(trajectoryTimeline(projection, 'sequence')!.boundaries.map(boundary => [boundary.nativeAttemptId, boundary.label])).toEqual(
+    items.filter(item => item.type === 'TurnHeader').map(item => [item.attempt_id, item.label]),
+  );
+  show(cacheOf(records));
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  expect(ledger.textContent).not.toContain('opaque-step');
+  expect(ledger.textContent).not.toContain('attempt-a');
+  fireEvent.click(row('RequestBoundary', 'trace:2'));
+  fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain('opaque-step');
+  expect(screen.getByRole('tabpanel').textContent).toContain('attempt-a');
+  expect(screen.getByRole('tabpanel').textContent).toContain('request-2');
+});
+
+it('407: prepend renumbers Turn while collapsed selection, prompt detail and focus retain native identity', () => {
+  const selected = richRequest(10);
+  const detail = requestDetail(10);
+  detail.request!.effective_system_prompt.text = 'Exact frozen request ten';
+  const initial = completeTraceDetail(cacheOf([selected]), selected.id, 1, detail);
+  const older = traceRecord(1, { location: { attempt_id: 'older-attempt', step_id: 'older-step' } });
+  const load = vi.fn();
+  const view = show(initial, load);
+  fireEvent.click(row('SystemPromptCell', selected.id));
+  const collapse = screen.getByRole('button', { name: 'Fold Turn 1' });
+  act(() => collapse.focus());
+  fireEvent.click(collapse);
+  expect(screen.getByRole('complementary').textContent).toContain('Exact frozen request ten');
+  expect(row('SystemPromptCell', selected.id)).toBeNull();
+  const next = prependTrace(initial, { records: [older], next_cursor: null });
+  view.rerender(<Trajectory cache={next} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={load} />);
+  expect(screen.getByRole('button', { name: 'Expand Turn 2' })).toBe(collapse);
+  expect(document.activeElement).toBe(collapse);
+  expect(screen.getByRole('complementary').textContent).toContain('Exact frozen request ten');
+  expect(row('SystemPromptCell', selected.id)).toBeNull();
+  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  fireEvent.change(search, { target: { value: 'request-10' } });
+  expect(row('SystemPromptCell', selected.id).getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('row', { name: 'Turn 2' })).toBeDefined();
+  fireEvent.change(search, { target: { value: 'request-1' } });
+  fireEvent.change(search, { target: { value: '' } });
+  expect(row('SystemPromptCell', selected.id)).toBeNull();
+  expect(screen.getByRole('button', { name: 'Expand Turn 2' })).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'Expand Turn 2' }));
+  expect(row('SystemPromptCell', selected.id).getAttribute('aria-selected')).toBe('true');
+  fireEvent.click(screen.getByRole('button', { name: 'Close record' }));
+  expect(document.activeElement).toBe(row('SystemPromptCell', selected.id));
+  expect(load).not.toHaveBeenCalled();
+});
+
+it('407: System Prompt cells expose semantic tabs and preserve unknown historical evidence', () => {
+  const initial = richRequest();
+  const view = show(completeTraceDetail(cacheOf([initial]), initial.id, 1, requestDetail(0)));
+  fireEvent.click(row('SystemPromptCell'));
+  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['System Prompt', 'Tools', 'Summary', 'Native']);
+  expect(screen.queryByRole('tab', { name: 'Diff' })).toBeNull();
+  const unknown = richRequest();
+  unknown.request!.system_prompt.state = 'previous_unavailable';
+  unknown.request!.tool_catalog = 'previous_unavailable';
+  const detail = requestDetail(0);
+  detail.request!.previous_system_prompt = null;
+  detail.request!.predecessor = { availability: 'unavailable', request_id: 'historical-predecessor' };
+  view.rerender(<Trajectory cache={completeTraceDetail(cacheOf([unknown]), unknown.id, 1, detail)} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  fireEvent.click(row('SystemPromptCell'));
+  fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain('Previous prompt unavailable');
+  expect(screen.getByRole('tabpanel').textContent).not.toMatch(/unchanged|No changes/);
 });

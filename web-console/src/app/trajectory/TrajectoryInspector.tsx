@@ -373,8 +373,13 @@ function ContextAdditions({
 }
 
 /** The sections available for one record, given what the server projected. */
-function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): TrajectoryFacet[] {
-  if (record.kind === 'request') return ['Summary', 'System Prompt', 'Diff', 'Context', 'Tools', 'Options', 'Usage', 'Timing', 'Native'];
+function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined, selection: TrajectorySelection): TrajectoryFacet[] {
+  if (record.kind === 'request') {
+    const diff: TrajectoryFacet[] = record.request?.system_prompt.state === 'changed' || record.request?.system_prompt.state === 'previous_unavailable' ? ['Diff'] : [];
+    if (selection.cell_type === 'SystemPromptCell') return [...diff, 'System Prompt', 'Tools', 'Summary', 'Native'];
+    if (selection.cell_type === 'ContextRow') return ['Context', 'Summary', 'Native'];
+    return ['Summary', 'System Prompt', ...diff, 'Context', 'Tools', 'Options', 'Usage', 'Timing', 'Native'];
+  }
   if (record.kind === 'assistant') return ['Summary', 'Content', ...(detail?.messages.some(message => message.blocks.some(block => block.type === 'reasoning')) ? ['Thinking' as const] : []), 'Raw', 'Timing', 'Native'];
   if (record.kind === 'tool') return ['Summary', 'Input', ...(detail?.tool?.source ? ['Code' as const] : []), 'Result', 'Schema', 'Timing', 'Artifacts', 'Native'];
   return ['Summary', ...(detail?.messages.length ? ['Content' as const] : []), 'Timing', 'Artifacts', 'Native'];
@@ -448,14 +453,14 @@ export function TrajectoryInspector({
   useEffect(() => {
     if (record.has_detail && !detail && !loading && !error) onLoadDetail(record.id);
   }, [record.id, record.has_detail, detail, loading, error, onLoadDetail]);
-  const sections = sectionsOf(record, detail);
+  const sections = sectionsOf(record, detail, selection);
   const active = sections.includes(section) ? section : 'Summary';
   const request = detail?.request ?? undefined;
   const tool = detail?.tool ?? undefined;
   const toolState = toolDetailState(detail, loading, error);
   const toolFactFacet = record.kind === 'tool' && ['Input', 'Result', 'Schema'].includes(active);
   const messages = detail?.messages ?? [];
-  const title =
+  const title = selection.cell_type === 'SystemPromptCell' ? 'System Prompt' : selection.cell_type === 'ContextRow' ? 'Context' :
     record.kind === 'request' && record.request
       ? `Request · ${record.request.model}`
       : record.kind === 'tool' && record.tool
@@ -510,7 +515,7 @@ export function TrajectoryInspector({
               <dt>Tools</dt><dd>{record.request.tool_catalog.replaceAll('_', ' ')}</dd>
               <dt>Context introduced</dt><dd>{record.request.context_additions.length}{record.request.context_truncated ? ' · truncated' : ''}</dd>
               {record.request.failure_kind && <><dt>Failure</dt><dd>{record.request.failure_kind}</dd></>}
-              <dt>Historical input</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>View System Prompt</Button> <Button size="sm" onClick={() => onFacet('Tools')}>View Tools</Button></dd>
+              {sections.includes('System Prompt') && <><dt>Historical input</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>View System Prompt</Button> <Button size="sm" onClick={() => onFacet('Tools')}>View Tools</Button></dd></>}
               <dt>Acceptance</dt><dd>Provider completion alone does not prove canonical Assistant acceptance.</dd>
             </>}
             {record.calls.length > 0 && <><dt>Proposed calls</dt><dd>{record.calls.length} · A proposal proves assembly, not execution.</dd></>}

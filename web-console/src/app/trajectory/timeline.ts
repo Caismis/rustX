@@ -7,6 +7,7 @@
  * Journal wall spans and dispatch-origin numeric metrics cannot supply that
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
+import type { TrajectoryProjection } from './layout';
 import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v23';
 
 /** Horizontal projection of the overview's domain. */
@@ -38,8 +39,9 @@ export interface TrajectorySpan extends TrajectoryTimeRange {
   generationMs?: number;
 }
 
-/** One Attempt boundary in the active domain. */
+/** One Turn boundary in the active domain. */
 export interface TrajectoryBoundary {
+  nativeAttemptId: string;
   label: string;
   at: number;
 }
@@ -125,16 +127,23 @@ function timingOf(record: TraceRecord) {
  * omitted from the timed projection rather than placed at an invented point.
  */
 export function trajectoryTimeline(
-  records: readonly TraceRecord[],
+  projection: TrajectoryProjection,
   mode: TrajectoryTimelineMode,
-  sectionLabelOf: (record: TraceRecord, index: number) => string | undefined,
 ): TrajectoryTimelineModel | null {
+  const boundariesByRecord = new Map<string, { nativeAttemptId: string; label: string }>();
+  const records = projection.sections.flatMap(section => {
+    if (section.kind === 'outside') return [section.record];
+    const ordered = [...section.records.filter(record => record.kind === 'attempt'), ...section.groups.flatMap(group => group.records)];
+    const first = ordered[0];
+    if (first) boundariesByRecord.set(first.id, { nativeAttemptId: section.nativeAttemptId, label: `Turn ${section.displayOrdinal}` });
+    return ordered;
+  });
   const spans: TrajectorySpan[] = [];
   const boundaries: TrajectoryBoundary[] = [];
   if (mode === 'sequence') {
-    for (const [index, record] of records.entries()) {
-      const boundary = sectionLabelOf(record, index);
-      if (boundary !== undefined) boundaries.push({ label: boundary, at: spans.length });
+    for (const record of records) {
+      const boundary = boundariesByRecord.get(record.id);
+      if (boundary !== undefined) boundaries.push({ ...boundary, at: spans.length });
       if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
       const timing = timingOf(record);
       spans.push({
@@ -154,11 +163,11 @@ export function trajectoryTimeline(
     if (spans.length === 0) return null;
     return { start: 0, end: spans.length, spans, boundaries };
   }
-  for (const [index, record] of records.entries()) {
+  for (const record of records) {
     const timing = timingOf(record);
     if (timing.startedAt === undefined) continue;
-    const boundary = sectionLabelOf(record, index);
-    if (boundary !== undefined) boundaries.push({ label: boundary, at: timing.startedAt });
+    const boundary = boundariesByRecord.get(record.id);
+    if (boundary !== undefined) boundaries.push({ ...boundary, at: timing.startedAt });
     if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
     spans.push({
       id: record.id,

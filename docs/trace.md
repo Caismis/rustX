@@ -33,8 +33,8 @@ publication is not promoted into a completed Assistant record. Chat continues to
 own the existing publication audit presentation. Canonical ToolCall proposals
 prove assembly, not execution: a separate started Tool record proves execution.
 
-Native `TurnId` is the logical model Step inside an Attempt. The UI labels the
-Attempt as a lightweight section and shows its native Steps. `RequestIdentity`
+Native `TurnId` is the logical model Step inside an Attempt. The Web projects each
+native Attempt as one visible Turn and each native TurnId as one visible Step. `RequestIdentity`
 places request #0 and retries/recovery #1, #2, etc. beneath the **same** logical
 Step. The exact preceding request's failure class distinguishes transient,
 context-overflow and corrective cases when recorded. Neither timestamps nor
@@ -465,8 +465,9 @@ replaces the cache. Selection is presentation state, never native authority.
 ## Presentation and deliberate exclusions
 
 The browser projects native `TraceRecord` summaries into a closed local
-`TrajectoryDisplayItem` union: `RecordRow`, `SystemRow`, `ContextRow`,
-`StepHeader`, `RequestBoundary`, `AttemptSectionHeader`, `CollapsedCallSummary`,
+`TrajectoryProjection` of Turn models and outside records. Each Turn owns Message
+and Step groups. Ledger flattening produces `RecordRow`, `SystemPromptCell`,
+`ContextRow`, `GroupHeader`, `RequestBoundary`, `TurnHeader`, `CollapsedCallSummary`,
 and `HistoryBoundary`. None is an invented runtime event. The dense ledger has
 Event and Content columns. Successful state/duration/check chrome is absent;
 important lifecycle, uncertainty, missing history and truncation remain visible.
@@ -477,8 +478,8 @@ the bounded detail cache. SYSTEM, CONTEXT and Request boundaries retain distinct
 display keys/facets while sharing their exact Request owner.
 
 A structural header instead has native `attempt_id` (and `step_id` for Step), a
-browser-local `display_key`, a `segment_anchor_record_id` that fixes its placement,
-and loaded segment membership for regrouping. The segment anchor is the first
+browser-local `display_key`, an `anchor_record_id` that fixes its placement,
+and exact loaded membership for scrolling/search. The anchor is the first
 visible native record, **not** the structural or detail owner. A proven loaded
 Attempt/Step record may supply `native_record` evidence by exact kind and native
 structural IDs; no child can supply it. If the native start record is outside the
@@ -486,8 +487,8 @@ page, that evidence is absent. Both headers remain presentation-only even when
 the exact native start is loaded: no fake detail domain and no owner-fetch paging.
 
 Keys are JSON tuples, never indexes: record + native ID, system/request-boundary
-+ Request ID, context + Request ID + Message ID, step-segment + Attempt + Turn +
-segment anchor, attempt-section + Attempt + segment anchor, collapsed-calls +
++ Record ID + Request ID, context + Record ID + Request ID + Message ID, group +
+Attempt + native Step (or null for Message), turn + Attempt, collapsed-calls +
 canonical Assistant Message ID, and history-boundary + opaque cursor. One Trace
 cache supplies Session/Conversation scope. The Trajectory component lifetime is
 keyed by Session, Conversation and attachment so local state cannot leak across
@@ -507,47 +508,55 @@ Detail selection stores display key, native owner, facet and optional Context
 Message ID. Structural focus is a separate local state with no detail owner.
 Click, focus, Enter or Space on a header selects that structure and closes any
 Inspector, clearing cache selection without a detail read. Arrow keys navigate
-display items; entering an inspectable row explicitly selects its owner. Attempt's
-fold button only folds its native Attempt. Escape clears selection. Timeline
+display items; entering an inspectable row explicitly selects its owner. A Turn's
+fold button changes only collapse state, preserving its selected cell and Inspector. Escape clears selection. Timeline
 selection only resolves inspectable items, never a structural header.
 
 A late detail reply can populate its owner's cache but cannot replace structural
-focus or a newer detail facet. On prepend/segment merge, a structural target maps
-to the segment of the **same native structure** containing its old anchor. It
-never maps to that anchor's Request/Tool/Assistant Inspector. If no corresponding
-segment remains, structural selection is cleared. Inspectable regrouping retains
-the same owner/facet, then its corresponding Request boundary/content row; neither
-path falls back to a numeric position.
+focus or a newer detail facet. On prepend, structural focus retains the same native
+Attempt/Step key even when the first loaded record changes. Crossing the virtual
+mount threshold restores DOM focus to that same key. Inspectable selection retains
+its exact record/facet. Neither path falls back to a numeric position.
 
-Attempt numbers are loaded-window presentation ordinals, not native IDs. A
-logical Step is native `TurnId`; an unscoped record can split it into multiple
-visible segments without moving any records. Retry/recovery boundaries remain
-inside the same Step, using native Request identity and ordinal. Attempt/Step
-are section structure, not ordinary content rows. Fold Steps is removed.
+Turn numbers are loaded-window display ordinals. Prepending an older Attempt may
+renumber every Turn; it cannot move collapse, selection, detail, search or focus.
+One native Attempt owns exactly one Turn and one native Step owns exactly one Step
+group even with interleaved records. The first loaded occurrence orders groups,
+never assigns membership. Attempt-owned records with no Step form Message.
+Unscoped records remain outside Turns. Flattening can therefore bring interleaved
+members of the same native structure together, without changing native history.
+Retries stay request metadata inside the same Step. Native IDs remain in Inspector.
+There is no Attempt-first renderer or compatibility hierarchy.
 
 Calls collapse joins canonical Assistant proposals to **loaded** executions by
 Session/Conversation, Attempt, Turn, ToolCall ID and Tool ID. Missing/ambiguous
 scope remains uncollapsed. Proposals and executions have separate counts; failed,
 denied, waiting, running and unknown states remain in the summary. Background,
-Subagent and Workflow never become Subtools. Search overrides Calls and Attempt
+Subagent, Workflow and Interaction never become Subtools. Search temporarily overrides Calls and Turn
 collapse, searches only loaded labels/previews/native identities, and performs
-no detail or history reads. History loading lives at the boundary; Jump to latest
+no detail or history reads. Matching cells retain their Turn/group headers; clearing
+search restores the untouched collapse sets. History loading lives at the boundary; Jump to latest
 appears only off-tail. The old toolbar load/latest/count chrome is removed.
 
 SYSTEM mapping is initial prompt → Initial System Prompt; prompt change →
 System Prompt Updated; Tools change only → Tools Updated; both → System Prompt
 and Tools Updated; both unchanged → no duplicate; predecessor unavailable →
-neutral uncertainty. Ordering is Step segment, SYSTEM, frozen ordered CONTEXT,
+neutral uncertainty. Request-owned ordering is Step group, System Prompt, frozen ordered CONTEXT,
 Request boundary. No Session-start SYSTEM is fabricated. CONTEXT retains exact
 producer/source, native family, preview and truncation with Request/Message IDs.
 
 TanStack Virtual owns ordinary virtualization with semantic keys. One display
 item + pixel-offset anchor transfers across prepend, boundary/header
-insertion/removal, segment merging and the 100-display-item threshold. Tail follow
+insertion/removal and the 100-display-item threshold. Sticky Turn headers remain
+mounted through TanStack range extraction and stop at outside-record boundaries. Tail follow
 runs only at the tail; content/lifecycle-only repair does not pull a reader down.
 
 The local Inspector uses React Aria tabs and existing safe Markdown, Shiki, JSON
-and artifact primitives. SYSTEM/CONTEXT select facets of the owning Request.
+and artifact primitives. System Prompt cells expose System Prompt/Tools initially, and Diff first for a
+native prompt update; Context cells open their exact frozen Context. Summary and
+Native remain available. Diff requires complete predecessor/current evidence;
+truncated or missing evidence yields uncertainty, never a browser equality claim.
+Both cells retain their exact immutable RequestSnapshot-backed record owner.
 Summary is a human-readable view; Native holds IDs and allowlisted native facts.
 Tool Input, Result and Schema share one historical-read state decision. A pending
 read shows loading (or not-yet-loaded); a failed read shows that facet's read error,
@@ -565,13 +574,16 @@ clamp(320px, 38%, 440px), minimum 320px; Ledger minimum is 340px. Below a measur
 Trajectory width of 720px the panels stack. A Ledger container query at 560px
 compacts Event/icons even in a desktop viewport. No geometry is persisted.
 
-Timing lanes are Input / Model / Tools. Request generation is counted once,
+The timeline consumes the exact same `TrajectoryProjection` as the ledger:
+Turn boundaries, order and native identities are never reconstructed separately.
+Drag focus persists as native record IDs, so prepending history only relocates its
+visible coordinates. Timing lanes are Input / Model / Tools. Request generation is counted once,
 never again for canonical Assistant acceptance; Attempt/Step/SYSTEM acquire no
 durations. Parallel domain evidence retains overlap. Mode contracts:
 
 | Mode | Coordinates | Width / idle gaps |
 | --- | --- | --- |
-| sequence | durable visible execution order | equal width; no clock claim |
+| sequence | shared Turn/group presentation order | equal width; no clock claim |
 | duration | recorded time with one cross-lane union-of-occupied-time transform | measured widths; idle gaps removed; overlap retained |
 | time | absolute recorded starts | markers; idle gaps retained |
 | actual | absolute recorded starts/ends | measured widths; idle gaps and overlap retained |

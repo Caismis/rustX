@@ -1,3 +1,4 @@
+import { projectTrajectory } from '../../src/app/trajectory/layout';
 import { createRoot } from 'react-dom/client';
 import { TrajectoryTimeline } from '../../src/app/trajectory/TrajectoryTimeline';
 import { traceRecord, traceTool } from '../trace-fixture';
@@ -6,7 +7,6 @@ import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 
 const noop = () => {};
-const boundaryLabel = () => undefined;
 function Fixture({ bridge }: { bridge: boolean }) {
   const request = traceRecord(0);
   request.timing.duration_ms = '9000';
@@ -18,8 +18,8 @@ function Fixture({ bridge }: { bridge: boolean }) {
   const reference = traceTool(1, { timing: { ...request.timing } });
   return <section aria-label={bridge ? 'Measured bridge' : 'Missing bridge'}>
     <h1>{bridge ? '400 ms preparation, 320 ms TTFT, 1280 ms generation' : 'Numeric TTFT without a bridge'}</h1>
-    <TrajectoryTimeline records={[request, reference]} mode="duration" range={null}
-      selectedId={null} searchMatches={null} onRangeChange={noop} onSelect={noop} boundaryLabel={boundaryLabel}
+    <TrajectoryTimeline projection={projectTrajectory([request, reference])} mode="duration" range={null}
+      selectedId={null} searchMatches={null} onRangeChange={noop} onSelect={noop}
       hasEarlierRecords={false} loadingEarlier={false} canLoadEarlier={false} onLoadEarlier={noop} />
   </section>;
 }
