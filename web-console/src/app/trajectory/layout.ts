@@ -200,10 +200,23 @@ export function callsSummary(owner: TraceRecord, executions: readonly TraceRecor
   return `${owner.calls.length} proposed · ${executions.length} loaded matching executions${[...states].map(([state, count]) => ` · ${count} ${state}`).join('')} · ${executions.filter(record => record.tool?.started).length} started`;
 }
 
+/** Search visibility and timeline dimming share the projection's exact membership.
+ * Structural labels are evidence, never identities used to reconstruct ownership. */
+export function matchedRecordIds(items: readonly TrajectoryDisplayItem[], matches: ReadonlySet<string> | null): ReadonlySet<string> | null {
+  if (matches === null) return null;
+  const owners = new Set<string>();
+  for (const item of items) {
+    if (!matches.has(item.display_key) || item.type === 'HistoryBoundary') continue;
+    if (isInspectable(item)) owners.add(item.owner_record_id);
+    else for (const id of item.record_ids) owners.add(id);
+  }
+  return owners;
+}
+
 /** Search bypasses both collapse policies. It never performs a read. */
 export function visibleItems(items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], attempts: ReadonlySet<string>, calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
   if (matches) {
-    const owners = new Set(items.filter((item): item is InspectableDisplayItem => isInspectable(item) && matches.has(item.display_key)).map(item => item.owner_record_id));
+    const owners = matchedRecordIds(items, matches)!;
     return items.filter(item => matches.has(item.display_key) || (item.type !== 'HistoryBoundary' && !isInspectable(item) && item.record_ids.some(id => owners.has(id))));
   }
   const matching = matchingCalls(records);

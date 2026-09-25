@@ -5,9 +5,9 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { prependTrace, beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
+import { matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
-import { requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
+import { structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v23';
 
 beforeEach(() => {
@@ -568,4 +568,59 @@ it('407: System Prompt cells expose semantic tabs and preserve unknown historica
   fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
   expect(screen.getByRole('tabpanel').textContent).toContain('Previous prompt unavailable');
   expect(screen.getByRole('tabpanel').textContent).not.toMatch(/unchanged|No changes/);
+});
+
+it.each([
+  ['Step 2', 'GroupHeader', 'Step 2', 'attempt-a', ['trace:4', 'trace:5', 'trace:8']],
+  ['beta', 'GroupHeader', 'Step 2', 'attempt-a', ['trace:4', 'trace:5', 'trace:8']],
+  ['Turn 2', 'TurnHeader', 'Turn 2', 'attempt-b', ['trace:6', 'trace:7']],
+  ['attempt-b', 'TurnHeader', 'Turn 2', 'attempt-b', ['trace:6', 'trace:7']],
+  ['Message', 'GroupHeader', 'Message', 'attempt-a', ['trace:2']],
+] as const)('structural search %s shares exact ledger/timeline membership without reads or collapse mutation', (query, type, label, attempt, ids) => {
+  const records = structuralSearchRecords();
+  const items = flattenTrajectory(projectTrajectory(records), 'older');
+  const collapsed = new Set(['attempt-a', 'attempt-b']);
+  const before = visibleItems(items, records, collapsed, new Set(), null);
+  const matches = searchItems(items, query);
+  expect(matchedRecordIds(items, matches)).toEqual(new Set(ids));
+  const exposed = visibleItems(items, records, collapsed, new Set(), matches);
+  expect(exposed).toContainEqual(expect.objectContaining({ type, label, attempt_id: attempt }));
+  expect(visibleItems(items, records, collapsed, new Set(), null)).toEqual(before);
+  expect([...collapsed]).toEqual(['attempt-a', 'attempt-b']);
+
+  const load = vi.fn(); const older = vi.fn();
+  show(replaceTrace({ records, next_cursor: 'older' }), load, older);
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 2' }));
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  const previousKeys = () => [...ledger.querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
+  const foldedKeys = previousKeys();
+  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  fireEvent.change(search, { target: { value: query } });
+  expect(within(ledger).getByRole('row', { name: label }).getAttribute('data-attempt')).toBe(attempt);
+  const spans = [...document.querySelectorAll('[data-record-id]')];
+  expect(spans.length).toBeGreaterThan(0);
+  for (const span of spans) expect(span.hasAttribute('data-dimmed')).toBe(!new Set<string>(ids).has(span.getAttribute('data-record-id')!));
+  fireEvent.change(search, { target: { value: '' } });
+  expect(previousKeys()).toEqual(foldedKeys);
+  expect(screen.getByRole('button', { name: 'Expand Turn 1' })).toBeDefined();
+  expect(screen.getByRole('button', { name: 'Expand Turn 2' })).toBeDefined();
+  expect(load).not.toHaveBeenCalled();
+  expect(older).not.toHaveBeenCalled();
+});
+
+it('search conversion covers every inspectable cell, deduplicates owners and excludes history boundaries', () => {
+  const assistant = traceRecord(1, { kind: 'assistant', request: null, message_id: 'assistant', calls: [{ call_id: 'call-2', tool_id: 'tool-bash', name: 'bash' }] });
+  const records = [richRequest(), assistant, traceTool(2)];
+  const items = flattenTrajectory(projectTrajectory(records), 'older');
+  const folded = visibleItems(items, records, new Set(), new Set([assistant.id]), null);
+  const universe = [...items, ...folded];
+  expect(new Set(universe.filter(isInspectable).map(item => item.type))).toEqual(new Set(['SystemPromptCell', 'ContextRow', 'RequestBoundary', 'RecordRow', 'CollapsedCallSummary']));
+  for (const item of universe.filter(isInspectable)) {
+    expect(matchedRecordIds(universe, new Set([item.display_key]))).toEqual(new Set([item.owner_record_id]));
+  }
+  expect(matchedRecordIds(universe, new Set(universe.filter(isInspectable).map(item => item.display_key)))).toEqual(new Set(records.map(record => record.id)));
+  expect(matchedRecordIds(items, new Set([items[0]!.display_key]))).toEqual(new Set());
+  expect(matchedRecordIds(items, new Set())).toEqual(new Set());
+  expect(matchedRecordIds(items, null)).toBeNull();
 });

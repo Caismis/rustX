@@ -240,3 +240,31 @@ for (const kind of ['request', 'tool']) {
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
   });
 }
+
+for (const width of [1440, 390]) {
+  test(`structural search shares native Timeline membership and restores folded Turns at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?structural-search');
+    const ledger = page.getByRole('table', { name: 'Trace ledger' });
+    await ledger.getByRole('button', { name: 'Fold Turn 1' }).click();
+    await ledger.getByRole('button', { name: 'Fold Turn 2' }).click();
+    const foldedKeys = await ledger.locator('[data-display-key]').evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')));
+    const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+    for (const [query, attempt, expected] of [
+      ['Step 2', 'attempt-a', ['trace:5', 'trace:8']],
+      ['Turn 2', 'attempt-b', ['trace:7']],
+    ] as const) {
+      await search.fill(query);
+      await expect(ledger.getByRole('row', { name: query, exact: true })).toHaveAttribute('data-attempt', attempt);
+      await expect(ledger.getByRole('row', { name: attempt === 'attempt-a' ? 'Turn 1' : 'Turn 2', exact: true })).toBeVisible();
+      await expect.poll(() => page.locator('[data-record-id]:not([data-dimmed])').evaluateAll(spans => spans.map(span => span.getAttribute('data-record-id')))).toEqual([...expected]);
+      await expect(page.locator('[data-record-id="trace:3"]')).toHaveAttribute('data-dimmed');
+    }
+    await search.fill('');
+    await expect(ledger.getByRole('button', { name: 'Expand Turn 1' })).toBeVisible();
+    await expect(ledger.getByRole('button', { name: 'Expand Turn 2' })).toBeVisible();
+    expect(await ledger.locator('[data-display-key]').evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')))).toEqual(foldedKeys);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
+  });
+}

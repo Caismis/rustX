@@ -8,7 +8,7 @@ import { Input } from '../../presentation/primitives/Input';
 import { TrajectoryInspector } from './TrajectoryInspector';
 import { CellContent, CellIcon, SystemPromptCell } from './TrajectoryCell';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import { projectTrajectory, trajectoryItems, matchingCalls, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, preferredDisplayItem, type InspectableDisplayItem, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
+import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, preferredDisplayItem, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
 import { timelineFocus, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
@@ -48,7 +48,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const matches = useMemo(() => searchItems(allItems, query), [allItems, query]);
   const rows = useMemo(() => visibleItems(allItems, records, collapsedTurns, calls, matches), [allItems, records, collapsedTurns, calls, matches]);
   const selectionItems = useMemo(() => displayUniverse(allItems, rows), [allItems, rows]);
-  const matchingOwners = useMemo(() => matches ? new Set(allItems.filter((item): item is InspectableDisplayItem => isInspectable(item) && matches.has(item.display_key)).map(item => item.owner_record_id)) : null, [allItems, matches]);
+  const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(projection, mode), [projection, mode]);
   // Drag selection persists as native record identities, not sequence positions.
   // Prepending history changes the displayed range without moving its ownership.

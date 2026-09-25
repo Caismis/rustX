@@ -534,7 +534,10 @@ scope remains uncollapsed. Proposals and executions have separate counts; failed
 denied, waiting, running and unknown states remain in the summary. Background,
 Subagent, Workflow and Interaction never become Subtools. Search temporarily overrides Calls and Turn
 collapse, searches only loaded labels/previews/native identities, and performs
-no detail or history reads. Matching cells retain their Turn/group headers; clearing
+no detail or history reads. One projection-owned conversion maps matched cells to
+their native owner and matched Turn/Message/Step headers to their exact `record_ids`.
+Both ledger header exposure and Timeline dimming use this membership; history
+boundaries contribute no records. Matching cells retain their Turn/group headers; clearing
 search restores the untouched collapse sets. History loading lives at the boundary; Jump to latest
 appears only off-tail. The old toolbar load/latest/count chrome is removed.
 
