@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NewConversation } from '../src/app/new-conversation/NewConversation';
+import { NavigationEpoch } from '../src/app/commands/native';
 import { RpcFailure } from '../src/client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v21';
@@ -69,13 +70,30 @@ it('uncertain creation preserves the draft, refuses another Send and requires na
   expect(opened).not.toHaveBeenCalled();
 });
 
-it('confirmed create survives immediate authority replacement in the recovery presentation without stale attachment', async () => {
-  let current = true; const { opened } = await mount({ current: () => current });
+it('confirmed create survives a transport replacement: it opens the exact committed Session without continuing native effects', async () => {
+  const { opened } = await mount();
   server.held.add('session/create');
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   const request = await server.waitFor('session/create', 1);
-  await act(async () => { server.reply(request); current = false; });
+  // Deliver the acknowledgement first; the transport replacement then occurs
+  // before XState starts its next, separately fenced continuation.
+  await act(async () => { server.reply(request); await Promise.resolve(); server.socket.close(); });
+  await waitFor(() => expect(opened).toHaveBeenCalledWith('native-committed', expect.stringContaining('Authority changed')));
+  expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'session/upload', 'turn/start'].includes(r.request.method))).toHaveLength(0);
+  expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
+  await act(async () => server.connect());
+  expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
+  expect(opened).toHaveBeenCalledTimes(1);
+});
+
+it('a replaced New Conversation navigation cannot open a Session committed by its older route', async () => {
+  const navigation = new NavigationEpoch(); const { opened } = await mount({ current: navigation.capture() });
+  server.held.add('session/create');
+  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  const request = await server.waitFor('session/create', 1);
+  await act(async () => { server.reply(request); navigation.invalidate(); });
   expect(screen.getByRole('alert').textContent).toContain('Session native-committed was created');
   expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'turn/start'].includes(r.request.method))).toHaveLength(0);
   expect(opened).not.toHaveBeenCalled(); // obsolete navigation cannot take over a newer route

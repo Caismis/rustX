@@ -68,6 +68,34 @@ repetitions. The unchanged spec and the complete suite pass.
 The earlier note in [review-corrections.md](review-corrections.md) treated the
 first occurrence as a fixture accident. That was wrong; it had the same cause.
 
+## Committed Session recovery ownership
+
+The navigation-lifetime correction above deliberately did not make a
+submission's transport port durable. `FirstSubmitPort.current()` is still the
+authority for native continuation only: attach, model observation, upload and
+send must stop when its endpoint, generation, authority or target fence is
+replaced.
+
+That is not the authority for presentation of an acknowledged `session/create`.
+Successful create stores the exact `CreatedSession` in `firstSubmitMachine`
+before the next continuation fence is evaluated. From that commit point, a
+transport replacement may stop the old continuation, but it cannot erase the
+native Session identity. `NewConversation` therefore transfers a committed
+Session through its current navigation-epoch callback, rather than through the
+obsolete submission port:
+
+```text
+submission continuation authority != committed Session presentation authority
+FirstSubmitPort.current()           != current New Conversation navigation epoch
+```
+
+If the route is still current, recovery opens that exact native Session after a
+confirmed create even when attach is fenced by a dropped connection. The App's
+normal Session route can then attach or reread under the new generation; no
+create or other native mutation is replayed. If a newer navigation invalidates
+the old epoch first, the old route cannot open or steal focus, while the native
+Session remains discoverable from authoritative Session state.
+
 ## Deterministic proof
 
 - `issue402_workspace_session_models_are_the_created_session_catalog`
@@ -89,6 +117,11 @@ first occurrence as a fixture accident. That was wrong; it had the same cause.
     Send binds the reconnected generation.
 - `first-submit.test.ts`: a replaced authority's SUBMIT is refused, and a later
   SUBMIT on the current authority proceeds.
+- `new-conversation.test.tsx`: a create acknowledgement followed by a transport
+  replacement opens the exact committed ID while attach/model/upload/send stay
+  fenced and create remains single-shot; reconnect does not replay create. A
+  replacement navigation epoch prevents the older route from opening its
+  committed Session.
 
 ## Validation commands
 

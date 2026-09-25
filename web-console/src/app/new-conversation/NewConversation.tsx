@@ -34,11 +34,14 @@ export function NewConversation({ client, host, initialWorkspace, current, opene
     return () => { alive = false; };
   }, [host, current, transport.endpoint, transport.authorityRevision]);
   useEffect(() => {
-    if (!flow.context.port?.current()) return;
+    // A FirstSubmitPort owns only the native continuation it started.  Once
+    // create acknowledges, this exact Session is a committed native fact;
+    // recovery belongs to the current New Conversation navigation epoch.
+    if (!current()) return;
     if (flow.matches('session')) opened(flow.context.session!.id);
     // A later failure never rewinds creation: the committed Session is opened.
     else if (flow.matches('failed') && flow.context.session) opened(flow.context.session.id, `Session created. First submission stopped: ${String(flow.context.error)}. ${flow.context.receipts.length} upload(s) committed. No operation was replayed.`);
-  }, [flow, opened]);
+  }, [flow, current, opened]);
   const bound = sameEndpoint(catalog?.endpoint, transport.endpoint);
   const selected = bound ? catalog?.workspaces.find(w => w.id === workspaceId) : undefined;
   const pick = (id: string) => { setWorkspace(id); setIntent(undefined); setMenu(false); };
