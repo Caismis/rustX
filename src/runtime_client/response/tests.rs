@@ -503,3 +503,48 @@ fn is_completed_response(
 }
 
 mod timing;
+
+#[test]
+fn process_membership_uses_exact_attempts_across_steering_and_pages() {
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",
+    ))
+    .unwrap();
+    user(&store, "input");
+    assistant(&store, "a", "a-intermediate");
+    user(&store, "steering");
+    assistant(&store, "b", "b-live");
+    assistant(&store, "a", "a-final");
+    let live = page(&store, None, 64);
+    assert!(
+        live.entries
+            .iter()
+            .all(|entry| entry.completed_process.is_none())
+    );
+    finish(&store, "a");
+    let completed = page(&store, None, 64);
+    for entry in &completed.entries {
+        let RuntimeClientTranscriptItem::Message { message } = &entry.item else {
+            continue;
+        };
+        match message.id().as_str() {
+            "a-intermediate" | "a-final" => {
+                let process = entry.completed_process.as_ref().unwrap();
+                assert_eq!(process.origin.attempt_id, AttemptId::new("a"));
+                assert_eq!(process.final_message_id, MessageId::new("a-final"));
+            }
+            _ => assert!(entry.completed_process.is_none()),
+        }
+    }
+    let last = page(&store, None, 1);
+    let earlier = page(
+        &store,
+        last.next_cursor
+            .map(|cursor| crate::durable::TranscriptCursor::new(cursor.get())),
+        64,
+    );
+    let member = earlier.entries.iter().find(|entry| matches!(&entry.item,
+        RuntimeClientTranscriptItem::Message { message } if message.id().as_str() == "a-intermediate")).unwrap();
+    assert_eq!(member.completed_process, last.entries[0].completed_process);
+    assert_eq!(store.load_canonical().unwrap().len(), 5);
+}

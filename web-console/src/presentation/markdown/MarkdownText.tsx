@@ -151,8 +151,9 @@ class StreamingRenderer {
  * identity discards the streaming render cache mid-message.
  * Raw HTML stays literal, links are protocol-allowlisted, and images render alt text.
  */
-export const MarkdownText = memo(function MarkdownText({ text, streaming = false, labels = DEFAULT_LABELS }: {
+export const MarkdownText = memo(function MarkdownText({ text, streaming = false, labels = DEFAULT_LABELS, variant = 'normal' }: {
   text: string
+  variant?: 'normal' | 'compact'
   streaming?: boolean
   labels?: MarkdownLabels
 }) {
@@ -169,5 +170,5 @@ export const MarkdownText = memo(function MarkdownText({ text, streaming = false
     }
     return streamRef.current.render(text)
   }, [text, streaming, labels])
-  return <div className={css.markdown}>{children}</div>
+  return <div className={`${css.markdown} ${variant === 'compact' ? css.compact : ''}`} data-markdown-variant={variant}>{children}</div>
 })

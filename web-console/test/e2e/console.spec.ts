@@ -1,8 +1,10 @@
+import { expandModelAuthoring } from './shell-actions';
+import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { showInspector } from './shell-actions';
 import {
-  choose, chooseWorkspace, closeSettings, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  choose, closeSettings, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
@@ -34,11 +36,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.goto('/'); await expect(page).toHaveTitle('rustX Developer Console');
     await expect(page.locator('[data-harness-frame]')).toBeVisible();
     await connect();
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceA}`);
     const idA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
-    await chooseWorkspace(page, 'Workspace B'); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceB}`);
     const idB = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
     await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
@@ -51,7 +52,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
     await closeSettings(page);
-    await openWorkspaceSettings(page, 'Workspace A');
+    await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaultModel, 'Model', 'fixture/second-model');
     await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
@@ -59,7 +60,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
-    await openSettingsPage(page, 'Models');
+    await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await confirmSettingsAction(page, 'Use global default Default model');
     await expect(settings.getByText('Default model saved. Native coordination owns application.')).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();

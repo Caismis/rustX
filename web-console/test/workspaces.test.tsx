@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { NavigationEpoch } from '../src/app/commands/native';
-import { createWorkspaceSession } from '../src/workspaces/navigation';
+import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { sessionObservation } from '../src/workspaces/WorkspaceNavigation';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { configurationSystem } from '../src/app/settings/machines/system';
@@ -40,7 +40,7 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
   expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy();
   expect(methods()).toEqual(['initialize', 'session/list']);
-  expect(host.resolveWorkspace).not.toHaveBeenCalled(); expect(server.loaded.size).toBe(0);
+  expect(host.resolveWorkspace).toHaveBeenCalledWith('wA', endpoint); expect(methods()).not.toContain('session/create'); expect(server.loaded.size).toBe(0);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(server.coldLoads.get('A')).toBe(1);
   // Session focus changes beneath the Settings modal, which hides the page it
@@ -88,17 +88,17 @@ it('picker capability exposes only authorized choices and Session rename uses th
 it('Host resolution supplies exact cwd, rejects unauthorized identifiers, and a late resolution cannot create or reopen', async () => {
   await server.connect(); const host = hostFixture(), navigation = new NavigationEpoch();
   const gate = deferred<{ cwd: string }>(); vi.mocked(host.resolveWorkspace).mockReturnValueOnce(gate.promise);
-  const pending = createWorkspaceSession(host, 'wA', server.client, navigation.capture());
-  navigation.invalidate(); gate.resolve({ cwd: '/workspace/A' }); expect(await pending).toBeUndefined();
+  const pending = firstSubmitPort(server.client, host, navigation.capture()).create({ workspaceId: 'wA', text: 'hello', files: [] });
+  navigation.invalidate(); const rejected = expect(pending).rejects.toThrow('authority changed'); gate.resolve({ cwd: '/workspace/A' }); await rejected;
   expect(methods()).not.toContain('session/create');
-  await expect(createWorkspaceSession(host, '/arbitrary/path', server.client, navigation.capture())).rejects.toThrow('Unauthorized');
+  await expect(firstSubmitPort(server.client, host, navigation.capture()).create({ workspaceId: '/arbitrary/path', text: 'hello', files: [] })).rejects.toThrow('Unauthorized');
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw new Error('wrong request');
     expect(request.params.settings.cwd).toBe('/workspace/A');
     server.snapshots.set('created', snapshot('created'));
     return { type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
   });
-  expect((await createWorkspaceSession(host, 'wA', server.client, navigation.capture()))?.session.id).toBe('created');
+  expect((await firstSubmitPort(server.client, host, navigation.capture()).create({ workspaceId: 'wA', text: 'hello', files: [] })).id).toBe('created');
 });
 it('late metadata searches cannot replace newer results or results after Workspace navigation', async () => {
   await mount(); server.held.add('session/list');
@@ -115,8 +115,9 @@ it('late metadata searches cannot replace newer results or results after Workspa
   expect(server.client.getSnapshot().sessions[0].id).toBe('new');
   fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'obsolete' } });
   const obsolete = await server.waitFor('session/list', 4);
-  fireEvent.click(screen.getAllByRole('button', { name: 'New Session' })[0]);
-  fireEvent.change(screen.getByLabelText('Choose Workspace'), { target: { value: 'wB' } });
+  await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
+  fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' }));
   await act(async () => server.reply(obsolete));
   expect(server.client.getSnapshot().sessions[0].id).toBe('new');
 });
@@ -191,7 +192,8 @@ it('registered authorization is checked from current native settings before exac
 });
 it('unregister retains authorization and permits ungrouped cold open without recreating registration', async () => {
   const host = hostFixture(); await host.removeWorkspace('wA'); await mount(host);
-  expect(screen.getByRole('button', { name: 'Select Workspace Ungrouped Sessions' }).closest('[class]')?.textContent).toContain('Ungrouped');
+  expect(screen.queryByRole('button', { name: 'Select Workspace Ungrouped Sessions' })).toBeNull();
+  fireEvent.click(screen.getByText('Sessions outside registered Workspaces'));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(server.loaded.has('A')).toBe(true);
   expect(document.querySelector('[aria-label^="Select Workspace"][aria-current="page"]')).toBeNull();
@@ -246,8 +248,8 @@ async function invokeNew() {
   fireEvent.change(input, { target: { value: '/new' } });
   await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
 }
-it('Sidebar selection synchronizes Workspace context and /new resolves A after visiting B', async () => {
-  const host = await mount();
+it('Sidebar selection synchronizes Workspace context and /new drafts in A after visiting B without creation', async () => {
+  await mount();
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw new Error('wrong request');
     expect(request.params.settings.cwd).toBe('/workspace/A'); server.snapshots.set('child', snapshot('child'));
@@ -261,8 +263,8 @@ it('Sidebar selection synchronizes Workspace context and /new resolves A after v
   expect(screen.getByRole('button', { name: 'Open Session A' }).getAttribute('aria-current')).toBe('page');
   expect(screen.getByRole('button', { name: 'Select Workspace Workspace A' }).getAttribute('aria-current')).toBe('page');
   await invokeNew();
-  expect(host.resolveWorkspace).toHaveBeenCalledExactlyOnceWith('wA', endpoint);
-  expect(methods().filter(method => method === 'session/create')).toHaveLength(1);
+  expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Workspace A');
+  expect(methods()).not.toContain('session/create');
 });
 it('focusing an authorized-unregistered Session clears old Workspace context and /new cannot reuse B', async () => {
   const host = await mount();
@@ -271,9 +273,10 @@ it('focusing an authorized-unregistered Session clears old Workspace context and
   await host.removeWorkspace('wA');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(document.querySelector('[aria-label^="Select Workspace"][aria-current="page"]')).toBeNull();
+  vi.mocked(host.resolveWorkspace).mockClear();
   await invokeNew();
   expect(host.resolveWorkspace).not.toHaveBeenCalled(); expect(methods()).not.toContain('session/create');
-  expect(screen.getByRole('alert').textContent).toContain('Select a Host-authorized Workspace');
+  expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Choose Workspace');
 });
 it('browser binding accepts the same URL normalization as Host routing', async () => {
   const host = hostFixture(), catalog = await host.listWorkspaces();
@@ -360,8 +363,8 @@ it('classification belongs to exactly the native summary page that requested it'
   host.classifyLocations = vi.fn(() => pending.promise);
   server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], }));
   await act(async () => { await server.client.listSessions(); });
-  const groupContaining = () => screen.getByRole('button', { name: 'Open Fresh Session' }).closest('[data-workspace-group]')!.textContent;
-  expect(groupContaining()).toContain('Ungrouped Sessions');
+  const groupContaining = () => screen.getByRole('button', { name: 'Open Fresh Session' }).closest('[data-workspace-group]')?.textContent ?? '';
+  expect(groupContaining()).toBe('');
   expect(groupContaining()).not.toContain('Workspace A');
   await act(async () => pending.resolve([{ authorized: true, workspaceId: 'wB' }]));
   expect(groupContaining()).toContain('Workspace B');
@@ -372,7 +375,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v20').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v21').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -409,7 +412,7 @@ it('S1-10 an unregistered owning Workspace reports an explicit error and never f
   await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/revoked' }], host);
   const before = methods().length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/revoked' })));
-  expect(screen.getByRole('alert').textContent).toContain('/workspace/revoked is not registered by this Product Host');
+  expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('/workspace/revoked is not registered by this Product Host'))).toBe(true);
   // No Settings instance is opened at all, least of all User authoring.
   expect(screen.queryByRole('heading', { name: 'User Settings' })).toBeNull();
   expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
@@ -431,7 +434,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by one App-owned epoch. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v20').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v21').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();

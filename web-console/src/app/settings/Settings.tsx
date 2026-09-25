@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v20';
+import type { SourceScope } from '../../../../protocol/app-server/v21';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -194,7 +194,7 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
       <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>Reload configuration</Button>
     </div>}>
     <section className={`${css.settings} ${css.page}`} aria-label="Settings" aria-busy={busy}>
-      {scope === 'workspace' && <p className={css.hint}>Bound to this exact authorized Workspace. Session focus never retargets this editor.</p>}
+      {scope === 'workspace' && current !== 'models' && <p className={css.hint}>Bound to this exact authorized Workspace. Session focus never retargets this editor.</p>}
       {/* Target-wide facts, each reported as itself: a read failure, a
           convergence report, an unknown save outcome and a maintenance
           failure are separate alerts, and none of them hides another. */}
@@ -202,7 +202,7 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
       {convergenceError && <p role="alert" className={css.error}>{convergenceError}</p>}
       <MutationNotice outcome={outcome} />
       {maintenanceError && <p role="alert" className={css.error}>{maintenanceError}</p>}
-      {scope === 'workspace' && current !== 'general' && <p className={css.hint}>Use global default removes the unit this Workspace authors, so the global value applies again. It never removes the global definition.</p>}
+      {scope === 'workspace' && current !== 'general' && current !== 'models' && <p className={css.hint}>Use global default removes the unit this Workspace authors, so the global value applies again. It never removes the global definition.</p>}
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
         ? <ConnectionSettings connection={connection} client={client} />
         : !source ? <SourcePending lifecycle={lifecycle} />

@@ -1,5 +1,6 @@
+import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
-import { chooseWorkspace, connectionAction } from './shell-actions';
+import { connectionAction } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -37,8 +38,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   try {
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connect();
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceA}`);
     // Composed Todo with no current list stays a distinct native fact, and its
     // ordinary visual result is the same as extension absence: no dock at all.
@@ -66,6 +66,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     // Real composed Agent Status, placed only by the runtime-published anchors it
     // carries: every composition renders exactly once, subordinate to its own
     // anchor row, and never repeats under later messages.
+    while (await page.locator('[data-turn-process][aria-expanded="false"]').count()) await page.locator('[data-turn-process][aria-expanded="false"]').first().click();
     const notes = page.getByRole('note', { name: 'Agent Status' });
     await expect(notes).not.toHaveCount(0);
     const placement = async () => page.locator('[data-agent-status]').evaluateAll(nodes =>
@@ -96,6 +97,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(goal).toContainText('Active Goal');
     await expect(goal).toContainText('Verify the composer docks');
     await expect(goal).toContainText('1/1 rounds');
+    while (await page.locator('[data-turn-process][aria-expanded="false"]').count()) await page.locator('[data-turn-process][aria-expanded="false"]').first().click();
     const activity = page.locator('[data-goal-activity]').filter({ hasText: 'Goal started' });
     await expect(activity).toHaveCount(1);
     await expect(activity.locator('[data-tool-renderer]')).toHaveCount(0);
@@ -191,7 +193,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     // Reload rebuilds from the authoritative snapshot; disclosure state is presentation-local.
     await expect(todo.getByRole('button', { expanded: false })).toContainText(/1 in progress\s·\s1 pending/);
     // Cold attach reconstructs exactly the placement that live observation produced.
-    await expect(notes).toHaveCount(beforeReload.length);
+    await expect(page.getByRole('note', { name: 'Agent Status', includeHidden: true })).toHaveCount(beforeReload.length);
     expect(await placement()).toEqual(beforeReload);
     await expect(goal).toContainText('Verify the composer docks end to end');
     expect(await revision()).toBe(settled);

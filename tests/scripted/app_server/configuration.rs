@@ -4020,3 +4020,128 @@ async fn native_source_application_identity_uses_exact_facts_not_projection() {
             .is_empty()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue402_workspace_session_models_are_the_created_session_catalog() {
+    use crate::local_runtime::configuration::settings::{SessionModelsView, SourceTarget};
+    Box::pin(bounded(async {
+        let fixture = Fixture::new().await;
+        let directory = fixture.workspaces[0].clone();
+        let workspace = SourceTarget::Workspace {
+            directory: directory.clone(),
+        };
+        let user = fixture
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap();
+        assert_eq!(user.session_models, None);
+
+        let create = |cwd: std::path::PathBuf| {
+            fixture
+                .manager
+                .create_session(SessionPersistentState { cwd, model: None })
+        };
+        // The first creation publishes this Workspace's binding. A model then
+        // authored in its document but never published is configuration, not
+        // a selectable model of a Session created now.
+        create(directory.clone()).await.unwrap();
+        let authored = std::fs::read_to_string(&user.user.path).unwrap();
+        let document: toml::Value = toml::from_str(&authored).unwrap();
+        let mut unpublished = document["models"]["local/a"].clone();
+        unpublished["id"] = "unpublished".into();
+        let mut layer = toml::Table::new();
+        layer.insert(
+            "models".into(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "local/unpublished".into(),
+                unpublished,
+            )])),
+        );
+        std::fs::write(
+            directory.join("rustx.toml"),
+            format!(
+                "[environment]\nRESIDENCY_SESSION = \"A\"\n{}",
+                toml::to_string(&layer).unwrap()
+            ),
+        )
+        .unwrap();
+        let source = fixture
+            .manager
+            .source_settings(&workspace, None)
+            .await
+            .unwrap();
+        assert!(
+            source
+                .resolved
+                .as_ref()
+                .unwrap()
+                .models
+                .as_ref()
+                .unwrap()
+                .contains_key("local/unpublished")
+        );
+        let Some(SessionModelsView::Available { catalog }) = source.session_models else {
+            panic!("Workspace Session catalog: {:?}", source.session_models)
+        };
+        let listed: Vec<_> = catalog
+            .models
+            .iter()
+            .map(|model| model.model.to_string())
+            .collect();
+        assert_eq!(listed, ["local/a", "local/b"]);
+
+        let created = create(directory).await.unwrap().session.id;
+        fixture.manager.load(&created, None).await.unwrap();
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_runtime(&created)
+                .unwrap()
+                .model_catalog(),
+            catalog
+        );
+
+        // Where native cannot bind a Session, there is no catalog to choose
+        // from, and the read creates no Session.
+        let broken = fixture.workspaces[0].parent().unwrap().join("broken");
+        std::fs::create_dir(&broken).unwrap();
+        std::fs::write(
+            broken.join("rustx.toml"),
+            "[agent.model]\nmodel = \"local/missing\"\n",
+        )
+        .unwrap();
+        let count = || async {
+            fixture
+                .manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .len()
+        };
+        let before = count().await;
+        let source = fixture
+            .manager
+            .source_settings(
+                &SourceTarget::Workspace {
+                    directory: broken.clone(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let Some(SessionModelsView::Unavailable { diagnostic }) = source.session_models else {
+            panic!(
+                "broken Workspace Session catalog: {:?}",
+                source.session_models
+            )
+        };
+        assert!(diagnostic.contains("local/missing"), "{diagnostic}");
+        assert_eq!(count().await, before);
+        assert!(create(broken).await.is_err());
+        fixture.close().await;
+    }))
+    .await;
+}

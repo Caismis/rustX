@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ModelCatalogView } from '../../../../protocol/app-server/v20';
+import type { ModelCatalogView } from '../../../../protocol/app-server/v21';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Button } from '../../presentation/primitives/Button';
 import { activeAttempt } from '../../bindings/projection';
+import { catalogAdmits, catalogChoices } from '../../bindings/model-catalog';
 
 /** Replaceable read cache scoped to one native attachment. Mutations never update
  * displayed selection; only a subsequent authoritative read unlocks controls. */
@@ -41,9 +42,9 @@ export function AgentControls({ client, view }: { client: AppServerClient; view:
  };
  const model = view.snapshot?.model;
  const disabled = !attached || busy;
- return <div className="agent-control"><ModelSelect key={`${generation}:${target?.attachment_id}`} choices={(catalog?.models ?? []).map(value => ({ id: value.model, profiles: (value.reasoningProfiles ?? []).map(profile => ({ id: profile.id, label: profile.id })), defaultProfile: value.defaultReasoningProfile ?? undefined }))}
+ return <div className="agent-control"><ModelSelect key={`${generation}:${target?.attachment_id}`} choices={catalogChoices(catalog)}
    current={model?.configured.model} profile={model?.effective.reasoningProfile ?? undefined} disabled={disabled} loading={blocked} error={error} load={load}
-   choose={(selected, profile) => { if (!catalog?.models?.some(model => model.model === selected && (profile === undefined || model.reasoningProfiles?.some(item => item.id === profile)))) return;
+   choose={(selected, profile) => { if (!catalogAdmits(catalog, selected, profile)) return;
      void mutate(() => client.setAgentModel(view.id, { model: selected, ...(profile === undefined ? {} : { reasoningProfile: profile }) })); }}/>
    {activeAttempt(view.snapshot) && view.snapshot?.attempt?.model && view.snapshot.attempt.model.primary.model !== model?.effective.model && <small>Running: {view.snapshot?.attempt?.model?.primary.model}</small>}
    {blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={load}>Reread models</Button>}

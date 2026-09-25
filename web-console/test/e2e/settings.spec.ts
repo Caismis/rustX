@@ -1,5 +1,7 @@
+import { expandModelAuthoring } from './shell-actions';
+import { openEmptySession } from './shell-actions';
 import {
-  choose, chooseWorkspace, closeSettings, confirmSettingsAction, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  choose, closeSettings, confirmSettingsAction, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -13,8 +15,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
@@ -23,7 +24,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     expect(await selectedSettingsPage(page)).toBe('General');
     const saved = async (unit: string) => { await expect(settings.getByText(`${unit} saved. Native coordination owns application.`)).toBeVisible(); };
     const row = (name: string) => settings.getByRole('row', { name, exact: true });
-    await openSettingsPage(page, 'Models');
+    await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await settings.getByLabel('New Provider identity').fill('acceptance');
     await settings.getByRole('button', { name: 'Add Provider', exact: true }).click();
     await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:1/v1');
@@ -38,7 +39,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
     await settings.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
     await closeSettings(page);
-    await openWorkspaceSettings(page, 'Workspace A');
+    await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     // A Workspace surface is constrained and lands on Models.
     expect(await selectedSettingsPage(page)).toBe('Models');
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name: 'General', exact: true })).toHaveCount(0);
@@ -126,7 +127,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     // Independent removal of each Workspace override is revision fenced, and
     // it is confirmed as what it is: inheriting the global definition again.
-    await openSettingsPage(page, 'Models');
+    await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await settings.getByRole('button', { name: '← Models', exact: true }).click();
     await settings.getByRole('button', { name: /^All Models/ }).click();
     await row('independent').click();

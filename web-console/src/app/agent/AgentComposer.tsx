@@ -3,7 +3,7 @@
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useState, useRef, type ReactNode } from 'react';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/uploads';
-import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v20';
+import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v21';
 import { commands, available, discoveryQuery, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { CommandMenu } from '../commands/CommandMenu';
@@ -14,8 +14,9 @@ import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
-export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed, model, cancellationAvailable = !disabled }: {
-  disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; cancellationAvailable?: boolean;
+export function AgentComposer({ disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed, model, permission, onDraftSend, cancellationAvailable = !disabled }: {
+  submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
+  onDraftSend?: (text: string, files: readonly File[]) => Promise<boolean>; cancellationAvailable?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
@@ -23,19 +24,20 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
 }) {
   const [restoreSupported] = useState(() => editableContent(initialContent));
   disabled = disabled || !restoreSupported;
-  type DraftFile = { id: number; file: File; status: 'uploading' | 'complete' | 'failed' | 'uncertain'; receipt?: UploadReceipt; error?: string };
+  type DraftFile = { id: number; file: File; status: 'draft' | 'uploading' | 'complete' | 'failed' | 'uncertain'; receipt?: UploadReceipt; error?: string };
   const [files, setFiles] = useState<DraftFile[]>([]);
   const nextId = useRef(0);
   const transferring = useRef(false);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
-  const pending = files.some(file => file.status !== 'complete');
+  const pending = files.some(file => file.status !== 'complete' && file.status !== 'draft');
   const pick = (picked: File[]) => {
     if (!picked.length) return;
     if (transferring.current) { setError('Additional files were not added. Wait for the current upload to finish, then select them again.'); return; }
     if (files.length + picked.length > DRAFT_MAX_FILES || picked.some(file => file.size > UPLOAD_MAX_BYTES)
       || picked.reduce((sum, file) => sum + file.size, 0) > UPLOAD_BATCH_MAX_BYTES) { setError('Choose at most 8 files, 256 KiB each and 512 KiB per batch.'); return; }
-    const batch: DraftFile[] = picked.map(file => ({ id: nextId.current++, file, status: 'uploading' }));
+    const batch: DraftFile[] = picked.map(file => ({ id: nextId.current++, file, status: onDraftSend ? 'draft' : 'uploading' }));
+    if (onDraftSend) { setFiles(current => [...current, ...batch]); setError(''); return; }
     transferring.current = true;
     setError(''); setFiles(current => [...current, ...batch]);
     void onUpload(picked).then(uploaded => {
@@ -69,7 +71,7 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
   const selectedCommand = menu && rows[highlight] ? rows[highlight].id : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
-    blocked: disabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
+    blocked: disabled || submitDisabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
   const primary = composerSubmissionPolicy(facts);
   const invoke = (id: CommandId) => {
     if (disabled || busy) return;
@@ -95,7 +97,7 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
       return;
     }
     const submitted = draft;
-    if (await onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery)) { setDraft(current => current === submitted ? '' : current); setFiles([]); setRestored([]); input.current?.focus(); }
+    if (await (onDraftSend ? onDraftSend(submitted, files.map(file => file.file)) : onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery))) { setDraft(current => current === submitted ? '' : current); setFiles([]); setRestored([]); input.current?.focus(); }
   };
   return <div ref={root} className={css.root} onDragOver={event => { if (!disabled && !busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
@@ -106,10 +108,10 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
     <div className={css.card} data-composer-card>
       {menu && <CommandMenu rows={rows} active={highlight} select={invoke} highlight={setHighlight} />}
       {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>Native restored upload batch {receipt.batch_id}</span><Button onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>Remove draft upload</Button></div>)}
-      <div className={css.attachments} aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Reconnect and inspect authoritative state; do not replay.' : item.error}</small></div>)}</div>
+      <div className={css.attachments} aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'draft' ? 'Ready to upload on submit' : item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Reconnect and inspect authoritative state; do not replay.' : item.error}</small></div>)}</div>
       <div className={css.editor}>
-        <textarea ref={input} className={css.input} aria-label="Message" placeholder="Give this Session a task…"
-          aria-controls={menu ? 'composer-commands' : undefined} aria-expanded={!!menu} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
+        <textarea ref={input} className={css.input} aria-label="Message" placeholder={onDraftSend ? "Describe what you want to do…" : "Give this Session a task…"}
+          aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
           value={draft} disabled={disabled || busy} rows={1} onChange={event => { setDraft(event.target.value); setDismissed(false); setHighlight(0); setError(''); }}
           onPaste={event => { const pasted = Array.from(event.clipboardData.files); if (pasted.length) { event.preventDefault(); pick(pasted); } }}
           onKeyDown={event => {
@@ -126,6 +128,7 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
           {onCommand && <button type="button" className={css.add} aria-label="Commands" title="Commands" aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={() => { if (draft.trim() && discoveryQuery(draft) === undefined) { setError('Type / in an empty composer to discover commands. Your draft is preserved.'); return; } setDraft('/'); setDismissed(false); setHighlight(0); input.current?.focus(); }}>+</button>}
           <input ref={picker} type="file" hidden multiple aria-label="Attach files" disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? [])); event.target.value = ''; }}/>
           <button type="button" className={css.attachment} aria-label="Add attachments" title="Add attachments" disabled={disabled || busy} onClick={() => picker.current?.click()}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 14l8-8" /></svg></button>
+          {permission}
         </div>
         <div className={css.trailing}>
           {model}

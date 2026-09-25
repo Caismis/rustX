@@ -132,8 +132,8 @@ credentials or resource definitions. See [Web Settings](../docs/web-settings.md)
 ## Harness browser presentation (#345)
 
 The Sidebar uses the upstream compact project/Session rows, hover cards, menus,
-search results and collapsed rail. **New Session** opens the registered Workspace
-picker; a project's **New Session** button uses that authorized registration.
+search results and collapsed rail. **New Conversation** opens the center draft route. Workspace selection stays
+browser draft state until first submit; only that submit creates a native Session.
 Project title selection changes navigation context; its chevron expands/collapses
 rows. **View options** switches Flat/Grouped view and refreshes the native list.
 Search is native Session metadata search, paged in 32-row windows. It never scans
@@ -146,4 +146,6 @@ unloaded or stale snapshots cannot claim current activity. A Host classification
 result is paired with the exact Session summary array it classified and is thrown
 away on replacement. Collapse and search selection remain disposable; there is no
 persisted Session-to-Workspace membership map. Unregister changes Host metadata
-only, retaining authorized ungrouped Sessions and committed native operations.
+only, retaining authorized unclassified Sessions and committed native operations.
+
+Unclassified Sessions remain reachable through the bounded “Sessions outside registered Workspaces” disclosure or native metadata search. They are never a synthetic Workspace.

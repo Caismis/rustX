@@ -19,7 +19,6 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
     await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await page.getByLabel('Message', { exact: true }).fill('workflow conformance request');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('workflow-child-admitted');

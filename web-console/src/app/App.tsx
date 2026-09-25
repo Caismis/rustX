@@ -1,15 +1,17 @@
+import { NewConversation } from './new-conversation/NewConversation';
+import { WorkspaceControls, WorkspacePermission } from './new-conversation/WorkspaceControls';
 import { ConversationStats } from './agent/ConversationStats';
 import { navigateTabs } from '../presentation/primitives/tabs';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
 import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
-import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspaces/navigation';
+import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { Trajectory } from './trajectory/Trajectory';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v20';
+import type { RuntimeClientSessionDeletePreview, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v21';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -59,7 +61,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
-  const [createOpen, setCreateOpen] = useState(false);
+  type CenterRoute = { kind: 'new-conversation'; epoch: number; workspaceId?: string } | { kind: 'session'; sessionId: string };
+  const centerEpoch = useRef(0);
+  const [center, setCenter] = useState<CenterRoute>({ kind: 'new-conversation', epoch: 0 });
   // Top-level Settings navigation is an explicit machine, not an epoch counter.
   // Every navigation-affecting decision re-enters its idle state, which stops
   // any owning-Workspace lookup in flight: a stale lookup therefore has no
@@ -94,7 +98,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // Released views are not restored. Sidebar rows remain catalog-owned.
   const resumeViews = JSON.stringify(openViews.filter(id => state.views[id]?.attachmentIntent !== 'released'));
   const [error, setError] = useState('');
-  const [creating, setCreating] = useState<number>();
   const [sending, setSending] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
   const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
@@ -103,8 +106,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   if (presentationAuthority !== state.authorityRevision) {
     setPresentationAuthority(state.authorityRevision);
     navigation.invalidate(); setOpenViews([]); setFocus({}); setCommand(undefined); setRestored(undefined);
-    setPreview(undefined); setError(''); setConsumed(undefined); setSending({}); setCreating(undefined);
-    setCreateOpen(false); setSessionMenuOpen(false); setArtifactPreview(undefined);
+    setPreview(undefined); setError(''); setConsumed(undefined); setSending({});
+    setCenter({ kind: 'new-conversation', epoch: ++centerEpoch.current }); setSessionMenuOpen(false); setArtifactPreview(undefined);
   }
 
   // The client owns authority retirement; this retires the browser navigation
@@ -124,7 +127,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (!view || composerDisabled) return;
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
-    if (request.id === 'new') { if (workspace) createInWorkspace(workspace); else setError('Select a Host-authorized Workspace first.'); return; }
+    if (request.id === 'new') { createInWorkspace(workspace); return; }
     if (request.id === 'goal') {
       document.querySelector<HTMLElement>('[aria-label="Goal"] button')?.focus();
       setConsumed(previous => ({ id: 'goal', sequence: (previous?.sequence ?? 0) + 1 }));
@@ -145,6 +148,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (preferences.endpoint !== endpoint) return;
     client.restoreViews(preferences.openViews);
     setOpenViews(preferences.openViews); setFocus({ sessionId: preferences.openViews[0] });
+    if (preferences.openViews[0]) setCenter({ kind: 'session', sessionId: preferences.openViews[0] });
     if (client.getSnapshot().connection === 'connected') for (const id of preferences.openViews) {
       if (!client.getSnapshot().views[id]?.target) void client.attach(id).catch(() => {});
     }
@@ -160,6 +164,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean } = {}) => {
     navigation.invalidate(); const current = navigation.capture();
     const generation = state.generation;
+    setCenter(id ? { kind: 'session', sessionId: id } : { kind: 'new-conversation', epoch: ++centerEpoch.current });
     setCommand(undefined); if (!options.preserveDraft) setRestored(undefined); setFocus({ sessionId: id });
     if (!id) return;
     client.restoreViews([id]);
@@ -194,21 +199,11 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     setOpenViews([]); focusSession();
     run(() => Promise.all(closing.map(id => client.release(id))));
   };
-  const createInWorkspace = (id: string) => {
-    if (openViews.length >= 32) { setError('32 Session views are open. Close a view from its Sidebar Session actions, or use Sidebar View options → Close all views.'); return; }
-    if (creating === state.generation) return;
-    navigation.invalidate(); const current = navigation.capture(); const generation = state.generation;
-    setCommand(undefined); setCreating(generation);
-    run(async () => {
-      try {
-        const result = await createWorkspaceSession(workspaceHost, id, client, current);
-        if (result && current() && generation === client.getSnapshot().generation) {
-          focusSession(result.session.id); setOpenViews(value => value.includes(result.session.id) ? value : [...value, result.session.id]);
-        }
-      } catch (cause) { if (current()) throw cause; }
-      finally { if (generation === client.getSnapshot().generation) setCreating(undefined); }
-    });
+  const createInWorkspace = (id?: string) => {
+    navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation });
+    setCenter({ kind: 'new-conversation', workspaceId: id, epoch: ++centerEpoch.current });
   };
+  const newConversationCurrent = useMemo(() => navigation.capture(), [navigation, center]);
   // Owner-specific Settings navigation from one native authored source owner.
   // The owner arrives as a `SourceTarget` from `ConfigurationApplication.sources`;
   // nothing here parses an application scope, a Session cwd or a display string.
@@ -228,11 +223,11 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (result.result.status === 'preview') setPreview(result.result.preview);
     else setError(sessionDeletionNotice(result.result));
   });
-  return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { setCreateOpen(true); }}
+  return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
     panels={[]}
-    browser={(wide, expand) => <WorkspaceNavigation key={state.authorityRevision ?? 0} wide={wide} expand={expand} createOpen={createOpen} closeCreate={() => setCreateOpen(false)} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
-      creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
-      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
+    browser={(wide, expand) => <WorkspaceNavigation key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
+      metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
+      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={createInWorkspace}
       openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={deletePreview}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
@@ -278,7 +273,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         setError(sessionDeletionNotice(result)); setPreview(undefined);
       })}>Confirm delete</Button></div>
     </section>}
-    {view ? <section className={`session-panel ${agentCss.root}`} data-phase="active" id="session-view" role="region" aria-labelledby="session-title">
+    {center.kind === 'session' && view ? <section className={`session-panel ${agentCss.root}`} data-phase="active" id="session-view" role="region" aria-labelledby="session-title">
       <header className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong id="session-title" aria-label="Session title">{sessionDisplayTitle(state.sessions.find(session => session.id === view.id) ?? view.summary)}</strong><small aria-label="Session location" title={view.settings?.cwd}>{view.settings?.cwd ?? 'Location unavailable'}</small></div>
         <div className="row"><Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus
           anchor={<Button aria-label="Session actions" aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}>•••</Button>}
@@ -314,6 +309,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
           lineageSwitchSafe={lineageSwitchSafe(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
           consumed={consumed} cancellationAvailable={attached && !view.cancellation && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure}
+          permission={workspace && <WorkspaceControls client={client} host={workspaceHost} workspaceId={workspace}>{(source, approval) => <WorkspacePermission source={source} approval={approval} disabled={composerDisabled}/>}</WorkspaceControls>}
           model={<AgentControls key={`model:${view.id}`} client={client} view={view}/>}
           onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts, delivery) => {
             const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
@@ -333,6 +329,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           setOpenViews(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section> : <div className="empty"><h2>What would you like to work on?</h2><p>Choose New Session to select a Workspace, or open an existing Session from the sidebar.</p><p>Switching or closing views never cancels work.</p></div>}
+    </section> : center.kind === 'session' ? <section aria-label="Session recovery"><p>Session {center.sessionId} exists. Open its native state to continue.</p><Button disabled={!connected} onClick={() => open(center.sessionId)}>Open Session</Button></section> : <NewConversation key={center.epoch} client={client} host={workspaceHost}
+      initialWorkspace={center.kind === 'new-conversation' ? center.workspaceId : undefined} current={newConversationCurrent}
+      opened={(id, failure) => { open(id); if (failure) setError(failure); }}/>}
   </AppFrame>;
 }

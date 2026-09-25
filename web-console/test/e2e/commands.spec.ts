@@ -1,8 +1,9 @@
+import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { expectSettled } from './shell-actions';
 import { sessionTree } from './shell-actions';
 import { showInspector } from './shell-actions';
-import { chooseWorkspace, connectionAction } from './shell-actions';
+import { connectionAction } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { test, expect } from '@playwright/test';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -25,8 +26,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(message).toBeEnabled();
     const originalId = JSON.parse(await facts.innerText()).SessionId as string;
     const originalConversation = JSON.parse(await facts.innerText()).ConversationId as string;

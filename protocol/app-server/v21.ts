@@ -2417,6 +2417,18 @@ export type Origin =
       kind: 'process';
     };
 export type ProcessPolicyImpact = 'hot' | 'restart';
+/**
+ * Whether native can bind a Session in a Workspace, and its model catalog.
+ */
+export type SessionModelsView =
+  | {
+      catalog: ModelCatalogView;
+      kind: 'available';
+    }
+  | {
+      diagnostic: string;
+      kind: 'unavailable';
+    };
 export type ErrorData =
   | {
       rejection: AdoptionError;
@@ -5626,6 +5638,11 @@ export interface ConversationStatistics {
  */
 export interface RuntimeClientTranscriptEntry {
   /**
+   * Exact successful Attempt process membership, derived by native owners.
+   * Absence is not permission for a client to infer a process boundary.
+   */
+  completed_process?: CompletedProcessView | null;
+  /**
    * The native Attempt has not yet settled this accepted Assistant candidate.
    * A client retaining this row outside a refresh must reread it, not freeze absence.
    */
@@ -5803,12 +5820,31 @@ export interface RuntimeClientTranscriptEntry {
       };
 }
 /**
+ * Native ownership of a completed Attempt's process. Destination final address
+ * and immutable origin are distinct, including through lineage copies.
+ */
+export interface CompletedProcessView {
+  origin: ResponseOrigin;
+  final_message_id: MessageId;
+}
+/**
+ * Original execution owner, unchanged through arbitrarily deep lineage copies.
+ */
+export interface ResponseOrigin {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+  /**
+   * Identifies a committed canonical message block.
+   */
+  closing_message_id: string;
+}
+/**
  * Derived response view over local execution or inherited lineage provenance.
  * Canonical content remains in the Message Ledger.
  */
 export interface CompletedResponseView {
   closing_message_id: MessageId;
-  origin: ResponseOrigin;
+  origin: ResponseOrigin1;
   /**
    * Durable completion timestamp; never a browser receipt time.
    */
@@ -5838,9 +5874,9 @@ export interface CompletedResponseView {
   timing?: CompletedResponseTiming | null;
 }
 /**
- * Original execution owner, including for inherited historical responses.
+ * Original execution owner, unchanged through arbitrarily deep lineage copies.
  */
-export interface ResponseOrigin {
+export interface ResponseOrigin1 {
   conversation_id: ConversationId;
   attempt_id: AttemptId;
   /**
@@ -8866,6 +8902,12 @@ export interface SourceSettings {
    * Read-only native source resolution; never a Session adopted binding.
    */
   resolved?: RuntimeLayer | null;
+  /**
+   * The catalog a Session created in this Workspace binds, exactly as its
+   * `session/models` then serves it. Absent for the User target. Clients
+   * select pre-Session models only from here, never from `resolved`.
+   */
+  session_models?: SessionModelsView | null;
   provenance: {
     [k: string]: Origin;
   };

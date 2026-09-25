@@ -157,6 +157,10 @@ pub struct SourceSettings {
     pub resource_revisions: BTreeMap<PathBuf, String>,
     /// Read-only native source resolution; never a Session adopted binding.
     pub resolved: Option<SourceDocumentView>,
+    /// The catalog a Session created in this Workspace binds, exactly as its
+    /// `session/models` then serves it. Absent for the User target. Clients
+    /// select pre-Session models only from here, never from `resolved`.
+    pub session_models: Option<SessionModelsView>,
     pub provenance: BTreeMap<String, super::Origin>,
     pub user: SourceView<SourceDocumentView>,
     pub workspace: Option<SourceView<SourceDocumentView>>,
@@ -166,6 +170,18 @@ pub struct SourceSettings {
     pub user_mcp: SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>,
     pub workspace_mcp: Option<SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>>,
     pub agents: Vec<AgentSourceView>,
+}
+
+/// Whether native can bind a Session in a Workspace, and its model catalog.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionModelsView {
+    /// The validated credential-free catalog of the Session creation binding.
+    Available {
+        catalog: crate::model::catalog::ModelCatalogView,
+    },
+    /// Session creation would fail here; no catalog exists to select from.
+    Unavailable { diagnostic: String },
 }
 
 /// Redacted, immutable facts read at the runtime configuration publication lock.
@@ -978,6 +994,7 @@ impl UserConfigManager {
             absent_resource_revision: revision(None),
             resource_revisions,
             resolved: resolved.ok().map(redact),
+            session_models: None,
             provenance,
             user_mcp: mcp_view(self.resource_root(&SourceTarget::User).join("mcp.toml"))?,
             workspace_mcp: target

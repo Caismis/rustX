@@ -9973,6 +9973,17 @@
       "description": "One derived transcript item and its stable durable cursor.",
       "type": "object",
       "properties": {
+        "completed_process": {
+          "description": "Exact successful Attempt process membership, derived by native owners.\nAbsence is not permission for a client to infer a process boundary.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompletedProcessView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "response_pending": {
           "description": "The native Attempt has not yet settled this accepted Assistant candidate.\nA client retaining this row outside a refresh must reread it, not freeze absence.",
           "type": "boolean",
@@ -10009,6 +10020,45 @@
       "required": [
         "cursor",
         "item"
+      ]
+    },
+    "CompletedProcessView": {
+      "description": "Native ownership of a completed Attempt's process. Destination final address\nand immutable origin are distinct, including through lineage copies.",
+      "type": "object",
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/ResponseOrigin"
+        },
+        "final_message_id": {
+          "$ref": "#/$defs/MessageId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "final_message_id"
+      ]
+    },
+    "ResponseOrigin": {
+      "description": "Original execution owner, unchanged through arbitrarily deep lineage copies.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "closing_message_id": {
+          "description": "Provenance only; never a destination content address.",
+          "$ref": "#/$defs/MessageId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id",
+        "closing_message_id"
       ]
     },
     "CompletedResponseView": {
@@ -10070,28 +10120,6 @@
         "origin",
         "completed_at",
         "surface_revision"
-      ]
-    },
-    "ResponseOrigin": {
-      "description": "Original execution owner, unchanged through arbitrarily deep lineage copies.",
-      "type": "object",
-      "properties": {
-        "conversation_id": {
-          "$ref": "#/$defs/ConversationId"
-        },
-        "attempt_id": {
-          "$ref": "#/$defs/AttemptId"
-        },
-        "closing_message_id": {
-          "description": "Provenance only; never a destination content address.",
-          "$ref": "#/$defs/MessageId"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "conversation_id",
-        "attempt_id",
-        "closing_message_id"
       ]
     },
     "CompletedResponseTiming": {
@@ -17647,6 +17675,17 @@
             }
           ]
         },
+        "session_models": {
+          "description": "The catalog a Session created in this Workspace binds, exactly as its\n`session/models` then serves it. Absent for the User target. Clients\nselect pre-Session models only from here, never from `resolved`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionModelsView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "provenance": {
           "type": "object",
           "additionalProperties": {
@@ -17716,6 +17755,47 @@
       "enum": [
         "hot",
         "restart"
+      ]
+    },
+    "SessionModelsView": {
+      "description": "Whether native can bind a Session in a Workspace, and its model catalog.",
+      "oneOf": [
+        {
+          "description": "The validated credential-free catalog of the Session creation binding.",
+          "type": "object",
+          "properties": {
+            "catalog": {
+              "$ref": "#/$defs/ModelCatalogView"
+            },
+            "kind": {
+              "type": "string",
+              "const": "available"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "catalog"
+          ]
+        },
+        {
+          "description": "Session creation would fail here; no catalog exists to select from.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "diagnostic"
+          ]
+        }
       ]
     },
     "SourceView": {

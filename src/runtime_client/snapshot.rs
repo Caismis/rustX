@@ -254,6 +254,10 @@ pub struct RuntimeClientTranscriptPage {
 /// One derived transcript item and its stable durable cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptEntry {
+    /// Exact successful Attempt process membership, derived by native owners.
+    /// Absence is not permission for a client to infer a process boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_process: Option<super::response::CompletedProcessView>,
     /// The native Attempt has not yet settled this accepted Assistant candidate.
     /// A client retaining this row outside a refresh must reread it, not freeze absence.
     #[serde(default)]
@@ -393,102 +397,105 @@ pub(crate) fn transcript_page_view(
     let entries = page
         .entries
         .into_iter()
-        .map(|entry| {
-            let item = match entry.item {
-                crate::durable::TranscriptItem::Message { message } => {
-                    RuntimeClientTranscriptItem::Message { message }
-                }
-                crate::durable::TranscriptItem::PublicationAudit { audit } => {
-                    RuntimeClientTranscriptItem::PublicationAudit { audit }
-                }
-                crate::durable::TranscriptItem::InteractionRequested { event } => {
-                    let RuntimeEventEnvelope {
-                        event_id,
-                        timestamp,
-                        attempt_id: Some(attempt_id),
-                        turn_id: Some(turn_id),
-                        event:
-                            crate::events::types::RuntimeEvent::InteractionRequested {
-                                interaction_id,
-                                subject,
-                            },
-                        ..
-                    } = event
-                    else {
-                        return Err(
-                            "durable transcript requested interaction has an invalid envelope"
-                                .to_owned(),
-                        );
-                    };
-                    RuntimeClientTranscriptItem::InteractionRequested {
-                        event_id,
-                        timestamp,
-                        attempt_id,
-                        turn_id,
-                        interaction_id,
-                        subject,
-                    }
-                }
-                crate::durable::TranscriptItem::InteractionSettled { event } => {
-                    let RuntimeEventEnvelope {
-                        event_id,
-                        timestamp,
-                        attempt_id: Some(attempt_id),
-                        turn_id: Some(turn_id),
-                        event:
-                            crate::events::types::RuntimeEvent::InteractionSettled {
-                                interaction_id,
-                                settlement,
-                            },
-                        ..
-                    } = event
-                    else {
-                        return Err(
-                            "durable transcript settled interaction has an invalid envelope"
-                                .to_owned(),
-                        );
-                    };
-                    RuntimeClientTranscriptItem::InteractionSettled {
-                        event_id,
-                        timestamp,
-                        attempt_id,
-                        turn_id,
-                        interaction_id,
-                        settlement,
-                    }
-                }
-            };
-            Ok(RuntimeClientTranscriptEntry {
-                completed_response: None,
-                response_pending: false,
-                cursor: entry.cursor.into(),
-                tool_calls: entry
-                    .tool_calls
-                    .into_iter()
-                    .map(|tool| {
-                        let arguments =
-                            serde_json::to_string(&tool.call.arguments).expect("JSON arguments");
-                        ForegroundToolExecution {
-                            message_id: tool.message_id,
-                            block_index: tool.block_index,
-                            call_id: tool.call.id,
-                            tool_id: tool.call.tool_id,
-                            name: tool.call.name,
-                            state: match tool.result {
-                                Some(result) => ForegroundToolState::Settled { arguments, result },
-                                None => ForegroundToolState::Assembled { arguments },
-                            },
-                        }
-                    })
-                    .collect(),
-                item,
-            })
-        })
+        .map(transcript_entry_view)
         .collect::<Result<Vec<_>, String>>()?;
     Ok(RuntimeClientTranscriptPage {
         statistics: None,
         entries,
         next_cursor: page.next_cursor.map(Into::into),
+    })
+}
+
+fn transcript_entry_view(
+    entry: crate::durable::TranscriptEntry,
+) -> Result<RuntimeClientTranscriptEntry, String> {
+    let item = match entry.item {
+        crate::durable::TranscriptItem::Message { message } => {
+            RuntimeClientTranscriptItem::Message { message }
+        }
+        crate::durable::TranscriptItem::PublicationAudit { audit } => {
+            RuntimeClientTranscriptItem::PublicationAudit { audit }
+        }
+        crate::durable::TranscriptItem::InteractionRequested { event } => {
+            let RuntimeEventEnvelope {
+                event_id,
+                timestamp,
+                attempt_id: Some(attempt_id),
+                turn_id: Some(turn_id),
+                event:
+                    crate::events::types::RuntimeEvent::InteractionRequested {
+                        interaction_id,
+                        subject,
+                    },
+                ..
+            } = event
+            else {
+                return Err(
+                    "durable transcript requested interaction has an invalid envelope".to_owned(),
+                );
+            };
+            RuntimeClientTranscriptItem::InteractionRequested {
+                event_id,
+                timestamp,
+                attempt_id,
+                turn_id,
+                interaction_id,
+                subject,
+            }
+        }
+        crate::durable::TranscriptItem::InteractionSettled { event } => {
+            let RuntimeEventEnvelope {
+                event_id,
+                timestamp,
+                attempt_id: Some(attempt_id),
+                turn_id: Some(turn_id),
+                event:
+                    crate::events::types::RuntimeEvent::InteractionSettled {
+                        interaction_id,
+                        settlement,
+                    },
+                ..
+            } = event
+            else {
+                return Err(
+                    "durable transcript settled interaction has an invalid envelope".to_owned(),
+                );
+            };
+            RuntimeClientTranscriptItem::InteractionSettled {
+                event_id,
+                timestamp,
+                attempt_id,
+                turn_id,
+                interaction_id,
+                settlement,
+            }
+        }
+    };
+    Ok(RuntimeClientTranscriptEntry {
+        completed_process: None,
+        completed_response: None,
+        response_pending: false,
+        cursor: entry.cursor.into(),
+        tool_calls: entry
+            .tool_calls
+            .into_iter()
+            .map(|tool| {
+                let arguments =
+                    serde_json::to_string(&tool.call.arguments).expect("JSON arguments");
+                ForegroundToolExecution {
+                    message_id: tool.message_id,
+                    block_index: tool.block_index,
+                    call_id: tool.call.id,
+                    tool_id: tool.call.tool_id,
+                    name: tool.call.name,
+                    state: match tool.result {
+                        Some(result) => ForegroundToolState::Settled { arguments, result },
+                        None => ForegroundToolState::Assembled { arguments },
+                    },
+                }
+            })
+            .collect(),
+        item,
     })
 }
 

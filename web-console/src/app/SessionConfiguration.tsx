@@ -1,11 +1,11 @@
 import { useSelector } from '@xstate/react';
-import type { SourceTarget } from '../../../protocol/app-server/v20';
-import type { AppServerClient, SessionView } from '../client/app-server';
+import type { SourceTarget } from '../../../protocol/app-server/v21';
+import type { AppServerClient, SessionView, ConnectionState } from '../client/app-server';
 import type { ReactNode } from 'react';
 import { Button } from '../presentation/primitives/Button';
 import { StateDot, type StateDotState } from '../presentation/primitives/StateDot';
 import css from '../presentation/agent/SessionConfiguration.module.css';
-import { useSessionConfiguration } from './settings/machines/react';
+import { useSessionConfiguration, type SessionConfigurationActor } from './settings/machines/react';
 import { applicationKnown } from './settings/machines/session-configuration';
 import { applicationOwners, observedResult, observedUnitLabel, observedUnits, openOwnerLabel, sourceTargetKey, unitApplication } from './settings/projection';
 
@@ -24,6 +24,9 @@ import { applicationOwners, observedResult, observedUnitLabel, observedUnits, op
  * this presentation renders, and whether or not the Session is attached. */
 export function SessionConfiguration({ client, view, openOwningSettings }: { client: AppServerClient; view: SessionView; openOwningSettings?: (owner: SourceTarget) => void }) {
   const { actor, transport } = useSessionConfiguration(client, view.id);
+  return actor ? <ConfigurationObservation actor={actor} connection={transport.connection} openOwningSettings={openOwningSettings}/> : null;
+}
+function ConfigurationObservation({ actor, connection, openOwningSettings }: { actor: SessionConfigurationActor; connection: ConnectionState; openOwningSettings?: (owner: SourceTarget) => void }) {
   // The current connected span's observation, or — while no span has observed
   // since the last one ended — that span's observation as explicitly stale
   // presentation data. `known` is what says which of the two this is; the
@@ -52,7 +55,7 @@ export function SessionConfiguration({ client, view, openOwningSettings }: { cli
     {candidate && <Line state={eligibility === 'eligible' ? 'ready' : 'blocked'} text="Prepared configuration is waiting for this Session."
       reason={eligibility === 'busy' ? 'Session work must settle before adoption.'
         : eligibility === 'unavailable' ? 'Session configuration is unavailable for adoption.' : undefined}
-      actions={<Button size="sm" variant="primary" disabled={!known || busy || transport.connection !== 'connected' || eligibility !== 'eligible'}
+      actions={<Button size="sm" variant="primary" disabled={!known || busy || connection !== 'connected' || eligibility !== 'eligible'}
         onClick={() => actor.send({ type: 'ADOPT', candidate })}>Adopt configuration</Button>} />}
     {failed.length > 0 && <Line state="failed" text="Some configuration preparation failed. Review the owning authored source in Settings and rescan."
       detail={failed.map(row => `${observedUnitLabel(row.unit)}: failed — ${row.result.state === 'failed' ? row.result.diagnostic : ''}`)}

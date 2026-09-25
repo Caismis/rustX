@@ -1,6 +1,7 @@
 // Isolated deterministic wire fixture. Never imported by the production entry.
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
+import { cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
 import '../../src/presentation/theme/base.css';
@@ -20,6 +21,13 @@ server.snapshots.get('A')!.messages = [{ role: 'assistant', id: 'message-A', con
 server.snapshots.get('A')!.transcript = { entries: [{ cursor: '1', item: { type: 'message', message: server.snapshots.get('A')!.messages[0] } }] };
 server.workspaceHost.listWorkspaces = async () => ({ endpoint, workspaces: [{ id: 'project', displayName: 'rustX', displayPath: '/workspace', location: 'project' }], picker: { kind: 'unavailable', reason: 'Fixture has one authorized project' } });
 server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/C') ? undefined : 'project' }));
+// The shell's registered Workspace supplies the same generated source contract
+// as the permission seat. User Settings retains its explicit error fixture.
+server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
+  const projection = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace' } };
+  if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
+  return { kind: operation.kind, projection };
+};
 await server.attached('A', 'B');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);

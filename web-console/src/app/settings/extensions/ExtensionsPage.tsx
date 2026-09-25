@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v20';
+import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v21';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { NativeFacts } from '../../components/NativeFacts';

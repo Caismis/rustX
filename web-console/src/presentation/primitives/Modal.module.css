@@ -108,3 +108,9 @@
 .content { min-height: 0; overflow-y: auto; }
 .header, .footer { flex-shrink: 0; }
 .body { overflow-wrap: anywhere; }
+
+/* DialogSurface owns the viewport; apply the Harness mask to that surface. */
+.scrim {
+  background: var(--dsw-alias-bg-mask-1);
+  backdrop-filter: var(--dsw-mask-blur);
+}

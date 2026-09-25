@@ -147,8 +147,8 @@ export function Toggle({ label, checked, onChange, disabled = false }: {
  * The workflow names the stable outcome surface; this interaction chooses
  * dismissed versus confirmed. DialogSurface owns the close-focus lifecycle.
  */
-export function ConfirmAction({ label, title, description, confirm, onConfirm, tone, settle, disabled = false }: {
-  label: string; title: string; description: ReactNode; confirm: string;
+export function ConfirmAction({ label, triggerText, title, description, confirm, onConfirm, tone, settle, disabled = false }: {
+  label: string; triggerText?: string; title: string; description: ReactNode; confirm: string;
   onConfirm: () => void; tone: 'destructive' | 'restore';
   /** The enabled element of the caller's workflow that takes focus after a
    * confirmation: one that the confirmed action neither disables nor
@@ -162,11 +162,11 @@ export function ConfirmAction({ label, title, description, confirm, onConfirm, t
   const closing = useRef<'dismissed' | 'confirmed'>('dismissed');
   const destructive = tone === 'destructive';
   return <span className={css.removal} data-tone={tone}>
-    <button type="button" ref={trigger} disabled={disabled}
+    <AriaButton ref={trigger} isDisabled={disabled} aria-label={label}
       className={clsx(buttonCss.button, buttonCss.ghost, buttonCss.md, destructive && css.dangerTrigger)}
-      onClick={() => { closing.current = 'dismissed'; setOpen(true); }}>
-      {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{label}
-    </button>
+      onPress={() => { closing.current = 'dismissed'; setOpen(true); }}>
+      {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{triggerText ?? label}
+    </AriaButton>
     <DialogSurface open={open} onClose={() => setOpen(false)} title={title}
       role={destructive ? 'alertdialog' : 'dialog'} overlayClassName={css.confirmOverlay}
       panelClassName={css.confirmModal} className={css.confirmDialog} initialFocus={cancel}

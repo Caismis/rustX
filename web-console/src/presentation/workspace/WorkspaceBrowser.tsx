@@ -48,13 +48,14 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
     {!wide && <button type="button" className={css.searchButton} aria-label="Search Sessions" onClick={() => { expand(); setSearchExpanded(true); }}><IconSearchOutline16 size={18} /></button>}
     <div className={css.listArea}>{wide && <div className={clsx(css.treeBody, css.wide)}><div ref={tree} className={css.list} role="tree" aria-label="Session browser" tabIndex={-1}>
       {notices}
-      {query ? sessions.map(node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={t} />) : flat ? sessions.map(row) : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
+      {query ? sessions.map(node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={t} />) : flat || groups.length === 0 ? sessions.map(row) : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
         <ProjectRowItem group={{ ...group, expanded: !collapsed.includes(group.key) }} menuFocusOwner={tree} t={t}
           onToggle={() => setCollapsed(value => value.includes(group.key) ? value.filter(id => id !== group.key) : [...value, group.key])}
           onSelect={() => group.workspaceId && selectWorkspace(group.workspaceId)} onCreate={() => group.workspaceId && create(group.workspaceId)}
           actions={group.workspaceId ? { settings: workspaceSettings ? () => workspaceSettings(group.workspaceId!, group.label) : undefined, rename: () => renameWorkspace(group.workspaceId!, group.label), delete: () => removeWorkspace(group.workspaceId!, group.label) } : undefined} />
         {!collapsed.includes(group.key) && group.sessions.map(row)}
       </div>)}
+      {!flat && !query && groups.length > 0 && sessions.some(session => !groups.some(group => group.sessions.some(member => member.id === session.id))) && <details><summary>Sessions outside registered Workspaces</summary>{sessions.filter(session => !groups.some(group => group.sessions.some(member => member.id === session.id))).map(row)}</details>}
       {!sessions.length && <p className={css.empty}>{query ? 'No matching Sessions' : 'No Sessions yet'}</p>}
     </div><div className={css.fade} /></div>}</div>
     {wide && (previous || next) && <div><button className={css.sessionOverflowButton} disabled={!previous} onClick={previous}>Previous</button><button className={css.sessionOverflowButton} disabled={!next} onClick={next}>Next</button></div>}

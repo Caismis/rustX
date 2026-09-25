@@ -20,7 +20,7 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   fireEvent.click(screen.getByRole('button', { name: 'Collapse Sidebar' }));
   act(() => vi.advanceTimersByTime(150)); // upstream presentation transition only, never race synchronization
   expect(document.querySelector('[data-sidebar-wide]')?.getAttribute('data-sidebar-wide')).toBe('false');
-  expect(screen.getByRole('button', { name: 'New Session' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'New Conversation' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Expand Sidebar' }));
   expect(document.querySelector('[data-sidebar-wide]')?.getAttribute('data-sidebar-wide')).toBe('true');
   fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
