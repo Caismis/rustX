@@ -31,10 +31,15 @@ never `PythonToolPackage`, runtime state, protocol DTOs, or persistence. It
 does not invoke uv resolution or runtime behavior.
 
 The replacement removes `pep508_rs`, `pep440_rs`, `itertools 0.13`,
-`version-ranges 0.1`, and `thiserror 1`; it adds `pep-508`, its pinned
-`chumsky` parser runtime, and `uv-normalize`. This is a bounded delta chosen
-for current grammar correctness, normalized identity, and relative-reference
-support. The locked Rust-1.92 build is the MSRV evidence.
+`version-ranges 0.1`, and `thiserror 1`; it adds `pep-508`, direct pinned
+`chumsky` access for its public error type, and `uv-normalize`. The required
+transitive additions are Chumsky's stack (`stacker`, `psm`, and its parser
+support) and uv-normalize's stack (`uv-small-str`, `rkyv`, `arcstr`, and
+their serialization support). The lockfile is rebuilt from `origin/main` with
+only that delta; the prior opportunistic ICU/`tinystr`/`writeable`/`zerovec`
+upgrade set is absent. This is a bounded delta chosen for current grammar
+correctness, normalized identity, and relative-reference support. The locked
+Rust-1.92 build is the MSRV evidence.
 
 ## Requirements-file boundary
 
@@ -56,17 +61,20 @@ fallback parser, marker evaluation, index policy, network check, or resolver.
 
 ## Diagnostics and ownership
 
-`pep-508` returns structured Chumsky span/token errors. It does not expose
-public grammar-production labels, so rustX never formats its error value or the
-authored declaration. Instead, after the parser rejects the declaration, the
-boundary selects a coarse, fixed rustX-owned class: invalid extra, version
-specifier, environment marker, or direct-reference URL. The maximum parser
-reason is the documented `MAX_REQUIREMENTS_PARSE_REASON_BYTES` bound (28
-bytes); the `line N: reason` parse result is therefore at most 36 bytes for
-the tested one-digit line case. The classification is diagnostic-only and
-cannot change parsing or acceptance.
-This prevents disclosure of URL credentials, tokens, long input, and source
-excerpts while retaining a useful error class.
+`pep-508` returns public Chumsky `Simple` errors with a byte span and a
+found-token/EOF distinction, but no grammar-production labels or expected
+token list. rustX consumes the first parser error and emits only that supported
+metadata: `invalid dependency syntax near byte N` when a token was found, or
+`unexpected end of dependency declaration near byte N` at EOF. The byte offset
+is capped at the requirements-file size limit and the reason is bounded by
+`MAX_REQUIREMENTS_PARSE_REASON_BYTES`; the file line remains separately owned
+by rustX. rustX never formats the parser error, authored declaration, found
+token, expected syntax, source excerpt, or caret.
+
+The parser owns acceptance and grammar. This sanitizer may lose precision, but
+it never infers a name/extra/specifier/marker/URL category from declaration
+characters. That prevents disclosure of URL credentials, tokens, long input,
+and source excerpts while retaining a useful parser-derived location.
 
 Every effective declaration is parsed once before rustX compares the parser's
 normalized name to `fastmcp`. Consequently `FastMCP`, extras, constraints,
@@ -82,7 +90,7 @@ installation; prepared-state publication and validation are unchanged.
 | Matrix | Deterministic coverage |
 | --- | --- |
 | PEP-01 | `pep508_requirements_corpus_preserves_effective_declarations` includes `===`, normal comparison operators, `in`, and `not in` |
-| PEP-02 | `pep508_parser_diagnostics_are_useful_bounded_and_safe` covers malformed extra/specifier/marker/URL, line location, useful reasons, secret non-disclosure, and long-input bounds |
+| PEP-02 | `pep508_parser_diagnostics_are_useful_bounded_and_safe` covers malformed name/extra/specifier/marker/URL, ambiguous punctuation, parser-derived byte location, secret non-disclosure, and long-input bounds; `discovery_surfaces_safe_pep508_diagnostics_as_invalid_packages` preserves `InvalidPackage` discovery semantics |
 | PEP-03 | `pep508_requirements_reject_invalid_grammar_and_file_directives` rejects `${TOKEN}`; `requirements_file_comments_crlf_and_quoted_markers_are_bounded` accepts literal `$TOKEN` |
 | PEP-04 | `requirements_file_comments_crlf_and_quoted_markers_are_bounded` covers CRLF, comments, fragments, quoted `#`, and quoted `$` |
 | PEP-05 | `managed_fastmcp_uses_pep503_normalized_identity_without_marker_evaluation`; `managed_fastmcp_policy_applies_to_user_and_workspace_discovery` |
@@ -90,4 +98,4 @@ installation; prepared-state publication and validation are unchanged.
 | PEP-07 | existing `read_prepared_state` tamper/fail-closed tests |
 | PEP-08 | synchronous parser tests invoke no runner, Python, uv, network, or preparation |
 | PEP-09 | User/Workspace discovery integration plus existing fake/supervised preparation regressions |
-| PEP-10 | one `pep-508` grammar owner, no fallback or AST leakage, bounded safe diagnostics, and unchanged `PythonToolError` variants |
+| PEP-10 | one `pep-508` grammar owner, no fallback, no source-character diagnostic classifier or AST leakage, parser-derived bounded safe diagnostics, and unchanged `PythonToolError` variants |

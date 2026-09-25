@@ -359,13 +359,8 @@ fn parse_requirements(bytes: &[u8], _package_root: &Path) -> Result<Vec<String>,
                 index + 1
             ));
         }
-        let requirement = pep_508::parse(line).map_err(|error| {
-            format!(
-                "line {}: {}",
-                index + 1,
-                safe_pep508_diagnostic(&error, line)
-            )
-        })?;
+        let requirement = pep_508::parse(line)
+            .map_err(|error| format!("line {}: {}", index + 1, safe_pep508_diagnostic(&error)))?;
         let name = uv_normalize::PackageName::from_str(requirement.name)
             .map_err(|_| format!("line {}: invalid dependency declaration", index + 1))?;
         if name.as_ref() == "fastmcp" {
@@ -397,29 +392,35 @@ fn contains_environment_variable_reference(line: &str) -> bool {
     })
 }
 
-/// Converts parser-owned structured errors into a short rustX-owned reason.
-/// Never format a parser error itself: its display form can include the full
-/// authored declaration and a source caret, which can disclose URL credentials.
-const MAX_REQUIREMENTS_PARSE_REASON_BYTES: usize = "invalid direct-reference URL".len();
+/// Converts parser-owned failure metadata into a short rustX-owned reason.
+///
+/// `pep-508` owns acceptance and grammar. Its `Simple` errors expose only a
+/// byte span and whether parsing found a token, not grammar-production labels;
+/// rustX therefore emits only the parser-supported distinction between an
+/// unexpected end and another syntax error. Never format the parser error: its
+/// display form includes the authored token and span, which can disclose URL
+/// credentials.
+const MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET: usize = 16 * 1024 * 1024;
+const MAX_REQUIREMENTS_PARSE_REASON_BYTES: usize =
+    "unexpected end of dependency declaration near byte 16777216+".len();
 
-fn safe_pep508_diagnostic(
-    _errors: &[chumsky::error::Simple<'_, char>],
-    declaration: &str,
-) -> &'static str {
-    // `pep-508` returns structured span/found-token errors, not a formatted
-    // source excerpt. Its error type does not expose production names for
-    // grammar branches, so rustX selects a coarse class solely for the safe
-    // diagnostic. This cannot affect parsing or acceptance, and neither the
-    // parser error nor authored text is formatted or retained. Each returned
-    // string must remain no longer than `MAX_REQUIREMENTS_PARSE_REASON_BYTES`.
-    let reason = if declaration.contains(';') {
-        "invalid environment marker"
-    } else if declaration.contains('@') {
-        "invalid direct-reference URL"
-    } else if declaration.contains('[') {
-        "invalid dependency extra"
+fn safe_pep508_diagnostic(errors: &[chumsky::error::Simple<'_, char>]) -> String {
+    let error = errors
+        .first()
+        .expect("pep-508 parse failures include structured error metadata");
+    let offset = error
+        .span()
+        .start
+        .min(MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET);
+    let offset = if error.span().start > MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET {
+        format!("{offset}+")
     } else {
-        "invalid version specifier"
+        offset.to_string()
+    };
+    let reason = if error.found().is_none() {
+        format!("unexpected end of dependency declaration near byte {offset}")
+    } else {
+        format!("invalid dependency syntax near byte {offset}")
     };
     debug_assert!(reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES);
     reason
@@ -1553,49 +1554,57 @@ mod tests {
     #[test]
     fn pep508_parser_diagnostics_are_useful_bounded_and_safe() {
         let cases = [
-            ("extra", "demo[extra", "invalid dependency extra"),
-            ("specifier", "demo >< 1", "invalid version specifier"),
-            (
-                "marker",
-                "demo; python_version >< '3.12'",
-                "invalid environment marker",
-            ),
-            (
-                "URL",
-                "demo @ https://[broken",
-                "invalid direct-reference URL",
-            ),
+            ("name", "bad/name"),
+            ("extra", "demo[extra"),
+            ("specifier", "demo >< 1"),
+            ("marker", "demo; python_version >< '3.12'"),
+            ("URL", "demo @ https://[broken"),
         ];
-        for (label, declaration, reason) in cases {
+        for (label, declaration) in cases {
             let error =
                 parse_requirements(declaration.as_bytes(), Path::new("/tmp")).expect_err(label);
             assert!(error.starts_with("line 1: "), "{label}: {error}");
-            assert!(error.contains(reason), "{label}: {error}");
-            assert!(!error.contains("not a valid PEP 508"), "{label}: {error}");
+            let reason = error.strip_prefix("line 1: ").expect("line prefix");
             assert!(
-                error.len() <= "line 1: ".len() + MAX_REQUIREMENTS_PARSE_REASON_BYTES,
-                "{label} is bounded: {error}"
+                reason.starts_with("invalid dependency syntax near byte ")
+                    || reason.starts_with("unexpected end of dependency declaration near byte "),
+                "{label}: {error}"
+            );
+            assert!(!reason.contains("version specifier"), "{label}: {error}");
+            assert!(!reason.contains("environment marker"), "{label}: {error}");
+            assert!(!reason.contains("dependency extra"), "{label}: {error}");
+            assert!(!reason.contains("direct-reference URL"), "{label}: {error}");
+            assert!(
+                reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES,
+                "{label} reason is bounded: {error}"
             );
         }
 
-        let sentinel = "user:secret-token@";
-        let error = parse_requirements(
-            format!("demo @ https://{sentinel}[broken").as_bytes(),
-            Path::new("/tmp"),
-        )
-        .expect_err("malformed URL");
+        let ambiguous = "demo[broken; python_version >= '3.12'";
+        let error = parse_requirements(ambiguous.as_bytes(), Path::new("/tmp"))
+            .expect_err("ambiguous malformed declaration");
+        let reason = error.strip_prefix("line 1: ").expect("line prefix");
+        assert!(reason.starts_with("invalid dependency syntax near byte "));
+        assert!(!reason.contains("environment marker"), "{error}");
+        assert!(!reason.contains("dependency extra"), "{error}");
+
+        let sentinel = "TOP-SECRET-397";
+        let declaration = format!("demo @ https://user:{sentinel}@example.invalid/[broken");
+        let error = parse_requirements(declaration.as_bytes(), Path::new("/tmp"))
+            .expect_err("malformed URL");
         assert!(
-            !error.contains(sentinel),
-            "diagnostic disclosed URL credential: {error}"
+            !error.contains(sentinel) && !error.contains("user:") && !error.contains(&declaration),
+            "diagnostic disclosed authored URL content: {error}"
         );
 
         let long = format!("demo[{}", "x".repeat(16 * 1024));
         let error = parse_requirements(long.as_bytes(), Path::new("/tmp"))
             .expect_err("malformed long declaration");
+        let reason = error.strip_prefix("line 1: ").expect("line prefix");
         assert!(
-            error.len() <= "line 1: ".len() + MAX_REQUIREMENTS_PARSE_REASON_BYTES,
-            "diagnostic is bounded: {} bytes",
-            error.len()
+            reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES,
+            "diagnostic reason is bounded: {} bytes",
+            reason.len()
         );
     }
 
@@ -1605,15 +1614,16 @@ mod tests {
             "demo",
             &[
                 (SERVER_FILE, b"mcp = None\n".as_slice()),
-                (REQUIREMENTS_FILE, b"demo[extra\n".as_slice()),
+                (REQUIREMENTS_FILE, b"bad/name\n".as_slice()),
             ],
         )]);
         let package = workspace.root().join(".agents/tools/demo");
-        let error = discover_package(&package, "demo").expect_err("invalid extra");
+        let error = discover_package(&package, "demo").expect_err("invalid name");
         let PythonToolError::InvalidPackage(message) = error else {
             panic!("PEP 508 parse errors remain package validation errors");
         };
-        assert!(message.contains("requirements.txt: line 1: invalid dependency extra"));
+        assert!(message.contains("requirements.txt: line 1: invalid dependency syntax near byte"));
+        assert!(!message.contains("version specifier"));
     }
 
     #[test]

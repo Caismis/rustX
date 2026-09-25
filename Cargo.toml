@@ -44,8 +44,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 # PEP 508 grammar and PyPA normalized distribution identities for managed
-# Python requirements. Relative file references are an existing accepted
-# pyproject input; rustX rejects requirements-file expansion syntax itself.
+# Python requirements. Chumsky is direct only to normalize pep-508's public
+# structured parser errors; rustX never parses with it independently.
 pep-508 = "0.5.0"
 chumsky = "=1.0.0-alpha.8"
 uv-normalize = "0.0.40"
