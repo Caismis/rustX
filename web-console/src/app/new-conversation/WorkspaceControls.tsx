@@ -1,16 +1,15 @@
 import type { ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
-import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v21';
+import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v22';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
 import { Button } from '../../presentation/primitives/Button';
 import { SettingsActorContext, useSettingsActor, useSettingsTarget } from '../settings/machines/react';
 import { SourceContext } from '../settings/source-context';
 import { workspaceSettingsTarget, userSettingsTarget, revisionSelector } from '../settings/projection';
 import { useUnitEditing } from '../settings/forms/bridge';
-import { catalogAdmits, catalogChoices } from '../../bindings/model-catalog';
+import { catalogAdmits } from '../../bindings/model-catalog';
 import { approvalMutation, workspaceApprovalBlock } from './approval';
 
 /** Shared bounded configuration actor, independent of the Settings page tree. */
@@ -62,10 +61,4 @@ export function sessionModelBlock(source: SourceSettings | undefined, intent?: S
   if (source?.session_models?.kind === 'unavailable') return `Native cannot create a Session in this Workspace: ${source.session_models.diagnostic}`;
   return intent && source && !catalogAdmits(sessionCatalog(source), intent.model, intent.reasoningProfile ?? undefined)
     ? 'The selected model is not in this Workspace\'s native model catalog. Choose a model again.' : undefined;
-}
-export function NewConversationModelControl({ source, intent, choose, disabled }: { source?: SourceSettings; intent?: SessionModelConfig; choose: (intent: SessionModelConfig) => void; disabled: boolean }) {
-  const catalog = sessionCatalog(source);
-  const unavailable = source?.session_models?.kind === 'unavailable' ? source.session_models.diagnostic : undefined;
-  return <ModelSelect choices={catalogChoices(catalog)} current={intent?.model} profile={intent?.reasoningProfile ?? undefined} disabled={disabled || !catalog} loading={!source} error={unavailable} load={() => {}}
-    choose={(model, reasoningProfile) => { if (catalogAdmits(catalog, model, reasoningProfile)) choose({ model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) }); }}/>;
 }

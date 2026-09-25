@@ -14,17 +14,18 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   if (mode === 'background') {
     await page.locator('button[data-session-id="B"]').click();
     await expect(page.getByLabel('Session title')).toHaveText('Session B');
-    await expect(page.locator('button[data-session-id="A"]')).toContainText('Working…');
+    await expect(page.locator('button[data-session-id="A"]')).not.toContainText('Working…');
   }
   if (mode === 'other-uncertain') {
-    await expect(page.getByLabel('Session status')).toHaveText('Working…');
+    await expect(page.getByLabel('Session status')).toHaveCount(0);
+    await expect(page.getByText(/^Deep diving/).first()).toBeVisible();
     await expect(page.locator('button[data-session-id="B"]')).toContainText('Needs verification');
   }
   if (mode === 'delete') {
     await page.locator('button[data-session-id="A"]').hover();
     await page.locator('button[data-session-actions="A"]').click();
     await page.getByRole('menuitem', { name: 'Delete Session' }).click();
-    await expect(page.getByRole('region', { name: 'Confirm Session deletion' })).toContainText('Delete Inspect the Session ownership boundary?');
+    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toContainText('Delete Inspect the Session ownership boundary?');
   }
   await expectStableScreenshot(page, `sidebar-${mode}-light.png`);
   if (mode === 'other-uncertain') {
@@ -91,7 +92,8 @@ test('Session product states stay concise and recovery evidence remains in Inspe
   await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const mode of ['idle', 'queued', 'stopping', 'reconnect', 'uncertain'] as const) {
     await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
-    await expect(page.getByLabel('Session status')).toHaveText('Working…');
+    await expect(page.getByLabel('Session status')).toHaveCount(0);
+    await expect(page.getByText(/^Deep diving/).first()).toBeVisible();
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
     const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: 'Connection interrupted', uncertain: 'Needs verification' }[mode];
     if (expected) await expect(page.getByLabel('Session status')).toContainText(expected);

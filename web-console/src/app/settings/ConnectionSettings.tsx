@@ -24,7 +24,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
     <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>Reconnect</Button>
     <Button onClick={() => void connection.disconnect()}>Disconnect</Button>
     {(selection.error || transport.error) && <p role="alert">{selection.error || transport.error}</p>}
-    <details><summary>Connection details</summary><p>{transport.endpoint} · generation {transport.generation} · App Server v21</p></details>
+    <details><summary>Connection details</summary><p>{transport.endpoint} · generation {transport.generation} · App Server v22</p></details>
     {!!transport.detached?.length && <details><summary>Detached authority diagnostics</summary>
       <p>Historical evidence only. These operations are never replayed and cannot control the current server. Verify the old server separately before acknowledging.</p>
       {transport.detached.map((evidence, index) => <section key={index}><h3>{evidence.authority}</h3>

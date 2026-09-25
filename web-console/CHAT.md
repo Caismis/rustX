@@ -251,8 +251,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v21 (`rustx.app-server.v21` and generated
-`protocol/app-server/v21.ts` / `v21.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v22 (`rustx.app-server.v22` and generated
+`protocol/app-server/v22.ts` / `v22.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -332,7 +332,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v21, Runtime Client v47, SQLite v44, and Session catalog v12, with no
+App Server v22, Runtime Client v48, SQLite v44, and Session catalog v12, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -381,7 +381,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v21 / Runtime Client v47 project `completed_process` from the native
+App Server v22 / Runtime Client v48 project `completed_process` from the native
 Attempt evidence fold. It carries original execution provenance and the local
 final-message identity, including through remapped lineage. SQLite v44 persists
 the bounded member identities in bootstrap provenance; it refuses older stores.

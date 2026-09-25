@@ -57,12 +57,30 @@ pub struct CompletedProcessView {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationStatistics {
+    /// Harness-style Turn and Step counts: native Attempt starts and Loop turns.
+    pub turns: u64,
+    pub steps: u64,
+    /// Latest native Turn clock; never a browser receipt timestamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_turn: Option<ConversationTurnClock>,
+    /// Complete measured request timing, separate from usage coverage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<crate::durable::response::CompletedResponseTiming>,
     pub completed_responses: u64,
     pub model_requests: u64,
     /// Known reported usage. Coverage is explicit; missing reports are not zero.
     pub requests_with_usage: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reported_usage: Option<ModelUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationTurnClock {
+    pub attempt_id: AttemptId,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Default)]
@@ -259,12 +277,14 @@ fn project(
         })
         .collect();
     let mut statistics = ConversationStatistics::default();
+    let mut timings = timing::TimingFold::default();
     let mut after = 0;
     loop {
         let events = store.read_presentation_events(&FactQuery {
             scope: FactScope::All,
             kinds: vec![
                 "attempt_started",
+                "turn_started",
                 "model_request_started",
                 "model_request_completed",
                 "model_request_failed",
@@ -293,8 +313,16 @@ fn project(
             match event.event {
                 RuntimeEvent::AttemptStarted { .. } => {
                     evidence.started_at = Some(event.timestamp);
+                    statistics.turns += 1;
+                    statistics.latest_turn = Some(ConversationTurnClock {
+                        attempt_id: id.clone(),
+                        started_at: event.timestamp,
+                        ended_at: None,
+                    });
                 }
+                RuntimeEvent::TurnStarted => statistics.steps += 1,
                 RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+                    timings.start(request_id.clone());
                     evidence.timing.start(request_id.clone());
                     evidence.last_request = Some(request_id);
                     evidence.requests += 1;
@@ -312,6 +340,7 @@ fn project(
                     generation,
                     ..
                 } => {
+                    timings.terminal(&request_id, generation, usage.as_ref());
                     evidence
                         .timing
                         .terminal(&request_id, generation, usage.as_ref());
@@ -332,6 +361,13 @@ fn project(
                     finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
                     ..
                 } => {
+                    if let Some(clock) = statistics
+                        .latest_turn
+                        .as_mut()
+                        .filter(|clock| clock.attempt_id == id)
+                    {
+                        clock.ended_at = Some(event.timestamp);
+                    }
                     if let Some(closing) = evidence.closing.take() {
                         statistics.completed_responses += 1;
                         let process = CompletedProcessView {
@@ -394,12 +430,20 @@ fn project(
                 | RuntimeEvent::AttemptFailed { .. }
                 | RuntimeEvent::AttemptTimedOut { .. }
                 | RuntimeEvent::AttemptLimitExceeded { .. } => {
+                    if let Some(clock) = statistics
+                        .latest_turn
+                        .as_mut()
+                        .filter(|clock| clock.attempt_id == id)
+                    {
+                        clock.ended_at = Some(event.timestamp);
+                    }
                     attempts.remove(&id);
                 }
                 _ => {}
             }
         }
     }
+    statistics.timing = timings.summary(None, chrono::DateTime::UNIX_EPOCH);
     let pending: BTreeSet<_> = attempts
         .values()
         .flat_map(|evidence| evidence.members.iter().cloned())

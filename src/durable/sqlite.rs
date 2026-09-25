@@ -240,7 +240,7 @@ fn count_conversation_store_open() {
 /// recovery of the unresolved resource state, so it is rejected rather than
 /// guessed.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v15/v15/v16/v17/v18/v19/v21/v21 database
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v15/v15/v16/v17/v18/v19/v22/v22 database
 /// must fail at store open; there is no migration or compatibility path.
 /// Version 23 preserves Denied in detached terminal facts (Issue #206).
 /// Version 24 adds Workflow block/node instance lifecycle facts (Issue #217).

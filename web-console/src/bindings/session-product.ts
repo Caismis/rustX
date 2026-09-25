@@ -45,9 +45,9 @@ export function deriveSessionProductState(state: Pick<ClientView, 'connection' |
   const snapshot = view.snapshot;
   if (snapshot.shutting_down) return { status: 'stopping', label: 'Session is closing…', severity: 'warning' };
   if (view.cancellation) return { status: 'stopping', label: 'Stopping…', severity: 'quiet' };
-  if (view.modelMutation) return { status: 'waiting', label: 'Updating model…', severity: 'quiet' };
+  if (view.modelMutation) return { status: 'waiting', severity: 'quiet' };
   if (snapshot.pending_interactions?.length) return { status: 'waiting', label: 'Waiting for your response', severity: 'quiet' };
-  if (snapshot.attempt && snapshot.attempt.phase.type !== 'settled') return { status: 'working', label: 'Working…', severity: 'quiet' };
+  if (snapshot.attempt && snapshot.attempt.phase.type !== 'settled') return { status: 'working', severity: 'quiet' };
   if (snapshot.inbound.pending?.length || view.submissions?.length) return { status: 'queued', label: 'Queued', severity: 'quiet' };
   if (snapshot.attempt?.phase.type === 'settled') {
     const outcome = snapshot.attempt.phase.outcome.type;

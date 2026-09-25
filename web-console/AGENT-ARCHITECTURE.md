@@ -1,5 +1,12 @@
 # WEB-RESET-02 Agent ownership
 
+Current conversation/composer ownership is specified by
+[WEB-16](../docs/issue-406/conversation-surface.md), referencing Harness
+`477b4f420553e8a52c2fbccc464d7561b239c443`. The notes below record earlier
+layers; the resident composer, turn-local running state and Turn tails replace
+their earlier lifecycle/status ownership. App Server is now v22 / Runtime Client
+v48, with native whole-conversation Turn/Step statistics and authored model seed.
+
 Base: `204f7ccc8fbaf4bc1b6842e02e8d0d68f19d5837`.
 Harness: `ddefc45fbc7f8e46dd73185e68295696d1297887`.
 

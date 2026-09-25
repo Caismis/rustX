@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v21';
+import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v22';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { findOnAdvanced, openResourceRow, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';

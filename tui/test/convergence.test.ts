@@ -166,7 +166,7 @@ test("all representative terminal sizes retain bounded Composer and actionable p
 test("exact historical completed_response drives tails and whole-conversation statistics survive paging", () => {
   const message = assistantMessage("answer", "historical response");
   const response = { closing_message_id: "answer", origin: { conversation_id: "origin", attempt_id: "old", closing_message_id: "answer" }, completed_at: "2026-01-01T00:00:00Z", surface_revision: "4", usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 }, timing: { total_duration_ms: 18000 } };
-  const statistics = { completed_responses: "50", model_requests: "100", requests_with_usage: "99", reported_usage: { input_tokens: 10000, output_tokens: 2000, total_tokens: 12000 } };
+  const statistics = { turns: "1", steps: "1", completed_responses: "50", model_requests: "100", requests_with_usage: "99", reported_usage: { input_tokens: 10000, output_tokens: 2000, total_tokens: 12000 } };
   const native: RuntimeClientSnapshot = snapshot({ transcript: { entries: [{ cursor: "4", item: { type: "message", message }, completed_response: response }], statistics }, attempt: attemptView({ last_usage: { input_tokens: 999, output_tokens: 999, total_tokens: 1998 } }) });
   const state = replaceFromSnapshot(native, "10");
   assert.match(transcriptString(state), /120 tok · 18.0s/); assert.doesNotMatch(transcriptString(state), /1,998 tok/);
@@ -205,7 +205,7 @@ test("settlement reads native response statistics instead of summing usage event
   const h = await harness(snapshot({ attempt: attemptView() }));
   h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor: "1", event: { type: "attempt_settled", attempt_id: "a1", outcome: { type: "completed", finish_reason: { type: "stop" } } } } });
   const read = await nextRequest(h, "session/snapshot", 0);
-  const statistics = { completed_responses: "2", model_requests: "5", requests_with_usage: "4" };
+  const statistics = { turns: "1", steps: "1", completed_responses: "2", model_requests: "5", requests_with_usage: "4" };
   h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ transcript: { statistics } }), cursor: "2" });
   await new Promise<void>(resolve => h.session.onState(() => resolve()));
   assert.equal(h.transport.transportCount("session/subscribe"), 0);

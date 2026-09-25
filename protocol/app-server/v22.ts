@@ -2423,6 +2423,7 @@ export type ProcessPolicyImpact = 'hot' | 'restart';
 export type SessionModelsView =
   | {
       catalog: ModelCatalogView;
+      default_model: SessionModelConfig;
       kind: 'available';
     }
   | {
@@ -5625,6 +5626,19 @@ export interface RuntimeClientTranscriptPage {
  * Forked Conversations start a fresh execution epoch, as native lineage does.
  */
 export interface ConversationStatistics {
+  /**
+   * Harness-style Turn and Step counts: native Attempt starts and Loop turns.
+   */
+  turns: string;
+  steps: string;
+  /**
+   * Latest native Turn clock; never a browser receipt timestamp.
+   */
+  latest_turn?: ConversationTurnClock | null;
+  /**
+   * Complete measured request timing, separate from usage coverage.
+   */
+  timing?: CompletedResponseTiming | null;
   completed_responses: string;
   model_requests: string;
   /**
@@ -5632,6 +5646,33 @@ export interface ConversationStatistics {
    */
   requests_with_usage: string;
   reported_usage?: ModelUsage | null;
+}
+export interface ConversationTurnClock {
+  attempt_id: AttemptId;
+  started_at: string;
+  ended_at?: string | null;
+}
+/**
+ * Historical product timing derived from native lifecycle and generation evidence.
+ * Missing evidence stays absent; these are not destination execution facts.
+ */
+export interface CompletedResponseTiming {
+  /**
+   * Authoritative successful Attempt completion minus its start timestamp.
+   */
+  total_duration_ms?: number | null;
+  /**
+   * First actual request's adapter-dispatch-to-first-output duration.
+   */
+  ttft_ms?: number | null;
+  /**
+   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   */
+  generation_ms?: number | null;
+  /**
+   * Fully covered output usage divided by fully covered positive generation work.
+   */
+  output_tokens_per_second?: number | null;
 }
 /**
  * One derived transcript item and its stable durable cursor.
@@ -5883,28 +5924,6 @@ export interface ResponseOrigin1 {
    * Identifies a committed canonical message block.
    */
   closing_message_id: string;
-}
-/**
- * Historical product timing derived from native lifecycle and generation evidence.
- * Missing evidence stays absent; these are not destination execution facts.
- */
-export interface CompletedResponseTiming {
-  /**
-   * Authoritative successful Attempt completion minus its start timestamp.
-   */
-  total_duration_ms?: number | null;
-  /**
-   * First actual request's adapter-dispatch-to-first-output duration.
-   */
-  ttft_ms?: number | null;
-  /**
-   * Sum of output-producing requests' first-output-to-provider-terminal spans.
-   */
-  generation_ms?: number | null;
-  /**
-   * Fully covered output usage divided by fully covered positive generation work.
-   */
-  output_tokens_per_second?: number | null;
 }
 /**
  * The foreground tool execution read model of one logical tool call.

@@ -198,6 +198,45 @@ fn finish(store: &dyn ConversationStore, attempt: &str) {
 }
 
 #[test]
+fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",
+    ))
+    .unwrap();
+    for attempt in ["a", "b"] {
+        user(&store, &format!("input-{attempt}"));
+        append(
+            &store,
+            attempt,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new(attempt),
+            },
+        );
+        append(&store, attempt, RuntimeEvent::TurnStarted);
+        request(&store, attempt, 0, Some(usage(Some(20))));
+        assistant(&store, attempt, &format!("answer-{attempt}"));
+        finish(&store, attempt);
+    }
+    let full = page(&store, None, 64);
+    let latest = page(&store, None, 1);
+    let earlier = page(&store, latest.next_cursor.map(Into::into), 1);
+    assert_eq!(full.statistics, latest.statistics);
+    assert_eq!(full.statistics, earlier.statistics);
+    let totals = full.statistics.unwrap();
+    assert_eq!(totals.turns, 2);
+    assert_eq!(totals.steps, 2);
+    assert_eq!(totals.model_requests, 2);
+    assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
+    assert_eq!(
+        totals.timing.unwrap().output_tokens_per_second,
+        Some(15.625)
+    );
+    let clock = totals.latest_turn.unwrap();
+    assert_eq!(clock.attempt_id, AttemptId::new("b"));
+    assert_eq!(clock.ended_at, Some(clock.started_at));
+}
+
+#[test]
 fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent() {
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",

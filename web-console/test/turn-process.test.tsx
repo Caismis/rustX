@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CompletedProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v21';
+import type { CompletedProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v22';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { turnProcesses } from '../src/bindings/turn-process';
 import { snapshot } from './fixture';
@@ -12,7 +12,7 @@ it('folds only native completed membership across steering and interleaved Attem
   const entries = [row('first', process(), true), user, row('live', undefined, true), row('second', process(), true), row('final', process(), true)];
   const before = JSON.stringify(entries);
   const ui = render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>);
-  const folded = screen.getByRole('button', { name: '2 messages' });
+  const folded = screen.getByRole('button', { name: 'Worked' });
   expect(folded.getAttribute('aria-expanded')).toBe('false');
   expect(screen.getByText('Answer first').closest('[hidden]')).not.toBeNull();
   for (const text of ['Answer final', 'Answer live', 'steering']) expect(screen.getByText(text).closest('[hidden]')).toBeNull();
@@ -45,7 +45,7 @@ it.each([0, 1, 3])('counts %i exact native tool occurrences, not result bodies o
 it('a page beginning at a suppressed Tool result retains a reachable process disclosure and final answer', () => {
   const result: RuntimeClientTranscriptEntry = { cursor: 'result', completed_process: process(), item: { type: 'message', message: { role: 'tool', id: 'result', occurrence: { assistant_message_id: 'earlier-call', block_index: 0 }, tool_call_id: 'call', tool_id: 'bash', result: { status: { type: 'success' }, duration_ms: 1, content: [] } } } };
   render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [result, row('final', process())] } }}/>);
-  expect(screen.getByRole('button', { name: 'Thought for a while' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Worked' })).toBeTruthy();
   expect(screen.getByText('Answer final').closest('[hidden]')).toBeNull();
 });
 it('folds a status by exact native Attempt without moving its inbound anchor or hiding steering', () => {
@@ -55,10 +55,10 @@ it('folds a status by exact native Attempt without moving its inbound anchor or 
   const anchor = note.closest('[data-chat-anchor-key]');
   expect(note.closest('[hidden]')).not.toBeNull();
   expect(screen.getByText('steering').closest('[hidden]')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '1 message' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Worked' }));
   expect(note.closest('[hidden]')).toBeNull();
   expect(note.closest('[data-chat-anchor-key]')).toBe(anchor);
-  const disclosure = screen.getByRole('button', { name: '1 message' });
+  const disclosure = screen.getByRole('button', { name: 'Worked' });
   expect(screen.getByText('steering').compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(disclosure.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(disclosure.compareDocumentPosition(screen.getByText('Answer middle')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -67,7 +67,7 @@ it('folds a status by exact native Attempt without moving its inbound anchor or 
 it('Status-only completed process has a disclosure after its independent anchor and before the Status', () => {
   const entries = [user, row('final', process())];
   render(<AgentTranscript snapshot={{ ...snapshot(), conversation_id: 'c', transcript: { entries }, statuses: [{ attempt_id: 'a', turn: 1, status_message_id: 'only-status', opportunities: { fresh_inbound: { target_message_id: 'u' } }, sections: [], rendered: 'native context' }] }}/>);
-  const disclosure = screen.getByRole('button', { name: 'Thought for a while' });
+  const disclosure = screen.getByRole('button', { name: 'Worked' });
   const note = screen.getByRole('note', { name: 'Agent Status', hidden: true });
   expect(note.closest('[hidden]')).not.toBeNull();
   expect(screen.getByText('Answer final').closest('[hidden]')).toBeNull();
@@ -81,10 +81,10 @@ it('pagination moves only the disclosure seat and preserves its expanded native 
   const owner = process(); const status = { attempt_id: 'a', turn: 1, status_message_id: 'status', opportunities: { fresh_inbound: { target_message_id: 'u' } }, sections: [], rendered: 'context' };
   const state = { ...snapshot(), conversation_id: 'c', statuses: [status] };
   const ui = render(<AgentTranscript snapshot={{ ...state, transcript: { entries: [row('middle', owner), row('final', owner, true)] } }}/>);
-  const disclosure = screen.getByRole('button', { name: '1 message' });
+  const disclosure = screen.getByRole('button', { name: 'Worked' });
   const id = disclosure.getAttribute('data-turn-process'); fireEvent.click(disclosure);
   ui.rerender(<AgentTranscript snapshot={{ ...state, transcript: { entries: [user, row('middle', owner), row('final', owner, true), row('retry', process('retry', 'retry-final')), row('retry-final', process('retry', 'retry-final'))] } }}/>);
-  const controls = screen.getAllByRole('button', { name: '1 message' });
+  const controls = screen.getAllByRole('button', { name: 'Worked' });
   const same = controls.find(button => button.getAttribute('data-turn-process') === id)!;
   expect(same.getAttribute('aria-expanded')).toBe('true');
   const note = screen.getByRole('note', { name: 'Agent Status' });

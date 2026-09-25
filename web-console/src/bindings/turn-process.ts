@@ -1,5 +1,5 @@
 import { statusesAt, type AgentStatusPlacement } from './agent-status';
-import type { RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v21';
+import type { RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v22';
 /** Only exact native identity is a grouping key. Canonical order is untouched;
  * pagination can add members without changing the disclosure's identity. */
 export type ProcessSeat = { cursor: string; kind: 'entry' } | { cursor: string; kind: 'status'; statusId: string };

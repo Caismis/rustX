@@ -52,6 +52,12 @@ test('Harness New Conversation, permission, model, native process and Models con
     await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Converge the conversation');
+    const residentInput = await page.getByRole('textbox', { name: 'Message', exact: true }).elementHandle();
+    const residentSeat = await page.locator('[data-resident-composer]').elementHandle();
+    await page.getByRole('button', { name: 'Commands', exact: true }).click();
+    await expect(page.getByRole('listbox', { name: 'Commands' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Converge the conversation');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).press('Escape');
     await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Workspace B', exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Converge the conversation');
@@ -90,6 +96,10 @@ test('Harness New Conversation, permission, model, native process and Models con
     expect(wire.requests.filter(r => r.method === 'configuration/sourceWrite' && r.params.mutation?.unit === 'default_model')).toHaveLength(0);
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
+    expect(await residentInput!.evaluate(node => node === document.querySelector('textarea[aria-label="Message"]'))).toBe(true);
+    expect(await residentSeat!.evaluate(node => node === document.querySelector('[data-resident-composer]'))).toBe(true);
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/^(Creating|Attaching)…$/)).toHaveCount(0);
     expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(1);
     expect(wire.requests.filter(r => r.method === 'turn/start')).toHaveLength(1);
     const admitted = wire.notifications.filter(n => n.method === 'session/event' && n.params.event?.type === 'attempt_started');

@@ -20,7 +20,7 @@ test("settlement refresh retains loaded history and older cursor, enriches exact
   settled(h, "1");
   const read = await nextRequest(h, "session/snapshot", 0);
   const done = published(h);
-  const statistics = { completed_responses: "50", model_requests: "100", requests_with_usage: "99" };
+  const statistics = { turns: "1", steps: "1", completed_responses: "50", model_requests: "100", requests_with_usage: "99" };
   h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ transcript: { entries: [{ ...entry("4", true), completed_response: response }], next_cursor: "4", statistics } }), cursor: "1" });
   await done;
   assert.deepEqual(h.session.state.transcript.map(e => e.key), ["committed:2", "committed:3", "committed:4"]);

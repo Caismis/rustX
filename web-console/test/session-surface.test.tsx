@@ -7,7 +7,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v21';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v22';
 
 let server: Server;
 beforeEach(() => {
@@ -57,7 +57,7 @@ it('uses only the Sidebar for selection; switching preserves concurrent work and
   const before = methods().length;
   await select('B');
   expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
-  expect(row('A').textContent).toContain('Working…');
+  expect(row('A').textContent).not.toContain('Working…');
   await select('A');
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
   expect(methods().slice(before).filter(method => ['session/attach', 'session/detach', 'session/unload', 'turn/cancel'].includes(method))).toEqual([]);
@@ -434,13 +434,16 @@ it('deletion shows the catalog title and impact, never raw identity/CAS, while s
   await mount();
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for My first prompt' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Session' })));
-  const confirmation = screen.getByRole('region', { name: 'Confirm Session deletion' });
+  const confirmation = screen.getByRole('dialog', { name: 'Confirm Session deletion' });
   expect(confirmation.textContent).toContain('Delete My first prompt?');
   expect(confirmation.textContent).toContain('Saved conversations: 3 · History nodes: 3 · Child conversations: 1');
   expect(confirmation.textContent).not.toMatch(/session_id|target_revision|9007199254740999/);
   expect(confirmation.querySelector('pre')).toBeNull();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' })));
   expect(server.requests.find(({ request }) => request.method === 'session/delete')?.request.params).toEqual({ session_id: 'A', expected_target_revision: '9007199254740999' });
+  expect(screen.queryByRole('dialog', { name: 'Confirm Session deletion' })).toBeNull();
+  expect(screen.queryByText('Session deleted.')).toBeNull();
+  expect(screen.queryByText('This Session no longer exists.')).toBeNull();
 });
 
 it('unlisted restored views cannot strand the finite view capacity', async () => {
@@ -694,7 +697,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v21').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v22').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 

@@ -9938,6 +9938,37 @@
       "description": "Whole-conversation execution totals, independent of any transcript window.\nForked Conversations start a fresh execution epoch, as native lineage does.",
       "type": "object",
       "properties": {
+        "turns": {
+          "description": "Harness-style Turn and Step counts: native Attempt starts and Loop turns.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "steps": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "latest_turn": {
+          "description": "Latest native Turn clock; never a browser receipt timestamp.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationTurnClock"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timing": {
+          "description": "Complete measured request timing, separate from usage coverage.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompletedResponseTiming"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "completed_responses": {
           "type": "string",
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
@@ -9964,10 +9995,81 @@
       },
       "additionalProperties": false,
       "required": [
+        "turns",
+        "steps",
         "completed_responses",
         "model_requests",
         "requests_with_usage"
       ]
+    },
+    "ConversationTurnClock": {
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "started_at"
+      ]
+    },
+    "CompletedResponseTiming": {
+      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+      "type": "object",
+      "properties": {
+        "total_duration_ms": {
+          "description": "Authoritative successful Attempt completion minus its start timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttft_ms": {
+          "description": "First actual request's adapter-dispatch-to-first-output duration.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "generation_ms": {
+          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens_per_second": {
+          "description": "Fully covered output usage divided by fully covered positive generation work.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
     },
     "RuntimeClientTranscriptEntry": {
       "description": "One derived transcript item and its stable durable cursor.",
@@ -10121,51 +10223,6 @@
         "completed_at",
         "surface_revision"
       ]
-    },
-    "CompletedResponseTiming": {
-      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
-      "type": "object",
-      "properties": {
-        "total_duration_ms": {
-          "description": "Authoritative successful Attempt completion minus its start timestamp.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "ttft_ms": {
-          "description": "First actual request's adapter-dispatch-to-first-output duration.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "generation_ms": {
-          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "output_tokens_per_second": {
-          "description": "Fully covered output usage divided by fully covered positive generation work.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        }
-      },
-      "additionalProperties": false
     },
     "ForegroundToolExecution": {
       "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",
@@ -17767,6 +17824,9 @@
             "catalog": {
               "$ref": "#/$defs/ModelCatalogView"
             },
+            "default_model": {
+              "$ref": "#/$defs/SessionModelConfig"
+            },
             "kind": {
               "type": "string",
               "const": "available"
@@ -17775,7 +17835,8 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "catalog"
+            "catalog",
+            "default_model"
           ]
         },
         {

@@ -5,11 +5,13 @@ import { IconDataOutline16, IconChevronDownOutline14 } from '../primitives/icons
 import css from './ModelSelect.module.css';
 export interface ModelChoice { id: string; profiles: { id: string; label: string }[]; defaultProfile?: string }
 /** The Harness model/profile two-level menu over exact adapter-supplied choices. */
-export function ModelSelect({ choices, current, profile, disabled, loading, error, load, choose, initialOpen = false }: {
+export function ModelSelect({ choices, current, profile, disabled, loading, error, load, choose, initialOpen = false, binding = '' }: {
  choices: ModelChoice[]; current?: string; profile?: string; disabled: boolean; loading: boolean; error?: string;
- load: () => void; choose: (model: string, profile?: string) => void; initialOpen?: boolean;
+ load: () => void; choose: (model: string, profile?: string) => void; initialOpen?: boolean; binding?: string;
 }) {
  const [open, setOpen] = useState(initialOpen);
+ const [owner, setOwner] = useState(binding);
+ if (owner !== binding) { setOwner(binding); setOpen(false); }
  const selected = choices.find(choice => choice.id === current);
  const effectiveProfile = profile ?? selected?.defaultProfile;
  const items: MenuEntry[] = [{ id: 'models', label: 'Model', submenu: choices.map(choice => ({ id: `model:${choice.id}`, label: choice.id, disabled: disabled || loading })) }];
@@ -17,9 +19,11 @@ export function ModelSelect({ choices, current, profile, disabled, loading, erro
  return <div className={css.root}>
  <Menu open={open} side="top" align="end" autoFocus items={items}
  selectedIds={[`model:${current}`, `profile:${effectiveProfile}`]} onClose={() => setOpen(false)}
- onSelect={id => { if (disabled || loading) return; if (id.startsWith('model:')) choose(id.slice(6)); else if (current && id.startsWith('profile:')) choose(current, id.slice(8)); }}
+ onSelect={id => { if (disabled || loading) return; setOpen(false); if (id.startsWith('model:')) choose(id.slice(6)); else if (current && id.startsWith('profile:')) choose(current, id.slice(8)); }}
  anchor={<button className={css.trigger} type="button" aria-label="Model and reasoning" aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16}/><span className={css.triggerLabel}>{current ?? 'Choose model'}</span>{effectiveProfile && <span className={css.triggerEffort}>{effectiveProfile}</span>}<IconChevronDownOutline14/></button>}/>
  {open && loading && <span role="status">Reading native models…</span>}
+ {current && !loading && !selected && <span role="status">{current} is unavailable in this Workspace.</span>}
+ {selected && profile && !selected.profiles.some(choice => choice.id === profile) && <span role="status">Reasoning profile {profile} is unavailable for {current} in this Workspace.</span>}
  {error && <p role="alert">{error}</p>}
  </div>;
 }

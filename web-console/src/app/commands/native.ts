@@ -1,5 +1,6 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v21';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v22';
 import { AppServerClient, sameTarget } from '../../client/app-server';
+import { modelPreferences } from '../model-preference';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
 /** A UI continuation fence, never a cancellation token for server mutations. */
@@ -43,6 +44,7 @@ export class CommandSession {
     // to its native defaults; no provider inference or configuration editor.
     await this.client.setAgentModel(this.sessionId, { model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) });
     if (!this.current()) return;
+    modelPreferences().select(this.client.getSnapshot().endpoint ?? '', { model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) });
     await this.client.repairAgentModel(this.sessionId);
     if (this.current()) return this.models();
   }

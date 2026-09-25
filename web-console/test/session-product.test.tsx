@@ -56,7 +56,8 @@ async function mount() {
 }
 it('ordinary chrome is product-only; Inspector retains exact facts and emits no native operations', async () => {
   const server = await mount();
-  expect(screen.getByLabelText('Session status').textContent).toBe('Working…');
+  expect(screen.queryByLabelText('Session status')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Deep diving…' })).toBeTruthy();
   const product = within(document.querySelector('.session-panel') as HTMLElement);
   for (const label of ['Attach / cold resume', 'Resync', 'Detach', 'Unload runtime', 'private-attempt']) expect(product.queryByText(label)).toBeNull();
   expect(document.querySelector('.attempt-status')).toBeNull();
@@ -102,7 +103,8 @@ it('lost authoritative attachment exposes one Open Session action and sends one 
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
   expect(server.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(1);
   expect(screen.queryByRole('button', { name: 'Open Session' })).toBeNull();
-  expect(screen.getByLabelText('Session status').textContent).toBe('Working…');
+  expect(screen.queryByLabelText('Session status')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Deep diving…' })).toBeTruthy();
 });
 it('failed observation exposes one Retry connection action which refreshes without attaching or replaying', async () => {
   const server = await mount();

@@ -351,7 +351,7 @@ describe("footer", () => {
     assert.match(
       footer(
         stateOf({
-          transcript: { statistics: { completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 12500, output_tokens: 840, total_tokens: 13340 } } },
+          transcript: { statistics: { turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 12500, output_tokens: 840, total_tokens: 13340 } } },
           attempt: attemptView({
             last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
           }),
@@ -886,7 +886,7 @@ it("unknown context window is omitted and snapshot replacement rebuilds approval
 
 it("drops tokens then Session then context before essential facts require two rows", () => {
   const state = stateOf({ attempt: attemptView({ phase: { type: "settled", outcome: { type: "completed", finish_reason: { type: "stop" } } }, last_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } }) });
-  state.statistics = { completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } };
+  state.statistics = { turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } };
   const session = { name: "work" } as import("../src/protocol/app-server.ts").SessionView;
   const wide = footer(state, "connected", 200, session);
   assert.match(wide, /session work.*↑1 ↓2/);

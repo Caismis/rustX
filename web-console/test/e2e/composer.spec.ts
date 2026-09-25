@@ -39,7 +39,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connect();
     await openEmptySession(page, fixture, 'Workspace A');
-    await expect(page.getByLabel('Session location', { exact: true })).toHaveText(`${fixture.workspaceA}`);
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     // Composed Todo with no current list stays a distinct native fact, and its
     // ordinary visual result is the same as extension absence: no dock at all.
     // Measured, not asserted from the DOM alone — the composer stack must reserve

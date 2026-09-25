@@ -7,7 +7,7 @@
  * Journal wall spans and dispatch-origin numeric metrics cannot supply that
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v21';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v22';
 
 /** Horizontal projection of the overview's domain. */
 export type TrajectoryTimelineMode = 'sequence' | 'duration' | 'time' | 'actual';

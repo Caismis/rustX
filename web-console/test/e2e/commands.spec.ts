@@ -70,7 +70,6 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     const originalTiming = await timingDetail.locator('dl').innerText();
     await page.getByRole('button', { name: 'Close timing' }).click();
     phase = 'selecting exact historical Retry boundary';
-    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
     await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
     await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Replay the original input once/ }).click();
     phase = 'awaiting validated retry provider request (branch → switchNode → attach → turn/start)';
@@ -84,7 +83,8 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
       await expect(facts).not.toContainText(`"ConversationId": "${originalConversation}"`);
       expect(JSON.parse(await facts.innerText()).SessionId).toBe(originalId);
       expect(JSON.parse(await facts.innerText()).ConversationId).not.toBe(originalConversation);
-      await expect(page.getByLabel('Session status')).toContainText('Working…');
+      await expect(page.getByLabel('Session status')).toHaveCount(0);
+    await expect(page.getByText(/^Deep diving/).first()).toBeVisible();
       await expect(page.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
     });
     phase = 'validated retry request reached; awaiting provider output and canonical settlement';
@@ -99,7 +99,6 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: originalConversation }).click();
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
     await page.getByRole('button', { name: 'Fork to new Session', exact: true }).click();
     await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
     await expect(page.getByRole('dialog', { name: '/fork', exact: true })).toHaveCount(0);
@@ -109,7 +108,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     const forkConversation = JSON.parse(await facts.innerText()).ConversationId as string;
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(page.getByText(/Native restored upload batch/)).toHaveCount(0);
-    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(1);
+    await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Usage 120 tokens', exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: originalRuntime!, exact: true })).toHaveCount(1);
     await page.getByRole('button', { name: originalRuntime!, exact: true }).click();
@@ -128,27 +127,25 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(facts).toContainText('fixture/second-model');
     await expect(facts).toContainText('policy');
     // A reopened inherited Assistant remains a valid native continuation anchor.
-    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(1);
+    await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Usage 120 tokens', exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: originalRuntime!, exact: true })).toHaveCount(1);
     await page.getByRole('button', { name: originalRuntime!, exact: true }).click();
     expect(await page.getByRole('dialog', { name: 'Response timing' }).locator('dl').innerText()).toBe(originalTiming);
     await page.getByRole('button', { name: 'Close timing' }).click();
-    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Retry / Regenerate', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Branch in this Session', exact: true }).click();
     await page.getByRole('dialog', { name: '/branch', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
     await expect(page.getByRole('dialog', { name: '/branch', exact: true })).toHaveCount(0);
     await expect(message).toHaveValue('');
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(1);
+    await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Usage 120 tokens', exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: originalRuntime!, exact: true })).toHaveCount(1);
     await page.getByRole('button', { name: originalRuntime!, exact: true }).click();
     expect(await page.getByRole('dialog', { name: 'Response timing' }).locator('dl').innerText()).toBe(originalTiming);
     await page.getByRole('button', { name: 'Close timing' }).click();
-    await expect(page.getByLabel('Conversation statistics')).toContainText('0 responses · 0 requests');
-    await page.getByRole('button', { name: 'Lineage', exact: true }).click();
+    await expect(page.getByLabel('Conversation statistics')).toContainText('0 Turns · 0 Steps');
     await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
     await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Replay the original input once/ }).click();
     expect(await fixture.gate('inherited-retry-reached')).toMatchObject({ kind: 'gate_reached', requestIndex: 2 });
