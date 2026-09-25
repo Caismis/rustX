@@ -1220,6 +1220,17 @@ impl SessionRuntimeManager {
             if let Ok(projection) = &mut projection {
                 projection.application = application.view(&target.application_scope());
                 projection.process_bindings = Some(owner.process_policy());
+                projection.session_models = target.workspace().map(|directory| {
+                    use super::configuration::settings::SessionModelsView;
+                    match application.session_creation_models(
+                        &owner.configuration,
+                        directory,
+                        &owner.credentials,
+                    ) {
+                        Ok(catalog) => SessionModelsView::Available { catalog },
+                        Err(diagnostic) => SessionModelsView::Unavailable { diagnostic },
+                    }
+                });
             }
             drop(application);
             if committed {

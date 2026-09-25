@@ -111,14 +111,13 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
   onSelect?: () => void
   onToggle: () => void
   onCreate: () => void
-  /** Real-Workspace actions; absent for the ungrouped bucket (no menu shown). */
+  /** Registered Workspace actions. */
   actions?: { rename: () => void; delete: () => void; settings?: () => void } | undefined
   menuFocusOwner: RefObject<HTMLElement | null>
   t: RowTranslate
 }) {
   const row = group
-  // The ungrouped bucket has no workspace title: its label is dictionary copy.
-  const label = row.workspaceId === undefined ? t('group.ungrouped') : row.label
+  const label = row.label
   const active = containsCurrentDescendant || (group.expanded && group.containsCurrent)
   const [menuOpen, setMenuOpen] = useState(false)
   const workspaceMenuItems = [
@@ -331,7 +330,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
       </span>
       <span className={css.searchResultMeta}>
         {result.observation && <span>{result.observation}</span>}
-        <span className={css.searchResultWorkspace}>{result.workspace || t('group.ungrouped')}</span>
+        <span className={css.searchResultWorkspace}>{result.workspace || t('session.unclassified')}</span>
         {result.snippet !== undefined && (
           <span className={css.searchResultSnippet}>{result.snippet}</span>
         )}

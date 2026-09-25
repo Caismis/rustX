@@ -47,3 +47,20 @@ Assistant MessageIds and preserve provider correlation IDs. The foreground
 projection carries the same occurrence; only that occurrence can receive its live
 state. Provider call/Tool IDs alone are never historical identity. No unproven
 turn folding or inferred subcall nesting is supported.
+
+## Issue #402: draft and completed-process presentation
+
+`App` owns an explicit New Conversation / Session center route. The shared
+Harness-derived composer accepts browser File drafts before Session creation;
+`firstSubmitMachine` owns the one creation/application/upload/send sequence.
+`firstSubmitPort` fences endpoint, connection generation, authority revision,
+navigation and the exact native attachment. Settings target actors are shared
+with the permission seat; no configuration coordinator lives in the composer.
+
+App Server v21 / Runtime Client v47 publishes `completed_process` on canonical
+Assistant and Tool entries using native Attempt event evidence. Its origin and
+local final-message identity survive pagination and lineage remapping. Only
+those facts create process disclosure membership; final answers and actions
+stay outside. Agent Status retains its native anchor and shares disclosure only
+when its exact Conversation/Attempt matches a loaded completed process. Live or
+unclassified annotations remain visible. No canonical cache is modified.

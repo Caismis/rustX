@@ -22,11 +22,11 @@ export function sessionObservation(state: ClientView, id: string) {
   if (state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, creating, metadataChanged, wide, expand, createOpen, closeCreate, workspaceSettings }: {
+export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
   workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
-  wide: boolean; expand: () => void; createOpen: boolean; closeCreate: () => void;
-  creating: boolean; metadataChanged: (removed?: string) => void;
+  wide: boolean; expand: () => void;
+  metadataChanged: (removed?: string) => void;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
   openViews: readonly string[]; closeView: (id: string) => void; closeAllViews: () => void;
   openSession: (id: string) => void; createSession: (id: string) => void; forkSession: (id: string) => void; deleteSession: (id: string) => void;
@@ -82,24 +82,14 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     cwd: row.displayPath, createdAt: undefined, label: row.displayName, expanded: true,
     containsCurrent: row.id === workspace,
     sessionCount: rows.filter(item => item.group === row.id).length, sessions: rows.filter(item => item.group === row.id).map(item => toNode(item.session)) }));
-  groupNodes.push({ key: '', workspaceId: undefined, cwd: undefined, createdAt: undefined, label: 'Ungrouped Sessions', expanded: true,
-    containsCurrent: rows.some(item => item.group === null && item.session.id === selected), sessionCount: rows.filter(item => item.group === null).length,
-    sessions: rows.filter(item => item.group === null).map(item => toNode(item.session)) });
   return <>
     <WorkspaceBrowser wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={(id, title) => edit('session', id, title)} fork={forkSession} remove={deleteSession}
-      workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && !creating && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
+      workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => setDialog({ kind: 'add', id: '', name: '' }) : undefined}
       refresh={() => { setReload(value => value + 1); search(query, offset); }} previous={connected && offset > 0 ? () => search(query, Math.max(0, offset - 32)) : undefined}
       next={connected && state.nextOffset != null ? () => search(query, state.nextOffset!) : undefined}
       notices={<>{hostError && <p role="status">{hostError}</p>}{error && <p role="alert">{error}</p>}{catalog && !bound && <p role="status">This Workspace Host belongs to {catalog.endpoint}.</p>}</>} />
-    <Modal open={createOpen} title="New Session" closeLabel="Close dialog" onClose={closeCreate}>
-      <label>Choose Workspace<select aria-label="Choose Workspace" value={workspace ?? ''} disabled={!bound} onChange={event => selectWorkspace(event.target.value || undefined)}>
-        <option value="">Select authorized Workspace</option>{catalog?.workspaces.map(row => <option key={row.id} value={row.id}>{row.displayName}</option>)}
-      </select></label>
-      {catalog?.picker.kind === 'unavailable' && <p>{catalog.picker.reason}</p>}
-      <Button variant="primary" disabled={!connected || !bound || !workspace || busy || creating} onClick={() => { if (workspace) { createSession(workspace); closeCreate(); } }}>Create Session</Button>
-    </Modal>
     {dialog && <Modal closeLabel="Close dialog" open title={dialog.kind === 'add' ? 'Add Workspace' : dialog.kind === 'remove' ? `Unregister ${dialog.name}?` : `Rename ${dialog.kind}`} onClose={() => setDialog(undefined)}>
       {dialog.kind === 'add' ? <><p>Choose a location authorized by this Product Host.</p>{catalog?.picker.kind === 'configured' && catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(location.id))}>{location.displayName}</Button>)}</>
           : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.id), dialog.id)}>Unregister</Button></>

@@ -439,6 +439,7 @@ impl LineageSeed {
         responses: Vec<super::response::CompletedResponseProvenance>,
     ) -> Result<Self, ConversationStoreError> {
         let mut seen = std::collections::BTreeSet::new();
+        let mut process_members = std::collections::BTreeSet::new();
         for response in &responses {
             let closing = self.canonical.iter().position(|message| matches!(message,
                 MessageBlock::Assistant(assistant) if assistant.id == response.closing_message_id
@@ -449,6 +450,21 @@ impl LineageSeed {
                     "invalid or duplicate inherited response anchor".into(),
                 ));
             };
+            if !response
+                .process_message_ids
+                .contains(&response.closing_message_id)
+                || response.process_message_ids.iter().any(|id| {
+                    !process_members.insert(id)
+                        || !self.canonical[..=closing].iter().any(|message| {
+                            matches!(message,
+                        MessageBlock::Assistant(assistant) if &assistant.id == id)
+                        })
+                })
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid inherited process membership".into(),
+                ));
+            }
             if let Some(input) = &response.retry_message_id
                 && !self.canonical[..closing].iter().any(|message| matches!(message,
                     MessageBlock::User(user) if user.id == *input && user.kind == crate::message::types::InboundKind::Message)) {

@@ -163,3 +163,23 @@ def web_trace_convergence() -> Scenario:
 
 
 SCENARIOS["web_trace_convergence"] = web_trace_convergence
+
+
+def web_harness_convergence() -> Scenario:
+    """Real native Tool and status projection for the Issue #402 browser flow."""
+    from fake_provider.scenario import Reasoning
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="second-model",
+                      body_contains=("Converge the conversation",))
+    return Scenario(
+        "web_harness_convergence",
+        Step(expected, Stream(Reasoning("## Plan\n\n- Inspect the workspace.\n- Keep **native authority**.\n\n`exact identity`"),
+                              Text("I will prepare a small workspace change."),
+                              ToolCall("write-402", "write", json.dumps({"path": "hello.txt", "content": "hello native world\n"})), Finish("tool_calls"))),
+        Step(expected, Stream(Reasoning("Verify the committed file before answering."),
+                              ToolCall("bash-402", "bash", json.dumps({"command": "cat hello.txt", "execution_mode": "foreground"})), Finish("tool_calls"))),
+        Step(expected, Stream(ToolCall("read-402", "read", json.dumps({"path": "hello.txt"})), Finish("tool_calls"))),
+        Step(expected, Stream(Text("## Workspace ready\n\nThe file was written and verified through native Tools."), Finish())),
+    )
+
+
+SCENARIOS["web_harness_convergence"] = web_harness_convergence

@@ -1,18 +1,20 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted model request controls and settings cards; see PROVENANCE.md. */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { GridList, GridListItem, Button as AriaButton } from 'react-aria-components';
 import type {
   Model, ModelLayer, Modality, ProviderView, ProviderWrite, SourceScope, SourceSettings,
-} from '../../../../../protocol/app-server/v20';
+} from '../../../../../protocol/app-server/v21';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
-import { TypedUnitForm, UnitForm, type TypedUnitForm as TypedForm } from '../forms/bridge';
+import { TypedUnitForm, UnitForm, useUnitEditing, type TypedUnitForm as TypedForm } from '../forms/bridge';
 import { Bool, Enum, Numeric, NumericText, RequestParameters, RequestParameterRows, Text } from '../forms/fields';
 import { TextField } from '../forms/controls';
-import { Advanced, Choice, ResourceList, Search, type ResourceRow } from '../primitives/aria';
+import { Advanced, Choice, ConfirmAction, ResourceList, Search, type ResourceRow } from '../primitives/aria';
 import { catalogEntries, provenanceLabel, sourceView, type CatalogEntry } from '../projection';
 import type { PageFocus } from '../machines/navigation';
 import { observedResult, observedResultLabel, unitApplication } from '../projection';
 import css from '../../../presentation/settings/SettingsContent.module.css';
+import cards from '../../../presentation/settings/ModelsCards.module.css';
 import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
 
 export interface ModelsPageProps {
@@ -50,6 +52,7 @@ export function ModelsPage({ source, scope, revision, models, focus, onFocus }: 
 }
 
 function ProviderList({ source, scope, revision, models, onFocus }: Omit<ModelsPageProps, 'focus'>) {
+  const landing = useRef<HTMLElement>(null);
   const [query, setQuery] = useState('');
   const [identity, setIdentity] = useState('');
   const providers = catalogEntries<ProviderView>(source, scope, 'providers');
@@ -59,37 +62,19 @@ function ProviderList({ source, scope, revision, models, onFocus }: Omit<ModelsP
   // It is an application observation of the whole unit, never a per-Provider
   // reachability claim and never the result of a probe this page issued.
   const application = observedResult(unitApplication(source.application, 'provider'));
-  const rows: ResourceRow[] = matches.map(entry => {
-    const provider = entry.authored ?? entry.effective;
-    return {
-      id: entry.id, name: entry.id,
-      facts: <>
-        <Badge>{credentialLabel(provider)}</Badge>
-        {scope === 'workspace' && <Badge>{provenanceLabel(entry.origin)}</Badge>}
-        {scope === 'workspace' && !entry.authored && <Badge>No override in this Workspace</Badge>}
-      </>,
-      detail: <p className={css.hint}>{provider?.base_url} · {catalog.filter(model => (model.authored ?? model.effective)?.provider === entry.id).length} model(s)</p>,
-      actions: [{ id: 'open', label: entry.authored ? `Edit Provider ${entry.id}` : `Override Provider ${entry.id}`, run: () => onFocus({ kind: 'provider', id: entry.id }) }],
-    };
-  });
-  return <section aria-label="Models">
-    <h3>Models</h3>
-    <p>Manage the Providers that serve your models, and choose the model new Sessions start from.</p>
-
-    <h4>Providers</h4>
-    <p>A configured Provider is an authored definition. It is not evidence that the endpoint is reachable — nothing on this page contacts a Provider, and no model call is made to fill a badge. Credentials are never read back.</p>
-    {scope === 'workspace' && <p>Identities this Workspace does not override are listed from the native effective projection. Opening one authors nothing.</p>}
-    <p role="status">Native Providers &amp; Models application for this source: <strong>{observedResultLabel(application)}</strong>{application.state === 'failed' && <> — {application.diagnostic}</>}</p>
-    <div className={workflow.toolbar}>
-      <Search label="Find a Provider" value={query} onChange={setQuery} placeholder="Find by identity" />
-    </div>
-    <ResourceList label="Providers" rows={rows} onOpen={id => onFocus({ kind: 'provider', id })}
-      empty={query ? `No Provider identity matches ${query}.` : 'No Provider is defined for this source yet.'} />
-    <div className={css.actions}>
-      <TextField label="New Provider identity" value={identity} change={setIdentity} />
-      <Button disabled={!identity || providers.some(entry => entry.id === identity)}
-        onClick={() => { onFocus({ kind: 'provider', id: identity }); setIdentity(''); }}>Add Provider</Button>
-    </div>
+  return <section ref={landing} tabIndex={-1} aria-label="Models" className={cards.section}>
+    <h3 className={cards.title}>Models</h3>
+    <p className={cards.intro} role="status">Providers &amp; Models: {observedResultLabel(application)}{application.state === 'failed' && <> — {application.diagnostic}</>}</p>
+    <Search label="Find a Provider" value={query} onChange={setQuery} placeholder="Find by identity" />
+    <GridList className={cards.rows} aria-label="Providers" onAction={id => onFocus({ kind: 'provider', id: String(id) })}>{matches.map(entry => <GridListItem id={entry.id} key={entry.id} textValue={entry.id} aria-label={entry.id} className={cards.rowCard}>
+      <ProviderCard entry={entry} revision={revision} open={() => onFocus({ kind: 'provider', id: entry.id })} settle={landing}/>
+    </GridListItem>)}</GridList>
+    {!matches.length && <p className={cards.intro}>{query ? `No Provider identity matches ${query}.` : 'No Provider is defined for this source yet.'}</p>}
+    <Advanced title="New Provider">
+      <div className={css.actions}><TextField label="New Provider identity" value={identity} change={setIdentity} />
+        <Button disabled={!identity || providers.some(entry => entry.id === identity)} onClick={() => { onFocus({ kind: 'provider', id: identity }); setIdentity(''); }}>Add Provider</Button>
+      </div>
+    </Advanced>
 
     <Advanced title={`All Models (${catalog.length})`}>
       <p className={css.hint}>Every Model identity this source reaches, including any whose Provider identity is not defined here.</p>
@@ -98,7 +83,7 @@ function ProviderList({ source, scope, revision, models, onFocus }: Omit<ModelsP
       <NewModel exists={catalog.map(entry => entry.id)} open={id => onFocus({ kind: 'model', id })} />
     </Advanced>
 
-    <h4>Default model for new Sessions</h4>
+    <Advanced title="Default model for new Sessions">
     <UnitForm<ModelLayer> title="Default model" authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
       blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
       removalNotice={<p>New Sessions fall back to the native default model once no source authors one.</p>}>
@@ -107,7 +92,25 @@ function ProviderList({ source, scope, revision, models, onFocus }: Omit<ModelsP
         <ModelSelection value={value} change={change} models={models} />
       </>}
     </UnitForm>
+    </Advanced>
   </section>;
+}
+
+function ProviderCard({ entry, revision, open, settle }: { entry: CatalogEntry<ProviderView>; revision: string; open: () => void; settle: React.RefObject<HTMLElement | null> }) {
+  const authored = entry.authored;
+  const unit = useUnitEditing<ProviderWrite>({ authored: authored ? { base_url: authored.base_url, credential: { kind: 'retain' } } : undefined,
+    blank: { base_url: '', credential: { kind: 'environment', variable: '' } }, revision,
+    mutation: value => ({ kind: 'config', mutation: { unit: 'provider', id: entry.id, authored: value } }) });
+  return <><div className={cards.rowHead}>
+    <div className={cards.rowIdentity}><span className={cards.rowName} title={entry.id}>{entry.id}</span><span className={cards.rowTag}>{authored ? 'Configured' : provenanceLabel(entry.origin)}</span></div>
+    <div className={cards.rowActions}><AriaButton className={cards.secondaryButton} aria-label={`${authored ? 'Edit' : 'Override'} Provider ${entry.id}`} onPress={open}>{authored ? 'Edit' : 'Details'}</AriaButton>
+      {authored && <ConfirmAction label={`Delete Provider ${entry.id}`} triggerText="Delete" title={`Delete Provider ${entry.id}?`} description="Remove this source's Provider definition. Model definitions are kept; inherited configuration may apply." confirm={`Delete Provider ${entry.id}`} tone="destructive" settle={settle} disabled={!unit.admitted || unit.busy || unit.reviewNeeded} onConfirm={() => unit.submit(true)}/>}</div>
+    </div>
+    {unit.outcome.kind === 'conflict' && <small role="alert">Source changed. Open details to review the preserved revision.</small>}
+    {unit.outcome.kind === 'uncertain' && <small role="alert">Outcome uncertain. Open details and reread; no replay.</small>}
+    {unit.outcome.kind === 'rejected' && <small role="alert">{unit.outcome.detail}</small>}
+    {unit.awaitingObservation && <small role="status">Saved; awaiting observation.</small>}
+  </>;
 }
 
 function modelRow(entry: CatalogEntry<Model>, scope: SourceScope): ResourceRow {

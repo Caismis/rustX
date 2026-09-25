@@ -52,7 +52,7 @@ export async function startDogfood(scenario = 'web_console_dogfood') {
 approval = "never"
 [agent.tools.sources]
 image_fixture = ["render_image"]
-` : scenario === 'web_composer_context' ? `
+` : ['web_composer_context', 'web_harness_convergence'].includes(scenario) ? `
 [agent.plugins.todo]
 enabled = true
 [agent.plugins.goal]

@@ -6,8 +6,8 @@
  */
 
 export const en = {
-  'group.ungrouped': 'Ungrouped Sessions',
-  'session.new': 'New Session',
+  'session.unclassified': 'Outside registered Workspaces',
+  'session.new': 'New Conversation',
   'section.workspaces': 'Workspaces',
   'section.sessions': 'Sessions',
   'viewOptions.label': 'View options',
@@ -50,7 +50,7 @@ export const en = {
   'sessions.count.other': '{n} sessions',
   'actions.workspace.aria': 'Workspace actions for {name}',
   'actions.session.aria': 'Session actions for {name}',
-  'actions.newSession.aria': 'New session in {name}',
+  'actions.newSession.aria': 'New conversation in {name}',
   'status.running': 'Running',
   'status.subagentsRunning.one': '{n} subagent running',
   'status.subagentsRunning.other': '{n} subagents running',

@@ -1,8 +1,10 @@
+import { expandModelAuthoring } from './shell-actions';
+import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { choose, chooseWorkspace, closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
+import { choose, closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -32,16 +34,15 @@ reasoning = { default_profile = "deep", profiles = { deep = { enabled = true }, 
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
     await closeSettings(page);
-    await openWorkspaceSettings(page, 'Workspace A');
+    await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     for (const owner of ['Root', 'Agent'] as const) {
-      if (owner === 'Root') await openSettingsPage(page, 'Models');
+      if (owner === 'Root') { await openSettingsPage(page, 'Models'); await expandModelAuthoring(page); }
       else {
         await openSettingsPage(page, 'Extensions');
         await settings.getByRole('tab', { name: 'Agents', exact: true }).click();

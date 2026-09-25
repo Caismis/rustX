@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
@@ -24,7 +24,7 @@ export function useSettingsActor(): SettingsTargetActor {
  * attachment is the only thing this binding tells the actor: the transport is
  * delivered to it by its `ConfigurationSystem`, so no read, reconnect or
  * convergence ever depends on this component rendering. */
-export function useSettingsTarget(client: AppServerClient, target: SettingsTarget, host: ProductHostWorkspaces | undefined) {
+export function useSettingsTarget(client: AppServerClient, target: SettingsTarget, host: ProductHostWorkspaces | undefined, enabled = true) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   // The Product Host object identity is a presentation detail that may change
   // on any render; the port and its actor are bound to the authority instead.
@@ -38,11 +38,11 @@ export function useSettingsTarget(client: AppServerClient, target: SettingsTarge
     [client, lifetime],
   );
   useEffect(() => {
-    actor.send({ type: 'ATTACH' });
-    // An authority replacement may already have stopped this lifetime, which
-    // leaves no presentation attachment to end.
-    return () => { if (actor.getSnapshot().status === 'active') actor.send({ type: 'DETACH' }); };
-  }, [actor]);
+    if (!enabled) return;
+    const system = configurationSystem(client);
+    system.retainTarget(actor);
+    return () => system.releaseTarget(actor);
+  }, [actor, client, enabled]);
   return { actor, transport };
 }
 
@@ -54,13 +54,17 @@ export function useSettingsTarget(client: AppServerClient, target: SettingsTarge
 export function useSessionConfiguration(client: AppServerClient, sessionId: string) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const lifetime = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${sessionId}`;
-  const actor = useMemo(() => configurationSystem(client).sessionConfiguration(sessionId), [client, lifetime]);
+  const [binding, setBinding] = useState<{ lifetime: string; actor: SessionConfigurationActor }>();
   useEffect(() => {
+    // Acquiring a Session actor can start its read region. Do this at commit,
+    // never while React is rendering another subscribed presentation.
     const system = configurationSystem(client);
+    const actor = system.sessionConfiguration(sessionId);
     system.retainSession(actor);
+    setBinding({ lifetime, actor });
     return () => system.releaseSession(actor);
-  }, [client, actor]);
-  return { actor, transport };
+  }, [client, lifetime, sessionId]);
+  return { actor: binding?.lifetime === lifetime ? binding.actor : undefined, transport };
 }
 
 /** Subscribe to one unit's live editing transaction, which exists only while

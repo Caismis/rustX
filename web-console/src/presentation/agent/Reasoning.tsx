@@ -12,5 +12,5 @@ export function Reasoning({ text, running = false }: { text: string; running?: b
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
  icon={<IconThinkOutline14 size={14}/>} title="Reasoning" open={expanded} expandable expandOnRowClick onToggle={() => setExpanded(v => !v)}
  collapsedContent={<><span className={css.separator}/><span className={css.summary}><span className={css.summaryText}>{summary}</span></span></>}>
- <div className={css.thinkBody}><MarkdownText text={text} streaming={running}/></div></DisclosureRow></div>;
+ <div className={css.thinkBody}><MarkdownText variant="compact" text={text} streaming={running}/></div></DisclosureRow></div>;
 }

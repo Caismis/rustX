@@ -108,8 +108,8 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
   await settingsReady();
   // The inherited identity is reachable and reported as a redacted native fact.
-  expect(screen.getByText(/Literal secret \(redacted\)/)).toBeTruthy();
   await openResourceRow('transport');
+  expect(screen.getByText(/Literal secret \(redacted\)/)).toBeTruthy();
   // Authoring an override starts a complete new definition; `retain` is not
   // even offered, because this Workspace authors no credential to retain.
   fireEvent.click(await screen.findByRole('button', { name: /Credential source/ }));

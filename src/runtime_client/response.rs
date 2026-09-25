@@ -43,6 +43,15 @@ pub struct CompletedResponseView {
     pub timing: Option<crate::durable::response::CompletedResponseTiming>,
 }
 
+/// Native ownership of a completed Attempt's process. Destination final address
+/// and immutable origin are distinct, including through lineage copies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompletedProcessView {
+    pub origin: ResponseOrigin,
+    pub final_message_id: MessageId,
+}
+
 /// Whole-conversation execution totals, independent of any transcript window.
 /// Forked Conversations start a fresh execution epoch, as native lineage does.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -61,6 +70,7 @@ struct AttemptEvidence {
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     timing: timing::TimingFold,
     closing: Option<MessageId>,
+    members: BTreeSet<MessageId>,
     last_request: Option<RequestId>,
     requests: u64,
     reports: u64,
@@ -103,6 +113,7 @@ pub(crate) fn decorate_through(
 ) -> Result<(), ConversationStoreError> {
     for entry in &mut page.entries {
         entry.completed_response = None;
+        entry.completed_process = None;
         entry.response_pending = false;
     }
     let wanted: BTreeSet<_> = page
@@ -112,15 +123,30 @@ pub(crate) fn decorate_through(
             RuntimeClientTranscriptItem::Message {
                 message: MessageBlock::Assistant(message),
             } => Some(message.id.clone()),
+            RuntimeClientTranscriptItem::Message {
+                message: MessageBlock::Tool(message),
+            } => Some(message.occurrence.assistant_message_id.clone()),
             _ => None,
         })
         .collect();
     let ResponseProjection {
         mut completed,
+        processes,
         pending,
         statistics,
     } = project(store, &wanted, through)?;
     for entry in &mut page.entries {
+        let owner = match &entry.item {
+            RuntimeClientTranscriptItem::Message {
+                message: MessageBlock::Assistant(message),
+            } => Some(&message.id),
+            RuntimeClientTranscriptItem::Message {
+                message: MessageBlock::Tool(message),
+            } => Some(&message.occurrence.assistant_message_id),
+            _ => None,
+        };
+        entry.completed_process = owner.and_then(|id| processes.get(id)).cloned();
+        entry.response_pending = owner.is_some_and(|id| pending.contains(id));
         let RuntimeClientTranscriptItem::Message {
             message: MessageBlock::Assistant(message),
         } = &entry.item
@@ -164,6 +190,7 @@ pub(crate) fn decorate_through(
 
 struct ResponseProjection {
     completed: BTreeMap<MessageId, CompletedResponseProvenance>,
+    processes: BTreeMap<MessageId, CompletedProcessView>,
     pending: BTreeSet<MessageId>,
     statistics: ConversationStatistics,
 }
@@ -179,14 +206,7 @@ pub(crate) fn lineage_provenance(
     let wanted = canonical
         .iter()
         .filter_map(|message| match message {
-            MessageBlock::Assistant(assistant)
-                if !assistant
-                    .content
-                    .iter()
-                    .any(|block| matches!(block, AssistantContentBlock::ToolCall(_))) =>
-            {
-                Some(assistant.id.clone())
-            }
+            MessageBlock::Assistant(assistant) => Some(assistant.id.clone()),
             _ => None,
         })
         .collect();
@@ -211,8 +231,32 @@ fn project(
     let mut completed: BTreeMap<_, _> = store
         .load_inherited_responses()?
         .into_iter()
-        .filter(|response| wanted.contains(&response.closing_message_id))
+        .filter(|response| {
+            wanted.contains(&response.closing_message_id)
+                || response
+                    .process_message_ids
+                    .iter()
+                    .any(|id| wanted.contains(id))
+        })
         .map(|response| (response.closing_message_id.clone(), response))
+        .collect();
+    let mut processes: BTreeMap<_, _> = completed
+        .values()
+        .flat_map(|response| {
+            response
+                .process_message_ids
+                .iter()
+                .filter(|id| wanted.contains(*id))
+                .map(|id| {
+                    (
+                        id.clone(),
+                        CompletedProcessView {
+                            origin: response.origin.clone(),
+                            final_message_id: response.closing_message_id.clone(),
+                        },
+                    )
+                })
+        })
         .collect();
     let mut statistics = ConversationStatistics::default();
     let mut after = 0;
@@ -279,6 +323,9 @@ fn project(
                     }
                 }
                 RuntimeEvent::AssistantMessageCommitted { message_id } => {
+                    if wanted.contains(&message_id) {
+                        evidence.members.insert(message_id.clone());
+                    }
                     evidence.closing = Some(message_id);
                 }
                 RuntimeEvent::AttemptCompleted {
@@ -287,6 +334,17 @@ fn project(
                 } => {
                     if let Some(closing) = evidence.closing.take() {
                         statistics.completed_responses += 1;
+                        let process = CompletedProcessView {
+                            origin: ResponseOrigin {
+                                conversation_id: store.conversation_id().clone(),
+                                attempt_id: id.clone(),
+                                closing_message_id: closing.clone(),
+                            },
+                            final_message_id: closing.clone(),
+                        };
+                        for member in &evidence.members {
+                            processes.insert(member.clone(), process.clone());
+                        }
                         if wanted.contains(&closing) {
                             let retry_message_id = match &evidence.last_request {
                                 Some(id) => {
@@ -309,6 +367,7 @@ fn project(
                             completed.insert(
                                 closing.clone(),
                                 CompletedResponseProvenance {
+                                    process_message_ids: evidence.members.iter().cloned().collect(),
                                     closing_message_id: closing.clone(),
                                     origin: ResponseOrigin {
                                         conversation_id: store.conversation_id().clone(),
@@ -343,10 +402,11 @@ fn project(
     }
     let pending: BTreeSet<_> = attempts
         .values()
-        .filter_map(|evidence| evidence.closing.clone())
+        .flat_map(|evidence| evidence.members.iter().cloned())
         .collect();
     Ok(ResponseProjection {
         completed,
+        processes,
         pending,
         statistics,
     })

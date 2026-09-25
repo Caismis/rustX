@@ -167,7 +167,7 @@ froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
 descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
-heads, and the Todo-specific durable progress sequence. Current schema 43
+heads, and the Todo-specific durable progress sequence. Current schema 44
 replaces these with producer-scoped contribution receipts, generic logical-step
 progress, and typed accepted RequestSnapshot contributions; no old reader remains. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool

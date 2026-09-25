@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v20';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v21';
 import type { ToolCardView } from '../presentation/agent/ToolCard';
 import { json } from './projection';
 const variants: Record<string, ToolCardView['variant']> = { 'tool-bash': 'bash', 'tool-read': 'read', 'tool-write': 'write', 'tool-edit': 'edit', 'tool-glob': 'search', 'tool-grep': 'search' };
@@ -12,12 +12,11 @@ export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   const state = status === 'outcome_unknown' ? 'uncertain' : status === 'success' ? 'success' : status === 'cancelled' ? 'cancelled' : status ? 'failure' : tool.state.type === 'running' ? 'running' : 'assembled';
   const detail = result?.status && 'detail' in result.status ? result.status.detail : result?.status && 'error' in result.status ? result.status.error : result?.status && 'reason' in result.status ? result.status.reason : undefined;
   const string = (key: string) => typeof args[key] === 'string' ? args[key] as string : undefined;
-  const output = result ? (result.content ?? []).flatMap(block => block.type === 'text' ? [block.text] : block.type === 'json' ? [json(block.value)] : []).join('\n') : tool.state.type === 'running' && tool.state.progress ? json(tool.state.progress) : undefined;
+  const output = result ? (result.content ?? []).flatMap(block => block.type === 'text' ? [block.text] : block.type === 'json' ? [variant === 'bash' && block.value && typeof block.value === 'object' && !Array.isArray(block.value) && typeof block.value.combined === 'string' ? block.value.combined : json(block.value)] : []).join('\n') : tool.state.type === 'running' && tool.state.progress ? json(tool.state.progress) : undefined;
   const edits = variant === 'edit' && Array.isArray(args.edits) ? args.edits.filter((edit): edit is { oldText: string; newText: string } => !!edit && typeof edit.oldText === 'string' && typeof edit.newText === 'string') : [];
-  return { id: tool.call_id, nativeName: tool.name, title: tool.name, variant, state,
+  return { id: tool.call_id, path: string('path'), exitCode: result?.exit_code, truncated: result?.truncation?.truncated,
+    diffs: variant === 'edit' ? edits.map(edit => ({ path: string('path') ?? '', oldText: edit.oldText, newText: edit.newText })) : variant === 'write' && string('content') !== undefined ? [{ path: string('path') ?? '', oldText: null, newText: string('content')! }] : undefined, nativeName: tool.name, title: tool.name, variant, state,
     summary: detail ?? string(variant === 'bash' ? 'command' : variant === 'search' ? 'pattern' : 'path') ?? tool.call_id,
     input: variant === 'bash' ? string('command') ?? tool.state.arguments : tool.state.arguments,
-    output: [detail, output].filter(Boolean).join('\n') || undefined,
-    removed: edits.length ? edits.map(edit => edit.oldText).join('\n') : undefined,
-    added: edits.length ? edits.map(edit => edit.newText).join('\n') : variant === 'write' ? string('content') : undefined };
+    output: [detail, output].filter(Boolean).join('\n') || undefined };
 }

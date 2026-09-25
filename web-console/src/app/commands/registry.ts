@@ -9,7 +9,7 @@ export interface CommandDefinition {
 export const commands: readonly CommandDefinition[] = [
   { id: 'model', label: 'Choose model', aliases: ['模型'], availability: 'attached' },
   { id: 'compact', label: 'Compact context', aliases: ['压缩'], availability: 'no-attempt' },
-  { id: 'new', label: 'New Session', aliases: ['新建'], availability: 'attached' },
+  { id: 'new', label: 'New Conversation', aliases: ['新建'], availability: 'attached' },
   { id: 'fork', label: 'Fork independent Session', aliases: ['分叉'], availability: 'attached' },
   { id: 'branch', label: 'Branch within Session', aliases: ['分支'], availability: 'idle' },
   { id: 'goal', label: 'Goal controls', aliases: ['目标'], availability: 'goal' },

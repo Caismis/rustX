@@ -1,5 +1,7 @@
+import { expandModelAuthoring } from './shell-actions';
+import { openEmptySession } from './shell-actions';
 import {
-  choose, chooseWorkspace, closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  choose, closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
@@ -15,8 +17,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
@@ -40,7 +41,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await closeSettings(page);
-    await openWorkspaceSettings(page, 'Workspace A');
+    await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
     await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
     // The User definition is the native effective one for this identity, so the
@@ -102,7 +103,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await choose(settings, 'Theme', 'Dark');
     await closeSettings(page);
-    await openWorkspaceSettings(page, 'Workspace A');
+    await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
     await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
     await settings.getByRole('row', { name: 'reviewer', exact: true }).click();

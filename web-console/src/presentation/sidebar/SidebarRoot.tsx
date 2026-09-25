@@ -45,7 +45,7 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
   settings: (wide: boolean) => ReactNode; footer?: (wide: boolean) => ReactNode;
   panels?: readonly { id: string; label: string; icon: ReactNode; active?: boolean; select: () => void }[];
 }) {
-  const t = (key: string) => ({ 'toggle.open': 'Expand Sidebar', 'toggle.collapse': 'Collapse Sidebar', 'session.new.label': 'New Session', 'session.new': 'New Session', 'brand.localBuild': 'rustX', 'panels.label': 'Global panels' }[key] ?? key);
+  const t = (key: string) => ({ 'toggle.open': 'Expand Sidebar', 'toggle.collapse': 'Collapse Sidebar', 'session.new.label': 'New Conversation', 'session.new': 'New Conversation', 'brand.localBuild': 'rustX', 'panels.label': 'Global panels' }[key] ?? key);
   // Wide content stays mounted while the collapse animates (fading via
   // .collapsed .wide), unmounts at settle, and remounts right away on expand.
   const [settled, setSettled] = useState(collapsed)
@@ -152,7 +152,7 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
       onPointerLeave={() => { armLinger() }}
     >
       <div className={css.logoRow}>
-        {/* Expanded, the brand doubles as a New Session shortcut; the
+        {/* Expanded, the brand doubles as a New Conversation shortcut; the
             collapsed rail's logo is the expand toggle below instead. */}
         {wide && (
           <button

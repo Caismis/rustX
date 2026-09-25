@@ -4,7 +4,7 @@ import { createActor } from 'xstate';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../src/client/app-server';
 import { ConnectionController } from '../src/connection/controller';
-import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v20';
+import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v21';
 import { settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
@@ -126,6 +126,12 @@ export function SettingsSurface({ target, initialPage, navigation, connection, .
 export async function openSettingsPage(name: string) {
   fireEvent.click(screen.getByRole('tab', { name }));
   await screen.findByRole('tab', { name, selected: true });
+  if (name === 'Models') {
+    for (const title of ['New Provider', 'Default model for new Sessions']) {
+      const trigger = screen.queryByRole('button', { name: title, expanded: false });
+      if (trigger) fireEvent.click(trigger);
+    }
+  }
 }
 
 /** Open a detail from a resource list through its actual row, so list/detail

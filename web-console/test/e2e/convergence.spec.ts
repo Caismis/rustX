@@ -1,0 +1,120 @@
+import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { startDogfood } from './dogfood-server';
+import { routeWorkspaceHost } from './workspace-host';
+import { connectRemote, openWorkspaceSettings, openSettingsPage, closeSettings } from './shell-actions';
+import { wireProbe } from './wire-probe';
+
+function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+
+test('Harness New Conversation, permission, model, native process and Models convergence', async ({ page }) => {
+  const fixture = await startDogfood('web_harness_convergence');
+  const wire = await wireProbe(page);
+  let passed = false;
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const shot = async (name: string) => {
+    expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()).violations).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath(`${name}.png`), fullPage: true });
+  };
+  const noOverflow = async () => expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  try {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.addInitScript(() => localStorage.setItem('rustx-appearance-v1', 'dark'));
+    const beforeWrite = gate(), releaseWrite = gate();
+    const observedWrite = gate(), releaseObservation = gate();
+    await routeWorkspaceHost(page, fixture, {
+      before: async () => { beforeWrite.resolve(); await releaseWrite.promise; },
+      observed: async () => { observedWrite.resolve(); await releaseObservation.promise; },
+    }); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByRole('region', { name: 'New Conversation', exact: true })).toBeVisible();
+    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toBeEnabled();
+    await shot('01-new-conversation-desktop-dark');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
+    await expect(page.locator('[data-sidebar-wide]')).toHaveAttribute('data-sidebar-wide', 'false');
+    await noOverflow(); await shot('02-new-conversation-mobile-dark');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+    await shot('03-workspace-picker');
+    await page.getByRole('menuitem', { name: '+ Add Workspace', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Add Workspace', exact: true })).toBeVisible();
+    await shot('03-add-workspace');
+    const adoption = page.waitForResponse(response => response.url().endsWith('/product-host/adopt'));
+    await page.getByRole('dialog', { name: 'Add Workspace', exact: true }).getByRole('button', { name: 'Workspace A', exact: true }).click();
+    expect((await adoption).ok()).toBe(true);
+    await expect(page.getByRole('dialog', { name: 'Add Workspace', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Choose Workspace', exact: true })).toContainText('Workspace A');
+    await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Converge the conversation');
+    await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Workspace B', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Converge the conversation');
+    await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
+    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
+    const permissions = page.getByRole('button', { name: 'Workspace permissions', exact: true });
+    await expect(permissions).toBeEnabled(); await permissions.focus(); await page.keyboard.press('Enter');
+    await shot('04-permission-menu');
+    await page.getByRole('menuitem', { name: 'Full access', exact: true }).focus(); await page.keyboard.press('Enter');
+    const risk = page.getByRole('dialog', { name: 'Enable full access?', exact: true });
+    await expect(risk).toBeVisible(); await shot('05-elevated-confirmation');
+    await risk.getByRole('checkbox').focus(); await page.keyboard.press('Space');
+    await risk.getByRole('button', { name: 'Enable full access', exact: true }).focus(); await page.keyboard.press('Enter');
+    await beforeWrite.promise;
+    const send = page.getByRole('button', { name: 'Send', exact: true });
+    const noAdmission = () => { expect(wire.requests.filter(r => r.method === 'session/create' || r.method === 'turn/start')).toHaveLength(0); };
+    await expect(send).toBeDisabled();
+    await page.getByRole('textbox', { name: 'Message', exact: true }).press('Enter'); noAdmission();
+    await expect(page.getByText('Applying Workspace permission…', { exact: true })).toBeVisible();
+    await shot('05-permission-write-pending');
+    releaseWrite.resolve(); await observedWrite.promise;
+    // Native write and Host reread have completed, but their authoritative
+    // result has not reached the Settings actor. Admission must remain closed.
+    await expect(send).toBeDisabled();
+    await page.getByRole('textbox', { name: 'Message', exact: true }).press('Enter'); noAdmission();
+    releaseObservation.resolve();
+    await expect(permissions).toContainText('Full access');
+    await expect(send).toBeEnabled();
+    const model = page.getByRole('button', { name: 'Model and reasoning', exact: true });
+    await expect(model).toBeEnabled(); await model.click();
+    await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
+    await shot('06-new-conversation-model-picker');
+    await page.getByRole('menuitem', { name: 'fixture/second-model', exact: true }).click();
+    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
+    expect(wire.requests.filter(r => r.method === 'configuration/sourceWrite' && r.params.mutation?.unit === 'default_model')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
+    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(1);
+    expect(wire.requests.filter(r => r.method === 'turn/start')).toHaveLength(1);
+    const admitted = wire.notifications.filter(n => n.method === 'session/event' && n.params.event?.type === 'attempt_started');
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0].params.event.execution_settings.approval_mode).toBe('full_access');
+    const methods = wire.requests.map(r => r.method);
+    expect(methods.indexOf('session/setModel')).toBeLessThan(methods.indexOf('turn/start'));
+    const process = page.locator('[data-turn-process]');
+    await expect(process).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('note', { name: 'Agent Status' })).toHaveCount(0);
+    await shot('07-process-folded');
+    await process.focus(); await page.keyboard.press('Enter');
+    for (const reasoning of await page.getByRole('button', { name: /^Reasoning/ }).all()) await reasoning.click();
+    await expect(page.getByRole('note', { name: 'Agent Status' }).first()).toBeVisible();
+    expect(await page.locator('[aria-label="Canonical conversation"]').evaluate(root => { const disclosure = root.querySelector('[data-turn-process]')!; return [...root.querySelectorAll('[role="note"]')].every(note => !!(disclosure.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING)); })).toBe(true);
+    await shot('08-process-expanded');
+    const bash = page.locator('[data-tool-call-id="bash-402"]');
+    await bash.getByRole('button').first().click(); await shot('09-terminal');
+    const write = page.locator('[data-tool-call-id="write-402"]');
+    await write.getByRole('button').first().click(); await shot('10-write-diff');
+    await openWorkspaceSettings(page, 'Workspace A'); await openSettingsPage(page, 'Models');
+    await shot('11-models-desktop');
+    await page.setViewportSize({ width: 390, height: 844 }); await noOverflow(); await shot('12-models-mobile');
+    expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()).violations).toEqual([]);
+    await closeSettings(page); await noOverflow();
+    expect(errors).toEqual([]); passed = true;
+  } finally { await fixture.stop(passed); }
+});

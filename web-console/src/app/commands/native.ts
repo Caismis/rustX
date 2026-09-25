@@ -1,4 +1,4 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v20';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v21';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
@@ -14,21 +14,6 @@ export interface HistoricalSelection {
   boundary: SessionUserMessageBoundary | CompletedResponseView;
 }
 export type HistoryAction = 'fork' | 'branch' | 'retry';
-/** Shared by the sidebar and /new. Only a current gesture may open the result. */
-export async function createSession(client: AppServerClient, cwd: string, navigationCurrent: () => boolean) {
-  const generation = client.getSnapshot().generation;
-  const current = () => navigationCurrent() && client.getSnapshot().generation === generation && client.getSnapshot().connection === 'connected';
-  if (!current()) return;
-  const result = await client.request({ method: 'session/create', params: { settings: { cwd } } }, 'session_transition');
-  if (!current()) return;
-  if (result.durability_diagnostic) throw new Error(`Session ${result.session.id} committed with durability uncertainty: ${result.durability_diagnostic}. Inspect Sessions; do not repeat creation.`);
-  await client.attach(result.session.id, result.session.active_node, current);
-  if (!current()) return;
-  const target = client.target(result.session.id);
-  if (target.conversation_id !== result.session.active_conversation_id) throw new Error('Created Session attached a different Conversation.');
-  await client.listSessions();
-  if (current() && sameTarget(client.getSnapshot().views[result.session.id]?.target, target)) return { session: result.session, content: [] as UserInputBlock[] };
-}
 export class CommandSession {
   readonly target: AttachmentTarget;
   private readonly generation: number;

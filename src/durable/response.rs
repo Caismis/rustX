@@ -24,6 +24,9 @@ pub struct ResponseOrigin {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompletedResponseProvenance {
+    /// Exact retained Assistant members of this finalized Attempt, including
+    /// its closing response. Remapped with canonical identities during lineage.
+    pub process_message_ids: Vec<MessageId>,
     pub closing_message_id: MessageId,
     pub origin: ResponseOrigin,
     pub completed_at: DateTime<Utc>,

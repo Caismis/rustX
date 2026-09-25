@@ -785,3 +785,81 @@ See [acceptance record](../docs/trajectory-convergence-validation.md) for concre
 T1/X tests, commands and browser evidence. Browser control uses the repository's
 pinned Playwright container: agent-browser is unavailable in this environment and
 no Browser plugin is installed; the container is also the CI screenshot authority.
+
+## Issue #402 — conversation and Models convergence
+
+The pin remains `ddefc45fbc7f8e46dd73185e68295696d1297887`. All source is
+vendored and checked into this repository; builds and runtime never fetch Harness.
+Each entry below was inspected at that pin before adaptation. Hashes, exact
+imports and additional-source provenance are recorded in `source-inventory.json`.
+
+| Pinned source | Adapted destination |
+| --- | --- |
+| `packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx` | `src/app/new-conversation/NewConversation.tsx` |
+| `packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css` | `src/presentation/agent/HeroShell.module.css` |
+| `packages/client/ui-permission-presets/src/client/PermissionSelect.tsx` | `src/presentation/agent/PermissionSelect.tsx` |
+| `packages/client/ui-permission-presets/src/client/PermissionSelect.module.css` | `src/presentation/agent/PermissionSelect.module.css` |
+| `packages/client/ui-primitives/src/RiskConfirmation.module.css` | `src/presentation/primitives/RiskConfirmation.module.css` |
+| `packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx` | `src/presentation/agent/TurnProcess.tsx` |
+| `packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css` | `src/presentation/agent/TurnProcess.module.css` |
+| `packages/client/ui-settings-models/src/client/ModelsSection.module.css` | `src/presentation/settings/ModelsCards.module.css` |
+| `packages/client/ui-primitives/src/TerminalBlock.tsx` | `src/presentation/primitives/TerminalBlock.tsx` |
+| `packages/client/ui-primitives/src/TerminalBlock.module.css` | `src/presentation/primitives/TerminalBlock.module.css` |
+| `packages/client/ui-primitives/src/DiffBlock.tsx` | `src/presentation/primitives/DiffBlock.tsx` |
+| `packages/client/ui-primitives/src/DiffBlock.module.css` | `src/presentation/primitives/DiffBlock.module.css` |
+| `packages/client/ui-primitives/src/ReadBlock.tsx` | `src/presentation/primitives/ReadBlock.tsx` |
+| `packages/client/ui-primitives/src/ReadBlock.module.css` | `src/presentation/primitives/ReadBlock.module.css` |
+| `packages/client/ui-primitives/src/SearchBlock.tsx` | `src/presentation/primitives/SearchBlock.tsx` |
+| `packages/client/ui-primitives/src/SearchBlock.module.css` | `src/presentation/primitives/SearchBlock.module.css` |
+| `packages/client/ui-primitives/src/FoldToggle.tsx` | `src/presentation/primitives/FoldToggle.tsx` |
+| `packages/client/ui-primitives/src/head-tail-cap.ts` | `src/presentation/primitives/head-tail-cap.ts` |
+| `packages/client/ui-primitives/src/use-copy-feedback.ts` | `src/presentation/primitives/use-copy-feedback.ts` |
+| `packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx` | `src/app/agent/AgentStatus.tsx` |
+| `packages/client/ui-chat/src/client/chat/ContextInjectionRow.module.css` | `src/app/agent/AgentStatus.module.css` |
+
+Existing pinned source adaptations reused/extended:
+
+- `ui-conversation/.../skeleton/InputBar.tsx` and `InputBar.module.css`: the one
+  shared composer, now with pre-Session File drafts and permission/model seats.
+- `ui-workspace/.../WorkspacePicker.tsx`: Workspace chip/menu and adoption seat;
+  rustX Product Host handles replace upstream path/root/runtime authority.
+- `ui-permission-presets/.../PermissionSelect.tsx` and
+  `ui-primitives/src/RiskConfirmation.tsx`: visual controls only. The upstream
+  read-only/workspace-write presets and automatic permission controller are
+  excluded; rustX exposes only policy/full_access and reuses its source actor.
+- `ui-chat/.../ReasoningRow.tsx` and the existing Markdown stack: compact
+  Markdown typography, one parser/security/streaming implementation.
+- `ui-tool/.../components/ToolRow.tsx`: native-ID dispatch into the body primitives
+  above. The existing `CodeBlock.tsx`, Shiki, Pill, StateDot, clipboard, and
+  DisclosureRow remain the common rendering infrastructure.
+- `ui-settings-models/.../ModelsSection.tsx`, `ModelsSection.module.css` and
+  `ProviderEditor.tsx`: dense provider identity/action cards and progressive
+  details. Harness credential writes, adapter-family runtime, built-in/custom
+  taxonomy, provider connectivity claims and stores are excluded. Existing
+  rustX TanStack typed forms and exact semantic-unit actors remain authoritative.
+
+Inspected but not imported: `ui-tool/.../models/terminal-card-model.ts`,
+`diff-card-model.ts`, `read-card-model.ts`, and `search-card-model.ts`. Their
+Harness Tool metadata/identity models are incompatible with rustX. Native exact
+Tool IDs and typed result blocks replace those models. Bash's native JSON
+`combined` field is displayed without parsing human output. Read/Search use the
+opaque bounded body when native output provides no structured file/match facts.
+Diffs show requested Write/Edit changes, explicitly labelled, without pretending
+the request contains a filesystem before-image. ANSI parsing is excluded from
+TerminalBlock: no extra interpreter dependency was added; bounded native text is
+rendered verbatim. SearchBlock retains its upstream structured primitive but its
+opaque text seat is used for rustX's current projection.
+
+Harness conversation controllers, event assembly, runtime stores, permission
+catalogs and browser Session ownership are excluded. TurnProcess uses only
+native `completed_process` membership, never Harness event reduction or browser
+adjacency. Independent subagent lifecycles are not assigned a parent process by
+provider call-ID coincidence; only native-owned process rows are folded. The
+upstream fish logo/wordmark is deliberately excluded in favor of rustX branding.
+
+Intentional visual differences: native permission vocabulary, native model IDs,
+source provenance labels, unclassified-Session disclosure, and opaque Read/Search
+content without invented line numbers. Models retains rustX's complete typed
+configuration details and distinguishes unobserved application from availability.
+The Agent Status status-section definition list replaces Harness ContextBody,
+while its disclosure axes, separator and indentation reuse ContextInjectionRow.

@@ -19,10 +19,10 @@
       "destination": "web-console/src/app/agent/AgentComposer.tsx",
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
-      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only.",
+      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/agent/Composer.module.css",
@@ -42,7 +42,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "50278a9bcc30e3560087209bfb4ba3b17656e8a63070e297278517370c6e3fd3"
+      "local_sha256": "1fd4858d8fb26d621e475eec585dc693e65a61aad9d10da033da9f75c45295d0"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -50,10 +50,10 @@
       "destination": "web-console/src/app/agent/Questionnaire.tsx",
       "upstream_sha256": "b4ff56bd18dfef03299dd7dc43f928b7ac2a7d5253ecf65a5fbe64ca9b65ec8e",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Issue #394: generated App Server v20 type import only.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../bindings/questionnaire",
         "../../presentation/agent/Question.module.css",
         "../../presentation/primitives/Button",
@@ -67,7 +67,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "04a6490c235d7ed41f7bdb6b8d02f3e25189c27ee52bdd283e5b9edb7da2ce57"
+      "local_sha256": "e0b6f4d8cd8a52dd0f7ea485484ea2d9f1cff69cea2ed113e8a9526fe7a5c655"
     },
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
@@ -92,10 +92,10 @@
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
       "destination": "web-console/src/app/commands/CommandPanel.tsx",
-      "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch Issue #394: generated App Server v20 type import only.",
+      "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -113,7 +113,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c099e76c5bb7d189a851538e2ca97fbb6a4decbcf43a4c880d72d50c3b4dddd1"
+      "local_sha256": "acfe2c3d439ee3b60f98c2ae51a2a614688c2558dc82f10b102f068d2e8bd80b"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -212,10 +212,10 @@
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.tsx",
       "destination": "web-console/src/app/composer/GoalDock.tsx",
-      "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs Issue #394: generated App Server v20 type import only.",
+      "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -232,7 +232,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "be6c7e7667d0614d47e5db23823d47d665ca5ad46ede4350678a1a3787a76135"
+      "local_sha256": "deac892476d6bb796642d561624baed606e1ea1f731c9974323c70b0b33871e4"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -251,10 +251,10 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
       "destination": "web-console/src/app/composer/QueueDock.tsx",
-      "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged. Issue #394: generated App Server v20 type import only.",
+      "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -269,7 +269,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7b7c601f70a041aeda0e581a1937a659858b29a54e74343cedd4bd83ae86a497"
+      "local_sha256": "4d64e473d62026aac5efe8456e27c7dac372a55f8b1afbbcf34874a4563010ca"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -288,10 +288,10 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
       "destination": "web-console/src/app/composer/TodoDock.tsx",
-      "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded. Issue #394: generated App Server v20 type import only.",
+      "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -305,7 +305,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3ce080c7c7923f1474565cf78d9290c3bcebd18e09cc838bbb08abc2e9121350"
+      "local_sha256": "04bd918003967a0d2418d5bbf9dcd220adf7845c4f9e4fd4aab65740d1fa3c5e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -334,11 +334,12 @@
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
       "destination": "web-console/src/app/settings/models/ModelsPage.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it. Issue #394: generated App Server v20 type import only.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../../protocol/app-server/v20",
+        "../../../../../protocol/app-server/v21",
         "../../../presentation/primitives/Button",
+        "../../../presentation/settings/ModelsCards.module.css",
         "../../../presentation/settings/SettingsContent",
         "../../../presentation/settings/SettingsContent.module.css",
         "../../../presentation/settings/SettingsWorkflow.module.css",
@@ -348,7 +349,8 @@
         "../machines/navigation",
         "../primitives/aria",
         "../projection",
-        "react"
+        "react",
+        "react-aria-components"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -361,18 +363,30 @@
           "upstream": "packages/client/ui-settings-models/src/client/EditorFooter.tsx",
           "upstream_sha256": "20b6c0bfc6b4b387c4d4a98605007362077206867393eec1562a5af56e39e283",
           "treatment": "adapted presentation only"
+        },
+        {
+          "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "2ec7f8ef098c41e0a094dd83d754502f136d762aa0d332853049acae9f4a1dfd",
+          "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        },
+        {
+          "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "4b8c47132e3cbb24339e2362d5ddb8e8b8fba302ca99b7926560381d0350a0a3",
+          "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9eb49bbbbd6fd4db048dc8fa4b888cb975c91b7905adb38796fc308f2ad1c659"
+      "local_sha256": "fe882a5064912d8526072df4eaa7ab011c0d2bcd04b2696e0fe31815e4bcda2a"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/settings/extensions/ExtensionDetail.tsx",
-      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain. #393: native diagnostics and alerts share the error vocabulary. Issue #394: generated App Server v20 type import only.",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain. #393: native diagnostics and alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../../protocol/app-server/v20",
+        "../../../../../protocol/app-server/v21",
         "../../../bindings/mcp",
         "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent",
@@ -428,15 +442,15 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f332dd52a4a370fd5e3dd719589ae8778b9e4e0d617aabf0c56c1de595bf2659"
+      "local_sha256": "c2bb625128620c801e46cc76c674fe86ad4ecec58163a8904a8a926389ade499"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary. Issue #394: generated App Server v20 type import only.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../client/app-server",
         "../../connection/controller",
         "../../presentation/primitives/Button",
@@ -475,7 +489,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c4c8738e9f51a5e942e053c380d677a5a563764a086a2f15e477f7c56eba9aa3"
+      "local_sha256": "c8267cec75dd6a287c8ae7ff92de79535693901edde49b2ca7893e83f2181380"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -552,7 +566,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../presentation/markdown/CodeBlock",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
@@ -589,7 +603,7 @@
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
         }
       ],
-      "local_sha256": "623bd9e2b497724d30e3dc628620a5e62309ac21288aa8cdbd29276530b80764"
+      "local_sha256": "e9f6f05f034a64e9e082ff90c8fdbe6031cc4eea72ccd0d21eed285c4513e64c"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -617,7 +631,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Tooltip",
         "./TrajectoryTimeline.module.css",
@@ -634,7 +648,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "cea50817ca3ae2ea545b804871ed25034bb16d37761a42378aa48ddaa38ad9db"
+      "local_sha256": "a229dc39d253dee310452fb554b784d4b7ecf132ec63c75d2b265a42fd0d3ae6"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -642,7 +656,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20"
+        "../../../../protocol/app-server/v21"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -654,7 +668,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3fcf079a8ab624f010673738a23c0d5cce8525808a0994556712f4ddff761e06"
+      "local_sha256": "83317e57cce0eeda9ba83c5936d92ab4d8d732e2df2c13c930d9e3b618db117e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -682,7 +696,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20"
+        "../../../../protocol/app-server/v21"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -694,7 +708,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "2583888f6173f8b815b2f414320f5d926a9462affb2343483e3cafda14e65a79"
+      "local_sha256": "72dd3ba56442dee0557d09c04e38bd3b5a5d1fe926bc21eec21ea500ccb50d0b"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -916,7 +930,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "04ace3e0c75c37744ccfe6e2d889e54bd0c1131c4bb70a8b6ac81bb857b0a692"
+      "local_sha256": "6dacc5525f99b7dfb4d201b02620317a4b668addd796e72dd91837854ce7df3f"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -944,8 +958,12 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../primitives/DiffBlock",
         "../primitives/DisclosureRow",
+        "../primitives/ReadBlock",
+        "../primitives/SearchBlock",
         "../primitives/StateDot",
+        "../primitives/TerminalBlock",
         "../primitives/icons",
         "./Tool.module.css",
         "./ToolTree.module.css",
@@ -957,7 +975,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "75350fd0e9aa1a0e2c412bea885709444b26e4b14814e3e67e33e8dae6476442"
+      "local_sha256": "db2e179936715ac4164c328e686615aeb6b439814da68954027d8d3b57543af3",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
+          "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1107,7 +1133,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "5082a2433acbea700d4281a523581215af54e2f577f83ca6ba34ba57ec076ebc",
+      "local_sha256": "abcfe4b5e40d3bb70073b593c474669cb5e3efff3d2dd434d5915ba3628f8c76",
       "classification": "A"
     },
     {
@@ -1190,7 +1216,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "dace8937f55d30d47fcab3401edf39edce6b5004cb06062c2437a03d1f73bc79"
+      "local_sha256": "2ff285394fd2cc864fa598d80eb801043000cb1dffbf5f637beb6925bd4a9bb9"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/cjkFriendlyStrong.ts",
@@ -1611,7 +1637,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "55627ed805c31a8af3fb86b4f0449464ff9464cfcfbe14b2cd80b86a259d4678",
+      "local_sha256": "af5ae86537bda57bf012c6d6cbe964f0dc658187b5eb857134dfb4f7da2abaa6",
       "classification": "A"
     },
     {
@@ -2016,7 +2042,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "0d321629286570bf8241653564a56992f8aaa6257707a55bcf00811b6b6829e0",
+      "local_sha256": "446233dd35047559ff79c1e88252a89802395da836f4665701a581ae1c8477fe",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2041,7 +2067,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "07b696d1b83a3dd5eecff089c4c15bc5fccbc6bbbf445ebb683cebe65052b6b4",
+      "local_sha256": "49755dbbfa491170ed354f32196159937f2f74e9b0a4a31c287570fe86cab85c",
       "classification": "B"
     },
     {
@@ -2194,7 +2220,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "250f1db8a8a839e1adc4e2f883a71cd2c3980fd40e3c4c9517f420e246e7edad",
+      "local_sha256": "b37e852730688dd034c71c8472f1be841881afa15c8ec0e44d4e01567fc36997",
       "classification": "B"
     },
     {
@@ -2238,7 +2264,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "91bf7955f4f8b9b62dd248c20ba841d93cc7fb078aa22e5fb1a0dd1283331cae",
+      "local_sha256": "8b33a8c6093d89b1b4d22f8ea70aac471e0d655f51d07d0ff9b4f2aa3d675044",
       "classification": "B"
     },
     {
@@ -2286,7 +2312,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "39916e9bf466e333975bb09dc1e9d18ed3a0e416dfbfc0451dc9c388a821ae34"
+      "local_sha256": "2bb320fa64d2888692470ab4d019c546dbe6714155befc8275f90556d8adecf1"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -2325,10 +2351,10 @@
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
       "destination": "web-console/test/trajectory.test.tsx",
-      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only.",
+      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
-        "../../protocol/app-server/v20",
+        "../../protocol/app-server/v21",
         "../src/app/trajectory/Trajectory",
         "../src/app/trajectory/layout",
         "../src/app/trajectory/search",
@@ -2355,12 +2381,12 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "a7d354e742ede8f97a197c055b273a95855ae6f7dca4852515ef8151c1581c45"
+      "local_sha256": "beda3f86233b82e77bbdbaa5fff2c07f6715a9d8a677b7513b19bb1644679e65"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
       "destination": "web-console/src/app/agent/ResponseTail.tsx",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only.",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "43d2e3e5713b6f08a33ce20a918eb8c73497f894438805413ef925f9e5437c5d",
       "additional_sources": [
         {
@@ -2370,7 +2396,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Modal",
         "../../presentation/primitives/Tooltip",
@@ -2387,7 +2413,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "eaad98d454f8aca9237d1c2f18ccd49a77ad67e0d2a3557f2568962eabe9362a"
+      "local_sha256": "85970abd24d070990c98bf22bdbf91177b8419f72206129048942dd84e39271a"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -2414,7 +2440,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.tsx",
       "destination": "web-console/src/app/agent/ConversationStats.tsx",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only.",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
       "upstream_sha256": "ed5c05a63cdedb339a3dc00e67e30ef3ebed2ac6a7511becd5ea857641bc82aa",
       "additional_sources": [
         {
@@ -2424,7 +2450,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../presentation/primitives/Tooltip",
         "./ResponseTail",
         "./ResponseTail.module.css"
@@ -2436,7 +2462,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9529300ad5ae1d6fcfd3a3037825171e324d08a444a6c8204b09656f980e6074"
+      "local_sha256": "89f1e0547057210537b2818b02e42304815ab9ffa6fbd7173e46be0c1c68345a"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -2444,7 +2470,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v20",
+        "../../../../protocol/app-server/v21",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/icons",
         "./Trajectory.module.css"
@@ -2460,7 +2486,421 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "additional_sources": [],
-      "local_sha256": "1865498323dff32604ea6b57d55ece46d554f5e7894fcd38c9f34b69579a1a2c"
+      "local_sha256": "5536702907b834d731267991c861bcd505db2f7c8ac3b98ff805e532733e90a3"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
+      "destination": "web-console/src/app/new-conversation/NewConversation.tsx",
+      "upstream_sha256": "6111132201e2e88ab7c68761db588b38dca1c500af14a2e0314a706f1315f28f",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. #402 review: model choices consume only the native Session-creation ModelCatalogView; each submission binds its own authority, so transport transitions never remount the draft. A submission port fences only native continuation; acknowledged Session recovery uses the current navigation epoch.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v21",
+        "../../client/app-server",
+        "../../presentation/agent/HeroShell.module.css",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/DialogSurface",
+        "../../presentation/primitives/Menu",
+        "../../presentation/primitives/Modal.module.css",
+        "../../presentation/primitives/icons",
+        "../../workspaces/endpoint",
+        "../../workspaces/host",
+        "../agent/AgentComposer",
+        "./WorkspaceControls",
+        "./first-submit",
+        "./port",
+        "@xstate/react",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "2a270046d9e4cc8bb4b5efb7c1cd2c30dda04a3b92bca03341eb40c7a9146fff",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "465952b8488857e437739b72585295d28535e3cd7f593c2d02aaf3ad14fcfab5",
+          "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        }
+      ]
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css",
+      "destination": "web-console/src/presentation/agent/HeroShell.module.css",
+      "upstream_sha256": "66d4dd75e428e7d956bbffa896714ea0709bd8350b09658a0f6f7fe9e9158ad7",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "423589acdf27a221dc33bdbfe44115de07b96118293e476b53727a355d45b1e7"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-permission-presets/src/client/PermissionSelect.tsx",
+      "destination": "web-console/src/presentation/agent/PermissionSelect.tsx",
+      "upstream_sha256": "d426510c88d64789c0f126d2e2649e7ddb7a2f46f7f8832cc69fd5e563045958",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../primitives/Button",
+        "../primitives/DialogSurface",
+        "../primitives/Menu",
+        "../primitives/Modal.module.css",
+        "../primitives/RiskConfirmation.module.css",
+        "../primitives/icons",
+        "./PermissionSelect.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "282c38bf418c53633a1712e9e0ba2b8d81e167798616e3519335603485407ff5",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "4671735be6dc70b496493f1a8e86da2de344413dea1f58f154185b1fc547d125",
+          "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        }
+      ]
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-permission-presets/src/client/PermissionSelect.module.css",
+      "destination": "web-console/src/presentation/agent/PermissionSelect.module.css",
+      "upstream_sha256": "dc6cea246e452bfef40b1085c5b624b742c509bf54c8ea5fd15c2c8ca52be328",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "ecf3e1836d86f68e50b917b1307edf188c080fbc6c380b1fb2e0d0bb7bcabdc9"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/RiskConfirmation.module.css",
+      "destination": "web-console/src/presentation/primitives/RiskConfirmation.module.css",
+      "upstream_sha256": "c4c8e339a9f12ebf21c785cd6217898733f8a053f63d5aee936611fcd319ef27",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "9d1ac2d4619ce81a4b9586adeceffa284628c27275df437387205f4cbc55181e"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
+      "destination": "web-console/src/presentation/agent/TurnProcess.tsx",
+      "upstream_sha256": "d397f1e92f76585fa49b924b3d43d829ad503a4ffa821660234d4b51e5cc743f",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../primitives/icons",
+        "./TurnProcess.module.css"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "97bf1c0c997dd2e1bc571bce72efc8e72dac22e6be8b6fb217918a6cb84bd2d0"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
+      "destination": "web-console/src/presentation/agent/TurnProcess.module.css",
+      "upstream_sha256": "94f400f0120a6a773fd65be6869c9b7d895590e31cc3cc8943e5d63eec7173d5",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "9b3695bb9351f49217e736e0b47501e22fb2d0b52d122db5328a9ebf9ceece8b"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
+      "destination": "web-console/src/presentation/settings/ModelsCards.module.css",
+      "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "268a604807b74692a6defe5e06ae954fa8626611f1b5915a6f019a232c6306e3"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/TerminalBlock.tsx",
+      "destination": "web-console/src/presentation/primitives/TerminalBlock.tsx",
+      "upstream_sha256": "8e24248d8f361fe538059abd0c733ac90465b73dd1048efb67ee679ebf3949de",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./Pill.tsx",
+        "./StateDot.tsx",
+        "./TerminalBlock.module.css",
+        "./head-tail-cap.ts",
+        "./use-copy-feedback.ts",
+        "clsx",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "7d551b0ca88276b668aee84433e5102a75f8e7129ca2c8c903c6b9b0119c327b"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/TerminalBlock.module.css",
+      "destination": "web-console/src/presentation/primitives/TerminalBlock.module.css",
+      "upstream_sha256": "505e0ec954e123837414adc232347c47f56ed1a32e063c4cc4e0195fe46c0847",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "5000dfe830dae18130547bcb53b9cc9447f74eb3cf6696a5b9c445903b6b5047"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/DiffBlock.tsx",
+      "destination": "web-console/src/presentation/primitives/DiffBlock.tsx",
+      "upstream_sha256": "7c02836d187eb495f49b4c4e1161e096af3336f3316d1926045dc38835eef96f",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./DiffBlock.module.css",
+        "./FoldToggle.tsx",
+        "./clipboard.ts",
+        "clsx",
+        "diff",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "591a202b6d756a1ed58cdf982ad7dd374baf9b88c94cad9ac4eedda385612da6"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/DiffBlock.module.css",
+      "destination": "web-console/src/presentation/primitives/DiffBlock.module.css",
+      "upstream_sha256": "a502d46c003c5f5772955b8eac930c36310fe522a690647207e37426b025a37f",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "3eb0a331c25d462dcfe7a8ee1c477d211e381b2dd3cffb3fe937ec180668ea74"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/ReadBlock.tsx",
+      "destination": "web-console/src/presentation/primitives/ReadBlock.tsx",
+      "upstream_sha256": "b9575caddc91ef41c0a7dc0a23652c5d315f8ecbd8d8d5fd1928255f44df53a1",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../markdown/highlight.ts",
+        "../markdown/useViewportHighlighting.ts",
+        "./FoldToggle.tsx",
+        "./ReadBlock.module.css",
+        "./clipboard.ts",
+        "clsx",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "21b570b4f8d44eaf139bd412726eaf2c1dee9c6c4c8af29dc07501e585a6adac"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/ReadBlock.module.css",
+      "destination": "web-console/src/presentation/primitives/ReadBlock.module.css",
+      "upstream_sha256": "51c238e23bfd3be92fc788b5b19d82cc0c3144ccec4aa644634073e60e077861",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "1f1dc1f03d20259e396bd79f8e75412a763e820c1af50b0a4f0efb11f23b5ab1"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/SearchBlock.tsx",
+      "destination": "web-console/src/presentation/primitives/SearchBlock.tsx",
+      "upstream_sha256": "e7d3fbd2ee77ab72e4555d3a7bb262b95e1a3021e253feb9c45aa581cb5b36bd",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./SearchBlock.module.css",
+        "./head-tail-cap.ts",
+        "./use-copy-feedback.ts",
+        "clsx",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "aa9c00b5d50ce6ff6c64b6f1b1f05a04315b7605acd8109b415f4f914a2b7d5a"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/SearchBlock.module.css",
+      "destination": "web-console/src/presentation/primitives/SearchBlock.module.css",
+      "upstream_sha256": "52efb46feb6fadaac29ae52b3d2face1c442eb83cbde93d7163b1d15ac0c4be0",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "4862a42c0e6602d3a5cea9fb9354e09d920cbe2294bd04579609468dc8c95bf7"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/FoldToggle.tsx",
+      "destination": "web-console/src/presentation/primitives/FoldToggle.tsx",
+      "upstream_sha256": "f848e8c26b75679b2d6c27d08aa7eab844395f408ba29026202bc1ae85334e6a",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "dfbbd181f7370d49f1d93775ed2ce9f0cfd9e3bc4d5945495753e2ae54aa7eb6"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/head-tail-cap.ts",
+      "destination": "web-console/src/presentation/primitives/head-tail-cap.ts",
+      "upstream_sha256": "1bede50ddacde225b92dfd8d5cf9621f4e39f7febbfc4363cf3446cab6953eed",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "83fd49bcf51040f6be0549b341fa7a1273c796b67bb7e1fb0fd40c7a6abf386e"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-primitives/src/use-copy-feedback.ts",
+      "destination": "web-console/src/presentation/primitives/use-copy-feedback.ts",
+      "upstream_sha256": "14f41a92fe72f87adc4827c2b3c0496657071cd05bbc85435a74e1606c9309f8",
+      "classification": "B",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./clipboard.ts",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and runtime authority",
+        "Harness provider/permission semantics",
+        "ANSI interpreter (native bounded text remains verbatim)"
+      ],
+      "local_sha256": "3dd59d9c5187e62b4e88ef2eede56be4a2079694cbdfaf5de6065e133f27f24e"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx",
+      "destination": "web-console/src/app/agent/AgentStatus.tsx",
+      "treatment": "Adapted disclosure axes, separator and indentation; native anchored status sections replace Harness context producer/forms.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness context projection and producer forms"
+      ],
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v21",
+        "../../bindings/agent-status",
+        "../../presentation/primitives/DisclosureRow",
+        "../../presentation/primitives/icons",
+        "./AgentStatus.module.css",
+        "react"
+      ],
+      "upstream_sha256": "bb87019d9291d93af6e69ed02ca4f47f040272244af0d023112ec565be9e3427",
+      "local_sha256": "887f3a0446861d306ec3bb5e6003b7e669ee0959f8b62f4af128e44872717ce4"
+    },
+    {
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.module.css",
+      "destination": "web-console/src/app/agent/AgentStatus.module.css",
+      "treatment": "Adapted disclosure axes, separator and indentation; native anchored status sections replace Harness context producer/forms.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness context projection and producer forms"
+      ],
+      "retained_dependencies": [],
+      "upstream_sha256": "233b9e4d400343d4aadd91b6977fd9108c020168916acdf4996adf8774eb791f",
+      "local_sha256": "ad40be4efd1ecde39ce78fdb3e4d176a40767159ff9e3c6c7271bdc5ec76e47b"
     }
   ],
   "inspected_only": [
@@ -2985,6 +3425,30 @@
       "upstream_sha256": "312580d4e2ab568eeec466dbbcff5117cff84a932aeee5d10214bc6a087812eb",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "Issue #394 source audit. Presentation adaptation destinations and deliberate exclusions are in PROVENANCE.md; native TraceProjection replaces Harness event/request/system/context authority."
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/models/terminal-card-model.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "639b75c0169ccb4ba3efd79449712fdda383ff3ed1635fb8f1fb76b6eb645275",
+      "treatment": "Issue #402 inspected, excluded: Harness Tool identity and metadata contracts do not authorize parsing rustX human output. Exact rustX Tool IDs and typed native lifecycle stay authoritative."
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/models/diff-card-model.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "7394fbe60a9dac708eb65b03393be7f99f4606a3b4acd080753e1dbe2c6c9249",
+      "treatment": "Issue #402 inspected, excluded: Harness Tool identity and metadata contracts do not authorize parsing rustX human output. Exact rustX Tool IDs and typed native lifecycle stay authoritative."
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/models/read-card-model.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "c82e1d365daa9bfb4f513136ac139b48beb309106f98a924012452505e6c0e2b",
+      "treatment": "Issue #402 inspected, excluded: Harness Tool identity and metadata contracts do not authorize parsing rustX human output. Exact rustX Tool IDs and typed native lifecycle stay authoritative."
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/models/search-card-model.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "37139b4b7341fd6692e8b7cfc02ab39ea631d37deb7eedb3d97cf067f2561239",
+      "treatment": "Issue #402 inspected, excluded: Harness Tool identity and metadata contracts do not authorize parsing rustX human output. Exact rustX Tool IDs and typed native lifecycle stay authoritative."
     }
   ],
   "historical_inspection": {

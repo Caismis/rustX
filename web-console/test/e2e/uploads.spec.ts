@@ -1,8 +1,8 @@
+import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { expectSettled } from './shell-actions';
 import { showInspector } from './shell-actions';
-import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,8 +36,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
-    await chooseWorkspace(page, 'Workspace A');
-    await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await openEmptySession(page, fixture, 'Workspace A');
     await expect(message).toBeEnabled(); const source = await id();
     await message.fill('Use my uploaded files');
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6pAAAAABJRU5ErkJggg==', 'base64');

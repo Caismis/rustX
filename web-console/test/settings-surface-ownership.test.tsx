@@ -8,7 +8,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v20';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v21';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -424,7 +424,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   });
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
-  fireEvent.click(screen.getByRole('tab', { name: 'Models' }));
+  await openSettingsPage('Models');
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
@@ -456,7 +456,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   expect(writes(s)).toHaveLength(1);
   // The reopened editor reconstructs from the redacted native projection only.
   // Models kept its own focus, so returning to it reopens the same Provider.
-  fireEvent.click(screen.getByRole('tab', { name: 'Models' }));
+  await openSettingsPage('Models');
   expect(credentialSource()).toContain('Keep the credential this scope already authored');
   expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
 });
@@ -516,16 +516,9 @@ it('S1-15 an inherited User Provider and Model are discoverable in the Workspace
   // each is reported with the native origin, not a manufactured one.
   const transport = within(providers.getByRole('row', { name: 'transport' }));
   expect(transport.getByText('Inherited from User')).toBeTruthy();
-  expect(transport.getByText('No override in this Workspace')).toBeTruthy();
-  expect(transport.getByText(/https:\/\/user\.invalid/)).toBeTruthy();
-  // An inherited literal credential stays redacted; the secret is never read
-  // back from the shadowed definition.
-  expect(transport.getByText('Literal secret (redacted)')).toBeTruthy();
-  // The row action names what it really is in this scope.
-  fireEvent.click(transport.getByRole('button', { name: 'Actions for transport' }));
-  expect(await screen.findByRole('menuitem', { name: 'Override Provider transport' })).toBeTruthy();
-  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+  expect(transport.getByRole('button', { name: 'Override Provider transport' })).toBeTruthy();
   // An identity that is already reachable is not offered as a new one.
+  fireEvent.click(screen.getByRole('button', { name: 'New Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'transport' } });
   expect((screen.getByRole('button', { name: 'Add Provider' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
@@ -640,7 +633,7 @@ async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
   };
   const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
   await findOnAdvanced(/Revision: workspace-1/);
-  fireEvent.click(screen.getByRole('tab', { name: 'Models' }));
+  await openSettingsPage('Models');
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
   fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });

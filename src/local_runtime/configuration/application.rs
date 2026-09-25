@@ -261,15 +261,13 @@ impl ApplicationState {
         credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let key = super::canonical_directory(&input.cwd)?;
-        if !self.available.contains_key(&key) {
-            let capture = configuration
-                .resolve_session(&super::SessionConfigInput::new(key.clone()))
-                .map_err(|error| error.to_string())?;
-            Self::validate_default(&capture, credentials)?;
-            capture.validate_resource_authority()?;
-            self.available.insert(key.clone(), capture);
-        }
-        let mut capture = self.available[&key].clone();
+        let mut capture = match self.creation_capture(configuration, &key, credentials)? {
+            std::borrow::Cow::Borrowed(capture) => capture.clone(),
+            std::borrow::Cow::Owned(capture) => {
+                self.available.insert(key.clone(), capture.clone());
+                capture
+            }
+        };
         capture.input.model = Some(
             input
                 .model
@@ -278,6 +276,46 @@ impl ApplicationState {
         );
         Self::validate_selection(&capture, credentials)?;
         capture.admit(|| credentials.clone())
+    }
+
+    /// The capture a Session created in the canonical directory `key` binds:
+    /// its published source, or on first use a freshly resolved and validated
+    /// one. Nothing is published here; `initial_binding` owns that step.
+    fn creation_capture(
+        &self,
+        configuration: &super::UserConfigManager,
+        key: &std::path::Path,
+        credentials: &crate::credentials::CredentialSnapshot,
+    ) -> Result<std::borrow::Cow<'_, super::ProspectiveSessionConfig>, String> {
+        if let Some(capture) = self.available.get(key) {
+            return Ok(std::borrow::Cow::Borrowed(capture));
+        }
+        let capture = configuration
+            .resolve_session(&super::SessionConfigInput::new(key.to_path_buf()))
+            .map_err(|error| error.to_string())?;
+        Self::validate_default(&capture, credentials)?;
+        capture.validate_resource_authority()?;
+        Ok(std::borrow::Cow::Owned(capture))
+    }
+
+    /// The exact catalog `session/models` serves for a Session created in
+    /// `cwd` now. Read-only: it neither publishes a capture nor creates a
+    /// Session, and it fails where Session creation would fail.
+    pub(crate) fn session_creation_models(
+        &self,
+        configuration: &super::UserConfigManager,
+        cwd: &std::path::Path,
+        credentials: &crate::credentials::CredentialSnapshot,
+    ) -> Result<crate::model::catalog::ModelCatalogView, String> {
+        let key = super::canonical_directory(cwd)?;
+        let capture = self.creation_capture(configuration, &key, credentials)?;
+        let catalog = capture
+            .models
+            .resolve(credentials)
+            .map_err(|error| error.to_string())?;
+        Ok(crate::model::invocation::ModelBindingRegistry::new(catalog)
+            .map_err(|error| error.to_string())?
+            .catalog_view())
     }
 
     /// Join the captured desired source without rereading authored files. The
