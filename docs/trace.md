@@ -534,10 +534,13 @@ scope remains uncollapsed. Proposals and executions have separate counts; failed
 denied, waiting, running and unknown states remain in the summary. Background,
 Subagent, Workflow and Interaction never become Subtools. Search temporarily overrides Calls and Turn
 collapse, searches only loaded labels/previews/native identities, and performs
-no detail or history reads. One projection-owned conversion maps matched cells to
-their native owner and matched Turn/Message/Step headers to their exact `record_ids`.
-Both ledger header exposure and Timeline dimming use this membership; history
-boundaries contribute no records. Matching cells retain their Turn/group headers; clearing
+no detail or history reads. Search returns only stable semantic cell keys. Turn,
+Step and Message labels are searchable context on their member cells, so structural
+queries expose actual cells, with headers reconstructed for context. Turn/Step
+ordinal phrases match the complete label, not unrelated numbers in cell content.
+Ledger filtering and Timeline dimming share this membership: Timeline uses the
+native owners of matching cells, without expanding matches to sibling semantic
+cells on the same Request. History and structural headers are never search results. Matching cells retain their Turn/group headers; clearing
 search restores the untouched collapse sets. History loading lives at the boundary; Jump to latest
 appears only off-tail. The old toolbar load/latest/count chrome is removed.
 
@@ -579,6 +582,10 @@ compacts Event/icons even in a desktop viewport. No geometry is persisted.
 
 The timeline consumes the exact same `TrajectoryProjection` as the ledger:
 Turn boundaries, order and native identities are never reconstructed separately.
+Each boundary is the minimum projected span start within its Turn, after the
+mode’s timing transform (including duration idle compression). A Turn without
+visible spans has no boundary. Structural Attempt/Step timestamps do not supply
+presentation coordinates; they remain native Inspector evidence.
 Drag focus persists as native record IDs, so prepending history only relocates its
 visible coordinates. Timing lanes are Input / Model / Tools. Request generation is counted once,
 never again for canonical Assistant acceptance; Attempt/Step/SYSTEM acquire no

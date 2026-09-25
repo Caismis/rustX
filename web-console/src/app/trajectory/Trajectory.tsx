@@ -45,7 +45,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const records = cache.page.records;
   const projection = useMemo(() => projectTrajectory(records), [records]);
   const allItems = useMemo(() => trajectoryItems(projection, cache.page.next_cursor), [projection, cache.page.next_cursor]);
-  const matches = useMemo(() => searchItems(allItems, query), [allItems, query]);
+  const matches = useMemo(() => searchItems(projection, query), [projection, query]);
   const rows = useMemo(() => visibleItems(allItems, records, collapsedTurns, calls, matches), [allItems, records, collapsedTurns, calls, matches]);
   const selectionItems = useMemo(() => displayUniverse(allItems, rows), [allItems, rows]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);

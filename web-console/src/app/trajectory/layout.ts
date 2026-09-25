@@ -206,9 +206,7 @@ export function matchedRecordIds(items: readonly TrajectoryDisplayItem[], matche
   if (matches === null) return null;
   const owners = new Set<string>();
   for (const item of items) {
-    if (!matches.has(item.display_key) || item.type === 'HistoryBoundary') continue;
-    if (isInspectable(item)) owners.add(item.owner_record_id);
-    else for (const id of item.record_ids) owners.add(id);
+    if (isInspectable(item) && matches.has(item.display_key)) owners.add(item.owner_record_id);
   }
   return owners;
 }
@@ -217,7 +215,8 @@ export function matchedRecordIds(items: readonly TrajectoryDisplayItem[], matche
 export function visibleItems(items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], attempts: ReadonlySet<string>, calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
   if (matches) {
     const owners = matchedRecordIds(items, matches)!;
-    return items.filter(item => matches.has(item.display_key) || (item.type !== 'HistoryBoundary' && !isInspectable(item) && item.record_ids.some(id => owners.has(id))));
+    return items.filter(item => isInspectable(item) ? matches.has(item.display_key)
+      : item.type !== 'HistoryBoundary' && item.record_ids.some(id => owners.has(id)));
   }
   const matching = matchingCalls(records);
   const hidden = new Set<string>();

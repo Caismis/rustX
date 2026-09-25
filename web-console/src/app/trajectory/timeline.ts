@@ -130,20 +130,25 @@ export function trajectoryTimeline(
   projection: TrajectoryProjection,
   mode: TrajectoryTimelineMode,
 ): TrajectoryTimelineModel | null {
-  const boundariesByRecord = new Map<string, { nativeAttemptId: string; label: string }>();
-  const records = projection.sections.flatMap(section => {
-    if (section.kind === 'outside') return [section.record];
-    const ordered = [...section.records.filter(record => record.kind === 'attempt'), ...section.groups.flatMap(group => group.records)];
-    const first = ordered[0];
-    if (first) boundariesByRecord.set(first.id, { nativeAttemptId: section.nativeAttemptId, label: `Turn ${section.displayOrdinal}` });
-    return ordered;
-  });
+  const records = projection.sections.flatMap(section => section.kind === 'outside'
+    ? [section.record] : section.groups.flatMap(group => group.records));
   const spans: TrajectorySpan[] = [];
-  const boundaries: TrajectoryBoundary[] = [];
+  // Derive boundaries only after projection (including idle compression).
+  // Membership comes from the shared Turn model, never timestamps or adjacency.
+  const boundaries = (): TrajectoryBoundary[] => {
+    const starts = new Map(spans.map(span => [span.id, span.start]));
+    return projection.sections.flatMap(section => {
+      if (section.kind === 'outside') return [];
+      const positions = section.records.flatMap(record => {
+        const start = starts.get(record.id);
+        return start === undefined ? [] : [start];
+      });
+      return positions.length ? [{ nativeAttemptId: section.nativeAttemptId,
+        label: `Turn ${section.displayOrdinal}`, at: Math.min(...positions) }] : [];
+    });
+  };
   if (mode === 'sequence') {
     for (const record of records) {
-      const boundary = boundariesByRecord.get(record.id);
-      if (boundary !== undefined) boundaries.push({ ...boundary, at: spans.length });
       if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
       const timing = timingOf(record);
       spans.push({
@@ -161,13 +166,11 @@ export function trajectoryTimeline(
       });
     }
     if (spans.length === 0) return null;
-    return { start: 0, end: spans.length, spans, boundaries };
+    return { start: 0, end: spans.length, spans, boundaries: boundaries() };
   }
   for (const record of records) {
     const timing = timingOf(record);
     if (timing.startedAt === undefined) continue;
-    const boundary = boundariesByRecord.get(record.id);
-    if (boundary !== undefined) boundaries.push({ ...boundary, at: timing.startedAt });
     if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
     spans.push({
       id: record.id,
@@ -203,7 +206,6 @@ export function trajectoryTimeline(
         if (span[key] !== undefined) span[key] = project(span[key]);
       }
     }
-    for (const boundary of boundaries) boundary.at = project(boundary.at);
   } else if (mode === 'time') {
     for (const span of spans) {
       span.end = span.start;
@@ -214,7 +216,7 @@ export function trajectoryTimeline(
     start: Math.min(...spans.map(span => span.start)),
     end: Math.max(...spans.map(span => span.end)),
     spans,
-    boundaries,
+    boundaries: boundaries(),
   };
 }
 

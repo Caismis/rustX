@@ -126,3 +126,84 @@ protocol surface changed, so affected Rust unit tests, clippy and protocol
 regeneration were not applicable. The native server was built and exercised by
 real App Server browser integration. All failures above were resolved or passed
 on the final affected-suite rerun; no failing test was skipped or weakened.
+
+## PR #414 presentation-contract repair (2026-09-26)
+
+The live PR was re-read before edits, after fetching `origin`: base/main
+`f268175bb8d31010706e7070aae80d2b46b7aced`, head
+`d33dfb884b45d40aa5afbffef3cadf4304e29fd8`, clean branch
+`issue-407-harness-turn-trajectory` in the existing issue worktree. Main was an
+ancestor (2 ahead / 0 behind). The PR was open, non-draft, with auto-merge null;
+GitHub returned no formal reviews or review/issue comments. Initial checks showed
+six successes and the macOS boundary job in progress. A second fetch after local
+validation found main unchanged. No integration or native/schema change was needed.
+
+Re-checked Harness at `477b4f420553e8a52c2fbccc464d7561b239c443`:
+`trajectory-search-index.ts`, `TrajectoryTable.tsx`, `timeline.ts`, and
+`TrajectoryView.tsx` under `packages/client/ui-trajectory/src/client/`.
+The external checkout remained clean and unchanged. Adapted the concepts of
+structural context on actual cell search entries, filtering cells before exposing
+headers, sharing membership between table and overview, and deriving boundaries
+from projected member spans. rustX keeps native record/cell identity and timing;
+Harness numeric cell/Turn identity and event assembly were not imported. The
+inventory records the additional pinned search/timeline sources and current hashes.
+
+The previous header-result expansion exposed native owners only to Timeline,
+while Ledger retained headers without their cells. Search now consumes
+`TrajectoryProjection` and returns only semantic cell keys. Turn/Step/Message
+labels are context on each member cell. Ledger filters exact keys and exposes
+necessary headers; Timeline uses the deduplicated native owners of those same
+cells. Owner conversion never expands a text match to sibling cells. Prompt text
+is confined to its System Prompt cell and model/failure text to Request metadata.
+Turn/Step ordinal phrases match the whole structural label, avoiding accidental
+cross-source matches such as Step 1 plus Turn 2 satisfying “Step 2”.
+
+The previous boundary coordinate came from a non-rendered structural record.
+Boundaries now use the minimum final span start belonging to each projected Turn,
+after duration compression. Sequence uses the same rule in sequence coordinates.
+A Turn without spans has no boundary. Native timing, provider phases versus
+Journal settlement, missing-duration policy, and native selection/drag IDs remain
+unchanged. No second ownership grouping algorithm or compatibility renderer exists.
+
+Added/strengthened deterministic coverage:
+
+- Folded Step 2, Turn 2, Message, and native identity queries assert actual Ledger
+  inspectable rows and matching Timeline owner IDs, zero reads, and exact collapse
+  restoration. Desktop/390px browser tests also require those rows to be visible.
+- Structural searches expose all semantic cells of a rich Request. Exact prompt,
+  Context, Request-model, and Tool-content searches expose one precise cell while
+  preserving selected Inspector ownership and causing no reads.
+- Structural search temporarily reveals collapsed Call executions and restores
+  their summary/collapse state when cleared.
+- All four timeline modes cover structural timestamps before activity, multiple
+  Turns, out-of-order activity timestamps, and structural-only Turns. Every
+  boundary equals its own Turn's minimum projected span start and stays within
+  the model domain. Duration explicitly checks both intra-Turn and inter-Turn idle
+  compression. A Turn lacking a usable timed start has no timed boundary.
+- Existing prepend, >100-row virtualization, sticky headers, finite loaded-window,
+  native focus/selection, lazy-detail and timing tests remain passing.
+
+Final local commands (Web commands from `web-console`):
+
+| Command | Result |
+| --- | --- |
+| `pnpm typecheck` | Passed. A new test initially omitted required `started_at`; corrected to the existing invalid-timestamp fixture pattern. |
+| `pnpm build` | Passed, including artifact provenance; existing >500 kB chunk warning only. |
+| `pnpm test` | 55 files / 988 tests passed. |
+| `pnpm exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts` | 2 files / 63 tests passed. Initial structural assertions caught cross-source ordinal matching; corrected before final runs. |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` | 21 passed; pinned browser, normal golden comparison, no reference changes. Includes native App Server integration and desktop/390px runs. |
+| `pnpm check:provenance` | 135 source records and 131 production-package notices verified. |
+| `node web-console/scripts/provenance.ts --reference /tmp/rustx-407-harness-audit` | Passed; pinned upstream byte hashes and local source/import closure verified. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed (1m 30s); no native edits. |
+| `git diff --check` | Passed. |
+
+Browser plugin was not available; the configured Playwright suite supplied browser
+and golden validation. Agent-browser session `rustx-414` additionally inspected
+`http://127.0.0.1:5176/test/fixtures/trajectory.html?structural-search`: correct
+page title/content, no blank page or framework overlay, no browser errors, and
+only Vite/React DevTools informational console output. Fold Turns → Step 2 search
+exposed the two real Request rows at both widths. Reviewed screenshots are
+`/tmp/rustx-414-search-1440.png` and `/tmp/rustx-414-search-390.png` (not committed).
+An initial manual navigation used the already-stopped E2E server; starting the
+separate fixture server resolved it. No semantic test sleeps were added.

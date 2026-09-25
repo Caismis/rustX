@@ -105,3 +105,35 @@ it('T1-12 four modes keep native time distinct from a shared idle-compression tr
   expect(spans('time')).toEqual([[0, 0], [100, 100], [2000, 2000]]);
   expect(spans('actual')).toEqual([[0, 1000], [100, 1100], [2000, 3000]]);
 });
+
+it.each(['sequence', 'duration', 'time', 'actual'] as const)('%s Turn boundaries belong to their own projected visible activity', mode => {
+  const at = (ms: number) => ({ started_at: new Date(ms).toISOString() });
+  const records = [
+    traceRecord(0, { kind: 'attempt', request: null, location: { attempt_id: 'a' }, timing: at(0) }),
+    traceRecord(1, { kind: 'step', request: null, location: { attempt_id: 'a', step_id: 's' }, timing: at(10) }),
+    traceRecord(2, { location: { attempt_id: 'a', step_id: 's' }, timing: at(100) }),
+    traceRecord(3, { kind: 'tool', request: null, location: { attempt_id: 'a', step_id: 's' }, timing: { ...at(200), duration_ms: '100' } }),
+    traceRecord(4, { kind: 'attempt', request: null, location: { attempt_id: 'empty' }, timing: at(400) }),
+    traceRecord(5, { kind: 'step', request: null, location: { attempt_id: 'empty', step_id: 's' }, timing: at(410) }),
+    traceRecord(6, { kind: 'attempt', request: null, location: { attempt_id: 'b' }, timing: at(500) }),
+    // Deliberately out of timestamp order: first input is not earliest activity.
+    traceRecord(7, { kind: 'tool', request: null, location: { attempt_id: 'b', step_id: 's' }, timing: { ...at(1100), duration_ms: '100' } }),
+    traceRecord(8, { location: { attempt_id: 'b', step_id: 's' }, timing: at(1000) }),
+    traceRecord(9, { location: { attempt_id: 'untimed', step_id: 's' }, timing: { started_at: 'unavailable' } }),
+  ];
+  const projection = projectTrajectory(records);
+  const model = trajectoryTimeline(projection, mode)!;
+  expect(model.boundaries.map(b => b.nativeAttemptId)).toEqual(mode === 'sequence' ? ['a', 'b', 'untimed'] : ['a', 'b']);
+  for (const boundary of model.boundaries) {
+    const turn = projection.sections.find(section => section.kind === 'turn' && section.nativeAttemptId === boundary.nativeAttemptId)!;
+    if (turn.kind !== 'turn') throw new Error('Expected Turn');
+    const ids = new Set(turn.records.map(record => record.id));
+    const spans = model.spans.filter(span => ids.has(span.id));
+    expect(boundary.at).toBe(Math.min(...spans.map(span => span.start)));
+    expect(boundary.at).toBeGreaterThanOrEqual(model.start);
+    expect(boundary.at).toBeLessThanOrEqual(model.end);
+  }
+  // Compression removes both intra-Turn gaps and the gap between Turns.
+  expect(model.boundaries.map(b => b.at)).toEqual(mode === 'sequence' ? [0, 2, 4] : mode === 'duration' ? [100, 200] : [100, 1000]);
+  expect(trajectoryTimeline(projectTrajectory(records.slice(4, 6)), mode)).toBeNull();
+});

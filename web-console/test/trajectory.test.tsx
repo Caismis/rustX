@@ -255,8 +255,8 @@ it('T1-09 search reveals both collapsed kinds without any detail/history reads',
   fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'ls -la' } });
   expect(row('RecordRow', 'trace:1')).not.toBeNull(); expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
   const items = trajectoryItems([richRequest()]);
-  expect(searchItems(items, 'Preview context-a')?.size).toBe(1);
-  expect(searchItems(items, 'Frozen prompt')?.size).toBeGreaterThan(0);
+  expect(searchItems(projectTrajectory([richRequest()]), 'Preview context-a')?.size).toBe(1);
+  expect(searchItems(projectTrajectory([richRequest()]), 'Frozen prompt')?.size).toBe(1);
   expect(preferredItem(items, 'trace:0')?.type).toBe('RequestBoundary');
 });
 
@@ -338,10 +338,10 @@ it('T1-09 structural search and Attempt collapse never borrow child facts or ano
   const child = traceRecord(10, { preview: { text: 'unique child preview', truncated: false } });
   const other = traceTool(11, { location: { attempt_id: 'attempt-b', step_id: '1' } });
   const items = trajectoryItems([child, other]);
-  const matches = searchItems(items, 'unique child preview')!;
+  const matches = searchItems(projectTrajectory([child, other]), 'unique child preview')!;
   expect(items.filter(item => matches.has(item.display_key)).every(item => item.type !== 'GroupHeader' && item.type !== 'TurnHeader')).toBe(true);
   const structural = items.find(item => item.type === 'GroupHeader')!;
-  expect(searchItems(items, 'Step 1')?.has(structural.display_key)).toBe(true);
+  expect(searchItems(projectTrajectory([child, other]), 'Step 1')).toEqual(new Set(items.filter(isInspectable).map(item => item.display_key)));
   expect(preferredStructure(trajectoryItems([{ ...child, location: { attempt_id: 'attempt-b', step_id: '1' } }]), structural)).toBeUndefined();
   const visible = visibleItems(items, [child, other], new Set(['attempt-a']), new Set(), null);
   expect(visible.filter(item => item.type === 'RequestBoundary')).toHaveLength(0);
@@ -571,19 +571,20 @@ it('407: System Prompt cells expose semantic tabs and preserve unknown historica
 });
 
 it.each([
-  ['Step 2', 'GroupHeader', 'Step 2', 'attempt-a', ['trace:4', 'trace:5', 'trace:8']],
-  ['beta', 'GroupHeader', 'Step 2', 'attempt-a', ['trace:4', 'trace:5', 'trace:8']],
-  ['Turn 2', 'TurnHeader', 'Turn 2', 'attempt-b', ['trace:6', 'trace:7']],
-  ['attempt-b', 'TurnHeader', 'Turn 2', 'attempt-b', ['trace:6', 'trace:7']],
+  ['Step 2', 'GroupHeader', 'Step 2', 'attempt-a', ['trace:5', 'trace:8']],
+  ['beta', 'GroupHeader', 'Step 2', 'attempt-a', ['trace:5', 'trace:8']],
+  ['Turn 2', 'TurnHeader', 'Turn 2', 'attempt-b', ['trace:7']],
+  ['attempt-b', 'TurnHeader', 'Turn 2', 'attempt-b', ['trace:7']],
   ['Message', 'GroupHeader', 'Message', 'attempt-a', ['trace:2']],
 ] as const)('structural search %s shares exact ledger/timeline membership without reads or collapse mutation', (query, type, label, attempt, ids) => {
   const records = structuralSearchRecords();
   const items = flattenTrajectory(projectTrajectory(records), 'older');
   const collapsed = new Set(['attempt-a', 'attempt-b']);
   const before = visibleItems(items, records, collapsed, new Set(), null);
-  const matches = searchItems(items, query);
+  const matches = searchItems(projectTrajectory(records), query);
   expect(matchedRecordIds(items, matches)).toEqual(new Set(ids));
   const exposed = visibleItems(items, records, collapsed, new Set(), matches);
+  expect(exposed.filter(isInspectable).map(item => item.owner_record_id)).toEqual([...ids]);
   expect(exposed).toContainEqual(expect.objectContaining({ type, label, attempt_id: attempt }));
   expect(visibleItems(items, records, collapsed, new Set(), null)).toEqual(before);
   expect([...collapsed]).toEqual(['attempt-a', 'attempt-b']);
@@ -598,6 +599,7 @@ it.each([
   const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: query } });
   expect(within(ledger).getByRole('row', { name: label }).getAttribute('data-attempt')).toBe(attempt);
+  expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-owner'))).toEqual([...ids]);
   const spans = [...document.querySelectorAll('[data-record-id]')];
   expect(spans.length).toBeGreaterThan(0);
   for (const span of spans) expect(span.hasAttribute('data-dimmed')).toBe(!new Set<string>(ids).has(span.getAttribute('data-record-id')!));
@@ -623,4 +625,58 @@ it('search conversion covers every inspectable cell, deduplicates owners and exc
   expect(matchedRecordIds(items, new Set([items[0]!.display_key]))).toEqual(new Set());
   expect(matchedRecordIds(items, new Set())).toEqual(new Set());
   expect(matchedRecordIds(items, null)).toBeNull();
+});
+
+it.each([
+  ['Frozen prompt', 'SystemPromptCell', 'trace:0'],
+  ['Preview context-a', 'ContextRow', 'trace:0'],
+  ['unique-model', 'RequestBoundary', 'trace:0'],
+  ['ls -la', 'RecordRow', 'trace:1'],
+] as const)('semantic search %s exposes only its exact cell and preserves Inspector ownership', (query, type, owner) => {
+  const request = richRequest(); request.request!.model = 'unique-model';
+  const records = [request, execution(1)];
+  const items = trajectoryItems(records);
+  const matches = searchItems(projectTrajectory(records), query)!;
+  const expected = items.filter(item => isInspectable(item) && matches.has(item.display_key));
+  expect(expected).toHaveLength(1);
+  expect(expected[0]).toMatchObject({ type, owner_record_id: owner });
+  const load = vi.fn(); const older = vi.fn();
+  show(completeTraceDetail(cacheOf(records), request.id, 1, requestDetail(0)), load, older);
+  fireEvent.click(row('SystemPromptCell'));
+  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  fireEvent.change(search, { target: { value: query } });
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual([...matches]);
+  expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual([owner]);
+  expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
+  fireEvent.change(search, { target: { value: '' } });
+  expect(row('SystemPromptCell').getAttribute('aria-selected')).toBe('true');
+  expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
+});
+
+it('structural search overrides Calls without changing the stored collapse set', () => {
+  const load = vi.fn(); const older = vi.fn();
+  show(cacheOf([proposal(), execution(1)]), load, older);
+  fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Collapse Calls' }));
+  expect(row('RecordRow', 'trace:1')).toBeNull();
+  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  fireEvent.change(search, { target: { value: 'Step 1' } });
+  expect(row('RecordRow', 'trace:1')).not.toBeNull();
+  expect(row('CollapsedCallSummary')).toBeNull();
+  fireEvent.change(search, { target: { value: '' } });
+  expect(row('RecordRow', 'trace:1')).toBeNull();
+  expect(row('CollapsedCallSummary')).not.toBeNull();
+  expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
+});
+
+it.each(['Turn 2', 'Step 2'])('%s reveals every semantic cell of its structural members', query => {
+  const request = richRequest(5); request.location = { attempt_id: 'b', step_id: 'second' };
+  const records = [traceRecord(0), traceRecord(1, { location: { attempt_id: 'b', step_id: 'first' } }), request];
+  show(cacheOf(records));
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turns' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: query } });
+  const expected = trajectoryItems(query === 'Turn 2' ? records.slice(1) : [request]).filter(isInspectable);
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(expected.map(cell => cell.display_key));
+  expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual(query === 'Turn 2' ? ['trace:1', 'trace:5'] : ['trace:5']);
 });

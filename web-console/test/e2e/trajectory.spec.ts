@@ -253,11 +253,14 @@ for (const width of [1440, 390]) {
     for (const [query, attempt, expected] of [
       ['Step 2', 'attempt-a', ['trace:5', 'trace:8']],
       ['Turn 2', 'attempt-b', ['trace:7']],
+      ['Message', 'attempt-a', ['trace:2']],
     ] as const) {
       await search.fill(query);
       await expect(ledger.getByRole('row', { name: query, exact: true })).toHaveAttribute('data-attempt', attempt);
       await expect(ledger.getByRole('row', { name: attempt === 'attempt-a' ? 'Turn 1' : 'Turn 2', exact: true })).toBeVisible();
       await expect.poll(() => page.locator('[data-record-id]:not([data-dimmed])').evaluateAll(spans => spans.map(span => span.getAttribute('data-record-id')))).toEqual([...expected]);
+      await expect.poll(() => ledger.locator('[data-owner]').evaluateAll(rows => rows.map(row => row.getAttribute('data-owner')))).toEqual([...expected]);
+      for (const id of expected) await expect(ledger.locator(`[data-owner="${id}"]`)).toBeVisible();
       await expect(page.locator('[data-record-id="trace:3"]')).toHaveAttribute('data-dimmed');
     }
     await search.fill('');

@@ -599,7 +599,7 @@
           "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "f415553e227c8c91edb25e7df180e7b0ef8bf7baf6381847d3f65ab1f03defd0"
+      "local_sha256": "31c39f04d6a27dfa899d8033822b6ee48d0b77f3dc635d704bbd24b21904b16e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -715,7 +715,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "1df296c134e932857f921d669c710111f564cebc8e6df5610ec41a709ef7ff33",
+      "local_sha256": "ec4d4fe19164cfb83042b282cab3fbdb59b55118e2729d5988fca2a7ac3f33c8",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -743,7 +743,15 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "18bb40fc6d2e3fe76903d21c139b758448aabe390811bcabf6fa86ee7e3641b1"
+      "local_sha256": "2ddb81722cd570035dd2303e45c8491902664dc3eb11acf8d206ce67f69b6159",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
+          "treatment": "PR #414 repair: structural labels are context on stable semantic cell search results; shared native owner projection serves Timeline, without sibling-cell expansion."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -764,7 +772,15 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "36d224177b96931847d886d6e8ad4e1bf87288fdd2426121e2658bf95e33dea0"
+      "local_sha256": "54be4d8a3e78c4845468bfca6209f09e3cc47e74f059259f5da02b92a16040e2",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
+          "treatment": "PR #414 repair: Turn boundaries use minimum projected member span start after idle compression; empty Turns have no boundary. Native timing remains authoritative."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2461,7 +2477,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "0f7ff462f8fd25b7fa92ce93d2de4408aff435f83ff13b36512feb7f744cf1ed"
+      "local_sha256": "a96ff863b2858a6c24829cb800f25453c7a02e5187e89c9e0c0189343294f81f"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
