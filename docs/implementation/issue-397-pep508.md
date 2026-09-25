@@ -63,13 +63,15 @@ fallback parser, marker evaluation, index policy, network check, or resolver.
 
 `pep-508` returns public Chumsky `Simple` errors with a byte span and a
 found-token/EOF distinction, but no grammar-production labels or expected
-token list. rustX consumes the first parser error and emits only that supported
-metadata: `invalid dependency syntax near byte N` when a token was found, or
-`unexpected end of dependency declaration near byte N` at EOF. The byte offset
-is capped at the requirements-file size limit and the reason is bounded by
-`MAX_REQUIREMENTS_PARSE_REASON_BYTES`; the file line remains separately owned
-by rustX. rustX never formats the parser error, authored declaration, found
-token, expected syntax, source excerpt, or caret.
+token list. rustX reduces the complete parser-error set by greatest
+`span().start` byte position; at the same position, a found-token error wins
+over an EOF error. Chumsky's vector order has no semantic meaning. The selected
+metadata emits `invalid dependency syntax near byte N` when a token was found,
+or `unexpected end of dependency declaration near byte N` at EOF. The byte
+offset is capped at the requirements-file size limit and the reason is bounded
+by `MAX_REQUIREMENTS_PARSE_REASON_BYTES`; the file line remains separately
+owned by rustX. rustX never formats the parser error, authored declaration,
+found token, expected syntax, source excerpt, or caret.
 
 The parser owns acceptance and grammar. This sanitizer may lose precision, but
 it never infers a name/extra/specifier/marker/URL category from declaration
@@ -90,7 +92,7 @@ installation; prepared-state publication and validation are unchanged.
 | Matrix | Deterministic coverage |
 | --- | --- |
 | PEP-01 | `pep508_requirements_corpus_preserves_effective_declarations` includes `===`, normal comparison operators, `in`, and `not in` |
-| PEP-02 | `pep508_parser_diagnostics_are_useful_bounded_and_safe` covers malformed name/extra/specifier/marker/URL, ambiguous punctuation, parser-derived byte location, secret non-disclosure, and long-input bounds; `discovery_surfaces_safe_pep508_diagnostics_as_invalid_packages` preserves `InvalidPackage` discovery semantics |
+| PEP-02 | `pep508_parser_diagnostics_are_useful_bounded_and_safe` covers malformed name/extra/specifier/marker/URL, ambiguous punctuation, parser-derived byte location, secret non-disclosure, and long-input bounds; `pep508_diagnostic_reduction_is_order_independent_and_prefers_progress` proves order-independent furthest-position reduction; `discovery_surfaces_safe_pep508_diagnostics_as_invalid_packages` preserves `InvalidPackage` discovery semantics |
 | PEP-03 | `pep508_requirements_reject_invalid_grammar_and_file_directives` rejects `${TOKEN}`; `requirements_file_comments_crlf_and_quoted_markers_are_bounded` accepts literal `$TOKEN` |
 | PEP-04 | `requirements_file_comments_crlf_and_quoted_markers_are_bounded` covers CRLF, comments, fragments, quoted `#`, and quoted `$` |
 | PEP-05 | `managed_fastmcp_uses_pep503_normalized_identity_without_marker_evaluation`; `managed_fastmcp_policy_applies_to_user_and_workspace_discovery` |

@@ -396,9 +396,11 @@ fn contains_environment_variable_reference(line: &str) -> bool {
 ///
 /// `pep-508` owns acceptance and grammar. Its `Simple` errors expose only a
 /// byte span and whether parsing found a token, not grammar-production labels;
-/// rustX therefore emits only the parser-supported distinction between an
-/// unexpected end and another syntax error. Never format the parser error: its
-/// display form includes the authored token and span, which can disclose URL
+/// rustX selects the furthest `span().start`, breaking a same-position tie in
+/// favor of a found token. This makes Chumsky's error-vector order irrelevant
+/// while emitting only the parser-supported distinction between an unexpected
+/// end and another syntax error. Never format the parser error: its display
+/// form includes the authored token and span, which can disclose URL
 /// credentials.
 const MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET: usize = 16 * 1024 * 1024;
 const MAX_REQUIREMENTS_PARSE_REASON_BYTES: usize =
@@ -406,7 +408,8 @@ const MAX_REQUIREMENTS_PARSE_REASON_BYTES: usize =
 
 fn safe_pep508_diagnostic(errors: &[chumsky::error::Simple<'_, char>]) -> String {
     let error = errors
-        .first()
+        .iter()
+        .max_by_key(|error| (error.span().start, error.found().is_some()))
         .expect("pep-508 parse failures include structured error metadata");
     let offset = error
         .span()
@@ -1566,8 +1569,7 @@ mod tests {
             assert!(error.starts_with("line 1: "), "{label}: {error}");
             let reason = error.strip_prefix("line 1: ").expect("line prefix");
             assert!(
-                reason.starts_with("invalid dependency syntax near byte ")
-                    || reason.starts_with("unexpected end of dependency declaration near byte "),
+                reason.starts_with("unexpected end of dependency declaration near byte "),
                 "{label}: {error}"
             );
             assert!(!reason.contains("version specifier"), "{label}: {error}");
@@ -1584,7 +1586,7 @@ mod tests {
         let error = parse_requirements(ambiguous.as_bytes(), Path::new("/tmp"))
             .expect_err("ambiguous malformed declaration");
         let reason = error.strip_prefix("line 1: ").expect("line prefix");
-        assert!(reason.starts_with("invalid dependency syntax near byte "));
+        assert!(reason.starts_with("unexpected end of dependency declaration near byte "));
         assert!(!reason.contains("environment marker"), "{error}");
         assert!(!reason.contains("dependency extra"), "{error}");
 
@@ -1622,8 +1624,74 @@ mod tests {
         let PythonToolError::InvalidPackage(message) = error else {
             panic!("PEP 508 parse errors remain package validation errors");
         };
-        assert!(message.contains("requirements.txt: line 1: invalid dependency syntax near byte"));
+        assert!(message.contains(
+            "requirements.txt: line 1: unexpected end of dependency declaration near byte"
+        ));
         assert!(!message.contains("version specifier"));
+    }
+
+    #[test]
+    fn pep508_diagnostic_reduction_is_order_independent_and_prefers_progress() {
+        use chumsky::{DefaultExpected, error::LabelError, prelude::SimpleSpan, util::MaybeRef};
+
+        fn error_at(start: usize, found: Option<char>) -> chumsky::error::Simple<'static, char> {
+            <chumsky::error::Simple<'static, char> as LabelError<
+                'static,
+                &'static str,
+                DefaultExpected<'static, char>,
+            >>::expected_found(
+                std::iter::empty::<DefaultExpected<'static, char>>(),
+                found.map(MaybeRef::Val),
+                SimpleSpan::new(start, start + usize::from(found.is_some())),
+            )
+        }
+
+        let earlier_found = error_at(3, Some('/'));
+        let later_eof = error_at(8, None);
+        let forward = vec![earlier_found, later_eof];
+        let reverse = vec![later_eof, earlier_found];
+        assert_eq!(
+            safe_pep508_diagnostic(&forward),
+            "unexpected end of dependency declaration near byte 8"
+        );
+        assert_eq!(
+            safe_pep508_diagnostic(&forward),
+            safe_pep508_diagnostic(&reverse)
+        );
+
+        let same_position_eof = error_at(8, None);
+        let same_position_found = error_at(8, Some('!'));
+        let eof_first = vec![same_position_eof, same_position_found];
+        let found_first = vec![same_position_found, same_position_eof];
+        assert_eq!(
+            safe_pep508_diagnostic(&eof_first),
+            "invalid dependency syntax near byte 8"
+        );
+        assert_eq!(
+            safe_pep508_diagnostic(&eof_first),
+            safe_pep508_diagnostic(&found_first)
+        );
+
+        // Equal semantic keys may contain different authored tokens; neither
+        // the token value nor its position in the vector affects the result.
+        let other_found = error_at(8, Some('$'));
+        for errors in [
+            [earlier_found, later_eof, same_position_found, other_found],
+            [other_found, same_position_found, later_eof, earlier_found],
+            [later_eof, other_found, earlier_found, same_position_found],
+        ] {
+            assert_eq!(
+                safe_pep508_diagnostic(&errors),
+                "invalid dependency syntax near byte 8"
+            );
+        }
+        let capped =
+            safe_pep508_diagnostic(&[error_at(MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET + 1, None)]);
+        assert_eq!(
+            capped,
+            "unexpected end of dependency declaration near byte 16777216+"
+        );
+        assert!(capped.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES);
     }
 
     #[test]
