@@ -459,7 +459,20 @@ impl SubagentRegistry {
                             )));
                         }
                         unsettled.insert(subagent_id.clone());
-                        if let Some(authority) = admitted_authority {
+                        if let Some(mut authority) = admitted_authority {
+                            let credentials = store.load_agent_credentials(&child_agent_id)?;
+                            authority
+                                .resolved
+                                .model
+                                .restore_admitted_credentials(&credentials)
+                                .map_err(|_| {
+                                    ConversationStoreError::Storage(
+                                        "restore frozen Agent provider credentials".to_owned(),
+                                    )
+                                })?;
+                            for binding in authority.resolved.materialization.sources.values_mut() {
+                                binding.credentials.capture(credentials.clone());
+                            }
                             let spec = SubagentStartSpec {
                                 resolved: authority.resolved,
                                 execution_policy: authority.execution_policy,
@@ -569,6 +582,17 @@ impl SubagentRegistry {
                                     SubagentLifecycle::Interrupted
                                 }
                             };
+                            if terminal == SubagentTerminalState::Interrupted
+                                && let Some(agent) = state.agents.get(&child_agent_id)
+                            {
+                                // Crash reconciliation proves a logical terminal,
+                                // not direct-child/nested physical containment.
+                                // Git inspection (or a shared workspace) cannot
+                                // grant a new physical activation. Explicit user
+                                // interruption settles as Cancelled and remains
+                                // resumable under its proven settlement contract.
+                                agent.workspace.poison();
+                            }
                         }
                     }
                     RuntimeEvent::SubagentWorkspaceDisposalStarted {

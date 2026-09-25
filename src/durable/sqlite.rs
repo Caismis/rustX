@@ -301,7 +301,9 @@ fn count_conversation_store_open() {
 /// Version 40 makes Tool-result occurrence ownership canonical; prior shapes are refused.
 /// Version 41 adds generation evidence to persisted request terminal events.
 /// Version 42 retains immutable completed-response provenance in lineage bootstrap.
-pub const SQLITE_SCHEMA_VERSION: i64 = 44;
+/// Version 45 commits durable Agent credentials privately with frozen admission.
+/// Older development stores are rejected; secrets never enter execution facts.
+pub const SQLITE_SCHEMA_VERSION: i64 = 45;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1203,6 +1205,25 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn load_agent_credentials(
+        &self,
+        agent_id: &crate::runtime::identity::AgentId,
+    ) -> Result<crate::credentials::CredentialSnapshot, ConversationStoreError> {
+        let connection = self.lock()?;
+        let encoded: Option<String> = connection
+            .query_row(
+                "SELECT credentials_json FROM agent_credentials WHERE agent_id=?1",
+                [agent_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| storage("read private Agent credentials"))?;
+        let encoded = encoded.ok_or_else(|| storage("missing admitted Agent credentials"))?;
+        let values: Vec<(String, String)> = serde_json::from_str(&encoded)
+            .map_err(|_| storage("decode private Agent credentials"))?;
+        Ok(crate::credentials::CredentialSnapshot::new(values))
+    }
+
     fn conversation_id(&self) -> &ConversationId {
         &self.conversation_id
     }
@@ -5031,6 +5052,10 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 stream_id TEXT PRIMARY KEY,
                 audit_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS agent_credentials (
+                agent_id TEXT PRIMARY KEY,
+                credentials_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS events (
                 sequence INTEGER PRIMARY KEY,
                 event_id TEXT NOT NULL UNIQUE,
@@ -5216,6 +5241,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "event_json",
             ],
         ),
+        ("agent_credentials", &["agent_id", "credentials_json"]),
         ("lifecycle_state", &["lifecycle_key", "terminal_event_id"]),
     ];
     for (table, required_columns) in required {
@@ -5240,6 +5266,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("inbound_correlation", "message_id"),
         ("message_ledger", "message_id"),
         ("canonical_tool_calls", "result_message_id"),
+        ("agent_credentials", "agent_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
         ("publication_streams", "stream_id"),
@@ -6689,6 +6716,41 @@ struct PersistedEvent {
 }
 
 #[allow(clippy::too_many_lines)] // One event persistence contract, one place.
+/// The Agent admission transaction owns both its public frozen references and
+/// its private credential capture. Copies of history never copy this table.
+fn persist_agent_credentials_tx(
+    transaction: &Transaction<'_>,
+    event: &mut RuntimeEvent,
+) -> Result<(), ConversationStoreError> {
+    if let RuntimeEvent::SubagentOwnershipCommitted {
+        child_agent_id,
+        admitted_authority: Some(authority),
+        ..
+    } = event
+    {
+        let mut credentials = Vec::new();
+        authority
+            .resolved
+            .model
+            .export_process_credentials(&mut credentials);
+        for binding in authority.resolved.materialization.sources.values_mut() {
+            binding
+                .credentials
+                .export_process_credentials(&mut credentials);
+        }
+        let encoded = serde_json::to_string(&credentials)
+            .map_err(|_| storage("encode private Agent credentials"))?;
+        transaction
+            .execute(
+                "INSERT INTO agent_credentials(agent_id,credentials_json) VALUES(?1,?2)",
+                params![child_agent_id.as_str(), encoded],
+            )
+            .map_err(|_| storage("commit private Agent credentials"))?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
 fn persist_event_tx(
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
@@ -6765,6 +6827,7 @@ fn persist_event_tx(
             }
         }
     }
+    persist_agent_credentials_tx(transaction, &mut event.event)?;
     let json = encode(&event, "runtime event")?;
     transaction
         .execute(
@@ -11572,6 +11635,158 @@ mod tests {
         assert_eq!(store.load_pending().unwrap().len(), 1);
     }
 
+    #[test]
+    #[allow(clippy::too_many_lines)] // Full admission, private capture, reopen and tamper boundaries.
+    fn agent_credentials_reopen_from_private_capture_without_journal_secrets() {
+        use crate::credentials::{CredentialSnapshot, SourceCredentials};
+        use crate::model::catalog::{CredentialSource, ResolvedCredential};
+        use crate::runtime::identity::SubagentId;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation.sqlite");
+        let id = ConversationId::generate();
+        let child_id = ConversationId::generate();
+        let agent_id = AgentId::new("private-agent");
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        store.initialize(&[]).unwrap();
+        let mut event =
+            crate::local_runtime::session::tests::deletion_tests::admit_agent(envelope(
+                &id,
+                crate::runtime::subagent::subagent_ownership_event_id(
+                    &SubagentId::for_conversation(&id, 1),
+                )
+                .as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    parent_agent_id: AgentId::new("parent-agent"),
+                    subagent_id: SubagentId::for_conversation(&id, 1),
+                    child_agent_id: agent_id.clone(),
+                    child_conversation_id: child_id,
+                    admitted_authority: None,
+                    tool_call_id: ToolCallId::new("private-call"),
+                    agent: "explore".into(),
+                    definition_digest: "sha256:definition".into(),
+                    profile_digest: "sha256:profile".into(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
+                        directory.path().to_path_buf(),
+                    ),
+                },
+            ));
+        let RuntimeEvent::SubagentOwnershipCommitted {
+            admitted_authority: Some(authority),
+            ..
+        } = &mut event.event
+        else {
+            panic!("authority")
+        };
+        authority.resolved.model.primary.binding.credential =
+            CredentialSource::Literal("private-literal".into());
+        authority.resolved.model.primary.binding.resolved_credential = None;
+        let mut summary = authority.resolved.model.primary.clone();
+        summary.binding.credential = CredentialSource::Environment("AUTHORED_PROVIDER".into());
+        summary.binding.resolved_credential = Some(ResolvedCredential::new("captured-provider"));
+        authority.resolved.model.summary =
+            crate::model::frozen::FrozenSummaryModel::Explicit(Box::new(summary));
+        let mut source: SourceCredentials = serde_json::from_value(serde_json::json!({
+            "environment": {"TOKEN":"$AUTHORED_SOURCE"}, "headers":{"Authorization":"$AUTHORED_SOURCE"}
+        })).unwrap();
+        source.capture(CredentialSnapshot::new([(
+            "AUTHORED_SOURCE".into(),
+            "captured-source".into(),
+        )]));
+        authority.resolved.materialization.sources.insert(
+            crate::capabilities::ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new(
+                "private-source",
+            )),
+            crate::tools::mcp::McpServerBinding {
+                credentials: source,
+                transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                    program: "test-server".into(),
+                    args: Vec::new(),
+                    cwd: None,
+                    environment: std::collections::BTreeMap::default(),
+                },
+                policy: crate::tools::ToolInvocationPolicy::default(),
+            },
+        );
+        store.append_event(event.clone()).unwrap();
+        assert!(
+            store.append_event(event).is_err(),
+            "duplicate admission rolls back"
+        );
+        let journal: String = store
+            .lock()
+            .unwrap()
+            .query_row("SELECT event_json FROM events", [], |row| row.get(0))
+            .unwrap();
+        for secret in ["private-literal", "captured-provider", "captured-source"] {
+            assert!(
+                !journal.contains(secret),
+                "Event Journal contains private material"
+            );
+        }
+        drop(store);
+        let reopened = SqliteConversationStore::open(id, &path).unwrap();
+        let capture = reopened.load_agent_credentials(&agent_id).unwrap();
+        let mut events = reopened.read_events(None, 10).unwrap().events;
+        let RuntimeEvent::SubagentOwnershipCommitted {
+            admitted_authority: Some(mut authority),
+            ..
+        } = events.remove(0).event
+        else {
+            panic!("authority")
+        };
+        authority
+            .resolved
+            .model
+            .restore_admitted_credentials(&capture)
+            .unwrap();
+        assert_eq!(
+            authority
+                .resolved
+                .model
+                .primary
+                .binding
+                .resolved_credential
+                .as_ref()
+                .unwrap()
+                .expose(),
+            "private-literal"
+        );
+        let crate::model::frozen::FrozenSummaryModel::Explicit(summary) =
+            &authority.resolved.model.summary
+        else {
+            panic!("summary")
+        };
+        assert_eq!(
+            summary
+                .binding
+                .resolved_credential
+                .as_ref()
+                .unwrap()
+                .expose(),
+            "captured-provider"
+        );
+        for source in authority.resolved.materialization.sources.values_mut() {
+            source.credentials.capture(capture.clone());
+            let resolved = source.credentials.resolve().unwrap();
+            assert_eq!(resolved.environment["TOKEN"].expose(), "captured-source");
+            assert_eq!(
+                resolved.headers["Authorization"].expose(),
+                "captured-source"
+            );
+        }
+        reopened
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM agent_credentials", [])
+            .unwrap();
+        assert!(
+            reopened.load_agent_credentials(&agent_id).is_err(),
+            "missing private capture must fail closed"
+        );
+    }
+
     /// Commits the canonical Normal-ownership fact of one subagent child
     /// over a shared workspace (agent name `explore`).
     fn own_normal_subagent(
@@ -13583,7 +13798,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 44);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 45);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13652,7 +13867,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 44);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 45);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

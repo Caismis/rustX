@@ -45,7 +45,7 @@ Detached executions, Subagents and Workflows retain their own native identities.
 Native Runtime Client version 50 and App Server version 24 retain this mandatory
 summary/detail vocabulary, including the shared predecessor and frozen Tool
 catalog classification added by #394. Required fields change the strict vocabulary;
-both negotiated versions advance, with no aliases or alternate decoder. SQLite schema 44 gates the persisted request terminal vocabulary including
+both negotiated versions advance, with no aliases or alternate decoder. SQLite schema 45 gates the persisted request terminal vocabulary including
 generation evidence. The Event Journal envelope framing is unchanged; this is
 request terminal event data, not a new Trace store.
 

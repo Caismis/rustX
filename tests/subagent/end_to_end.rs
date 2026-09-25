@@ -716,9 +716,14 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         physical_worktree_root.join("backend")
     );
     assert!(subagent.workspace.handoff.is_none());
+    assert_eq!(
+        subagent.state,
+        rustx::runtime::subagent::AgentState::Inactive
+    );
+    assert!(subagent.current_activation.is_none());
     assert!(
-        !physical_worktree_root.exists(),
-        "clean terminal settlement removes the physical worktree root"
+        physical_worktree_root.is_dir(),
+        "inactive Agent retains its physical workspace for later activations"
     );
     assert!(server.request_bodies().iter().any(|body| {
         body.contains("ISSUE189_FROZEN_OVERLAY")
@@ -1804,6 +1809,21 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     let parent_pid = parent.child.id().expect("parent pid");
     let child_pids = wait_for_direct_subagent(parent_pid).await;
     assert_eq!(child_pids.len(), 1, "one real child process is owned");
+    let response = parent
+        .request(|id| RuntimeClientRequest::SnapshotGet {
+            id: rustx::runtime_client::RequestId::new(id),
+        })
+        .await;
+    let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
+        panic!("snapshot captures the admitted Agent before parent death: {response:?}");
+    };
+    assert_eq!(snapshot.agents.len(), 1);
+    let admitted = &snapshot.agents[0];
+    assert_eq!(admitted.state, rustx::runtime::subagent::AgentState::Active);
+    let agent_id = admitted.agent_id.clone();
+    let child_conversation_id = admitted.child_conversation_id.clone();
+    let activation_id = admitted.activation_id.clone();
+    assert_eq!(admitted.current_activation.as_ref(), Some(&activation_id));
 
     // This is an actual abrupt parent death: no Runtime Client Shutdown and
     // no graceful transport EOF are sent before SIGKILL.
@@ -1879,9 +1899,20 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         1,
         "recovery publishes exactly one Interrupted notice"
     );
-    assert!(
-        snapshot.agents.is_empty(),
-        "recovery does not reattach a live registry child"
+    assert_eq!(
+        snapshot.agents.len(),
+        1,
+        "recovery retains the durable Agent"
+    );
+    let agent = &snapshot.agents[0];
+    assert_eq!(agent.agent_id, agent_id);
+    assert_eq!(agent.child_conversation_id, child_conversation_id);
+    assert_eq!(agent.activation_id, activation_id);
+    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Inactive);
+    assert!(agent.current_activation.is_none());
+    assert_eq!(
+        agent.activation_state,
+        rustx::runtime::subagent::SubagentState::Interrupted
     );
     assert!(
         !snapshot.messages.iter().any(|message| match message {
@@ -1952,7 +1983,17 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         1,
         "repeated restart is idempotent"
     );
-    assert!(snapshot.agents.is_empty());
+    assert_eq!(snapshot.agents.len(), 1);
+    let agent = &snapshot.agents[0];
+    assert_eq!(agent.agent_id, agent_id);
+    assert_eq!(agent.child_conversation_id, child_conversation_id);
+    assert_eq!(agent.activation_id, activation_id);
+    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Inactive);
+    assert!(agent.current_activation.is_none());
+    assert_eq!(
+        agent.activation_state,
+        rustx::runtime::subagent::SubagentState::Interrupted
+    );
     assert!(direct_subagent_pids(repeated.child.id().expect("repeated pid")).is_empty());
     let response = repeated
         .request(|id| RuntimeClientRequest::Shutdown {

@@ -126,7 +126,10 @@ impl SessionOwnership {
                 continue;
             };
             for (child, agent) in read_children(&store, &check)? {
-                if agent_owners.insert(agent, (id.clone(), child.clone())).is_some() {
+                if agent_owners
+                    .insert(agent, (id.clone(), child.clone()))
+                    .is_some()
+                {
                     return Err(Error::Invalid);
                 }
                 pending.push_back((owner.clone(), child, Some(id.clone())));
@@ -255,11 +258,18 @@ fn read_children(
                     }
                     children.insert(
                         child_conversation_id,
-                        (child_agent_id, parent_agent_id, admitted_authority.is_some()),
+                        (
+                            child_agent_id,
+                            parent_agent_id,
+                            admitted_authority.is_some(),
+                        ),
                     );
                 }
             }
         }
     }
-    Ok(children.into_iter().map(|(conversation, (agent, _, _))| (conversation, agent)).collect())
+    Ok(children
+        .into_iter()
+        .map(|(conversation, (agent, _, _))| (conversation, agent))
+        .collect())
 }

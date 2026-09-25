@@ -47,3 +47,11 @@ finite activation IDs. `send_message` to an inactive Agent reuses that admitted
 profile, model, Tools, Skills, resources and policies; it does not consult current
 settings or reread a named definition. Parent resource/configuration reload cannot
 mutate existing Agent authority. See [Jobs and continuable Agents](jobs-and-agents.md).
+
+Resume also requires proven physical containment of the prior activation. An
+explicit `interrupt_agent` settles as Cancelled after native physical settlement
+and leaves the Agent resumable. Crash reconciliation records Interrupted without
+proof that the old direct child and nested processes settled. It preserves the
+same inactive Agent/history projection but refuses another physical activation;
+clean Git inspection or a shared workspace does not supply that missing proof.
+Disposed or unresolved workspace authority likewise cannot be reacquired by resume.

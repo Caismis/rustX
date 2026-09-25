@@ -22,7 +22,7 @@ completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
 
 
-The earlier v24/v48 revision introduced native whole-conversation Turn/Step
+The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
 its catalog. v23/v49 retain these capabilities. A browser product preference can

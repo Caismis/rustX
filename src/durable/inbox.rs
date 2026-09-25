@@ -1323,6 +1323,13 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 ///   been durably accepted the answer stays `true` forever.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationStore: Send + Sync + 'static {
+    /// Private frozen credentials committed atomically with the Agent's first admission.
+    /// Never exposed by Event Journal, transcript, lineage copies, or client projections.
+    fn load_agent_credentials(
+        &self,
+        agent_id: &crate::runtime::identity::AgentId,
+    ) -> Result<crate::credentials::CredentialSnapshot, ConversationStoreError>;
+
     /// Current Goal state, independent of history and Event Journal.
     fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
         Err(ConversationStoreError::Storage(

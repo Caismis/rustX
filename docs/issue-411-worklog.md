@@ -179,9 +179,10 @@ external durable/process/subagent/tools/conformance/cfg3 suites; strict TUI test
 protocol generation/typecheck; dev launcher tests; WebUI unit/provenance/build and
 the digest-pinned browser container. macOS execution remains a GitHub CI lane.
 
-Current generated artifacts are App Server v22 and native Runtime Client48.
-Repository policy keeps only the current generated version, so v21 was replaced
-through the generator, without hand-editing generated types.
+Current generated artifacts are App Server v24 and native Runtime Client50.
+Repository policy keeps only the current generated version. Initial v22 was
+superseded after integrating origin/main #409 (v23); v24 was generated from both
+changes, without hand-editing generated types.
 
 ## Continuation implementation decisions
 
@@ -437,3 +438,72 @@ settlement cannot regain resume authority; an unreconciled orphan cannot admit a
 second activation. Both tests passed (`/tmp/411-recovery-test3.log`). The real-process
 three-activation regression passed on the integrated runtime in 1.36s
 (`/tmp/411-native-continuation4.log`). `git diff --check` passed.
+
+## Final integration and durability corrections
+
+Fetched main advanced from `8b59e770225cf8ae39bfdfe2a6e50b0137bfa146` to
+`f268175bb8d31010706e7070aae80d2b46b7aced` (#409). The complete issue implementation
+was preserved in commit `afd5fb3c`, then merged in `3a166204`. Main's native Turn
+ownership and resident conversation presentation remain intact. Both domains now
+use App Server v24 / Runtime Client50; merged Web tests increased to 977.
+
+The full boundary lane exposed a real persistence bug: ordinary credential
+serialization is deliberately redacted and cannot round-trip literal values.
+SQLite schema45 now atomically captures admitted credentials in a private Agent
+record alongside the initial ownership event. The Event Journal carries only
+opaque references. Replay hydrates the exact admitted private capture; no current
+configuration/environment lookup or fallback occurs. Private records follow the
+owning Conversation database's deletion, and are excluded from lineage copies.
+
+Resume reservations now carry their own activation ID and cancellation signal;
+cleanup can release only that generation. The owner holds counted runtime
+admission across preparation/commit/rollback, and shutdown cancels reservations.
+The command lane uses the existing Tokio FIFO substrate without bounded-channel
+loss: a deterministic gated32message+cancel test verifies ordered delivery and
+physical reap. Publication-abandoned wait/interrupt returns a settlement error.
+
+Crash-reconciled Interrupted events cannot establish physical containment proof.
+Such an Agent retains identity/history but cannot resume from a clean Git check.
+An ordinary explicit interrupt settles Cancelled and remains resumable. Tests use
+the real RecoveryPlan fold and both shared and isolated workspaces to prove this.
+
+Session ownership folds repeated activations into one child edge. Agent workspace
+ownership survives activation terminality. Session deletion can remove a clean,
+unchanged admitted workspace only through the existing exact owner proof and an
+unforced Git remove; dirty/diverged/unresolved work stays protected. Deterministic
+Git tests cover dirtiness before preview and after the deletion commit.
+
+## Final merged WebUI validation after current-main integration
+
+Merged `origin/main` #409 (`f268175b`) preserves resident ConversationLive/Seat,
+TurnProcess ownership, native clocks/control cursors, and local read-error owners.
+The #411 Job/Agent controls now attach through ConversationLive rather than the
+old shell-owned transcript path. Final protocol is App Server v24 / Runtime
+Client v50. Main's provenance additions and upstream pins were retained, with
+reviewed merged local import closures/hashes.
+
+Final validation on the merged runtime, including private admitted credential
+persistence and recovery containment fixes:
+- Web `pnpm install --frozen-lockfile`: passed.
+- Web `pnpm typecheck`: passed.
+- Web `pnpm test`: **977 passed / 56 files**, `/tmp/411-web-merge-tests.log`.
+- Web `pnpm check:provenance`: **135 source records / 131 package notices** passed.
+- Web `pnpm build`: passed, existing bundle-size advisory only.
+- `CONTAINER_ENGINE=podman pnpm test:e2e`: **91/91 passed, no skips, 5.6 minutes**,
+  `/tmp/411-web-final-merged-e2e2.log`, against the final merged v24 native binary.
+- Dev `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`: passed,
+  **37/37 tests**, rerun after the merge.
+- `git diff --check -- web-console`: passed.
+
+The first merged full browser run exposed an existing test teardown ordering
+assumption: `workspaces.spec.ts` stopped the routed Product Host while a resident
+view could still issue reads. The final test retires the Page before its remote
+clients and Host fixtures. It passed in isolation and in the complete rerun.
+Only the Inspector screenshot differs from current main's baselines; the pinned
+container regeneration was visually inspected and all screenshot checks passed.
+
+A further recovery regression proves actual `RecoveryPlan::reconcile` Interrupted
+facts do not create physical containment proof, even for clean isolated/shared
+workspaces. Explicit interrupt settles Cancelled and remains resumable. All three
+recovery revocation tests passed after credential hydration; see
+`/tmp/411-recovery-final.log` and the distinction in `docs/subagent-resources.md`.

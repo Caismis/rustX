@@ -42,7 +42,10 @@ admission, cancellation intent and activation transitions. There is zero or one
 active activation per Agent; no tool, transport or client makes that decision.
 
 `subagent` commits the durable Agent identity and first activation with frozen
-resolved authority. Later `send_message(agent_id, message)` performs one owner
+resolved authority. Creation starts a fresh child conversation; its optional
+context is explicit supplied input, not an implicit copy of parent history.
+Creation returns admission immediately; `wait_agent` supplies blocking behavior.
+There is no foreground/background Agent lifecycle switch or separate fork tool. Later `send_message(agent_id, message)` performs one owner
 operation under that mutex:
 
 - **Active:** admit the message to this activation's ordered guidance lane. The
@@ -125,3 +128,15 @@ message/seal arbitration, frozen authority, replay and both client projections.
 The release gate still requires canonical inbound durability, terminal uniqueness,
 physical quiescence, Workflow ownership and complete CI. The historical issue text
 was not edited; release tracking should link #411 and this current contract.
+
+### Private admitted credentials
+
+SQLite schema 45 stores a durable Agent's credential capture in the parent
+Conversation's private `agent_credentials` table. The first ownership transaction
+atomically commits this capture and frozen provider/source references. Event
+Journal records contain only opaque references, never credential values. Recovery
+rehydrates provider caches and source captures from that private record, without
+reading current configuration or environment. Missing private state fails closed.
+Repeated activations reuse the same capture; lineage copies omit it, and deleting
+the owning Session removes the private Conversation database. Existing local-store
+filesystem permissions protect these values; this is not a new secret vault.

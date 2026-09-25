@@ -100,6 +100,12 @@ fn activation_replay_rejects_agent_conversation_aliases_and_authority_readmissio
         }
         if case == "readmitted-authority" {
             next = admit_agent(next);
+            assert!(
+                parent.append_event(next).is_err(),
+                "frozen credential ownership cannot be readmitted"
+            );
+            assert_eq!(parent.read_events(None, 256).unwrap().events.len(), 1);
+            continue;
         }
         parent.append_event(next).unwrap();
         let error = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap_err();

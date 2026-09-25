@@ -2055,10 +2055,18 @@ fn assert_cut_lineage(scenario: &str) {
         })
         .expect("source owns an execution");
     assert!(copied.contains(&execution));
-    assert!(copied.contains(&format!("tool {execution} | bash | running")));
+    assert!(copied.contains(&format!("job {execution} | bash | running")));
     let children = owned_subagents(&source);
     assert!(copied.contains(&children[0]));
-    assert!(copied.contains(&format!("agent-{}", children[0])));
+    let agent = source
+        .journal()
+        .into_iter()
+        .find_map(|entry| match entry.event {
+            RuntimeEvent::SubagentOwnershipCommitted { child_agent_id, .. } => Some(child_agent_id),
+            _ => None,
+        })
+        .expect("source owns a durable Agent");
+    assert!(copied.contains(agent.as_str()));
     assert!(copied.contains(&format!("conversations/{source_conversation}/")));
 
     // …and every one of those identities is inert. The destination Journal is

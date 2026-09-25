@@ -1398,10 +1398,8 @@ fn render_sections(sections: &[AgentStatusSection]) -> String {
                 }
                 lines.push("Background jobs:".to_owned());
                 for execution in executions {
-                    // The identity vocabulary matches the model-facing
-                    // execution handle (Issue #162): explicit kind plus id,
-                    // so the model can construct an execution request
-                    // without guessing a namespace.
+                    // The finite Job identity is directly actionable through
+                    // job_status, job_wait and job_cancel.
                     let mut line = format!(
                         "- {} {} | {} | {}",
                         "job",
