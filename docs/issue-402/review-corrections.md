@@ -118,6 +118,9 @@ was weakened.
   completed. The unchanged scenario and the permission convergence scenario then
   passed together (3 tests). No assertion, timeout or screenshot threshold changed.
   The final complete browser rerun passed all 89 tests in 5.4 minutes.
+  Correction: this was not a fixture accident. New Conversation remounted on every
+  transport transition and re-listed Workspaces through the Product Host; see
+  [catalog-and-teardown.md](catalog-and-teardown.md).
 
 ## Validation commands
 

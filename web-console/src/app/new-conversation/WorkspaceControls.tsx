@@ -10,6 +10,7 @@ import { SettingsActorContext, useSettingsActor, useSettingsTarget } from '../se
 import { SourceContext } from '../settings/source-context';
 import { workspaceSettingsTarget, userSettingsTarget, revisionSelector } from '../settings/projection';
 import { useUnitEditing } from '../settings/forms/bridge';
+import { catalogAdmits, catalogChoices } from '../../bindings/model-catalog';
 import { approvalMutation, workspaceApprovalBlock } from './approval';
 
 /** Shared bounded configuration actor, independent of the Settings page tree. */
@@ -50,9 +51,21 @@ export function WorkspacePermission({ source, approval, disabled = false }: { so
     {(unit.awaitingObservation || outcome.kind === 'uncertain' || outcome.kind === 'conflict') && <Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>Reread permissions</Button>}
   </div>;
 }
-/** Current-file native model definitions are choices, never effective Session state. */
+/** The native catalog a Session created in this Workspace binds. Its choices
+ * are draft Session intent, never Workspace configuration or Session state. */
+export function sessionCatalog(source?: SourceSettings) {
+  return source?.session_models?.kind === 'available' ? source.session_models.catalog : undefined;
+}
+/** Native says a Session cannot be created here, or no longer publishes the
+ * draft model intent. Either way nothing is submitted. */
+export function sessionModelBlock(source: SourceSettings | undefined, intent?: SessionModelConfig) {
+  if (source?.session_models?.kind === 'unavailable') return `Native cannot create a Session in this Workspace: ${source.session_models.diagnostic}`;
+  return intent && source && !catalogAdmits(sessionCatalog(source), intent.model, intent.reasoningProfile ?? undefined)
+    ? 'The selected model is not in this Workspace\'s native model catalog. Choose a model again.' : undefined;
+}
 export function NewConversationModelControl({ source, intent, choose, disabled }: { source?: SourceSettings; intent?: SessionModelConfig; choose: (intent: SessionModelConfig) => void; disabled: boolean }) {
-  return <ModelSelect choices={Object.entries(source?.resolved?.models ?? {}).map(([id, model]) => ({ id, profiles: Object.keys(model.reasoning?.profiles ?? {}).map(id => ({ id, label: id })), defaultProfile: model.reasoning?.default_profile }))}
-    current={intent?.model} profile={intent?.reasoningProfile ?? undefined} disabled={disabled || !source?.resolved} loading={!source} load={() => {}}
-    choose={(model, reasoningProfile) => choose({ model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) })}/>;
+  const catalog = sessionCatalog(source);
+  const unavailable = source?.session_models?.kind === 'unavailable' ? source.session_models.diagnostic : undefined;
+  return <ModelSelect choices={catalogChoices(catalog)} current={intent?.model} profile={intent?.reasoningProfile ?? undefined} disabled={disabled || !catalog} loading={!source} error={unavailable} load={() => {}}
+    choose={(model, reasoningProfile) => { if (catalogAdmits(catalog, model, reasoningProfile)) choose({ model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) }); }}/>;
 }

@@ -17675,6 +17675,17 @@
             }
           ]
         },
+        "session_models": {
+          "description": "The catalog a Session created in this Workspace binds, exactly as its\n`session/models` then serves it. Absent for the User target. Clients\nselect pre-Session models only from here, never from `resolved`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionModelsView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "provenance": {
           "type": "object",
           "additionalProperties": {
@@ -17744,6 +17755,47 @@
       "enum": [
         "hot",
         "restart"
+      ]
+    },
+    "SessionModelsView": {
+      "description": "Whether native can bind a Session in a Workspace, and its model catalog.",
+      "oneOf": [
+        {
+          "description": "The validated credential-free catalog of the Session creation binding.",
+          "type": "object",
+          "properties": {
+            "catalog": {
+              "$ref": "#/$defs/ModelCatalogView"
+            },
+            "kind": {
+              "type": "string",
+              "const": "available"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "catalog"
+          ]
+        },
+        {
+          "description": "Session creation would fail here; no catalog exists to select from.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "diagnostic"
+          ]
+        }
       ]
     },
     "SourceView": {

@@ -329,7 +329,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           setOpenViews(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section> : center.kind === 'session' ? <section aria-label="Session recovery"><p>Session {center.sessionId} exists. Open its native state to continue.</p><Button disabled={!connected} onClick={() => open(center.sessionId)}>Open Session</Button></section> : <NewConversation key={`${state.endpoint}:${state.connection}:${state.authorityRevision}:${state.generation}:${center.kind === 'new-conversation' ? center.epoch : 'empty'}`} client={client} host={workspaceHost}
+    </section> : center.kind === 'session' ? <section aria-label="Session recovery"><p>Session {center.sessionId} exists. Open its native state to continue.</p><Button disabled={!connected} onClick={() => open(center.sessionId)}>Open Session</Button></section> : <NewConversation key={center.epoch} client={client} host={workspaceHost}
       initialWorkspace={center.kind === 'new-conversation' ? center.workspaceId : undefined} current={newConversationCurrent}
       opened={(id, failure) => { open(id); if (failure) setError(failure); }}/>}
   </AppFrame>;

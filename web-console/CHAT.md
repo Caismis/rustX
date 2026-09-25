@@ -363,8 +363,16 @@ model observation, uploads files one at a time, then starts the turn. Every
 acknowledged upload receipt remains in the machine context. Later failures retain
 the committed Session and report their actual stage; they never rewind to a
 pre-creation state. An uncertain mutation has no automatic retry transition.
-Navigation, endpoint, authority revision, connection generation and attachment
-identity fence continuations. The actor is retired when its route/authority leaves.
+Each SUBMIT carries the authority captured at its own gesture; navigation,
+endpoint, authority revision, connection generation and attachment identity fence
+its continuations. The route owns the draft, so a transport transition neither
+remounts it nor issues Product Host traffic, and a committed Session stays visible.
+
+Composer model choices come only from the Workspace read's native
+`session_models` catalog, the one the created Session serves from `session/models`.
+Order, reasoning profiles and the default profile are native. A configuration-only
+model is never offered. Native unavailability, or a draft model the catalog stops
+publishing, blocks Send without creating a Session.
 
 The composer permission seat binds the same Workspace target actor and semantic
 approval unit as Settings. It offers only native `policy` and `full_access`, uses

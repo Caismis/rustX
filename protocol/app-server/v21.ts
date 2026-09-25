@@ -2417,6 +2417,18 @@ export type Origin =
       kind: 'process';
     };
 export type ProcessPolicyImpact = 'hot' | 'restart';
+/**
+ * Whether native can bind a Session in a Workspace, and its model catalog.
+ */
+export type SessionModelsView =
+  | {
+      catalog: ModelCatalogView;
+      kind: 'available';
+    }
+  | {
+      diagnostic: string;
+      kind: 'unavailable';
+    };
 export type ErrorData =
   | {
       rejection: AdoptionError;
@@ -8890,6 +8902,12 @@ export interface SourceSettings {
    * Read-only native source resolution; never a Session adopted binding.
    */
   resolved?: RuntimeLayer | null;
+  /**
+   * The catalog a Session created in this Workspace binds, exactly as its
+   * `session/models` then serves it. Absent for the User target. Clients
+   * select pre-Session models only from here, never from `resolved`.
+   */
+  session_models?: SessionModelsView | null;
   provenance: {
     [k: string]: Origin;
   };

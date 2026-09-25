@@ -1072,6 +1072,15 @@ semantic-unit mutations. Independent policy applies automatically; active Attemp
 retain `attempt.execution_settings.approval_mode`. `effective_approval_mode` remains
 the loaded runtime fact. Neither field introduces a Session approval override.
 
+`SourceSettings.session_models` is present only for a Workspace target. `available`
+carries the `ModelCatalogView` that a Session created in that Workspace now binds,
+exactly as its `session/models` then serves it: the Workspace's published creation
+capture (or, before one exists, the capture creation would validate and publish),
+resolved with the process credentials. `unavailable` carries the native diagnostic
+where Session creation would fail. The read publishes nothing and creates no
+Session. Clients select pre-Session models only from this catalog; `resolved` is
+source resolution and is never a selectable model vocabulary.
+
 ### Root metadata authoring (#347)
 
 `configuration/sourceWrite` accepts native `ConfigMutation` units

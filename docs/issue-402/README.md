@@ -2,6 +2,7 @@
 
 [PR #404 review corrections and regression evidence](review-corrections.md).
 [Final integration with merged PR #403](integration-403.md).
+[Native model catalog authority and Settings-observation teardown](catalog-and-teardown.md).
 
 ## Repository and inspection
 
