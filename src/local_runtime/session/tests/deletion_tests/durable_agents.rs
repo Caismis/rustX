@@ -143,6 +143,10 @@ fn git(directory: &std::path::Path, arguments: &[&str]) {
 }
 
 async fn physical_agent() -> PhysicalAgent {
+    physical_agent_at_root(None).await
+}
+
+async fn physical_agent_at_root(root_alias: Option<&std::path::Path>) -> PhysicalAgent {
     let (root, catalog, _) = open_catalog();
     let source = tempfile::tempdir().unwrap();
     git(source.path(), &["init", "-q"]);
@@ -153,9 +157,26 @@ async fn physical_agent() -> PhysicalAgent {
     let (node, _) = catalog.lineage(&session, None).unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let allocation = SubagentId::for_conversation(parent.conversation_id(), 1);
-    let manager = crate::runtime::workspace::WorkspaceManager::new(
-        source.path(),
-        root.path().join("workspaces"),
+    // Session-owned workspaces use the same canonical storage authority as
+    // production admission, including when the product root has an OS alias.
+    #[cfg(unix)]
+    if let Some(alias) = root_alias {
+        std::os::unix::fs::symlink(root.path(), alias).unwrap();
+    }
+    let identity =
+        crate::runtime::local_storage::ProductRoot::existing(root_alias.unwrap_or(root.path()))
+            .unwrap();
+    let access = crate::runtime::local_storage::ConversationAccess::existing(
+        &identity,
+        catalog
+            .database_path(&session, parent.conversation_id())
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
+    let manager = crate::runtime::workspace::WorkspaceManager::for_local_conversation(
+        source.path().canonicalize().unwrap(),
+        std::sync::Arc::new(access),
     );
     let lease = manager
         .acquire(
@@ -309,4 +330,37 @@ async fn session_deletion_never_forces_dirty_agent_workspace_removal() {
     let retry = fixture.catalog.recover_delete(&fixture.session).unwrap();
     retry.settle().await.unwrap();
     assert!(!fixture.worktree.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn session_deletion_preserves_canonical_allocation_through_product_root_alias() {
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("product-root");
+    let mut fixture = physical_agent_at_root(Some(&alias)).await;
+    assert!(
+        fixture
+            .worktree
+            .starts_with(fixture.root.path().canonicalize().unwrap())
+    );
+    assert!(!fixture.worktree.starts_with(&alias));
+    let SessionDeleteResult::Preview { preview } = fixture.catalog.delete_preview(&fixture.session)
+    else {
+        panic!("canonical Agent allocation must remain deletable through a root alias")
+    };
+    let work = fixture
+        .catalog
+        .commit_delete(&fixture.session, &preview.target_revision)
+        .unwrap()
+        .unwrap();
+    work.settle().await.unwrap();
+    assert!(!fixture.worktree.exists());
+    fixture
+        .catalog
+        .recover_delete(&fixture.session)
+        .unwrap()
+        .settle()
+        .await
+        .unwrap();
 }

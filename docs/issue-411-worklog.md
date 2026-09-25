@@ -545,3 +545,29 @@ Final evidence logs: `/tmp/411-final-unit2.log`,
 
 Publication: [PR #413](https://github.com/Caismis/rustX/pull/413), targeting main.
 The dedicated issue worktree is retained. No merge or auto-merge is requested.
+
+
+## Published CI follow-up: macOS Session deletion fixtures
+
+Run 36144504292 passed all six Linux/protocol/TUI/Web lanes. macOS reported two
+Agent Session-deletion fixture failures: the fixture used the embedded
+`WorkspaceManager::new` with a raw temporary-root spelling, while Session cleanup
+correctly reconstructs canonical ProductRoot authority. macOS `/var` versus
+`/private/var` exposed that invalid fixture ownership.
+
+The fixture now uses production `ProductRoot` / `ConversationAccess` /
+`WorkspaceManager::for_local_conversation` admission. No production ownership
+check was relaxed. The new Unix regression
+`session_deletion_preserves_canonical_allocation_through_product_root_alias`
+constructs an explicit symlink alias on Linux too, asserts canonical allocation,
+and proves physical deletion plus idempotent committed cleanup replay.
+
+Follow-up validation:
+- `cargo test --lib --all-features local_runtime::session::tests::deletion_tests::durable_agents -- --nocapture`: 5 passed.
+- `cargo test --lib --all-features local_runtime::session::tests::deletion_tests`: 57 passed, no ignored tests.
+- `cargo clippy --all-targets --all-features -- -D warnings`: passed.
+- `cargo fmt --all -- --check` and `git diff --check`: passed.
+
+Only tests and this evidence note changed after the complete validation ledger
+above. A new GitHub run must confirm the macOS correction; the previous failed
+run is not represented as green.
