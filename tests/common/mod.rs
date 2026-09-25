@@ -1545,7 +1545,7 @@ impl FakeSkillEnvironmentBackend {
                 python_package_manager: std::sync::Mutex::new(
                     "pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.12)".to_owned(),
                 ),
-                node_runtime: std::sync::Mutex::new("v23.1.0".to_owned()),
+                node_runtime: std::sync::Mutex::new("v22.1.0".to_owned()),
                 node_package_manager: std::sync::Mutex::new("10.2.3".to_owned()),
                 python_failure: std::sync::Mutex::new(None),
                 node_failure: std::sync::Mutex::new(None),
