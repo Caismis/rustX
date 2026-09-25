@@ -507,3 +507,41 @@ facts do not create physical containment proof, even for clean isolated/shared
 workspaces. Explicit interrupt settles Cancelled and remains resumable. All three
 recovery revocation tests passed after credential hydration; see
 `/tmp/411-recovery-final.log` and the distinction in `docs/subagent-resources.md`.
+
+## Final validation ledger
+
+The final source integrates main `f268175bb8d31010706e7070aae80d2b46b7aced`.
+`.github/workflows/ci.yml` was rechecked after integration (unchanged by #409).
+All applicable Linux gates passed. Existing opt-in ignored tests are reported;
+no boundary, TUI, or browser tests were skipped.
+
+| Working directory | Command | Final result |
+| --- | --- | --- |
+| repository | `cargo fmt --all -- --check` | passed |
+| repository | `cargo clippy --all-targets --all-features -- -D warnings` | passed |
+| repository | `git diff --check` | passed |
+| repository | `cargo build --bins` | passed |
+| repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 3,091 passed, 2 existing ignored; bin/example targets passed |
+| repository | `cargo test --test contracts --test provider --all-features` | 28 + 166 passed, 5 opt-in live-provider tests ignored |
+| repository | `RUST_TEST_THREADS=1 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::` | 190 passed, no skips |
+| repository | `RUST_TEST_THREADS=1 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | 418 passed, no skips (26/5/22/129/62/44/130 by target order) |
+| test-support/fake-provider | `uv sync --frozen`; `uv run --frozen pytest` | passed; 51 tests |
+| tui | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | passed; 863 tests, no skips |
+| web-console | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `pnpm test`; `pnpm check:provenance`; `pnpm build` | passed; 977 tests/56 files; 135 source records/131 notices |
+| web-console | `CONTAINER_ENGINE=podman pnpm test:e2e` | 91 passed, no skips, digest-pinned browser image |
+| dev | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `pnpm test` | passed; 37 tests |
+| protocol/app-server | `pnpm install --frozen-lockfile`; `pnpm check`; `pnpm typecheck` | passed; regeneration leaves current artifacts unchanged |
+
+Initial concurrent boundary attempts hit intermittent PyPI connection failures and
+one 600-second dependency-sync timeout. The final complete serial lanes passed;
+no test or production dependency was disabled, replaced or weakened. The browser
+Workspace teardown regression was corrected by closing the resident Page before
+its Host. macOS validation remains GitHub CI's responsibility.
+
+Final evidence logs: `/tmp/411-final-unit2.log`,
+`/tmp/411-final-contracts-provider2.log`, `/tmp/411-final-boundaries4.log`,
+`/tmp/411-final-external5.log`, `/tmp/411-clippy-complete.log`,
+`/tmp/411-merged-tui-strict3.log`, `/tmp/411-web-final-merged-e2e2.log`.
+
+Publication: [PR #413](https://github.com/Caismis/rustX/pull/413), targeting main.
+The dedicated issue worktree is retained. No merge or auto-merge is requested.
