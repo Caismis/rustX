@@ -271,8 +271,12 @@ impl UploadRegistry {
                 Mode::from_bits_truncate(0o600),
             )?);
             output.write_all(&input.bytes)?;
+            #[cfg(test)]
+            cap_std_validation::native_sync_checkpoint("file sync")?;
             output.sync_all()?;
         }
+        #[cfg(test)]
+        cap_std_validation::native_sync_checkpoint("directory sync")?;
         directory.sync_all()?;
         root.sync_all()?;
         // Re-open the declared path before readiness: an ancestor swap must not
@@ -752,6 +756,8 @@ impl SessionCatalog {
             })
     }
 }
+#[cfg(test)]
+mod cap_std_validation;
 #[cfg(test)]
 mod tests;
 
