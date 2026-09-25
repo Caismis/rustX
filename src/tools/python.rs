@@ -62,6 +62,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -130,31 +131,18 @@ const PYTHON_TOOL_PROBE_TIMEOUT: std::time::Duration = RUNTIME_PROBE_TIMEOUT;
 const PYTHON_TOOL_UV_TIMEOUT: std::time::Duration = ENVIRONMENT_COMMAND_TIMEOUT;
 
 /// A package discovery/preparation failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PythonToolError {
     /// The package is malformed.
+    #[error("invalid Python tool package: {0}")]
     InvalidPackage(String),
     /// Prepared state could not be read or published.
+    #[error("Python tool storage failed: {0}")]
     Storage(String),
     /// The dependency environment could not be checked or materialized.
+    #[error("Python tool environment failed: {0}")]
     Environment(String),
 }
-
-impl std::fmt::Display for PythonToolError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidPackage(message) => {
-                write!(formatter, "invalid Python tool package: {message}")
-            }
-            Self::Storage(message) => write!(formatter, "Python tool storage failed: {message}"),
-            Self::Environment(message) => {
-                write!(formatter, "Python tool environment failed: {message}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for PythonToolError {}
 
 /// One discovered package: the frozen in-memory snapshot of every package
 /// byte, already validated against the package contract.
@@ -234,7 +222,7 @@ pub(crate) fn discover_package(
             "the package has no {REQUIREMENTS_FILE} (required, even when empty)"
         )));
     };
-    let requirements = parse_requirements(requirements_bytes)
+    let requirements = parse_requirements(requirements_bytes, root)
         .map_err(|message| invalid(format!("{REQUIREMENTS_FILE}: {message}")))?;
     Ok(PythonToolPackage {
         name: name.to_owned(),
@@ -342,12 +330,13 @@ pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolErro
 /// rustX-pinned, so a package may never declare it. Everything else is
 /// validated only far enough to become a `pyproject.toml` dependency entry;
 /// real dependency semantics (resolution, markers, indexes) belong to uv.
-fn parse_requirements(bytes: &[u8]) -> Result<Vec<String>, String> {
+fn parse_requirements(bytes: &[u8], _package_root: &Path) -> Result<Vec<String>, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "the file is not valid UTF-8".to_owned())?;
     let mut requirements = Vec::new();
     for (index, raw_line) in text.lines().enumerate() {
-        // Strip end-of-line comments the way pip does (a `#` preceded by
-        // whitespace or at line start).
+        // A requirements-file comment starts at `#` following whitespace,
+        // outside quoted marker text. URL fragments have no preceding
+        // whitespace and remain part of the declaration.
         let line = strip_requirement_comment(raw_line).trim();
         if line.is_empty() {
             continue;
@@ -358,9 +347,23 @@ fn parse_requirements(bytes: &[u8]) -> Result<Vec<String>, String> {
                 index + 1
             ));
         }
-        let name = requirement_name(line)
-            .ok_or_else(|| format!("line {}: not a requirement line: {line:?}", index + 1))?;
-        if name.eq_ignore_ascii_case("fastmcp") {
+        if line.ends_with('\\') {
+            return Err(format!(
+                "line {}: line continuations are not supported",
+                index + 1
+            ));
+        }
+        if contains_environment_variable_reference(line) {
+            return Err(format!(
+                "line {}: environment-variable expansion is not supported",
+                index + 1
+            ));
+        }
+        let requirement = pep_508::parse(line)
+            .map_err(|error| format!("line {}: {}", index + 1, safe_pep508_diagnostic(&error)))?;
+        let name = uv_normalize::PackageName::from_str(requirement.name)
+            .map_err(|_| format!("line {}: invalid dependency declaration", index + 1))?;
+        if name.as_ref() == "fastmcp" {
             return Err(format!(
                 "line {}: the `fastmcp` dependency is managed by rustX \
                  (pinned to fastmcp=={MANAGED_FASTMCP_VERSION}); remove it",
@@ -372,35 +375,84 @@ fn parse_requirements(bytes: &[u8]) -> Result<Vec<String>, String> {
     Ok(requirements)
 }
 
+/// The requirements-file layer rejects only pip's documented `${NAME}`
+/// expansion directive. Other dollar signs belong to the PEP 508 parser: in
+/// particular, `$TOKEN` is ordinary quoted-marker text rather than pip
+/// expansion syntax.
+fn contains_environment_variable_reference(line: &str) -> bool {
+    line.match_indices("${").any(|(index, _)| {
+        let remainder = &line[index + 2..];
+        let Some(end) = remainder.find('}') else {
+            return false;
+        };
+        let name = &remainder[..end];
+        let mut characters = name.chars();
+        matches!(characters.next(), Some(character) if character == '_' || character.is_ascii_alphabetic())
+            && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+    })
+}
+
+/// Converts parser-owned failure metadata into a short rustX-owned reason.
+///
+/// `pep-508` owns acceptance and grammar. Its `Simple` errors expose only a
+/// byte span and whether parsing found a token, not grammar-production labels;
+/// rustX selects the furthest `span().start`, breaking a same-position tie in
+/// favor of a found token. This makes Chumsky's error-vector order irrelevant
+/// while emitting only the parser-supported distinction between an unexpected
+/// end and another syntax error. Never format the parser error: its display
+/// form includes the authored token and span, which can disclose URL
+/// credentials.
+const MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET: usize = 16 * 1024 * 1024;
+const MAX_REQUIREMENTS_PARSE_REASON_BYTES: usize =
+    "unexpected end of dependency declaration near byte 16777216+".len();
+
+fn safe_pep508_diagnostic(errors: &[chumsky::error::Simple<'_, char>]) -> String {
+    let error = errors
+        .iter()
+        .max_by_key(|error| (error.span().start, error.found().is_some()))
+        .expect("pep-508 parse failures include structured error metadata");
+    let offset = error
+        .span()
+        .start
+        .min(MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET);
+    let offset = if error.span().start > MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET {
+        format!("{offset}+")
+    } else {
+        offset.to_string()
+    };
+    let reason = if error.found().is_none() {
+        format!("unexpected end of dependency declaration near byte {offset}")
+    } else {
+        format!("invalid dependency syntax near byte {offset}")
+    };
+    debug_assert!(reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES);
+    reason
+}
+
 fn strip_requirement_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
     let mut previous: Option<char> = None;
     for (index, character) in line.char_indices() {
-        if character == '#' && (index == 0 || previous.is_some_and(char::is_whitespace)) {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' && quote.is_some() {
+            escaped = true;
+        } else if matches!(character, '\'' | '\"') {
+            if quote == Some(character) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(character);
+            }
+        } else if quote.is_none()
+            && character == '#'
+            && (index == 0 || previous.is_some_and(char::is_whitespace))
+        {
             return &line[..index];
         }
         previous = Some(character);
     }
     line
-}
-
-/// The requirement name of one PEP 508 line: everything before the extras,
-/// version specifier, direct reference, or environment marker.
-fn requirement_name(line: &str) -> Option<&str> {
-    let end = line
-        .find(|character: char| {
-            matches!(character, '[' | '=' | '<' | '>' | '!' | '~' | ';' | '@')
-                || character.is_whitespace()
-        })
-        .unwrap_or(line.len());
-    let name = &line[..end];
-    if name.is_empty()
-        || !name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-        })
-    {
-        return None;
-    }
-    Some(name)
 }
 
 /// The deterministic content digest of the package source bytes alone.
@@ -1405,6 +1457,7 @@ mod tests {
     fn requirements_parse_normalizes_comments_and_blank_lines() {
         let parsed = parse_requirements(
             b"# heading\n\nsix==1.16.0  # pinned\nrequests[socks]>=2 ; python_version >= '3.10'\n",
+            Path::new("/tmp"),
         )
         .expect("valid requirements");
         assert_eq!(
@@ -1419,7 +1472,8 @@ mod tests {
     #[test]
     fn requirements_reject_the_managed_fastmcp_dependency() {
         for line in ["fastmcp", "fastmcp==4.0.0", "FastMCP[cli]>=2"] {
-            let error = parse_requirements(line.as_bytes()).expect_err("fastmcp is managed");
+            let error = parse_requirements(line.as_bytes(), Path::new("/tmp"))
+                .expect_err("fastmcp is managed");
             assert!(
                 error.contains(MANAGED_FASTMCP_VERSION),
                 "the diagnostic names the managed pin: {error}"
@@ -1429,20 +1483,263 @@ mod tests {
 
     #[test]
     fn requirements_reject_option_lines_and_unparseable_lines() {
-        let error = parse_requirements(b"-r other.txt\n").expect_err("option line");
+        let error =
+            parse_requirements(b"-r other.txt\n", Path::new("/tmp")).expect_err("option line");
         assert!(
             error.contains("line 1"),
             "the diagnostic locates the line: {error}"
         );
         assert!(error.contains("option lines"), "{error}");
-        let error =
-            parse_requirements(b"\nsix==1.16.0\n=== garbage ===\n").expect_err("unparseable");
+        let error = parse_requirements(b"\nsix==1.16.0\n=== garbage ===\n", Path::new("/tmp"))
+            .expect_err("unparseable");
         assert!(
             error.contains("line 3"),
             "the diagnostic locates the line: {error}"
         );
-        let error = parse_requirements(b"\xff\xfe").expect_err("not UTF-8");
+        let error = parse_requirements(b"\xff\xfe", Path::new("/tmp")).expect_err("not UTF-8");
         assert!(error.contains("UTF-8"), "{error}");
+    }
+
+    #[test]
+    fn pep508_requirements_corpus_preserves_effective_declarations() {
+        let root = tempfile::tempdir().expect("package root");
+        let declarations = [
+            "requests",
+            "requests[socks]>=2,<3",
+            "requests; python_version >= '3.10'",
+            "demo; python_version === '3.12'",
+            "demo; python_version == '3.12'",
+            "demo; python_version != '3.12'",
+            "demo; python_version < '3.12'",
+            "demo; python_version <= '3.12'",
+            "demo; python_version > '3.12'",
+            "demo; python_version >= '3.12'",
+            "demo; python_version ~= '3.12'",
+            "demo; os_name in 'posix'",
+            "demo; os_name not in 'nt'",
+            "demo @ https://example.invalid/demo-1.whl#sha256=deadbeef",
+            "demo @ git+https://example.invalid/demo.git@main",
+            "demo @ file:///tmp/demo-1.whl",
+            "demo @ ../demo-1.whl",
+        ];
+        let input = declarations.join("\n");
+        assert_eq!(
+            parse_requirements(input.as_bytes(), root.path()).expect("supported corpus"),
+            declarations,
+            "validated declarations remain the original effective text"
+        );
+    }
+
+    #[test]
+    fn pep508_requirements_reject_invalid_grammar_and_file_directives() {
+        for (label, input) in [
+            ("bad name", "bad/name"),
+            ("broken extras", "demo[extra"),
+            ("broken version", "demo >< 1"),
+            ("broken marker", "demo; python_version >< '3.12'"),
+            ("broken URL", "demo @ https://[broken"),
+            ("include", "-r other.txt"),
+            ("long include", "--requirement other.txt"),
+            ("editable", "-e ../demo"),
+            ("long editable", "--editable ../demo"),
+            ("index", "--index-url https://example.invalid/simple"),
+            ("continuation", "demo \\\\"),
+            (
+                "braced expansion",
+                "demo @ https://example.invalid/${TOKEN}.whl",
+            ),
+        ] {
+            let error = parse_requirements(input.as_bytes(), Path::new("/tmp")).expect_err(label);
+            assert!(error.starts_with("line 1:"), "{label}: {error}");
+        }
+    }
+
+    #[test]
+    fn pep508_parser_diagnostics_are_useful_bounded_and_safe() {
+        let cases = [
+            ("name", "bad/name"),
+            ("extra", "demo[extra"),
+            ("specifier", "demo >< 1"),
+            ("marker", "demo; python_version >< '3.12'"),
+            ("URL", "demo @ https://[broken"),
+        ];
+        for (label, declaration) in cases {
+            let error =
+                parse_requirements(declaration.as_bytes(), Path::new("/tmp")).expect_err(label);
+            assert!(error.starts_with("line 1: "), "{label}: {error}");
+            let reason = error.strip_prefix("line 1: ").expect("line prefix");
+            assert!(
+                reason.starts_with("unexpected end of dependency declaration near byte "),
+                "{label}: {error}"
+            );
+            assert!(!reason.contains("version specifier"), "{label}: {error}");
+            assert!(!reason.contains("environment marker"), "{label}: {error}");
+            assert!(!reason.contains("dependency extra"), "{label}: {error}");
+            assert!(!reason.contains("direct-reference URL"), "{label}: {error}");
+            assert!(
+                reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES,
+                "{label} reason is bounded: {error}"
+            );
+        }
+
+        let ambiguous = "demo[broken; python_version >= '3.12'";
+        let error = parse_requirements(ambiguous.as_bytes(), Path::new("/tmp"))
+            .expect_err("ambiguous malformed declaration");
+        let reason = error.strip_prefix("line 1: ").expect("line prefix");
+        assert!(reason.starts_with("unexpected end of dependency declaration near byte "));
+        assert!(!reason.contains("environment marker"), "{error}");
+        assert!(!reason.contains("dependency extra"), "{error}");
+
+        let sentinel = "TOP-SECRET-397";
+        let declaration = format!("demo @ https://user:{sentinel}@example.invalid/[broken");
+        let error = parse_requirements(declaration.as_bytes(), Path::new("/tmp"))
+            .expect_err("malformed URL");
+        assert!(
+            !error.contains(sentinel) && !error.contains("user:") && !error.contains(&declaration),
+            "diagnostic disclosed authored URL content: {error}"
+        );
+
+        let long = format!("demo[{}", "x".repeat(16 * 1024));
+        let error = parse_requirements(long.as_bytes(), Path::new("/tmp"))
+            .expect_err("malformed long declaration");
+        let reason = error.strip_prefix("line 1: ").expect("line prefix");
+        assert!(
+            reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES,
+            "diagnostic reason is bounded: {} bytes",
+            reason.len()
+        );
+    }
+
+    #[test]
+    fn discovery_surfaces_safe_pep508_diagnostics_as_invalid_packages() {
+        let (_directory, workspace) = workspace_with(&[(
+            "demo",
+            &[
+                (SERVER_FILE, b"mcp = None\n".as_slice()),
+                (REQUIREMENTS_FILE, b"bad/name\n".as_slice()),
+            ],
+        )]);
+        let package = workspace.root().join(".agents/tools/demo");
+        let error = discover_package(&package, "demo").expect_err("invalid name");
+        let PythonToolError::InvalidPackage(message) = error else {
+            panic!("PEP 508 parse errors remain package validation errors");
+        };
+        assert!(message.contains(
+            "requirements.txt: line 1: unexpected end of dependency declaration near byte"
+        ));
+        assert!(!message.contains("version specifier"));
+    }
+
+    #[test]
+    fn pep508_diagnostic_reduction_is_order_independent_and_prefers_progress() {
+        use chumsky::{DefaultExpected, error::LabelError, prelude::SimpleSpan, util::MaybeRef};
+
+        fn error_at(start: usize, found: Option<char>) -> chumsky::error::Simple<'static, char> {
+            <chumsky::error::Simple<'static, char> as LabelError<
+                'static,
+                &'static str,
+                DefaultExpected<'static, char>,
+            >>::expected_found(
+                std::iter::empty::<DefaultExpected<'static, char>>(),
+                found.map(MaybeRef::Val),
+                SimpleSpan::new(start, start + usize::from(found.is_some())),
+            )
+        }
+
+        let earlier_found = error_at(3, Some('/'));
+        let later_eof = error_at(8, None);
+        let forward = vec![earlier_found, later_eof];
+        let reverse = vec![later_eof, earlier_found];
+        assert_eq!(
+            safe_pep508_diagnostic(&forward),
+            "unexpected end of dependency declaration near byte 8"
+        );
+        assert_eq!(
+            safe_pep508_diagnostic(&forward),
+            safe_pep508_diagnostic(&reverse)
+        );
+
+        let same_position_eof = error_at(8, None);
+        let same_position_found = error_at(8, Some('!'));
+        let eof_first = vec![same_position_eof, same_position_found];
+        let found_first = vec![same_position_found, same_position_eof];
+        assert_eq!(
+            safe_pep508_diagnostic(&eof_first),
+            "invalid dependency syntax near byte 8"
+        );
+        assert_eq!(
+            safe_pep508_diagnostic(&eof_first),
+            safe_pep508_diagnostic(&found_first)
+        );
+
+        // Equal semantic keys may contain different authored tokens; neither
+        // the token value nor its position in the vector affects the result.
+        let other_found = error_at(8, Some('$'));
+        for errors in [
+            [earlier_found, later_eof, same_position_found, other_found],
+            [other_found, same_position_found, later_eof, earlier_found],
+            [later_eof, other_found, earlier_found, same_position_found],
+        ] {
+            assert_eq!(
+                safe_pep508_diagnostic(&errors),
+                "invalid dependency syntax near byte 8"
+            );
+        }
+        let capped =
+            safe_pep508_diagnostic(&[error_at(MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET + 1, None)]);
+        assert_eq!(
+            capped,
+            "unexpected end of dependency declaration near byte 16777216+"
+        );
+        assert!(capped.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES);
+    }
+
+    #[test]
+    fn requirements_file_comments_crlf_and_quoted_markers_are_bounded() {
+        let parsed = parse_requirements(
+            b"\r\n# comment\r\ndemo @ https://example.invalid/demo.whl#sha256=deadbeef\r\nrequests; os_name == 'hash # and $ stay' # comment\r\ndemo; os_name == '$TOKEN'\r\ndemo; os_name == '${'\r\n",
+            Path::new("/tmp"),
+        )
+        .expect("comments and CRLF are accepted");
+        assert_eq!(
+            parsed,
+            [
+                "demo @ https://example.invalid/demo.whl#sha256=deadbeef",
+                "requests; os_name == 'hash # and $ stay'",
+                "demo; os_name == '$TOKEN'",
+                "demo; os_name == '${'",
+            ]
+        );
+    }
+
+    #[test]
+    fn managed_fastmcp_uses_pep503_normalized_identity_without_marker_evaluation() {
+        for declaration in [
+            "FastMCP",
+            "fastmcp[cli]>=2",
+            "FASTmcp @ https://example.invalid/fastmcp.whl",
+            "fastmcp; python_version < '0'",
+        ] {
+            let error = parse_requirements(declaration.as_bytes(), Path::new("/tmp"))
+                .expect_err("managed FastMCP declaration");
+            assert!(error.contains("managed by rustX"), "{declaration}: {error}");
+        }
+        assert_eq!(
+            parse_requirements(b"fast_mcp\n", Path::new("/tmp")).expect("distinct package"),
+            ["fast_mcp"]
+        );
+        for (authored, expected) in [
+            ("FastMCP", "fastmcp"),
+            ("fastmcp", "fastmcp"),
+            ("FASTmcp", "fastmcp"),
+            ("fast_mcp", "fast-mcp"),
+            ("fast.mcp", "fast-mcp"),
+            ("fast---mcp", "fast-mcp"),
+        ] {
+            let normalized = uv_normalize::PackageName::from_str(authored)
+                .expect("library-owned normalized package name");
+            assert_eq!(normalized.as_ref(), expected, "{authored}");
+        }
     }
 
     #[test]
