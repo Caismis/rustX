@@ -1535,6 +1535,11 @@ export type TraceContentBlock =
  */
 export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
 /**
+ * Identifies one durable runtime event.
+ */
+export type EventId = string;
+export type TerminalTurnOutcome = 'cancelled' | 'failed' | 'timed_out' | 'limit_exceeded';
+/**
  * A content block inside a `UserMessageBlock`.
  */
 export type UserContentBlock =
@@ -5706,6 +5711,10 @@ export interface RuntimeClientTranscriptEntry {
    */
   item:
     | {
+        turn: TerminalTurnView;
+        type: 'attempt_terminal';
+      }
+    | {
         /**
          * The canonical or durably accepted message.
          */
@@ -5727,7 +5736,7 @@ export interface RuntimeClientTranscriptEntry {
       }
     | {
         /**
-         * Durable Event Journal event identity.
+         * Identifies one durable runtime event.
          */
         event_id: string;
         /**
@@ -5795,7 +5804,7 @@ export interface RuntimeClientTranscriptEntry {
       }
     | {
         /**
-         * Durable Event Journal event identity.
+         * Identifies one durable runtime event.
          */
         event_id: string;
         /**
@@ -6089,6 +6098,17 @@ export interface ToolExecutionResult1 {
    * consumes only this typed field, never arbitrary JSON keys.
    */
   managed_output?: ManagedOutputContinuation | null;
+}
+/**
+ * Durable terminal Turn identity and clock. Transcript cursor owns ordering.
+ */
+export interface TerminalTurnView {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+  event_id: EventId;
+  outcome: TerminalTurnOutcome;
+  started_at?: string | null;
+  ended_at: string;
 }
 /**
  * Inbound information supplied to the current agent.
@@ -9093,7 +9113,7 @@ export interface InteractionRef3 {
  */
 export interface RuntimeClientTranscriptInteractionRequested {
   /**
-   * Durable Event Journal event identity.
+   * Identifies one durable runtime event.
    */
   event_id: string;
   /**
@@ -9163,7 +9183,7 @@ export interface RuntimeClientTranscriptInteractionRequested {
  */
 export interface RuntimeClientTranscriptInteractionSettled {
   /**
-   * Durable Event Journal event identity.
+   * Identifies one durable runtime event.
    */
   event_id: string;
   /**

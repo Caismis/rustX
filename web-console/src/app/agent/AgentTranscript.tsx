@@ -51,6 +51,10 @@ export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHist
     {turnPresentation(entries).map(node => {
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}/>;
       const entry = node.entry;
+      if (entry.item.type === 'attempt_terminal') {
+        const turn = entry.item.turn;
+        return <TurnProcess key={entryIdentity(entry)} id={JSON.stringify([turn.conversation_id, turn.attempt_id])} open tools={0} messages={0} outcome={turn.outcome} start={turn.started_at ?? undefined} end={turn.ended_at}/>;
+      }
       const statuses = statusesAt(placement, { messageId: entry.item.type === 'message' ? entry.item.message.id : undefined, cursor: entry.cursor });
       const key = process.membership.get(entry.cursor);
       const group = key ? process.groups.get(key) : undefined;
@@ -86,9 +90,8 @@ export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHist
       </Fragment>;
     })}
     {!!currentContext.length && <details><summary>Current context</summary>{currentContext.map(message => <Message key={message.id} message={message} />)}</details>}
-    {snapshot.attempt && !entries.some(entry => entry.completed_response?.origin.conversation_id === snapshot.conversation_id && entry.completed_response.origin.attempt_id === snapshot.attempt!.attempt_id) && <TurnProcess id={JSON.stringify([snapshot.conversation_id, snapshot.attempt.attempt_id])} open tools={snapshot.attempt.foreground?.length ?? 0} messages={0}
-      running={snapshot.attempt.phase.type !== 'settled'}
-      outcome={snapshot.attempt.phase.type === 'settled' ? snapshot.attempt.phase.outcome.type : undefined}
+    {snapshot.attempt && snapshot.attempt.phase.type !== 'settled' && !entries.some(entry => entry.completed_response?.origin.conversation_id === snapshot.conversation_id && entry.completed_response.origin.attempt_id === snapshot.attempt!.attempt_id) && <TurnProcess id={JSON.stringify([snapshot.conversation_id, snapshot.attempt.attempt_id])} open tools={snapshot.attempt.foreground?.length ?? 0} messages={0}
+      running
       start={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.started_at : undefined}
       end={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.ended_at ?? undefined : undefined}/>}
     {streaming && !durableIds.has(streaming.message_id) && <div data-chat-anchor-key={`message:${streaming.message_id}`}><AssistantMessage label="Streaming response"><Content blocks={streaming.blocks ?? []} markdown streaming tools={snapshot.attempt?.foreground?.filter(tool => tool.message_id === streaming.message_id)}/></AssistantMessage></div>}

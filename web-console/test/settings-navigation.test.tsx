@@ -297,3 +297,14 @@ it('N11 a Workspace navigation state cannot be forced into Connection, with the 
   fireEvent.click(await screen.findByRole('button', { name: 'Connection' }));
   expect(connectionShown()).toBe(true);
 });
+
+it('a current owner lookup failure stays beside Session configuration, not in App notices', async () => {
+  const { startLookup } = await mountOwnerFailure();
+  await release(startLookup());
+  const error = screen.getByRole('alert', { name: 'Settings navigation error' });
+  expect(error.textContent).toContain('stale owner lookup failed');
+  expect(error.closest('header')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Dismiss notice' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss settings error' }));
+  expect(screen.queryByRole('alert', { name: 'Settings navigation error' })).toBeNull();
+});

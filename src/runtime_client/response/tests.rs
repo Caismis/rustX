@@ -587,3 +587,107 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
     assert_eq!(member.completed_process, last.entries[0].completed_process);
     assert_eq!(store.load_canonical().unwrap().len(), 5);
 }
+
+#[test]
+fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
+    use crate::events::types::{AttemptFailure, AttemptLimit};
+    use crate::runtime::types::{CancellationReason, RuntimeError};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("terminal.sqlite");
+    let id = ConversationId::new("conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f");
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    let outcomes = [
+        (
+            "cancelled",
+            RuntimeEvent::AttemptCancelled {
+                attempt_id: AttemptId::new("cancelled"),
+                reason: CancellationReason::UserRequested,
+            },
+            TerminalTurnOutcome::Cancelled,
+        ),
+        (
+            "failed",
+            RuntimeEvent::AttemptFailed {
+                attempt_id: AttemptId::new("failed"),
+                error: AttemptFailure::Runtime {
+                    error: RuntimeError::Internal {
+                        message: "fixture".into(),
+                    },
+                },
+            },
+            TerminalTurnOutcome::Failed,
+        ),
+        (
+            "timeout",
+            RuntimeEvent::AttemptTimedOut {
+                attempt_id: AttemptId::new("timeout"),
+            },
+            TerminalTurnOutcome::TimedOut,
+        ),
+        (
+            "limit",
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: AttemptId::new("limit"),
+                limit: AttemptLimit::MaxTurns,
+            },
+            TerminalTurnOutcome::LimitExceeded,
+        ),
+    ];
+    let mut expected = Vec::new();
+    for (attempt, terminal, outcome) in outcomes {
+        // No Assistant output is required to own a terminal Turn.
+        append(
+            &store,
+            attempt,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new(attempt),
+            },
+        );
+        let mut terminal = event(&store, attempt, terminal);
+        terminal.timestamp += chrono::Duration::seconds(7);
+        store.append_event(terminal).unwrap();
+        let latest = page(&store, None, 1);
+        let entry = latest.entries.last().unwrap().clone();
+        let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &entry.item else {
+            panic!("missing terminal Turn")
+        };
+        assert_eq!(turn.conversation_id, id);
+        assert_eq!(turn.attempt_id, AttemptId::new(attempt));
+        assert_eq!(turn.outcome, outcome);
+        assert_eq!(
+            turn.ended_at - turn.started_at.unwrap(),
+            chrono::Duration::seconds(7)
+        );
+        expected.push(entry);
+    }
+    // A later successful Attempt and a new running Attempt cannot rewrite history.
+    assistant(&store, "later", "later-response");
+    finish(&store, "later");
+    append(
+        &store,
+        "running",
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("running"),
+        },
+    );
+    drop(store);
+    let reopened = SqliteConversationStore::open_existing(id, &path).unwrap();
+    let full = page(&reopened, None, 64);
+    assert_eq!(&full.entries[..expected.len()], expected.as_slice());
+    let mut before = None;
+    let mut paged = Vec::new();
+    loop {
+        let current = page(&reopened, before, 1);
+        paged.extend(current.entries);
+        before = current.next_cursor.map(Into::into);
+        if before.is_none() {
+            break;
+        }
+    }
+    paged.reverse();
+    assert_eq!(paged, full.entries);
+    // Repeated resubscription reads are identical, with no live Attempt involved.
+    assert_eq!(full, page(&reopened, None, 64));
+    let wire = serde_json::to_string(&full).unwrap();
+    assert_eq!(full, serde_json::from_str(&wire).unwrap());
+}

@@ -105,3 +105,54 @@ stale protocol-number assertions; obsolete cwd/Lineage/Working/delete-banner
 assertions; intentional changed references; model-menu tests assuming selection
 left the menu open; and a Clippy large-enum warning resolved with a boxed native
 default-model payload. Build retains its existing non-fatal large-chunk warning.
+
+## PR #409 architectural review follow-up
+
+Starting PR HEAD: `34c983353c4a18a835421bc3cbba669955b075eb`.
+Latest fetched main: `8b59e770225cf8ae39bfdfe2a6e50b0137bfa146`.
+Worktree: `/home/caismis/Documents/codes/rustX-issue-406`, existing branch
+`issue-406-conversation-surface`; the original `rustX` main worktree and its
+pre-existing `.playwright-mcp/` directory were left unchanged. The pushed final
+SHA and final PR state are recorded in PR #409's Repository state section.
+
+New deterministic regressions:
+
+- Native terminal-event folds cover cancellation, failure, timeout and limit
+  exhaustion without Assistant output. They compare identity/outcome/native
+  timestamps after SQLite reopen, later successful and running Attempts,
+  repeated reads, one-entry paging, and wire serialization round-trip.
+- Real AppFrame, SidebarRoot, WorkspaceNavigation and ConversationHeader function
+  spies stay unchanged through idle/admitted/running/streaming/settled/next
+  Attempt, while transcript, TurnProcess and composer actions update. All four
+  non-success outcomes reconnect with their original identity.
+- A settled live Attempt with no durable transcript terminal cannot create a
+  Stopped row. Existing streaming/clock and resident input tests still run.
+- Transcript and trace request failures produce exactly one owner-local alert
+  and no App notice. Connection/durability recovery and active-surface attachment
+  failures keep global presentation. A Settings-owner lookup error stays beside
+  its configuration action.
+
+Native final validation: formatting and Clippy with warnings denied pass.
+`cargo test --all-targets --all-features --no-fail-fast` passes: **3,924 passed,
+0 failed, 7 ignored**, across 18 result blocks. `cargo build --bins` passes.
+The initial exact `cargo test --all-targets --all-features` run failed on a
+managed-Python fixture's transient PyPI network error; the full no-fail-fast
+rerun passed that fixture and every remaining target. No test was disabled.
+TUI typecheck and all **852 tests** pass; protocol typecheck passes and the
+updated schema/TypeScript were generated using `pnpm generate`.
+
+Validation incidents: an intermediate web run under concurrent native build and
+browser load hit two existing five-second Settings test timeouts; the next full
+run passed without threshold changes. One intermediate browser Settings test
+was invalidated by Vite hot updates to App and ConversationHeader while the
+suite was running (confirmed in its trace); final browser validation runs with
+source files held fixed. No reference screenshot or comparison tolerance was
+changed. The web build retains its existing nonfatal large-chunk warning.
+
+Final web validation: `pnpm typecheck`, `pnpm test` (**55 files / 964 tests**),
+`pnpm build`, `CONTAINER_ENGINE=podman pnpm test:e2e` (**90 passed in 5.3m**) and
+`pnpm check:provenance` (**135 source records / 131 production notices**) all pass.
+The intermediate Workspace browser fixture also had a provider-teardown
+connection refusal; the final complete browser run passed it unchanged. The
+narrow Settings case passed in nine seconds with no source hot reload. Final
+`git diff --check` passes. No browser reference changes were needed.

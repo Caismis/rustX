@@ -52,6 +52,48 @@ pub struct CompletedProcessView {
     pub final_message_id: MessageId,
 }
 
+/// Durable terminal Turn identity and clock. Transcript cursor owns ordering.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalTurnView {
+    pub conversation_id: crate::runtime::identity::ConversationId,
+    pub attempt_id: AttemptId,
+    pub event_id: crate::runtime::identity::EventId,
+    pub outcome: TerminalTurnOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub ended_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalTurnOutcome {
+    Cancelled,
+    Failed,
+    TimedOut,
+    LimitExceeded,
+}
+
+pub(crate) fn terminal_turn(
+    event: crate::events::types::RuntimeEventEnvelope,
+) -> Result<TerminalTurnView, String> {
+    let outcome = match event.event {
+        RuntimeEvent::AttemptCancelled { .. } => TerminalTurnOutcome::Cancelled,
+        RuntimeEvent::AttemptFailed { .. } => TerminalTurnOutcome::Failed,
+        RuntimeEvent::AttemptTimedOut { .. } => TerminalTurnOutcome::TimedOut,
+        RuntimeEvent::AttemptLimitExceeded { .. } => TerminalTurnOutcome::LimitExceeded,
+        _ => return Err("invalid terminal Attempt reference".into()),
+    };
+    Ok(TerminalTurnView {
+        conversation_id: event.conversation_id,
+        attempt_id: event.attempt_id.ok_or("terminal Attempt has no identity")?,
+        event_id: event.event_id,
+        outcome,
+        started_at: None,
+        ended_at: event.timestamp,
+    })
+}
+
 /// Whole-conversation execution totals, independent of any transcript window.
 /// Forked Conversations start a fresh execution epoch, as native lineage does.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -147,13 +189,25 @@ pub(crate) fn decorate_through(
             _ => None,
         })
         .collect();
+    let terminal_attempts = page
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.item {
+            RuntimeClientTranscriptItem::AttemptTerminal { turn } => Some(turn.attempt_id.clone()),
+            _ => None,
+        })
+        .collect();
     let ResponseProjection {
         mut completed,
         processes,
         pending,
         statistics,
-    } = project(store, &wanted, through)?;
+        terminal_starts,
+    } = project(store, &wanted, &terminal_attempts, through)?;
     for entry in &mut page.entries {
+        if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item {
+            turn.started_at = terminal_starts.get(&turn.attempt_id).copied();
+        }
         let owner = match &entry.item {
             RuntimeClientTranscriptItem::Message {
                 message: MessageBlock::Assistant(message),
@@ -207,6 +261,7 @@ pub(crate) fn decorate_through(
 }
 
 struct ResponseProjection {
+    terminal_starts: BTreeMap<AttemptId, chrono::DateTime<chrono::Utc>>,
     completed: BTreeMap<MessageId, CompletedResponseProvenance>,
     processes: BTreeMap<MessageId, CompletedProcessView>,
     pending: BTreeSet<MessageId>,
@@ -228,7 +283,12 @@ pub(crate) fn lineage_provenance(
             _ => None,
         })
         .collect();
-    let mut projection = project(store, &wanted, store.presentation_frontier()?)?;
+    let mut projection = project(
+        store,
+        &wanted,
+        &BTreeSet::new(),
+        store.presentation_frontier()?,
+    )?;
     Ok(canonical
         .iter()
         .filter_map(|message| {
@@ -243,8 +303,10 @@ pub(crate) fn lineage_provenance(
 fn project(
     store: &dyn ConversationStore,
     wanted: &BTreeSet<MessageId>,
+    terminal_attempts: &BTreeSet<AttemptId>,
     through: u64,
 ) -> Result<ResponseProjection, ConversationStoreError> {
+    let mut terminal_starts = BTreeMap::new();
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
     let mut completed: BTreeMap<_, _> = store
         .load_inherited_responses()?
@@ -312,6 +374,9 @@ fn project(
             let evidence = attempts.entry(id.clone()).or_default();
             match event.event {
                 RuntimeEvent::AttemptStarted { .. } => {
+                    if terminal_attempts.contains(&id) {
+                        terminal_starts.insert(id.clone(), event.timestamp);
+                    }
                     evidence.started_at = Some(event.timestamp);
                     statistics.turns += 1;
                     statistics.latest_turn = Some(ConversationTurnClock {
@@ -449,6 +514,7 @@ fn project(
         .flat_map(|evidence| evidence.members.iter().cloned())
         .collect();
     Ok(ResponseProjection {
+        terminal_starts,
         completed,
         processes,
         pending,

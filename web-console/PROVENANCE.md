@@ -915,3 +915,11 @@ content without invented line numbers. Models retains rustX's complete typed
 configuration details and distinguishes unobserved application from availability.
 The Agent Status status-section definition list replaces Harness ContextBody,
 while its disclosure axes, separator and indentation reuse ContextInjectionRow.
+
+PR #409 review corrections retain the existing Harness source pins and notices.
+`WorkspaceBrowser` gains a presentation render slot so native per-row activity
+subscriptions do not invalidate the browser; `WorkspaceNavigation` supplies that
+binding. Their local hashes and import closure are updated in the inventory.
+`ConversationSeat`, `ConversationHeader`, and `SettingsNavigationFeedback` split
+existing rustX App ownership; they add no copied upstream source. Journal-owned
+terminal transcript facts and failure routing are native rustX adaptations.

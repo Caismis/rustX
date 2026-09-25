@@ -67,10 +67,10 @@ composer chrome. Queue/steer/cancel remain exact native operations. No browser
 queue, cancellation owner, event fold, or compatibility mode was introduced.
 
 `useClientSelector` caches equality-selected values across publications.
-`sameChrome` names the bounded facts allowed to invalidate App: connection and
-authority, catalog/summary/navigation, admission/interaction/uncertainty, native
-model and configuration revision. It excludes transcript, Trace, token and Tool
-bodies. Live consumers independently subscribe; no debounce drops stream state.
+`selectShell` supplies only connection/authority, catalog/summary/navigation,
+Workspace settings and unresolved global authority. Its `ShellView` type has no
+execution snapshot. Composer admission, interactions, model changes, transcript,
+Trace and Tool bodies belong to local subscribers. No debounce drops stream state.
 
 ## Ten-area implementation and regression map
 
@@ -148,3 +148,59 @@ migration. SQLite's presentation-event query already contains native Turn starts
 See [Web provenance](../../web-console/PROVENANCE.md#406-current-harness-conversation-contract)
 for the exact studied and materially adapted source inventory. Validation and
 browser evidence are recorded in the PR against the final branch revision.
+
+## PR #409 review corrections
+
+Terminal execution history belongs to the Event Journal. Committing an
+`AttemptCancelled`, `AttemptFailed`, `AttemptTimedOut`, or
+`AttemptLimitExceeded` atomically adds an `attempt_terminal` reference to the
+existing transcript ordering spine. The reference contains no duplicated body:
+the native reader resolves the journal envelope and projects Conversation,
+Attempt and event identity, the exact outcome, and terminal timestamp. The
+response fold supplies the matching native start timestamp. The transcript
+cursor supplies stable ordering and bounded paging, including attempts without
+Assistant output. Runtime reconstruction and resubscription use the same read
+path. Successful Stop/Refusal response/process ownership is unchanged.
+
+`AgentTranscript` renders historical Stopped/Failed only from these projected
+items. Live Attempt state renders only an active process; absence or settlement
+of that state cannot manufacture history. TUI consumes the same terminal item.
+No execution history was added to React state or browser persistence.
+
+`selectShell` returns a typed `ShellView` without execution snapshots, Attempt
+identity, phase, stream, tools, queue, or model mutation state. `ConversationSeat`
+owns composer admission/send/stop subscriptions, `ConversationLive` owns
+transcript/trace, and `ConversationStatus` owns recovery. `TurnProcess` keeps its
+clock local. Sidebar activity subscribes within individual rows; its browser,
+`SidebarRoot`, `AppFrame`, and `ConversationHeader` stay catalog/chrome-owned.
+The Session actions menu checks lineage eligibility locally and each command
+rechecks the current native view at invocation. This preserves native admission
+without a stale shell snapshot or extra memoization.
+
+### Feedback audit
+
+| Former App `run()` caller | Owner after correction |
+| --- | --- |
+| Transcript pagination | `history.error`, rendered inside transcript; rejected read is consumed there |
+| Trace pagination | `trace.error`, rendered inside Trajectory; rejected read is consumed there |
+| Cancel Turn | ConversationSeat action error; uncertain native outcome remains recovery-owned |
+| Respond/cancel interaction | Interactions action error; native operation uncertainty stays visible |
+| Export Session | Session header action error |
+| Owning Settings lookup (formerly also subscribed by App) | Settings navigation actor, rendered beside the Session configuration action |
+| Attach/classify selected Session | Global: failure invalidates the active surface |
+| Release/close views | Global: failure leaves attachment authority unresolved |
+| Retry Session refresh | Global recovery for an invalidated active surface |
+| Deletion recovery | Global durable-authority/cleanup uncertainty |
+
+CommandPanel, Workspace mutations, Session deletion, settings, uploads and model
+selection retain their existing local owners. `runGlobal` is no longer passed
+into conversation components. Normal terminal failures are not independently
+reconstructed by `deriveSessionProductState`.
+
+Deterministic evidence: the native terminal fold test reopens SQLite, compares
+one-row pages and subsequent subscriptions, and adds later successful/running
+Attempts. Web tests exercise idle → admitted → running → streaming → settled →
+next Attempt for all four non-success outcomes, then reconnect. Spies execute
+the real AppFrame, SidebarRoot, WorkspaceNavigation and ConversationHeader
+functions. Local-read tests exercise rejected protocol responses and verify one
+local alert, no App notice, plus preserved active-surface/global recovery.

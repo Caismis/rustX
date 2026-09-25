@@ -2289,7 +2289,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "8b33a8c6093d89b1b4d22f8ea70aac471e0d655f51d07d0ff9b4f2aa3d675044",
+      "local_sha256": "d573bea737f151e5a9c60c3d5825e1c14f1466ce46d65feb73441f097704a60a",
       "classification": "B"
     },
     {
@@ -2303,6 +2303,7 @@
         "../bindings/session-product",
         "../bindings/session-title",
         "../client/app-server",
+        "../client/selectors",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
         "../presentation/primitives/Modal",
@@ -2343,7 +2344,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "97b90205b767cf3d52b19cd226c13007870eaf1fa11185f796a88781517494d3"
+      "local_sha256": "e846c56cdcd2b825f6ccec7a9570ff022249401bdea265eea67021dfad62b1e5"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",

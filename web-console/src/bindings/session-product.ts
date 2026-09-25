@@ -49,12 +49,5 @@ export function deriveSessionProductState(state: Pick<ClientView, 'connection' |
   if (snapshot.pending_interactions?.length) return { status: 'waiting', label: 'Waiting for your response', severity: 'quiet' };
   if (snapshot.attempt && snapshot.attempt.phase.type !== 'settled') return { status: 'working', severity: 'quiet' };
   if (snapshot.inbound.pending?.length || view.submissions?.length) return { status: 'queued', label: 'Queued', severity: 'quiet' };
-  if (snapshot.attempt?.phase.type === 'settled') {
-    const outcome = snapshot.attempt.phase.outcome.type;
-    if (outcome === 'failed' || outcome === 'timed_out' || outcome === 'limit_exceeded') return {
-      status: 'failure', label: outcome === 'timed_out' ? 'Work timed out' : outcome === 'limit_exceeded' ? 'Work reached its limit' : 'Work could not finish',
-      severity: 'error', detail: 'Review the conversation and settings before starting again. Details are available in Developer Inspector.',
-    };
-  }
   return { status: 'idle', severity: 'quiet' };
 }

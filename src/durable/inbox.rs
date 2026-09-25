@@ -645,6 +645,8 @@ pub struct RequestSnapshotPage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TranscriptItem {
+    /// Terminal execution fact, resolved from its Event Journal owner.
+    AttemptTerminal { event: RuntimeEventEnvelope },
     /// A user, Assistant, or Tool message resolved from the canonical owner.
     Message {
         /// The canonical or durably accepted message body.

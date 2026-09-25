@@ -13,17 +13,16 @@ import { Trajectory } from '../trajectory/Trajectory';
 import type { HistoryAction } from '../commands/native';
 import type { CompletedResponseView } from '../../../../protocol/app-server/v22';
 
-export function ConversationLive({ client, sessionId, mode, disabled, onHistorical, run }: {
+export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
   onHistorical: (id: HistoryAction, response: CompletedResponseView) => void;
-  run: (action: () => Promise<unknown>) => void;
 }) {
   const view = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined);
   if (!view) return null;
   return mode === 'trajectory' && view.trace
-    ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)}/>
+    ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})} latest={() => client.latestTrace(view.id)}/>
     : <ChatViewport key={`${view.id}:${view.target?.attachment_id}`}>
-      {view.snapshot && <><AgentTranscript snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)} lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={disabled} onHistorical={onHistorical}/><RuntimeFacts snapshot={view.snapshot}/></>}
+      {view.snapshot && <><AgentTranscript snapshot={view.snapshot} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} latest={() => client.latestTranscript(view.id)} lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={disabled || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || !!view.modelMutation || !!view.snapshot.shutting_down || !!view.snapshot.durability_failure} onHistorical={onHistorical}/><RuntimeFacts snapshot={view.snapshot}/></>}
     </ChatViewport>;
 }
 

@@ -314,6 +314,10 @@ pub struct RuntimeClientTranscriptInteractionSettled {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientTranscriptItem {
+    /// Journal-owned terminal execution history, including attempts without messages.
+    AttemptTerminal {
+        turn: super::response::TerminalTurnView,
+    },
     /// A user, Assistant, or Tool message body from Pending Inbound or Ledger.
     Message {
         /// The canonical or durably accepted message.
@@ -410,6 +414,12 @@ fn transcript_entry_view(
     entry: crate::durable::TranscriptEntry,
 ) -> Result<RuntimeClientTranscriptEntry, String> {
     let item = match entry.item {
+        crate::durable::TranscriptItem::AttemptTerminal { event } => {
+            RuntimeClientTranscriptItem::AttemptTerminal {
+                turn: super::response::terminal_turn(event)?,
+            }
+        }
+
         crate::durable::TranscriptItem::Message { message } => {
             RuntimeClientTranscriptItem::Message { message }
         }

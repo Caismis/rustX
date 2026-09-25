@@ -33,7 +33,7 @@ it.each([
   ['failed retirement stays disabled with honest recovery', { deleting: true, error: 'Writer retirement unproven' }, {}, 'uncertain', 'connect'],
   ['pending native mailbox', { snapshot: { ...snapshot(), inbound: { pending: [{ sequence: '2', revision: '3', message: { id: 'native-input', source: 'human', content: [] } }] } } }, {}, 'queued', undefined],
   ['settled cancellation has no noisy status', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } } }, {}, 'idle', undefined],
-  ['timed out is actionable', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'timed_out' } } } } }, {}, 'failure', undefined],
+  ['terminal history belongs to transcript projection', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'timed_out' } } } } }, {}, 'idle', undefined],
 ] as const)('%s maps only authoritative evidence', (_name, patch, connection, status, action) => {
   const view = { ...base(), ...patch } as SessionView;
   const state = { ...connected, ...connection } as Pick<ClientView, 'connection' | 'uncertain'>;

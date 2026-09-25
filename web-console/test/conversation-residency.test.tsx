@@ -1,3 +1,7 @@
+import { AgentTranscript } from '../src/app/agent/AgentTranscript';
+import { ConversationHeader } from '../src/app/agent/ConversationHeader';
+import { SidebarRoot } from '../src/presentation/sidebar/SidebarRoot';
+import { WorkspaceNavigation } from '../src/workspaces/WorkspaceNavigation';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -195,4 +199,71 @@ it('a lost model acknowledgement cannot seed the preference or replay the select
   expect(modelPreferences().read(endpoint)).toEqual({ model: 'fixture/root' });
   await server.connect();
   expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
+});
+
+vi.mock('../src/app/agent/ConversationHeader', async original => {
+  const module = await original<typeof import('../src/app/agent/ConversationHeader')>();
+  return { ...module, ConversationHeader: vi.fn(module.ConversationHeader) };
+});
+
+vi.mock('../src/presentation/sidebar/SidebarRoot', async original => {
+  const module = await original<typeof import('../src/presentation/sidebar/SidebarRoot')>();
+  return { ...module, SidebarRoot: vi.fn(module.SidebarRoot) };
+});
+
+vi.mock('../src/workspaces/WorkspaceNavigation', async original => {
+  const module = await original<typeof import('../src/workspaces/WorkspaceNavigation')>();
+  return { ...module, WorkspaceNavigation: vi.fn(module.WorkspaceNavigation) };
+});
+
+it.each(['cancelled', 'failed', 'timed_out', 'limit_exceeded'] as const)('execution transitions stay below real chrome functions (%s)', async outcome => {
+  await server.attached('A');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  const calls = () => [AppFrame, SidebarRoot, WorkspaceNavigation, ConversationHeader].map(component => vi.mocked(component).mock.calls.length);
+  const before = calls();
+  const editor = input();
+  expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+  for (const phase of ['admitted', 'running'] as const) {
+    const next = live(); next.attempt!.phase = { type: phase };
+    await act(async () => server.update('A', next));
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Deep diving/ })).toBeTruthy();
+    expect(calls()).toEqual(before);
+  }
+  await act(async () => server.update('A', live('streamed transition')));
+  expect(screen.getByText('streamed transition')).toBeTruthy();
+  const terminal: RuntimeClientSnapshot = { ...snapshot(), transcript: { entries: [{ cursor: '1', item: { type: 'attempt_terminal', turn: {
+    conversation_id: 'conversation-A', attempt_id: 'exact-attempt', event_id: 'terminal-event', outcome,
+    started_at: '2026-09-25T00:00:00Z', ended_at: '2026-09-25T00:00:07Z',
+  } } }] } };
+  terminal.attempt = { attempt_id: 'exact-attempt', turn: 2, phase: { type: 'settled', outcome:
+    outcome === 'cancelled' ? { type: 'cancelled', reason: 'user_requested' } : outcome === 'limit_exceeded' ? { type: 'limit_exceeded', limit: 'max_turns' } : outcome === 'failed' ? { type: 'failed', error: { type: 'runtime', error: { type: 'internal', message: 'fixture' } } } : { type: 'timed_out' } } };
+  await act(async () => server.update('A', terminal));
+  expect(screen.getByRole('button', { name: outcome === 'cancelled' ? 'Stopped' : 'Failed' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+  expect(calls()).toEqual(before);
+  // Reconstruction removes the live Attempt; history remains entirely projected.
+  delete terminal.attempt;
+  await act(async () => server.update('A', terminal));
+  expect(screen.getByRole('button', { name: outcome === 'cancelled' ? 'Stopped' : 'Failed' })).toBeTruthy();
+  const next = live('next attempt'); next.attempt!.attempt_id = 'next-attempt'; next.transcript.entries = terminal.transcript.entries;
+  await act(async () => server.update('A', next));
+  expect(screen.getByText('next attempt')).toBeTruthy();
+  expect(screen.getByRole('button', { name: outcome === 'cancelled' ? 'Stopped' : 'Failed' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+  expect(calls()).toEqual(before);
+  expect(input()).toBe(editor); expect(editor.value).toBe('');
+  // Fresh subscription after disconnect retains the same native terminal identity.
+  const identity = screen.getByRole('button', { name: outcome === 'cancelled' ? 'Stopped' : 'Failed' }).getAttribute('data-turn-process');
+  await act(async () => { server.socket.close(); await server.connect(); });
+  expect(screen.getByRole('button', { name: outcome === 'cancelled' ? 'Stopped' : 'Failed' }).getAttribute('data-turn-process')).toBe(identity);
+});
+
+it('a settled live Attempt without a journal projection cannot manufacture terminal history', () => {
+  const value = snapshot();
+  value.attempt = { attempt_id: 'unprojected', turn: 1, phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } };
+  render(<AgentTranscript snapshot={value}/>);
+  expect(screen.queryByRole('button', { name: 'Stopped' })).toBeNull();
+  expect(document.querySelector('[data-turn-process]')).toBeNull();
 });

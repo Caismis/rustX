@@ -2,6 +2,9 @@
 
 The current Web conversation/composer lifecycle and subscription boundaries are
 specified in [WEB-16 resident conversation ownership](issue-406/conversation-surface.md).
+Terminal Attempt journal facts have ordered native transcript references;
+execution subscribers live below the typed shell boundary. See the
+[review corrections and feedback audit](issue-406/conversation-surface.md#pr-409-review-corrections).
 
 ## App Server product topology
 

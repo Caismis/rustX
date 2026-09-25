@@ -10352,6 +10352,24 @@
       "description": "The explicit Runtime Client transcript vocabulary.",
       "oneOf": [
         {
+          "description": "Journal-owned terminal execution history, including attempts without messages.",
+          "type": "object",
+          "properties": {
+            "turn": {
+              "$ref": "#/$defs/TerminalTurnView"
+            },
+            "type": {
+              "type": "string",
+              "const": "attempt_terminal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "turn"
+          ]
+        },
+        {
           "description": "A user, Assistant, or Tool message body from Pending Inbound or Ledger.",
           "type": "object",
           "properties": {
@@ -10479,6 +10497,56 @@
             "settlement"
           ]
         }
+      ]
+    },
+    "TerminalTurnView": {
+      "description": "Durable terminal Turn identity and clock. Transcript cursor owns ordering.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "event_id": {
+          "$ref": "#/$defs/EventId"
+        },
+        "outcome": {
+          "$ref": "#/$defs/TerminalTurnOutcome"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id",
+        "event_id",
+        "outcome",
+        "ended_at"
+      ]
+    },
+    "EventId": {
+      "description": "Identifies one durable runtime event.",
+      "type": "string"
+    },
+    "TerminalTurnOutcome": {
+      "type": "string",
+      "enum": [
+        "cancelled",
+        "failed",
+        "timed_out",
+        "limit_exceeded"
       ]
     },
     "MessageBlock": {
@@ -11329,10 +11397,6 @@
           ]
         }
       ]
-    },
-    "EventId": {
-      "description": "Identifies one durable runtime event.",
-      "type": "string"
     },
     "InteractionSubject": {
       "description": "The bounded terminal answer facts used by all interaction layers.",
