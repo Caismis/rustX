@@ -42,6 +42,13 @@ clap = { version = "4.6.7", default-features = false, features = ["std", "derive
 uuid = { version = "1.24", features = ["v7"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
+# PEP 508 grammar and PyPA normalized distribution identities for managed
+# Python requirements. Chumsky is direct only to normalize pep-508's public
+# structured parser errors; rustX never parses with it independently.
+pep-508 = "0.5.0"
+chumsky = "=1.0.0-alpha.8"
+uv-normalize = "0.0.40"
 # Lossless editing of user-authored TOML settings.
 toml_edit = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
