@@ -1,89 +1,93 @@
 # Issue 397: PEP 508 validation for managed Python tools
 
-## Decision and suitability audit
+## Corrected parser decision
 
-Base audit SHA: `5df40f29c72ee5179864bf2f4671c3f8d32dbc18`.
+The first review implementation used `pep508_rs` `0.9.2` with
+`non-pep508-extensions`. Its minimal reproduction rejected the
+current-standard declaration `demo; python_version === '3.12'`. `0.9.2`
+remains the newest published `pep508_rs` release, so it cannot be rustX's
+grammar boundary.
 
-rustX uses `pep508_rs` `0.9.2`, with default features disabled (the crate
-has none) and `non-pep508-extensions` enabled. That feature is required only
-to retain the existing accepted relative local-reference forms when the parser
-is supplied the package root; it is not permission to add a requirements-file
-language. `thiserror` `2.0.19` is the direct error-derive dependency.
+The only Rust-1.92-compatible `uv-pep508` release (`0.0.40`) has the same
+runtime incompatibility; later releases require newer Rust. rustX therefore
+uses `pep-508` `0.5.0` for grammar and `uv-normalize` `0.0.40` for the
+library-owned PyPA package identity. The executable production-wrapper corpus
+parses `demo; python_version === '3.12'` with `pep-508`; it also parses direct
+HTTPS, VCS, file, and non-existent relative references without a network
+request or path traversal. `pep-508` is MPL-2.0. `uv-normalize` is dual
+licensed MIT OR Apache-2.0 and supplies the validated normalized name. Both
+compile in the locked Rust 1.92 build. Parser values remain inside
+`parse_requirements`; no AST or third-party type leaks into rustX APIs.
 
-The selected parser exposes `Requirement::<VerbatimUrl>::parse(input,
-working_dir)`, whose `name: PackageName` is the normalized PyPA distribution
-identity used by rustX. Its primary source documents `PackageName` as
-lowercasing and collapsing `-`, `_`, and `.` runs to `-`, and links that
-behavior to the PyPA name-normalization specification. `pep508_rs` is
-maintained in its public repository at
-<https://github.com/konstin/pep508_rs>; crate metadata and source are at
-<https://docs.rs/pep508_rs/0.9.2> and
-<https://crates.io/crates/pep508_rs/0.9.2>.
+`pep-508` is maintained at <https://github.com/figsoda/pep-508>. Its public
+`parse` API returns a dependency AST or Chumsky span/found-token errors; it
+does not declare an MSRV, so the locked Rust-1.92 build is the compatibility
+evidence. `uv-normalize` is maintained in Astral's uv repository and declares
+Rust `1.92.0`. Its public `PackageName::from_str` API is used only inside this
+validation boundary.
+Although extracted uv components do not promise a broad stable Rust API,
+that coupling is contained: replacing it changes only this local name check,
+never `PythonToolPackage`, runtime state, protocol DTOs, or persistence. It
+does not invoke uv resolution or runtime behavior.
 
-`pep508_rs` is dual licensed `Apache-2.0 OR BSD-2-Clause`. It declares no
-MSRV, but its 2021 edition and resolved dependency graph compile under
-rustX's declared Rust `1.92` MSRV. The narrow lockfile delta is
-`pep508_rs 0.9.2`, `pep440_rs 0.7.3`, `boxcar 0.2.14`, `itertools 0.13.0`,
-`version-ranges 0.1.3`, and their `thiserror 1.0.69` derive dependency;
-`thiserror 2.0.19` was already transitively locked and is now direct.
+The replacement removes `pep508_rs`, `pep440_rs`, `itertools 0.13`,
+`version-ranges 0.1`, and `thiserror 1`; it adds `pep-508`, its pinned
+`chumsky` parser runtime, and `uv-normalize`. This is a bounded delta chosen
+for current grammar correctness, normalized identity, and relative-reference
+support. The locked Rust-1.92 build is the MSRV evidence.
 
-The finite corpus in `src/tools/python.rs` covers names, extras, specifiers,
-markers, HTTPS URLs with fragments, VCS URLs, file URLs, and relative local
-references; malformed names/extras/specifiers/markers/URLs fail. A locked
-debug build of the binaries is the reproducible build-cost observation; no
-claim of a binary-size improvement is made because this parser is adopted for
-correct grammar and identity, not optimization.
+## Requirements-file boundary
 
-## Requirements-file contract
+The file layer owns UTF-8, one physical declaration per line, comments, CRLF,
+blank lines, option/directive rejection, continuation rejection, and exactly
+the unsupported pip expansion syntax `${NAME}`. It does not classify `$NAME`:
+that is not pip expansion and remains parser-owned text. Thus quoted marker
+`'$TOKEN'`, another quoted `$`, and URL dollar signs are passed unchanged to
+the dependency parser; `${TOKEN}` is rejected before parsing. A bare `$TOKEN`
+in a URL is likewise not an invented file-layer directive.
 
-`requirements.txt` is UTF-8 only. It has at most one declaration per physical
-line. Empty files and blank lines are accepted. A comment is a `#` at line
-start or after whitespace outside quoted marker text; a URL fragment such as
-`#sha256=...` is preserved. CRLF is accepted. The accepted effective text is
-trimmed only at the file boundary and otherwise passed unchanged, in order, to
-the generated `pyproject.toml`.
+Comments are a `#` at line start or after whitespace outside quoted marker
+text. Quoted `#`, quoted `$`, and URL fragments such as `#sha256=...` are
+preserved. Lines beginning with `-` (including `-r`, `--requirement`, `-e`,
+`--editable`, and `--index-url`) and backslash continuation are rejected.
+PEP 508 owns all remaining grammar: direct HTTPS and VCS references, file and
+relative references, markers, extras, names, and specifiers. There is no
+fallback parser, marker evaluation, index policy, network check, or resolver.
 
-The file is deliberately not pip syntax. Lines beginning with `-` reject pip
-options, includes and editable directives (including `-r`, `--requirement`,
-`-e`, `--editable`, and `--index-url`). Backslash continuation and `${...}`
-environment-variable expansion are rejected. There are no recursive includes,
-marker evaluation, index policy, resolver, or source-management layer.
+## Diagnostics and ownership
 
-PEP 508 direct HTTPS and VCS references, `file:` references, and relative
-local references remain accepted declaration forms. Parser acceptance changes
-neither filesystem authority nor installation behavior: frozen source bytes
-are still copied and uv alone resolves, locks, and materializes the
-environment. A previous hand-written name-prefix check accepted malformed
-declarations; rejection of those non-PEP-508 lines is intentional.
+`pep-508` returns structured Chumsky span/token errors. It does not expose
+public grammar-production labels, so rustX never formats its error value or the
+authored declaration. Instead, after the parser rejects the declaration, the
+boundary selects a coarse, fixed rustX-owned class: invalid extra, version
+specifier, environment marker, or direct-reference URL. The maximum parser
+reason is the documented `MAX_REQUIREMENTS_PARSE_REASON_BYTES` bound (28
+bytes); the `line N: reason` parse result is therefore at most 36 bytes for
+the tested one-digit line case. The classification is diagnostic-only and
+cannot change parsing or acceptance.
+This prevents disclosure of URL credentials, tokens, long input, and source
+excerpts while retaining a useful error class.
 
-## Managed FastMCP and identity preservation
-
-Every effective declaration is parsed before rustX checks its normalized
-`PackageName`. `FastMCP`, extras, version constraints, direct URLs, and
-marker-false declarations therefore all identify `fastmcp` and are rejected.
-`fast_mcp` normalizes to `fast-mcp`, which is distinct and accepted. This is
-applied through the same production discovery owner for User and Workspace
-resources.
-
-The AST is transient validation only. rustX does not serialize it, retain it
-in runtime state, expose it on the wire, or use it to resolve or evaluate
-markers. The original accepted effective declaration text remains in
-`PythonToolPackage.requirements`; raw `requirements.txt` bytes remain in the
-frozen source digest and package fingerprint unchanged. Existing frozen
-manifest validation and corrupt-published-state fail-closed behavior are
-unchanged.
+Every effective declaration is parsed once before rustX compares the parser's
+normalized name to `fastmcp`. Consequently `FastMCP`, extras, constraints,
+direct references, and marker-false `fastmcp` declarations all reject;
+`fast_mcp` normalizes to distinct `fast-mcp` and remains accepted. The AST is
+validation-only. Original effective declaration text and order remain in
+`PythonToolPackage.requirements`; raw `requirements.txt` bytes remain part of
+the source digest and fingerprint. uv still owns resolution, locking, and
+installation; prepared-state publication and validation are unchanged.
 
 ## Test mapping
 
-| Matrix | Coverage |
+| Matrix | Deterministic coverage |
 | --- | --- |
-| PEP-01 | `pep508_requirements_corpus_preserves_effective_declarations` |
-| PEP-02 | `pep508_requirements_reject_invalid_grammar_and_file_directives` |
-| PEP-03 | `pep508_requirements_reject_invalid_grammar_and_file_directives` |
-| PEP-04 | `requirements_file_comments_crlf_and_quoted_markers_are_bounded` and `requirements_parse_normalizes_comments_and_blank_lines` |
+| PEP-01 | `pep508_requirements_corpus_preserves_effective_declarations` includes `===`, normal comparison operators, `in`, and `not in` |
+| PEP-02 | `pep508_parser_diagnostics_are_useful_bounded_and_safe` covers malformed extra/specifier/marker/URL, line location, useful reasons, secret non-disclosure, and long-input bounds |
+| PEP-03 | `pep508_requirements_reject_invalid_grammar_and_file_directives` rejects `${TOKEN}`; `requirements_file_comments_crlf_and_quoted_markers_are_bounded` accepts literal `$TOKEN` |
+| PEP-04 | `requirements_file_comments_crlf_and_quoted_markers_are_bounded` covers CRLF, comments, fragments, quoted `#`, and quoted `$` |
 | PEP-05 | `managed_fastmcp_uses_pep503_normalized_identity_without_marker_evaluation`; `managed_fastmcp_policy_applies_to_user_and_workspace_discovery` |
-| PEP-06 | corpus preservation assertion, existing `the_generated_pyproject_pins_the_probed_series_and_the_managed_fastmcp`, and fingerprint tests |
+| PEP-06 | `pep508_requirements_corpus_preserves_effective_declarations`, `the_generated_pyproject_pins_the_probed_series_and_the_managed_fastmcp`, and `the_fingerprint_is_stable_and_tracks_every_material_input` |
 | PEP-07 | existing `read_prepared_state` tamper/fail-closed tests |
-| PEP-08 | parser unit tests are synchronous and do not invoke a runner, Python, uv, network, or preparation |
-| PEP-09 | User/Workspace discovery integration plus existing fake-backend Python preparation tests |
-| PEP-10 | parser corpus and error classification tests; `PythonToolError` retains its three typed variants through `thiserror` |
+| PEP-08 | synchronous parser tests invoke no runner, Python, uv, network, or preparation |
+| PEP-09 | User/Workspace discovery integration plus existing fake/supervised preparation regressions |
+| PEP-10 | one `pep-508` grammar owner, no fallback or AST leakage, bounded safe diagnostics, and unchanged `PythonToolError` variants |

@@ -62,6 +62,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -329,7 +330,7 @@ pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolErro
 /// rustX-pinned, so a package may never declare it. Everything else is
 /// validated only far enough to become a `pyproject.toml` dependency entry;
 /// real dependency semantics (resolution, markers, indexes) belong to uv.
-fn parse_requirements(bytes: &[u8], package_root: &Path) -> Result<Vec<String>, String> {
+fn parse_requirements(bytes: &[u8], _package_root: &Path) -> Result<Vec<String>, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "the file is not valid UTF-8".to_owned())?;
     let mut requirements = Vec::new();
     for (index, raw_line) in text.lines().enumerate() {
@@ -358,16 +359,16 @@ fn parse_requirements(bytes: &[u8], package_root: &Path) -> Result<Vec<String>, 
                 index + 1
             ));
         }
-        let requirement =
-            pep508_rs::Requirement::<pep508_rs::VerbatimUrl>::parse(line, package_root).map_err(
-                |_| {
-                    format!(
-                        "line {}: not a valid PEP 508 dependency declaration",
-                        index + 1
-                    )
-                },
-            )?;
-        if requirement.name.as_ref() == "fastmcp" {
+        let requirement = pep_508::parse(line).map_err(|error| {
+            format!(
+                "line {}: {}",
+                index + 1,
+                safe_pep508_diagnostic(&error, line)
+            )
+        })?;
+        let name = uv_normalize::PackageName::from_str(requirement.name)
+            .map_err(|_| format!("line {}: invalid dependency declaration", index + 1))?;
+        if name.as_ref() == "fastmcp" {
             return Err(format!(
                 "line {}: the `fastmcp` dependency is managed by rustX \
                  (pinned to fastmcp=={MANAGED_FASTMCP_VERSION}); remove it",
@@ -379,14 +380,49 @@ fn parse_requirements(bytes: &[u8], package_root: &Path) -> Result<Vec<String>, 
     Ok(requirements)
 }
 
+/// The requirements-file layer rejects only pip's documented `${NAME}`
+/// expansion directive. Other dollar signs belong to the PEP 508 parser: in
+/// particular, `$TOKEN` is ordinary quoted-marker text rather than pip
+/// expansion syntax.
 fn contains_environment_variable_reference(line: &str) -> bool {
-    line.char_indices().any(|(index, character)| {
-        character == '$'
-            && line[index + character.len_utf8()..]
-                .chars()
-                .next()
-                .is_some_and(|next| next == '{' || next == '_' || next.is_ascii_alphabetic())
+    line.match_indices("${").any(|(index, _)| {
+        let remainder = &line[index + 2..];
+        let Some(end) = remainder.find('}') else {
+            return false;
+        };
+        let name = &remainder[..end];
+        let mut characters = name.chars();
+        matches!(characters.next(), Some(character) if character == '_' || character.is_ascii_alphabetic())
+            && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
     })
+}
+
+/// Converts parser-owned structured errors into a short rustX-owned reason.
+/// Never format a parser error itself: its display form can include the full
+/// authored declaration and a source caret, which can disclose URL credentials.
+const MAX_REQUIREMENTS_PARSE_REASON_BYTES: usize = "invalid direct-reference URL".len();
+
+fn safe_pep508_diagnostic(
+    _errors: &[chumsky::error::Simple<'_, char>],
+    declaration: &str,
+) -> &'static str {
+    // `pep-508` returns structured span/found-token errors, not a formatted
+    // source excerpt. Its error type does not expose production names for
+    // grammar branches, so rustX selects a coarse class solely for the safe
+    // diagnostic. This cannot affect parsing or acceptance, and neither the
+    // parser error nor authored text is formatted or retained. Each returned
+    // string must remain no longer than `MAX_REQUIREMENTS_PARSE_REASON_BYTES`.
+    let reason = if declaration.contains(';') {
+        "invalid environment marker"
+    } else if declaration.contains('@') {
+        "invalid direct-reference URL"
+    } else if declaration.contains('[') {
+        "invalid dependency extra"
+    } else {
+        "invalid version specifier"
+    };
+    debug_assert!(reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES);
+    reason
 }
 
 fn strip_requirement_comment(line: &str) -> &str {
@@ -1467,6 +1503,16 @@ mod tests {
             "requests",
             "requests[socks]>=2,<3",
             "requests; python_version >= '3.10'",
+            "demo; python_version === '3.12'",
+            "demo; python_version == '3.12'",
+            "demo; python_version != '3.12'",
+            "demo; python_version < '3.12'",
+            "demo; python_version <= '3.12'",
+            "demo; python_version > '3.12'",
+            "demo; python_version >= '3.12'",
+            "demo; python_version ~= '3.12'",
+            "demo; os_name in 'posix'",
+            "demo; os_name not in 'nt'",
             "demo @ https://example.invalid/demo-1.whl#sha256=deadbeef",
             "demo @ git+https://example.invalid/demo.git@main",
             "demo @ file:///tmp/demo-1.whl",
@@ -1485,8 +1531,8 @@ mod tests {
         for (label, input) in [
             ("bad name", "bad/name"),
             ("broken extras", "demo[extra"),
-            ("broken version", "demo=>1"),
-            ("broken marker", "demo; python_version === '3.12'"),
+            ("broken version", "demo >< 1"),
+            ("broken marker", "demo; python_version >< '3.12'"),
             ("broken URL", "demo @ https://[broken"),
             ("include", "-r other.txt"),
             ("long include", "--requirement other.txt"),
@@ -1498,10 +1544,6 @@ mod tests {
                 "braced expansion",
                 "demo @ https://example.invalid/${TOKEN}.whl",
             ),
-            (
-                "bare expansion",
-                "demo @ https://example.invalid/$TOKEN.whl",
-            ),
         ] {
             let error = parse_requirements(input.as_bytes(), Path::new("/tmp")).expect_err(label);
             assert!(error.starts_with("line 1:"), "{label}: {error}");
@@ -1509,9 +1551,75 @@ mod tests {
     }
 
     #[test]
+    fn pep508_parser_diagnostics_are_useful_bounded_and_safe() {
+        let cases = [
+            ("extra", "demo[extra", "invalid dependency extra"),
+            ("specifier", "demo >< 1", "invalid version specifier"),
+            (
+                "marker",
+                "demo; python_version >< '3.12'",
+                "invalid environment marker",
+            ),
+            (
+                "URL",
+                "demo @ https://[broken",
+                "invalid direct-reference URL",
+            ),
+        ];
+        for (label, declaration, reason) in cases {
+            let error =
+                parse_requirements(declaration.as_bytes(), Path::new("/tmp")).expect_err(label);
+            assert!(error.starts_with("line 1: "), "{label}: {error}");
+            assert!(error.contains(reason), "{label}: {error}");
+            assert!(!error.contains("not a valid PEP 508"), "{label}: {error}");
+            assert!(
+                error.len() <= "line 1: ".len() + MAX_REQUIREMENTS_PARSE_REASON_BYTES,
+                "{label} is bounded: {error}"
+            );
+        }
+
+        let sentinel = "user:secret-token@";
+        let error = parse_requirements(
+            format!("demo @ https://{sentinel}[broken").as_bytes(),
+            Path::new("/tmp"),
+        )
+        .expect_err("malformed URL");
+        assert!(
+            !error.contains(sentinel),
+            "diagnostic disclosed URL credential: {error}"
+        );
+
+        let long = format!("demo[{}", "x".repeat(16 * 1024));
+        let error = parse_requirements(long.as_bytes(), Path::new("/tmp"))
+            .expect_err("malformed long declaration");
+        assert!(
+            error.len() <= "line 1: ".len() + MAX_REQUIREMENTS_PARSE_REASON_BYTES,
+            "diagnostic is bounded: {} bytes",
+            error.len()
+        );
+    }
+
+    #[test]
+    fn discovery_surfaces_safe_pep508_diagnostics_as_invalid_packages() {
+        let (_directory, workspace) = workspace_with(&[(
+            "demo",
+            &[
+                (SERVER_FILE, b"mcp = None\n".as_slice()),
+                (REQUIREMENTS_FILE, b"demo[extra\n".as_slice()),
+            ],
+        )]);
+        let package = workspace.root().join(".agents/tools/demo");
+        let error = discover_package(&package, "demo").expect_err("invalid extra");
+        let PythonToolError::InvalidPackage(message) = error else {
+            panic!("PEP 508 parse errors remain package validation errors");
+        };
+        assert!(message.contains("requirements.txt: line 1: invalid dependency extra"));
+    }
+
+    #[test]
     fn requirements_file_comments_crlf_and_quoted_markers_are_bounded() {
         let parsed = parse_requirements(
-            b"\r\n# comment\r\ndemo @ https://example.invalid/demo.whl#sha256=deadbeef\r\nrequests; os_name == 'hash # stays' # comment\r\n",
+            b"\r\n# comment\r\ndemo @ https://example.invalid/demo.whl#sha256=deadbeef\r\nrequests; os_name == 'hash # and $ stay' # comment\r\ndemo; os_name == '$TOKEN'\r\ndemo; os_name == '${'\r\n",
             Path::new("/tmp"),
         )
         .expect("comments and CRLF are accepted");
@@ -1519,7 +1627,9 @@ mod tests {
             parsed,
             [
                 "demo @ https://example.invalid/demo.whl#sha256=deadbeef",
-                "requests; os_name == 'hash # stays'",
+                "requests; os_name == 'hash # and $ stay'",
+                "demo; os_name == '$TOKEN'",
+                "demo; os_name == '${'",
             ]
         );
     }
@@ -1540,6 +1650,18 @@ mod tests {
             parse_requirements(b"fast_mcp\n", Path::new("/tmp")).expect("distinct package"),
             ["fast_mcp"]
         );
+        for (authored, expected) in [
+            ("FastMCP", "fastmcp"),
+            ("fastmcp", "fastmcp"),
+            ("FASTmcp", "fastmcp"),
+            ("fast_mcp", "fast-mcp"),
+            ("fast.mcp", "fast-mcp"),
+            ("fast---mcp", "fast-mcp"),
+        ] {
+            let normalized = uv_normalize::PackageName::from_str(authored)
+                .expect("library-owned normalized package name");
+            assert_eq!(normalized.as_ref(), expected, "{authored}");
+        }
     }
 
     #[test]

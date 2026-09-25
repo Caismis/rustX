@@ -46,7 +46,9 @@ thiserror = "2"
 # PEP 508 grammar and PyPA normalized distribution identities for managed
 # Python requirements. Relative file references are an existing accepted
 # pyproject input; rustX rejects requirements-file expansion syntax itself.
-pep508_rs = { version = "0.9.2", features = ["non-pep508-extensions"] }
+pep-508 = "0.5.0"
+chumsky = "=1.0.0-alpha.8"
+uv-normalize = "0.0.40"
 # Lossless editing of user-authored TOML settings.
 toml_edit = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
