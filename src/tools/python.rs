@@ -352,7 +352,7 @@ fn parse_requirements(bytes: &[u8], package_root: &Path) -> Result<Vec<String>, 
                 index + 1
             ));
         }
-        if line.contains("${") {
+        if contains_environment_variable_reference(line) {
             return Err(format!(
                 "line {}: environment-variable expansion is not supported",
                 index + 1
@@ -377,6 +377,16 @@ fn parse_requirements(bytes: &[u8], package_root: &Path) -> Result<Vec<String>, 
         requirements.push(line.to_owned());
     }
     Ok(requirements)
+}
+
+fn contains_environment_variable_reference(line: &str) -> bool {
+    line.char_indices().any(|(index, character)| {
+        character == '$'
+            && line[index + character.len_utf8()..]
+                .chars()
+                .next()
+                .is_some_and(|next| next == '{' || next == '_' || next.is_ascii_alphabetic())
+    })
 }
 
 fn strip_requirement_comment(line: &str) -> &str {
@@ -1484,7 +1494,14 @@ mod tests {
             ("long editable", "--editable ../demo"),
             ("index", "--index-url https://example.invalid/simple"),
             ("continuation", "demo \\\\"),
-            ("expansion", "demo @ https://example.invalid/${TOKEN}.whl"),
+            (
+                "braced expansion",
+                "demo @ https://example.invalid/${TOKEN}.whl",
+            ),
+            (
+                "bare expansion",
+                "demo @ https://example.invalid/$TOKEN.whl",
+            ),
         ] {
             let error = parse_requirements(input.as_bytes(), Path::new("/tmp")).expect_err(label);
             assert!(error.starts_with("line 1:"), "{label}: {error}");
