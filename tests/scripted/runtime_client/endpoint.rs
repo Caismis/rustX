@@ -196,7 +196,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     let response = adapter.exchange(r#"{"method":"initialize","id":33,"protocol_version":33}"#);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 33);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -207,17 +207,17 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     let response = adapter.exchange(r#"{"method":"initialize","id":38,"protocol_version":38}"#);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 38);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // A future version the runtime does not speak is rejected explicitly.
-    let response = adapter.exchange(r#"{"method":"initialize","id":7,"protocol_version":49}"#);
+    let response = adapter.exchange(r#"{"method":"initialize","id":7,"protocol_version":50}"#);
     assert_eq!(response["id"], 7);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
-    assert_eq!(response["error"]["requested"], 49);
+    assert_eq!(response["error"]["supported"], 49);
+    assert_eq!(response["error"]["requested"], 50);
     assert_eq!(
         adapter.endpoint.attachment_id(),
         None,
@@ -234,7 +234,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["id"], 28);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 28);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -243,7 +243,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["id"], 27);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 27);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -253,7 +253,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["id"], 26);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 26);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -264,7 +264,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["id"], 25);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 25);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -277,7 +277,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["id"], 15);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 15);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -289,7 +289,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["id"], 13);
     assert!(response.get("result").is_none());
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 14);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -299,14 +299,14 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     let response = adapter.exchange(r#"{"method":"initialize","id":14,"protocol_version":13}"#);
     assert_eq!(response["id"], 14);
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 13);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     let response = adapter.exchange(r#"{"method":"initialize","id":8,"protocol_version":1}"#);
     assert_eq!(response["id"], 8);
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 1);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -315,7 +315,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     let response = adapter.exchange(r#"{"method":"initialize","id":10,"protocol_version":7}"#);
     assert_eq!(response["id"], 10);
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 7);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -325,7 +325,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     let response = adapter.exchange(r#"{"method":"initialize","id":12,"protocol_version":10}"#);
     assert_eq!(response["id"], 12);
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 10);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
@@ -335,32 +335,32 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     let response = adapter.exchange(r#"{"method":"initialize","id":11,"protocol_version":6}"#);
     assert_eq!(response["id"], 11);
     assert_eq!(response["error"]["type"], "unsupported_protocol_version");
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 6);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // Trace changes the mandatory snapshot/event vocabulary; v34 is obsolete.
     let response = adapter.exchange(r#"{"method":"initialize","id":34,"protocol_version":34}"#);
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 34);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // Native deletion mutations were removed in v40, not kept as aliases.
     let response = adapter.exchange(r#"{"method":"initialize","id":39,"protocol_version":39}"#);
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 39);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // Trace replaced its single-level entry with the summary/detail split in
     // v41, so a v40 client would decode a vocabulary that no longer exists.
     let response = adapter.exchange(r#"{"method":"initialize","id":40,"protocol_version":40}"#);
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 40);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
     // Completed-response projections are mandatory in v42.
     let response = adapter.exchange(r#"{"method":"initialize","id":41,"protocol_version":41}"#);
-    assert_eq!(response["error"]["supported"], 48);
+    assert_eq!(response["error"]["supported"], 49);
     assert_eq!(response["error"]["requested"], 41);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 

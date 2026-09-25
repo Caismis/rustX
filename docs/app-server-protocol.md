@@ -1,6 +1,13 @@
-# App Server protocol v22
+# App Server protocol v23
 
-App Server v22 / Runtime Client v48 add native conversation Turn/Step totals,
+The #409 follow-up replaces separate successful/terminal process DTOs with native
+`TurnProcessView`: exact Attempt ownership on each committed process member,
+whole-process counts, immutable control cursor, outcome and native clock. Failed
+and stopped processes remain open across reconstruction and bounded paging.
+`CompletedResponseView` retains successful answer/TurnTail provenance and actions.
+See [the ownership contract](issue-406/terminal-process-ownership.md).
+
+App Server v23 / Runtime Client v49 add native conversation Turn/Step totals,
 measured request timing and the latest exact Attempt clock. Workspace
 `SessionModelsView::Available` also publishes the authored `default_model` from
 the same creation capture as its catalog. A browser product preference can seed
@@ -54,13 +61,13 @@ Catalog metadata after an asynchronous display-projection publication
 and every earlier version are rejected; there is no dual handling and no
 compatibility shim. Generated v16 artifacts are removed.
 
-App Server v22 also carries v16's producer identity on Trace context additions
+App Server v23 also carries v16's producer identity on Trace context additions
 and typed accepted contributions on request detail. These are historical
 RequestSnapshot facts, not live Todo/Goal authority. See
 [native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v22 identifies one complete mandatory vocabulary, including exact
+App Server v23 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -168,13 +175,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v22",
+  "rustx.app-server.v23",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v22` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v23` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -191,7 +198,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v22 subprotocols above.
+endpoint/token; the browser then connects directly using the v23 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -288,7 +295,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v22; pipeline individual requests instead. This limitation is
+supported in v23; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -377,7 +384,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v22 admits at most one writable external controller per resident
+Protocol v23 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -493,8 +500,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v22.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v22.ts`: TypeScript generated from that schema using pinned
+- `v23.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v23.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -759,7 +766,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v22; no compatibility path is provided.
+This remains mandatory protocol v23; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -789,7 +796,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 carries this vocabulary;
 version 38 clients are rejected by strict negotiation. This remains mandatory
-App Server protocol v22, with no compatibility field and no activation mode.
+App Server protocol v23, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -804,7 +811,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v22 includes `inbound/edit { target, expected, text }` and
+Protocol v23 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -974,7 +981,7 @@ literal values. `SourceSettings.user`, `SourceSettings.workspace`,
 redacted document view, so no source projection can carry a literal Tool
 environment value, and an override is authored by supplying a new value rather
 than by reading a lower owner's value back.
-Protocol v22 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v23 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -1098,9 +1105,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v22 and WebSocket requires `rustx.app-server.v22`.
-v21 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v22.ts`, `v22.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v23 and WebSocket requires `rustx.app-server.v23`.
+v22 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v23.ts`, `v23.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1129,7 +1136,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v22;
+explicit recovery action. These recovery semantics remain in App Server v23;
 native Runtime Client is v44.
 
 ## Rich historical Trace inspection (#364)
@@ -1151,7 +1158,7 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v22 vocabulary includes v12's
+is unchanged and never repeats them. This v23 vocabulary includes v12's
 read-only native `subagent/transcript` contract and these Trace DTO changes.
 Version 19 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
@@ -1171,7 +1178,7 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Subagent conversations (v22)
+## Read-only native Subagent conversations (v23)
 
 `subagent/transcript { target, subagent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,
