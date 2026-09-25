@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import type { SessionModelConfig } from '../../../../protocol/app-server/v21';
+import type { SessionModelConfig } from '../../../../protocol/app-server/v22';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../../workspaces/host';
 import { sameEndpoint } from '../../workspaces/endpoint';

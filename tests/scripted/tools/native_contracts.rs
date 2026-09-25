@@ -27,14 +27,17 @@ use std::sync::Arc;
 /// contract is checked below — not ordinary selectable capabilities. Since
 /// Issue #259 the `todo` Tool reaches the fixture registry through the Todo
 /// Agent Extension, never through `register_native_tools`.
-const NATIVE_TOOL_NAMES: [&str; 9] = [
+const NATIVE_TOOL_NAMES: [&str; 12] = [
     "read",
     "write",
     "edit",
     "glob",
     "grep",
     "bash",
-    "execution",
+    "job_list",
+    "job_status",
+    "job_wait",
+    "job_cancel",
     "ask_user",
     "todo",
 ];
@@ -131,14 +134,21 @@ fn preflight(
 #[test]
 fn all_native_schemas_are_canonical_and_have_no_file_path_contract() {
     let fixture = common::native_fixture();
+    assert!(
+        fixture
+            .registry
+            .definitions()
+            .iter()
+            .all(|tool| tool.name != "execution"),
+        "the obsolete unified model-facing control must not be registered"
+    );
     for name in NATIVE_TOOL_NAMES {
         let schema = definition(&fixture, name).input_schema;
         rustx::tools::schema::validate_canonical_schema(&schema)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(schema["type"], "object");
         // Every native contract rejects unknown fields. A plain object
-        // schema says so at its root; an action-tagged contract (the
-        // `execution` intrinsic) is a root union whose *branches* carry the
+        // schema says so at its root; a union contract has branches carrying the
         // object properties, and a root `additionalProperties: false` there
         // would forbid every property rather than the unknown ones. The
         // invariant is the strictness, not where it is written.
@@ -321,7 +331,7 @@ fn optional_native_properties_are_absent_not_nullable_and_registry_metadata_stay
 }
 
 #[test]
-fn native_tools_preserve_legal_execution_policies_and_fixed_execution_intrinsic_policy() {
+fn native_tools_preserve_legal_execution_policies_and_fixed_job_control_policy() {
     use rustx::runtime::identity::{ConversationId, ToolId};
     use rustx::tools::executor::ToolRegistry;
     use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
@@ -390,8 +400,8 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_execution_intrinsic_
         let execution = registry
             .definitions()
             .into_iter()
-            .find(|definition| definition.name == "execution")
-            .expect("execution definition");
+            .find(|definition| definition.name == "job_status")
+            .expect("Job status definition");
         assert_eq!(
             execution.execution_policy,
             ToolExecutionPolicy::ForegroundOnly
@@ -578,7 +588,8 @@ fn native_context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::conte
 fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor::ToolRegistry {
     use rustx::runtime::subagent::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use rustx::runtime::workflow::{WorkflowCatalog, WorkflowId, WorkflowProgram, WorkflowRuntime};
-    let plane = support::execution::subagent_plane_for(fixture.runtime.conversation_id().as_str());
+    let plane =
+        support::domain_controls::subagent_plane_for(fixture.runtime.conversation_id().as_str());
     let catalog = AgentCatalog::new([NamedAgentDefinition::new(
         SubagentName::parse("worker").unwrap(),
         rustx::runtime::agent_profile::AgentProfile {
@@ -710,7 +721,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             vec![],
             vec!["read"],
             vec!["read", "grep"],
-            vec!["execution", "read", "bash"],
+            vec!["read", "bash", "job_status"],
         ] {
             let mut selection = Selection::default();
             selection.profile.tools.builtin = expected.iter().map(|name| (*name).into()).collect();

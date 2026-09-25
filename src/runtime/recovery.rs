@@ -962,6 +962,8 @@ impl RecoveryEvidence {
                 background.remove(execution_id);
             }
             RuntimeEvent::SubagentOwnershipCommitted {
+                admitted_authority: _,
+                parent_agent_id: _,
                 subagent_id,
                 child_agent_id,
                 child_conversation_id,
@@ -2715,6 +2717,8 @@ mod tests {
         };
         let ownership = envelope(
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
                 child_conversation_id:
@@ -2875,6 +2879,8 @@ mod tests {
         };
         let ownership = envelope(
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
                 child_conversation_id:
@@ -2954,6 +2960,8 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
         let ownership = envelope(
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
                 child_conversation_id:

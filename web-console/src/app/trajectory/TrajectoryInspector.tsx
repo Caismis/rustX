@@ -26,7 +26,7 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v21';
+} from '../../../../protocol/app-server/v22';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
@@ -527,6 +527,8 @@ export function TrajectoryInspector({
             <dd>{record.state}</dd>
             <dt>Record</dt>
             <dd className={css.machine}>{record.id}</dd>
+            {record.agent_id && <><dt>Agent</dt><dd className={css.machine}>{record.agent_id}</dd></>}
+            {record.activation_id && <><dt>Activation</dt><dd className={css.machine}>{record.activation_id}</dd></>}
             <dt>Attempt</dt>
             <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
             <dt>Logical Step</dt>

@@ -30,6 +30,7 @@ rustX currently supports:
   execution;
 - runtime-owned model selection and switching;
 - native Sessions with resume, rename, clone, fork, and tree workflows;
+- finite background Jobs and durable child Agents with message, activation wait, interrupt and resume controls;
 - Runtime Client protocol over stdio/JSONL and the `rustx-tui` reference
   terminal client.
 

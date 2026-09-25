@@ -1,4 +1,4 @@
-//! Issue #60: native async one-shot subagents end to end through the real
+//! Durable native child Agent activations end to end through the real
 //! `rustx` binary.
 //!
 //! The parent process is driven over the stdio/JSONL Runtime Client
@@ -643,11 +643,9 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
             }),
             _ => false,
         });
-        if snapshot
-            .subagents
-            .iter()
-            .any(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded)
-            && answered
+        if snapshot.agents.iter().any(|subagent| {
+            subagent.activation_state == rustx::runtime::subagent::SubagentState::Succeeded
+        }) && answered
         {
             final_snapshot = Some(snapshot);
             break;
@@ -656,9 +654,11 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     }
     let snapshot = final_snapshot.expect("the scoped real child must succeed");
     let subagent = snapshot
-        .subagents
+        .agents
         .iter()
-        .find(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded)
+        .find(|subagent| {
+            subagent.activation_state == rustx::runtime::subagent::SubagentState::Succeeded
+        })
         .expect("the scoped real child must succeed");
 
     // Protocol v15 is one contract, not two coexisting ones. The same real
@@ -788,7 +788,7 @@ async fn subagent_process_stack(alias_root: bool) {
     let Some(RuntimeClientResult::Initialized { snapshot, .. }) = response.result else {
         panic!("initialize must succeed: {response:?}");
     };
-    assert!(snapshot.subagents.is_empty(), "no children at start");
+    assert!(snapshot.agents.is_empty(), "no children at start");
 
     // The composed tool surface includes the subagent intrinsic.
     let response = process
@@ -867,10 +867,9 @@ async fn subagent_process_stack(alias_root: bool) {
             }
             _ => false,
         });
-        let settled = snapshot
-            .subagents
-            .iter()
-            .any(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded);
+        let settled = snapshot.agents.iter().any(|subagent| {
+            subagent.activation_state == rustx::runtime::subagent::SubagentState::Succeeded
+        });
         if child_answer && parent_consumed && settled {
             final_snapshot = Some(snapshot);
             break;
@@ -929,10 +928,10 @@ async fn subagent_process_stack(alias_root: bool) {
     // succeeded, with no result content on the live projection (Issue
     // #178: `detail` is diagnostics-only; the answer arrived exactly once
     // through the canonical Agent-authored inbound proven above).
-    assert_eq!(snapshot.subagents.len(), 1, "exactly one child was owned");
-    let subagent = &snapshot.subagents[0];
+    assert_eq!(snapshot.agents.len(), 1, "exactly one child was owned");
+    let subagent = &snapshot.agents[0];
     assert_eq!(
-        subagent.state,
+        subagent.activation_state,
         rustx::runtime::subagent::SubagentState::Succeeded
     );
     assert_eq!(subagent.agent, "explore");
@@ -953,20 +952,20 @@ async fn subagent_process_stack(alias_root: bool) {
 
     // The dedicated status surface answers with the same snapshot.
     let response = process
-        .request(|id| RuntimeClientRequest::SubagentStatus {
+        .request(|id| RuntimeClientRequest::AgentStatus {
             id: rustx::runtime_client::RequestId::new(id),
-            subagent_id: subagent.subagent_id.clone(),
+            agent_id: subagent.agent_id.clone(),
         })
         .await;
-    let Some(RuntimeClientResult::SubagentStatus { subagent: status }) = response.result else {
-        panic!("subagent_status must succeed: {response:?}");
+    let Some(RuntimeClientResult::Agent { agent: status }) = response.result else {
+        panic!("agent_status must succeed: {response:?}");
     };
     assert_eq!(
-        status.state,
+        status.activation_state,
         rustx::runtime::subagent::SubagentState::Succeeded
     );
-    assert_eq!(status.subagent_id, subagent.subagent_id);
-    assert_eq!(status.child_agent_id, subagent.child_agent_id);
+    assert_eq!(status.activation_id, subagent.activation_id);
+    assert_eq!(status.agent_id, subagent.agent_id);
 
     // The tool result of the `subagent` call carries the accepted identity.
     let tool_message = snapshot
@@ -979,7 +978,7 @@ async fn subagent_process_stack(alias_root: bool) {
         .expect("the subagent tool result is committed");
     let tool_text = serde_json::to_string(&tool_message).expect("tool message json");
     assert!(
-        tool_text.contains(subagent.subagent_id.as_str()),
+        tool_text.contains(subagent.activation_id.as_str()),
         "the accepted tool result carries the subagent identity: {tool_text}"
     );
 
@@ -1273,9 +1272,11 @@ async fn running_child_inspection_is_execution_independent() {
                 panic!("parent snapshot succeeds at the running frontier: {response:?}");
             };
             if let Some(child_conversation_id) = snapshot
-                .subagents
+                .agents
                 .iter()
-                .find(|child| child.state == rustx::runtime::subagent::SubagentState::Running)
+                .find(|child| {
+                    child.activation_state == rustx::runtime::subagent::SubagentState::Running
+                })
                 .map(|child| child.child_conversation_id.clone())
             {
                 break (child_conversation_id, snapshot);
@@ -1426,10 +1427,10 @@ async fn running_child_inspection_is_execution_independent() {
         );
         assert_eq!(
             parent_after_inspection
-                .subagents
+                .agents
                 .iter()
                 .find(|child| child.child_conversation_id == child_conversation_id)
-                .map(|child| child.state),
+                .map(|child| child.activation_state),
             Some(rustx::runtime::subagent::SubagentState::Running),
             "inspection does not change child lifecycle"
         );
@@ -1467,9 +1468,9 @@ async fn running_child_inspection_is_execution_independent() {
                     panic!("snapshot at the controlled mailbox frontier: {response:?}");
                 };
                 let ready = if same_attempt {
-                    snapshot.subagents.iter().any(|child|
+                    snapshot.agents.iter().any(|child|
                         child.child_conversation_id == child_conversation_id
-                        && child.state == rustx::runtime::subagent::SubagentState::Succeeded)
+                        && child.activation_state == rustx::runtime::subagent::SubagentState::Succeeded)
                 } else {
                     snapshot.attempt.as_ref().is_some_and(|attempt|
                         attempt.attempt_id == preceding_attempt && matches!(attempt.phase,
@@ -1533,11 +1534,11 @@ async fn running_child_inspection_is_execution_independent() {
             panic!("parent snapshot succeeds after the final attempt: {response:?}");
         };
         let child_state = final_snapshot
-            .subagents
+            .agents
             .iter()
             .find(|child| child.child_conversation_id == child_conversation_id)
             .expect("the child remains in the parent projection")
-            .state;
+            .activation_state;
         let parent_attempt_completed = final_snapshot.attempt.as_ref().is_some_and(|attempt| {
             matches!(
                 &attempt.phase,
@@ -1879,7 +1880,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         "recovery publishes exactly one Interrupted notice"
     );
     assert!(
-        snapshot.subagents.is_empty(),
+        snapshot.agents.is_empty(),
         "recovery does not reattach a live registry child"
     );
     assert!(
@@ -1951,7 +1952,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         1,
         "repeated restart is idempotent"
     );
-    assert!(snapshot.subagents.is_empty());
+    assert!(snapshot.agents.is_empty());
     assert!(direct_subagent_pids(repeated.child.id().expect("repeated pid")).is_empty());
     let response = repeated
         .request(|id| RuntimeClientRequest::Shutdown {
@@ -1965,3 +1966,6 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     let (status, stderr) = repeated.close_and_wait().await;
     assert!(status.success(), "repeated runtime shuts down: {stderr}");
 }
+
+#[path = "continuation.rs"]
+mod continuation;

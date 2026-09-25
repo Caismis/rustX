@@ -2069,6 +2069,8 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
             "audited-subagent",
             "1",
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: rustx::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: AgentId::new("child-audited"),
                 child_conversation_id: ConversationId::new(

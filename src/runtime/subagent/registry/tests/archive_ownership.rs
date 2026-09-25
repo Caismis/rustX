@@ -627,8 +627,8 @@ async fn failed_and_cancelled_retained_children_keep_exact_transcript_authority(
             }
         );
         assert!(
-            terminal.handoff.is_some(),
-            "dirty child workspace is retained"
+            terminal.handoff.is_none() && workspace.join("keep.txt").exists(),
+            "inactive durable Agent retains its workspace without a disposable handoff"
         );
         assert_eq!(
             fixture

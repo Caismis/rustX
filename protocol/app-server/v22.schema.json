@@ -399,7 +399,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "background/status"
+              "const": "job/status"
             },
             "params": {
               "type": "object",
@@ -407,14 +407,14 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
-                "execution_id": {
+                "job_id": {
                   "$ref": "#/$defs/ToolExecutionId"
                 }
               },
               "additionalProperties": false,
               "required": [
                 "target",
-                "execution_id"
+                "job_id"
               ]
             }
           },
@@ -428,22 +428,18 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "background/cancel"
+              "const": "job/list"
             },
             "params": {
               "type": "object",
               "properties": {
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
-                },
-                "execution_id": {
-                  "$ref": "#/$defs/ToolExecutionId"
                 }
               },
               "additionalProperties": false,
               "required": [
-                "target",
-                "execution_id"
+                "target"
               ]
             }
           },
@@ -453,12 +449,11 @@
           ]
         },
         {
-          "description": "Bounded canonical history of an exact child owned by the addressed parent.",
           "type": "object",
           "properties": {
             "method": {
               "type": "string",
-              "const": "subagent/transcript"
+              "const": "job/wait"
             },
             "params": {
               "type": "object",
@@ -466,8 +461,211 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
-                "subagent_id": {
-                  "$ref": "#/$defs/SubagentId"
+                "job_id": {
+                  "$ref": "#/$defs/ToolExecutionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "job_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "job/cancel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "job_id": {
+                  "$ref": "#/$defs/ToolExecutionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "job_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/status"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/sendMessage"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id",
+                "message"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/wait"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/interrupt"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent/transcript"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
                 },
                 "before": {
                   "anyOf": [
@@ -489,66 +687,8 @@
               "additionalProperties": false,
               "required": [
                 "target",
-                "subagent_id",
+                "agent_id",
                 "limit"
-              ]
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
-              "const": "subagent/status"
-            },
-            "params": {
-              "type": "object",
-              "properties": {
-                "target": {
-                  "$ref": "#/$defs/AttachmentTarget"
-                },
-                "subagent_id": {
-                  "$ref": "#/$defs/SubagentId"
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "target",
-                "subagent_id"
-              ]
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
-              "const": "subagent/cancel"
-            },
-            "params": {
-              "type": "object",
-              "properties": {
-                "target": {
-                  "$ref": "#/$defs/AttachmentTarget"
-                },
-                "subagent_id": {
-                  "$ref": "#/$defs/SubagentId"
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "target",
-                "subagent_id"
               ]
             }
           },
@@ -1986,6 +2126,10 @@
     "ToolExecutionId": {
       "type": "string",
       "pattern": "^exec_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "AgentId": {
+      "description": "Identifies an agent.",
+      "type": "string"
     },
     "SubagentId": {
       "description": "Identifies one conversation-owned asynchronous one-shot subagent\n(Issue #60).\n\n`SubagentId` is the logical lifecycle/delegation identity of a child\nrustX runtime. It is deliberately not an OS pid: a pid is ephemeral\nprocess state and is never durable identity, and pid reuse after a\nrestart can never prove that a surviving process is the previously\nowned child.",
@@ -4335,10 +4479,6 @@
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
     },
-    "AgentId": {
-      "description": "Identifies an agent.",
-      "type": "string"
-    },
     "AgentProjectInstructionsDocument": {
       "description": "Project-instruction selection from admitted workspace resources.",
       "type": "object",
@@ -5140,45 +5280,151 @@
         {
           "type": "object",
           "properties": {
-            "execution": {
-              "$ref": "#/$defs/RuntimeClientBackgroundExecution"
+            "job": {
+              "$ref": "#/$defs/RuntimeClientJob"
             },
             "type": {
               "type": "string",
-              "const": "background"
+              "const": "job"
             }
           },
           "additionalProperties": false,
           "required": [
             "type",
-            "execution"
+            "job"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "subagent": {
-              "$ref": "#/$defs/RuntimeClientSubagent"
+            "jobs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RuntimeClientJob"
+              }
             },
             "type": {
               "type": "string",
-              "const": "subagent"
+              "const": "jobs"
             }
           },
           "additionalProperties": false,
           "required": [
             "type",
-            "subagent"
+            "jobs"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "subagent": {
-              "$ref": "#/$defs/RuntimeClientSubagent"
+            "agent": {
+              "$ref": "#/$defs/RuntimeClientAgent"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agents": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RuntimeClientAgent"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "agents"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "agents"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "activation_id": {
+              "$ref": "#/$defs/SubagentId"
+            },
+            "resumed": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_message"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "agent_id",
+            "activation_id",
+            "resumed"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "activation_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SubagentId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "outcome": {
-              "$ref": "#/$defs/RuntimeClientSubagentWorkspaceDisposalOutcome"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SubagentState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "agent": {
+              "$ref": "#/$defs/RuntimeClientAgent"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_wait"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "agent_id",
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "$ref": "#/$defs/RuntimeClientAgent"
+            },
+            "outcome": {
+              "$ref": "#/$defs/RuntimeClientAgentWorkspaceDisposalOutcome"
             },
             "type": {
               "type": "string",
@@ -5188,7 +5434,7 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "subagent",
+            "agent",
             "outcome"
           ]
         },
@@ -7041,6 +7287,26 @@
             "null"
           ]
         },
+        "agent_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "activation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "originating_tool_call_id": {
           "description": "The exact outer `ToolCall` this Tool-owned domain record belongs to,\ncopied from the native start fact. It is presentation and navigation\ncorrelation only: it confers no lifecycle, ownership, settlement or\ncancellation authority, and it is never resolved from a Tool name, a\ntimestamp, row adjacency or the loaded page.",
           "anyOf": [
@@ -8497,7 +8763,7 @@
               "description": "The active background executions in allocation order.",
               "type": "array",
               "items": {
-                "$ref": "#/$defs/RuntimeClientBackgroundExecution"
+                "$ref": "#/$defs/RuntimeClientJob"
               }
             },
             "omitted_count": {
@@ -8594,11 +8860,11 @@
         }
       ]
     },
-    "RuntimeClientBackgroundExecution": {
+    "RuntimeClientJob": {
       "description": "The external background execution read model.\n\nProjected from the authoritative [`ConversationBackgroundRegistry`]\n([`crate::tools::background::ConversationBackgroundRegistry`]); the\ncontainer shape belongs to the Runtime Client protocol while the\nlifecycle, progress, and result leaf types are stable runtime-owned\nvalue contracts. No internal task handles or process ids ever appear.",
       "type": "object",
       "properties": {
-        "execution_id": {
+        "job_id": {
           "description": "The detached runtime execution identity.",
           "$ref": "#/$defs/ToolExecutionId"
         },
@@ -8639,7 +8905,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "execution_id",
+        "job_id",
         "tool_id",
         "tool_name",
         "state"
@@ -12009,16 +12275,19 @@
         }
       }
     },
-    "RuntimeClientSubagent": {
-      "description": "The Runtime Client view of one subagent child (Issue #60).\n\nA read-model materialization of the authoritative registry snapshot:\nevery field is derived, and the durable ownership/terminal events —\nnever this view — are the recovery authority.\n\nSince Issue #178 the view also carries the child's live activity\nprojection (`observation`), its redacted execution profile\n(`execution_profile`), and its start time (`started_at`). These are\nobservation-plane facts: the lifecycle `state` remains the only\nauthority on whether the child is alive, settling, or settled.",
+    "RuntimeClientAgent": {
+      "description": "One durable child Agent, keyed by `agent_id` across every activation.\n\nThe registry owns lifecycle arbitration. Journal ownership facts rebuild\nidentity and activation correlation; canonical child history owns content.\n`activation_id` identifies the latest activation, while `current_activation`\nis absent when inactive or reserving the next activation. Neither replaces\nthe stable Agent identity. Activity is bounded observation, never authority.",
       "type": "object",
       "properties": {
-        "subagent_id": {
-          "description": "The conversation-owned subagent identity.",
+        "parent_agent_id": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "activation_id": {
+          "description": "The most recently admitted finite activation identity.",
           "$ref": "#/$defs/SubagentId"
         },
-        "child_agent_id": {
-          "description": "The child agent identity (the provenance its answer carries).",
+        "agent_id": {
+          "description": "The stable child Agent identity and canonical message provenance.",
           "$ref": "#/$defs/AgentId"
         },
         "child_conversation_id": {
@@ -12039,6 +12308,19 @@
         },
         "state": {
           "description": "The authoritative lifecycle state.",
+          "$ref": "#/$defs/AgentState"
+        },
+        "current_activation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "activation_state": {
           "$ref": "#/$defs/SubagentState"
         },
         "detail": {
@@ -12070,26 +12352,41 @@
         },
         "workspace": {
           "description": "The model-independent project workspace facts.",
-          "$ref": "#/$defs/RuntimeClientSubagentWorkspace"
+          "$ref": "#/$defs/RuntimeClientAgentWorkspace"
         }
       },
       "additionalProperties": false,
       "required": [
-        "subagent_id",
-        "child_agent_id",
+        "parent_agent_id",
+        "activation_id",
+        "agent_id",
         "child_conversation_id",
         "agent",
         "definition_digest",
         "profile_digest",
         "state",
+        "activation_state",
         "observation",
         "started_at",
         "workspace"
       ]
     },
+    "AgentState": {
+      "type": "string",
+      "enum": [
+        "active",
+        "stopping",
+        "inactive"
+      ]
+    },
     "SubagentState": {
       "description": "The public lifecycle vocabulary of one subagent snapshot.",
       "oneOf": [
+        {
+          "description": "Message admission is closed while the activation drains and settles.",
+          "type": "string",
+          "const": "stopping"
+        },
         {
           "description": "Ownership committed; the delegation is in flight or running.",
           "type": "string",
@@ -12410,7 +12707,7 @@
         "reasoning_enabled"
       ]
     },
-    "RuntimeClientSubagentWorkspace": {
+    "RuntimeClientAgentWorkspace": {
       "description": "User-recoverable facts about the project workspace authority of one\nsubagent. Acquisition and settlement policy remain native runtime\nresponsibilities; this is only a read-model projection.",
       "type": "object",
       "properties": {
@@ -12593,7 +12890,7 @@
         "dirty"
       ]
     },
-    "RuntimeClientSubagentWorkspaceDisposalOutcome": {
+    "RuntimeClientAgentWorkspaceDisposalOutcome": {
       "description": "The public result of disposing a retained subagent workspace.",
       "oneOf": [
         {
@@ -13406,19 +13703,19 @@
           },
           "default": []
         },
-        "background": {
+        "jobs": {
           "description": "All background executions in execution allocation order, including\nterminal records retained by the authoritative registry.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RuntimeClientBackgroundExecution"
+            "$ref": "#/$defs/RuntimeClientJob"
           },
           "default": []
         },
-        "subagents": {
-          "description": "All subagent children in subagent ordinal order, including terminal\nrecords retained by the authoritative registry (Issue #60).",
+        "agents": {
+          "description": "Durable child Agents in creation order. Repeated activations replace\nthe same Agent row; activation history remains in the Event Journal.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RuntimeClientSubagent"
+            "$ref": "#/$defs/RuntimeClientAgent"
           },
           "default": []
         },
@@ -18028,6 +18325,57 @@
         {
           "type": "object",
           "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent_stopping"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "agent_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "unknown_agent"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "agent_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent_history_unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "agent_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "subagent_id": {
               "$ref": "#/$defs/SubagentId"
             },
@@ -19528,38 +19876,38 @@
           "description": "One background execution transitioned in the authoritative\nconversation registry.\n\nBackground work is conversation-owned: it survives attempt\ntermination, client detach, and client reconnect.",
           "type": "object",
           "properties": {
-            "execution": {
+            "job": {
               "description": "The canonical registry snapshot after the transition.",
-              "$ref": "#/$defs/RuntimeClientBackgroundExecution"
+              "$ref": "#/$defs/RuntimeClientJob"
             },
             "type": {
               "type": "string",
-              "const": "background_execution_updated"
+              "const": "job_updated"
             }
           },
           "additionalProperties": false,
           "required": [
             "type",
-            "execution"
+            "job"
           ]
         },
         {
           "description": "One subagent child transitioned in the authoritative conversation\nregistry (Issue #60).\n\nSubagent children are conversation-owned: they survive attempt\ntermination, client detach, and client reconnect.",
           "type": "object",
           "properties": {
-            "subagent": {
+            "agent": {
               "description": "The canonical registry snapshot after the transition.",
-              "$ref": "#/$defs/RuntimeClientSubagent"
+              "$ref": "#/$defs/RuntimeClientAgent"
             },
             "type": {
               "type": "string",
-              "const": "subagent_updated"
+              "const": "agent_updated"
             }
           },
           "additionalProperties": false,
           "required": [
             "type",
-            "subagent"
+            "agent"
           ]
         },
         {

@@ -26,9 +26,9 @@ WEB-12 replaces the exact Attempt line with a deterministic product projection:
 Working, Queued, Stopping, connection recovery, Needs verification and actionable
 failure. Idle has no status chrome. A request to stop is never a successful stop;
 unresolved request evidence survives even a suggestive settled snapshot.
-Tool/Subagent/Workflow activity remains product UI; exact execution identifiers,
-raw Agent status, native mailbox data and revision evidence live in the existing
-Inspector. Interaction cards retain their questions, Tool arguments and review
+Tool/Job/Agent/Workflow activity remains product UI. Child Agent cards expose
+their durable identity and current activation for continuation; raw Agent status,
+native mailbox data and revision evidence live in the existing Inspector. Interaction cards retain their questions, Tool arguments and review
 subjects, while routing IDs and review instance metadata move to diagnostics.
 Goal/Queue changes are limited to diagnostic text removal; their layout, native
 references, CAS, controls and the WEB-11 composer contract are unchanged.
@@ -57,10 +57,53 @@ Harness-derived composer accepts browser File drafts before Session creation;
 navigation and the exact native attachment. Settings target actors are shared
 with the permission seat; no configuration coordinator lives in the composer.
 
-App Server v21 / Runtime Client v47 publishes `completed_process` on canonical
+App Server v22 / Runtime Client v48 publishes `completed_process` on canonical
 Assistant and Tool entries using native Attempt event evidence. Its origin and
 local final-message identity survive pagination and lineage remapping. Only
 those facts create process disclosure membership; final answers and actions
 stay outside. Agent Status retains its native anchor and shares disclosure only
 when its exact Conversation/Attempt matches a loaded completed process. Live or
 unclassified annotations remain visible. No canonical cache is modified.
+
+## Jobs and continuable child Agents (#411)
+
+`RuntimeFacts` renders two native snapshot domains. `jobs` contains finite detached
+Tool invocations keyed by `job_id`; a terminal Job never resumes. Status is an
+immediate read, Wait targets that exact Job's physical settlement, and Cancel
+uses the native settlement contract. Proactive runtime events trigger the normal
+snapshot refresh, so terminal output appears without status polling.
+
+`agents` contains durable child conversations keyed by `agent_id`. A card remains
+mounted and identifiable as its native state changes Active → Stopping → Inactive
+→ Active. `activation_id` identifies the latest finite activation and
+`current_activation` identifies the current one. An activation ID is never used
+as the Agent row key. Transcript reads address the durable Agent; committed child
+messages and final reports use the canonical transcript renderer. Older pages
+come from the native transcript endpoint, not a browser result cache. An open
+transcript refreshes when native activation facts change, including settlement
+and resume. Child artifact names render without borrowing the parent artifact
+reader: the native API currently exposes only parent-scoped artifact reads.
+
+Send message always sends the same `agent/sendMessage` operation. React never
+chooses between steering and resuming. The registry atomically admits Active
+input, creates an Inactive activation, or rejects Stopping input. Interrupt ends
+only the current activation. Wait captures its target in the runtime and cannot
+be retargeted by a subsequent resume. A pending wait does not disable interruption
+or messaging. Requests are never retried after a lost response; reconnect replaces
+the complete projection from native authority. Jobs and Agents remain scoped to
+the exact current attachment.
+
+Historical native Tool cards distinguish `job_*` from `subagent`, `list_agents`,
+`send_message`, `wait_agent`, and `interrupt_agent`. Historical results never
+replace the live roster. Trace records retain individual activation evidence and
+carry native Agent correlation rather than deriving child identity from an
+activation string.
+
+Reference source inspected: DeepSeek Harness
+`packages/client/ui-subagent/src/client/sidebar-chat/index.tsx` and
+`packages/client/ui-jobs/src/client/JobListAction.tsx` at
+`477b4f420553e8a52c2fbccc464d7561b239c443`.
+Adopted stable child-conversation detail, separate finite Job rows, retained output,
+and snapshot-owned controls. Rejected the historical one-shot/continuable mode
+branch and client lifecycle bookkeeping: rustX has one continuable Agent model.
+No new upstream presentation source was imported or baseline repinned.

@@ -2278,7 +2278,7 @@ fn assert_publication_is_atomic(scenario: &str, boundary: &str, committed: bool)
 /// This is the row the seed makes dangerous rather than safe. The destination
 /// context genuinely contains `exec_1`, `conversation-1-subagent-1`,
 /// `agent-conversation-1-subagent-1`, the source's private tool-output path,
-/// and three Agent Status footers reading `tool exec_1 | bash | running` — all
+/// and three Agent Status footers reading `job exec_1 | bash | running` — all
 /// copied verbatim from a lineage whose execution is still owned elsewhere. A
 /// runtime that resolved ownership from history would find every one of them.
 ///
@@ -2624,7 +2624,7 @@ fn a_reopened_runtime_never_relaunches_a_dead_background_execution() {
 /// The trap this row closes is specific. Agent Status is a **canonical
 /// message**: the status admitted for the second turn was composed while a
 /// real detached execution was live, so it literally says
-/// `Background executions: tool exec_1 | bash | …`, and it stays in the Ledger
+/// `Background jobs: tool exec_1 | bash | …`, and it stays in the Ledger
 /// forever. A reopened runtime reads that message back as ordinary history.
 /// If ownership were ever reconstructed from what history *says* — instead of
 /// from the durable ownership facts and the process-local registry — the
@@ -2659,12 +2659,12 @@ fn historical_status_and_history_never_revive_background_ownership() {
     let before = status_texts(&durable.canonical());
     assert_eq!(before.len(), 2);
     assert!(
-        !before[0].contains("Background executions:"),
+        !before[0].contains("Background jobs:"),
         "the first turn's status predates the execution: {}",
         before[0]
     );
     assert!(
-        before[1].contains("Background executions:"),
+        before[1].contains("Background jobs:"),
         "the second turn's status was composed while the execution was live: {}",
         before[1]
     );

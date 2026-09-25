@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { turnProcesses } from '../../bindings/turn-process';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v21';
+import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v22';
 import { conversation, json } from '../../bindings/projection';
 import { agentStatusPlacement, isAgentStatusContext, statusesAt } from '../../bindings/agent-status';
 import { Button } from '../../presentation/primitives/Button';

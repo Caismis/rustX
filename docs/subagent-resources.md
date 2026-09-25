@@ -26,14 +26,24 @@ execution/approval policies or create a persistent configuration layer.
 The profile digest covers effective execution semantics. Canonical Tool identity,
 model binding, Skill version and closed Plugin behavior are frozen before process
 staging. Equivalent resolved profiles have the same digest; routing prose and
-unselected definitions do not create execution authority. A steering message is
+unselected definitions do not create execution authority. A `send_message` input is
 ordinary inbound task content, never a way to change that admitted profile.
 
 ## Durable ownership
 
 Each child owns a typed UUIDv7 Conversation identity and a Conversation-local
-SQLite store under its owning Session. Subagent ordinal identity retains its
-real parent-scoped ordering semantics and is not the Conversation locator.
+SQLite store under its owning Session. `AgentId` is the durable child identity. Internal `SubagentId` names one finite
+activation and retains parent-scoped ordinal ordering; it is not the Conversation
+locator and is never reused for a later activation.
 Tool outputs belong to that Conversation allocation. Parent/child ownership
 commits, execution settlement, process supervision and retained-worktree disposal
 remain native runtime responsibilities. See [Session deletion ownership](session-deletion-ownership.md).
+
+## Durable Agent authority across activations
+
+The resolved contract freezes at Agent creation, not each resume. The durable
+Agent owns the same child ConversationId and workspace authority across multiple
+finite activation IDs. `send_message` to an inactive Agent reuses that admitted
+profile, model, Tools, Skills, resources and policies; it does not consult current
+settings or reread a named definition. Parent resource/configuration reload cannot
+mutate existing Agent authority. See [Jobs and continuable Agents](jobs-and-agents.md).

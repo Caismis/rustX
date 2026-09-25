@@ -87,19 +87,24 @@ impl Fixture {
         let mut borrowed = self.workspace.clone();
         borrowed.borrowed_from = Some(self.run.clone());
         self.parent
-            .append_event(crate::runtime::subagent::ownership_event(
-                &self.run.conversation_id,
-                &subagent,
-                &AgentId::new(format!("agent-{ordinal}")),
-                &child,
-                &ToolCallId::new(format!("borrow-call-{ordinal}")),
-                &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-                &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-                &serde_json::from_value(serde_json::json!(profile)).unwrap(),
-                SubagentOwnershipKind::Workflow,
-                &borrowed,
-                Utc::now(),
-            ))
+            .append_event(
+                crate::local_runtime::session::tests::deletion_tests::admit_agent(
+                    crate::runtime::subagent::ownership_event(
+                        &crate::runtime::identity::AgentId::new("agent-parent"),
+                        &self.run.conversation_id,
+                        &subagent,
+                        &AgentId::new(format!("agent-{ordinal}")),
+                        &child,
+                        &ToolCallId::new(format!("borrow-call-{ordinal}")),
+                        &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+                        &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+                        &serde_json::from_value(serde_json::json!(profile)).unwrap(),
+                        SubagentOwnershipKind::Workflow,
+                        &borrowed,
+                        Utc::now(),
+                    ),
+                ),
+            )
             .unwrap();
         let database =
             crate::runtime::subagent::child_conversation_store_path(root, &self.session, &child);

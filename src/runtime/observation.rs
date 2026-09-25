@@ -234,6 +234,9 @@ pub(crate) enum ConversationObservation {
     /// #60, reclassified #178). **Reliable**: ordered FIFO, non-lossy —
     /// every identity/lifecycle/terminal transition reaches the consumer
     /// exactly once, in publication order.
+    Agent {
+        snapshot: Box<crate::runtime::subagent::AgentSnapshot>,
+    },
     SubagentLifecycle(SubagentSnapshot),
     /// One reliable retained-workspace resource transition. This is separate
     /// from the logical lifecycle lane: disposing a handoff updates only the
@@ -989,6 +992,8 @@ mod tests {
     /// activity revision this suite distinguishes.
     fn subagent_snapshot(subagent_id: &str, revision: u64) -> SubagentSnapshot {
         SubagentSnapshot {
+            ownership: crate::events::types::SubagentOwnershipKind::Normal,
+            parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             subagent_id: SubagentId::new(subagent_id),
             child_agent_id: AgentId::new("agent-child"),
             child_conversation_id: crate::scripted_suites::common::identity::child_conversation_id(

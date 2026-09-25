@@ -899,6 +899,7 @@ fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
         assert!(text.len() < 600);
         assert!(!text.contains("scopes"));
         let record = DeletionRecord {
+            agent_workspaces: vec![],
             upload_workspaces: vec![],
             session_id: session_id.clone(),
             target_revision: "a".repeat(64),

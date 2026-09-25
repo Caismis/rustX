@@ -98,6 +98,8 @@ type InteractionAdmissionWaiter = (
 /// One control event the child's semantic driver must act on.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildControlEvent {
+    /// The registry closed message admission for this activation.
+    SealGranted,
     /// The delegated task arrived (exactly once, after `Ready`).
     Delegate(DelegationFrame),
     /// The parent requested cancellation. A semantic reason is present for a
@@ -589,6 +591,15 @@ impl ChildControlDispatcher {
                     Ok(Some(ParentFrame::InteractionProviderAvailable { available })) => {
                         if events_tx
                             .send(ChildControlEvent::InteractionProviderAvailable { available })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(ParentFrame::SealGranted)) => {
+                        if events_tx
+                            .send(ChildControlEvent::SealGranted)
                             .await
                             .is_err()
                         {

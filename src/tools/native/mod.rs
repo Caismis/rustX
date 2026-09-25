@@ -48,12 +48,13 @@
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 
+mod agents;
 mod ask_user;
 mod bash;
 mod edit;
-pub(crate) mod execution;
 mod glob;
 mod goal;
+mod jobs;
 pub(crate) use goal::NAMES as GOAL_TOOL_NAMES;
 pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
@@ -94,7 +95,6 @@ pub(crate) fn definitions(
     crate::tools::deadline::ForegroundPolicy,
 )> {
     let mut definitions = vec![
-        execution::definition(),
         ask_user::definition(),
         read::definition(policies.read),
         write::definition(policies.write),
@@ -103,6 +103,8 @@ pub(crate) fn definitions(
         grep::definition(policies.grep),
         bash::definition(policies.bash),
     ];
+    definitions.extend(jobs::definitions());
+    definitions.extend(agents::definitions());
     definitions.extend(subagent::definition(subagents));
     definitions
         .into_iter()
@@ -343,7 +345,6 @@ pub(crate) fn native_tool_registrations(
         subagent_catalog,
     } = resources;
     let mut registrations = vec![
-        execution::registration(background, subagents.clone()),
         ask_user::registration(),
         read::registration(policies.read),
         write::registration(policies.write),
@@ -357,6 +358,10 @@ pub(crate) fn native_tool_registrations(
     // resource generation admits at least one named agent. An empty catalog
     // has no satisfiable invocation, so publishing a Tool definition for it
     // would make the model-facing capability set untruthful.
+    registrations.extend(jobs::registrations(&background));
+    if let Some(subagents) = &subagents {
+        registrations.extend(agents::registrations(subagents));
+    }
     if let Some(subagents) = subagents
         && let Some(registration) = subagent::registration(subagents, &subagent_catalog)
     {
@@ -601,13 +606,19 @@ mod tests {
         assert_eq!(narrower.names(), vec!["grep"]);
     }
 
-    /// Recursive and execution capabilities are structurally unregistrable
+    /// Recursive delegation and parent-owned Agent controls are structurally unregistrable
     /// in a child, independently of definition admission. `ask_user` is a
     /// valid explicit child capability because its coordinator route is
     /// installed by child composition.
     #[test]
     fn child_unsafe_capabilities_are_structurally_absent() {
-        for name in ["subagent", "execution"] {
+        for name in [
+            "subagent",
+            "send_message",
+            "wait_agent",
+            "interrupt_agent",
+            "list_agents",
+        ] {
             assert!(
                 subagent_child_definition(name, ToolInvocationPolicy::default()).is_none(),
                 "{name} has no child-plane implementation at all"

@@ -110,7 +110,7 @@ function representative(): RuntimeClientSnapshot {
         }),
       ],
     }),
-    background: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
+    jobs: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
     pending_interactions: [approvalInteraction()],
     model: sessionModel("beta/model-b"),
     inbound: {
@@ -165,7 +165,7 @@ describe("snapshot reconstruction", () => {
     assert.match(screen, /◐ Grep "AttemptSettled" · running · scanning · 40\/900/);
 
     // Activity
-    assert.match(screen, /Background · 1 active of 1 known/);
+    assert.match(screen, /Jobs · 1 active of 1 known/);
     assert.match(screen, /Human input required · 1 pending/);
 
     // Working status: the pending approval for this attempt outranks the

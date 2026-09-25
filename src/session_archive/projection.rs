@@ -216,7 +216,8 @@ fn subagent_resource(resource: &crate::events::types::SubagentWorkspaceTerminalR
 fn workspace(workspace: &crate::runtime::workspace::WorkspaceSettlement) -> Value {
     use crate::runtime::workspace::WorkspaceSettlementDisposition;
     let disposition = match &workspace.disposition {
-        WorkspaceSettlementDisposition::Borrowed
+        WorkspaceSettlementDisposition::AgentRetained
+        | WorkspaceSettlementDisposition::Borrowed
         | WorkspaceSettlementDisposition::Shared
         | WorkspaceSettlementDisposition::Removed => json!(workspace.disposition),
         WorkspaceSettlementDisposition::Retained {

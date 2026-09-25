@@ -600,6 +600,11 @@ pub enum RuntimeEvent {
     /// The fact carries no attempt identity: a committed child deliberately
     /// outlives the attempt that started it.
     SubagentOwnershipCommitted {
+        /// Stable parent lineage, independent of any activation.
+        parent_agent_id: AgentId,
+        /// Present only on durable Agent creation, never re-resolved on resume.
+        /// Workflow children and subsequent activations carry no new authority.
+        admitted_authority: Option<Box<crate::runtime::subagent::FrozenAgentAuthority>>,
         /// The allocated subagent identity.
         subagent_id: SubagentId,
         /// The child agent identity (the provenance of the child's later

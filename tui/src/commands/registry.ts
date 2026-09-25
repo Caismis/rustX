@@ -101,14 +101,21 @@ export const COMMANDS: readonly CommandSpec[] = [
     description:
       "Expand or collapse foreground tool, background execution, and pending interaction detail. Purely visual: nothing is re-executed or re-fetched.",
     argumentHint:
-      "[latest|all|none|<tool-call-id>|background <execution-id>|interaction <conversation-id>::<interaction-id>]",
+      "[latest|all|none|<tool-call-id>|job <job-id>|interaction <conversation-id>::<interaction-id>]",
   },
   {
     name: "/cancel",
     description:
-      "Request cancellation of the current attempt, or of a background execution.",
-    argumentHint: "[execution-id]",
+      "Request cancellation of the current attempt.",
   },
+  { name: "/agents", description: "List durable child Agents and their current activation." },
+  { name: "/send-message", description: "Send to an Agent; the runtime delivers or resumes atomically.", argumentHint: "<agent-id> <message>" },
+  { name: "/wait-agent", description: "Wait for the Agent activation observed by the runtime.", argumentHint: "<agent-id>" },
+  { name: "/interrupt-agent", description: "Interrupt the current activation; keep the Agent resumable.", argumentHint: "<agent-id>" },
+  { name: "/jobs", description: "List finite background Jobs." },
+  { name: "/job-status", description: "Read one Job without waiting.", argumentHint: "<job-id>" },
+  { name: "/job-wait", description: "Wait for one exact Job to physically settle.", argumentHint: "<job-id>" },
+  { name: "/job-cancel", description: "Cancel one finite Job through runtime settlement.", argumentHint: "<job-id>" },
   { name: "/quit", description: "Shut down the runtime and exit cleanly." },
 ];
 

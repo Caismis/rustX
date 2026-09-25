@@ -863,3 +863,18 @@ content without invented line numbers. Models retains rustX's complete typed
 configuration details and distinguishes unobserved application from availability.
 The Agent Status status-section definition list replaces Harness ContextBody,
 while its disclosure axes, separator and indentation reuse ContextInjectionRow.
+
+## #411 Jobs and continuable Agents
+
+No new upstream source is copied and the presentation baseline is unchanged.
+Current source review used DeepSeek Harness commit
+`477b4f420553e8a52c2fbccc464d7561b239c443`:
+`packages/client/ui-subagent/src/client/sidebar-chat/index.tsx` and
+`packages/client/ui-jobs/src/client/JobListAction.tsx`. Stable child detail and
+separate finite Job output/control patterns inform rustX-authored ActivityCards.
+The old one-shot/continuable mode branch is deliberately not adopted.
+
+Reviewed local inventory changes update App Server imports to v22 and ToolCard's
+identity discriminator to finite `job`, including its `data-job-id` marker.
+Existing Tool dispatch, primitives, styling, licenses and pinned upstream hashes
+are retained. Inventory local hashes and import closure reflect those edits.

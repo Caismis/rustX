@@ -7,7 +7,7 @@ import { beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type 
 import { trajectoryItems, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v21';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v22';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -475,4 +475,20 @@ it.each(['resolve', 'reject'] as const)('Tool facets distinguish pending histori
     }
     expect(reads).toEqual(['trace:10']);
   }
+});
+
+it('Agent activations retain separate trace records correlated to one durable Agent across replay', () => {
+  const records = ['activation-a', 'activation-b'].map((activation_id, n) => traceRecord(n, {
+    kind: 'subagent', request: null, agent_id: 'durable-agent', activation_id, native_id: activation_id,
+  }));
+  const ui = show(cacheOf(records));
+  for (const record of records) {
+    fireEvent.click(row('RecordRow', record.id));
+    fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
+    const panel = within(screen.getByRole('tabpanel'));
+    expect(panel.getByText('durable-agent')).toBeTruthy();
+    expect(panel.getAllByText(record.activation_id!)).not.toHaveLength(0);
+  }
+  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop}/>);
+  expect(document.querySelectorAll('[data-display-type="RecordRow"]')).toHaveLength(2);
 });

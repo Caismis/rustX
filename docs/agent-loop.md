@@ -2055,6 +2055,19 @@ continuation exactly once after the semantic commit. A drained batch enters
 the Ledger and current Surface before the next projection/compaction, so the
 request corresponding to a selected batch always contains that batch.
 
+## Durable child Agents and finite activations
+
+The parent `SubagentRegistry` owns durable child identity and zero-or-one current
+activation. An activation uses the ordinary Agent Loop and canonical child
+ConversationRuntime. Native `send_message` input follows the same durable inbox
+and legal loop boundaries as ordinary input; it is not a second message/result
+channel. Before a successful activation seals guidance, `SealRequested` arbitrates
+with parent admission under the registry lock, changes the Agent to Stopping and
+drains already-admitted FIFO messages before `SealGranted`. Active therefore
+always means message admission remains open. Inactive resumes through one owner
+reservation with fresh activation identity and the same frozen child authority.
+See [Jobs and continuable Agents](jobs-and-agents.md) for exact boundaries.
+
 ## 10. Unsupported behavior (non-goals)
 
 The M3 loop does not implement: multi-agent execution, agent delegation,

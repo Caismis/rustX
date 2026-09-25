@@ -76,8 +76,8 @@ export function emptyPresentationState(
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
     pendingInteractions: [],
-    background: [],
-    subagents: [],
+    jobs: [],
+    agents: [],
     statuses: [],
     context: { compaction_in_progress: false, compaction_count: 0 },
     capabilities: { revision: EXACT_ZERO, tools: [], skills: [] },
@@ -187,8 +187,8 @@ export function replaceFromSnapshot(
       last_drain: snapshot.inbound.last_drain ?? undefined,
     },
     pendingInteractions: [...(snapshot.pending_interactions ?? [])],
-    background: [...(snapshot.background ?? [])],
-    subagents: [...(snapshot.subagents ?? [])],
+    jobs: [...(snapshot.jobs ?? [])],
+    agents: [...(snapshot.agents ?? [])],
     // The runtime's bounded composition window, verbatim. Every annotation
     // the transcript draws is reconstructed from this list and the placement
     // facts each status carries, so a repair never has to consult — or
@@ -694,12 +694,12 @@ export function reduce(
       };
       return next;
 
-    case "background_execution_updated":
-      next.background = upsertBackground(state.background, event.execution);
+    case "job_updated":
+      next.jobs = upsertBackground(state.jobs, event.job);
       return next;
 
-    case "subagent_updated":
-      next.subagents = upsertSubagent(state.subagents, event.subagent);
+    case "agent_updated":
+      next.agents = upsertSubagent(state.agents, event.agent);
       return next;
 
     case "capability_updated":
@@ -1119,11 +1119,11 @@ function settleForeground(
 }
 
 function upsertBackground(
-  background: PresentationState["background"],
-  execution: PresentationState["background"][number],
-): PresentationState["background"] {
+  background: PresentationState["jobs"],
+  execution: PresentationState["jobs"][number],
+): PresentationState["jobs"] {
   const index = background.findIndex(
-    (entry) => entry.execution_id === execution.execution_id,
+    (entry) => entry.job_id === execution.job_id,
   );
   if (index === -1) {
     return [...background, execution];
@@ -1134,16 +1134,16 @@ function upsertBackground(
 }
 
 function upsertSubagent(
-  subagents: PresentationState["subagents"],
-  subagent: PresentationState["subagents"][number],
-): PresentationState["subagents"] {
-  const index = subagents.findIndex(
-    (entry) => entry.subagent_id === subagent.subagent_id,
+  agents: PresentationState["agents"],
+  subagent: PresentationState["agents"][number],
+): PresentationState["agents"] {
+  const index = agents.findIndex(
+    (entry) => entry.agent_id === subagent.agent_id,
   );
   if (index === -1) {
-    return [...subagents, subagent];
+    return [...agents, subagent];
   }
-  const updated = [...subagents];
+  const updated = [...agents];
   updated[index] = subagent;
   return updated;
 }

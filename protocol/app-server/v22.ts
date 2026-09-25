@@ -100,40 +100,74 @@ export type Request1 =
       };
     }
   | {
-      method: 'background/status';
+      method: 'job/status';
       params: {
         target: AttachmentTarget;
-        execution_id: ToolExecutionId;
+        job_id: ToolExecutionId;
       };
     }
   | {
-      method: 'background/cancel';
+      method: 'job/list';
       params: {
         target: AttachmentTarget;
-        execution_id: ToolExecutionId;
       };
     }
   | {
-      method: 'subagent/transcript';
+      method: 'job/wait';
       params: {
         target: AttachmentTarget;
-        subagent_id: SubagentId;
+        job_id: ToolExecutionId;
+      };
+    }
+  | {
+      method: 'job/cancel';
+      params: {
+        target: AttachmentTarget;
+        job_id: ToolExecutionId;
+      };
+    }
+  | {
+      method: 'agent/status';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+      };
+    }
+  | {
+      method: 'agent/list';
+      params: {
+        target: AttachmentTarget;
+      };
+    }
+  | {
+      method: 'agent/sendMessage';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        message: string;
+      };
+    }
+  | {
+      method: 'agent/wait';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+      };
+    }
+  | {
+      method: 'agent/interrupt';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+      };
+    }
+  | {
+      method: 'agent/transcript';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
         before?: RuntimeClientTranscriptCursor | null;
         limit: number;
-      };
-    }
-  | {
-      method: 'subagent/status';
-      params: {
-        target: AttachmentTarget;
-        subagent_id: SubagentId;
-      };
-    }
-  | {
-      method: 'subagent/cancel';
-      params: {
-        target: AttachmentTarget;
-        subagent_id: SubagentId;
       };
     }
   | {
@@ -463,6 +497,10 @@ export type GoalMutation =
       action: 'budget';
     };
 export type ToolExecutionId = string;
+/**
+ * Identifies an agent.
+ */
+export type AgentId = string;
 /**
  * Identifies one conversation-owned asynchronous one-shot subagent
  * (Issue #60).
@@ -864,10 +902,6 @@ export type AgentSkillSelection = AllTools | string[];
  * configuration boundary rather than normalized later.
  */
 export type SubagentName = string;
-/**
- * Identifies an agent.
- */
-export type AgentId = string;
 export type SummaryOutput =
   | {
       mode: 'model_limit';
@@ -958,16 +992,37 @@ export type MethodResult =
       type: 'goal';
     }
   | {
-      execution: RuntimeClientBackgroundExecution;
-      type: 'background';
+      job: RuntimeClientJob;
+      type: 'job';
     }
   | {
-      subagent: RuntimeClientSubagent;
-      type: 'subagent';
+      jobs: RuntimeClientJob[];
+      type: 'jobs';
     }
   | {
-      subagent: RuntimeClientSubagent;
-      outcome: RuntimeClientSubagentWorkspaceDisposalOutcome;
+      agent: RuntimeClientAgent;
+      type: 'agent';
+    }
+  | {
+      agents: RuntimeClientAgent[];
+      type: 'agents';
+    }
+  | {
+      agent_id: AgentId;
+      activation_id: SubagentId;
+      resumed: boolean;
+      type: 'agent_message';
+    }
+  | {
+      agent_id: AgentId;
+      activation_id?: SubagentId | null;
+      outcome?: SubagentState | null;
+      agent: RuntimeClientAgent;
+      type: 'agent_wait';
+    }
+  | {
+      agent: RuntimeClientAgent;
+      outcome: RuntimeClientAgentWorkspaceDisposalOutcome;
       type: 'workspace_disposed';
     }
   | {
@@ -1330,7 +1385,7 @@ export type RuntimeClientStatusSection =
       /**
        * The active background executions in allocation order.
        */
-      executions: RuntimeClientBackgroundExecution[];
+      executions: RuntimeClientJob[];
       /**
        * Active executions omitted by the module-local bound.
        */
@@ -1787,9 +1842,21 @@ export type ExactInteger1 = string;
  */
 export type ToolDeadlineKind = 'hard' | 'idle';
 /**
+ * The public lifecycle vocabulary of one subagent snapshot.
+ */
+export type SubagentState =
+  | 'stopping'
+  | 'running'
+  | 'cancelling'
+  | 'publishing_terminal'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted';
+/**
  * The public result of disposing a retained subagent workspace.
  */
-export type RuntimeClientSubagentWorkspaceDisposalOutcome =
+export type RuntimeClientAgentWorkspaceDisposalOutcome =
   'disposed' | 'already_disposed' | 'disposal_pending' | 'no_retained_workspace';
 /**
  * Bounded external outcomes shared by App Server and local presentation.
@@ -2437,6 +2504,18 @@ export type ErrorData =
   | {
       reason: SessionArchivePrepareError;
       kind: 'archive_preparation_failed';
+    }
+  | {
+      agent_id: AgentId;
+      kind: 'agent_stopping';
+    }
+  | {
+      agent_id: AgentId;
+      kind: 'unknown_agent';
+    }
+  | {
+      agent_id: AgentId;
+      kind: 'agent_history_unavailable';
     }
   | {
       subagent_id: SubagentId;
@@ -3242,12 +3321,12 @@ export type RuntimeClientEvent =
       type: 'inbound_drained';
     }
   | {
-      execution: RuntimeClientBackgroundExecution1;
-      type: 'background_execution_updated';
+      job: RuntimeClientJob1;
+      type: 'job_updated';
     }
   | {
-      subagent: RuntimeClientSubagent1;
-      type: 'subagent_updated';
+      agent: RuntimeClientAgent1;
+      type: 'agent_updated';
     }
   | {
       capabilities: CapabilityView2;
@@ -4708,6 +4787,8 @@ export interface TraceRecord {
    * Exact native detached execution / Subagent / Workflow / interaction ID.
    */
   native_id?: string | null;
+  agent_id?: AgentId | null;
+  activation_id?: SubagentId | null;
   /**
    * The exact outer `ToolCall` this Tool-owned domain record belongs to,
    * copied from the native start fact. It is presentation and navigation
@@ -5206,11 +5287,11 @@ export interface PostToolBatchOpportunityView {
  * lifecycle, progress, and result leaf types are stable runtime-owned
  * value contracts. No internal task handles or process ids ever appear.
  */
-export interface RuntimeClientBackgroundExecution {
+export interface RuntimeClientJob {
   /**
    * The detached runtime execution identity.
    */
-  execution_id: string;
+  job_id: string;
   /**
    * Identifies a tool definition in the capability set.
    */
@@ -6636,19 +6717,16 @@ export interface GoalView {
   current?: GoalSnapshot | null;
 }
 /**
- * The Runtime Client view of one subagent child (Issue #60).
+ * One durable child Agent, keyed by `agent_id` across every activation.
  *
- * A read-model materialization of the authoritative registry snapshot:
- * every field is derived, and the durable ownership/terminal events —
- * never this view — are the recovery authority.
- *
- * Since Issue #178 the view also carries the child's live activity
- * projection (`observation`), its redacted execution profile
- * (`execution_profile`), and its start time (`started_at`). These are
- * observation-plane facts: the lifecycle `state` remains the only
- * authority on whether the child is alive, settling, or settled.
+ * The registry owns lifecycle arbitration. Journal ownership facts rebuild
+ * identity and activation correlation; canonical child history owns content.
+ * `activation_id` identifies the latest activation, while `current_activation`
+ * is absent when inactive or reserving the next activation. Neither replaces
+ * the stable Agent identity. Activity is bounded observation, never authority.
  */
-export interface RuntimeClientSubagent {
+export interface RuntimeClientAgent {
+  parent_agent_id: AgentId;
   /**
    * Identifies one conversation-owned asynchronous one-shot subagent
    * (Issue #60).
@@ -6659,11 +6737,11 @@ export interface RuntimeClientSubagent {
    * restart can never prove that a surviving process is the previously
    * owned child.
    */
-  subagent_id: string;
+  activation_id: string;
   /**
    * Identifies an agent.
    */
-  child_agent_id: string;
+  agent_id: string;
   /**
    * The child's own durable conversation identity.
    */
@@ -6699,14 +6777,9 @@ export interface RuntimeClientSubagent {
   /**
    * The authoritative lifecycle state.
    */
-  state:
-    | 'running'
-    | 'cancelling'
-    | 'publishing_terminal'
-    | 'succeeded'
-    | 'failed'
-    | 'cancelled'
-    | 'interrupted';
+  state: 'active' | 'stopping' | 'inactive';
+  current_activation?: SubagentId | null;
+  activation_state: SubagentState;
   /**
    * The bounded terminal failure/cancellation diagnostic, once known.
    *
@@ -6727,7 +6800,7 @@ export interface RuntimeClientSubagent {
    * When the ownership committed; clients derive elapsed time from it.
    */
   started_at: string;
-  workspace: RuntimeClientSubagentWorkspace;
+  workspace: RuntimeClientAgentWorkspace;
 }
 /**
  * The latest live activity projection reported by the child (Issue
@@ -6860,7 +6933,7 @@ export interface SubagentExecutionProfile {
 /**
  * The model-independent project workspace facts.
  */
-export interface RuntimeClientSubagentWorkspace {
+export interface RuntimeClientAgentWorkspace {
   /**
    * Present when the Workflow run, rather than this child, owns the lease.
    */
@@ -7355,12 +7428,12 @@ export interface RuntimeClientSnapshot {
    * All background executions in execution allocation order, including
    * terminal records retained by the authoritative registry.
    */
-  background?: RuntimeClientBackgroundExecution[];
+  jobs?: RuntimeClientJob[];
   /**
-   * All subagent children in subagent ordinal order, including terminal
-   * records retained by the authoritative registry (Issue #60).
+   * Durable child Agents in creation order. Repeated activations replace
+   * the same Agent row; activation history remains in the Event Journal.
    */
-  subagents?: RuntimeClientSubagent[];
+  agents?: RuntimeClientAgent[];
   /**
    * The bounded newest window of composed Agent Status observations, in
    * runtime composition order (oldest first).
@@ -9574,11 +9647,11 @@ export interface UserMessageBlock3 {
  * lifecycle, progress, and result leaf types are stable runtime-owned
  * value contracts. No internal task handles or process ids ever appear.
  */
-export interface RuntimeClientBackgroundExecution1 {
+export interface RuntimeClientJob1 {
   /**
    * The detached runtime execution identity.
    */
-  execution_id: string;
+  job_id: string;
   /**
    * Identifies a tool definition in the capability set.
    */
@@ -9611,19 +9684,16 @@ export interface RuntimeClientBackgroundExecution1 {
   result?: ToolExecutionResult | null;
 }
 /**
- * The Runtime Client view of one subagent child (Issue #60).
+ * One durable child Agent, keyed by `agent_id` across every activation.
  *
- * A read-model materialization of the authoritative registry snapshot:
- * every field is derived, and the durable ownership/terminal events —
- * never this view — are the recovery authority.
- *
- * Since Issue #178 the view also carries the child's live activity
- * projection (`observation`), its redacted execution profile
- * (`execution_profile`), and its start time (`started_at`). These are
- * observation-plane facts: the lifecycle `state` remains the only
- * authority on whether the child is alive, settling, or settled.
+ * The registry owns lifecycle arbitration. Journal ownership facts rebuild
+ * identity and activation correlation; canonical child history owns content.
+ * `activation_id` identifies the latest activation, while `current_activation`
+ * is absent when inactive or reserving the next activation. Neither replaces
+ * the stable Agent identity. Activity is bounded observation, never authority.
  */
-export interface RuntimeClientSubagent1 {
+export interface RuntimeClientAgent1 {
+  parent_agent_id: AgentId;
   /**
    * Identifies one conversation-owned asynchronous one-shot subagent
    * (Issue #60).
@@ -9634,11 +9704,11 @@ export interface RuntimeClientSubagent1 {
    * restart can never prove that a surviving process is the previously
    * owned child.
    */
-  subagent_id: string;
+  activation_id: string;
   /**
    * Identifies an agent.
    */
-  child_agent_id: string;
+  agent_id: string;
   /**
    * The child's own durable conversation identity.
    */
@@ -9674,14 +9744,9 @@ export interface RuntimeClientSubagent1 {
   /**
    * The authoritative lifecycle state.
    */
-  state:
-    | 'running'
-    | 'cancelling'
-    | 'publishing_terminal'
-    | 'succeeded'
-    | 'failed'
-    | 'cancelled'
-    | 'interrupted';
+  state: 'active' | 'stopping' | 'inactive';
+  current_activation?: SubagentId | null;
+  activation_state: SubagentState;
   /**
    * The bounded terminal failure/cancellation diagnostic, once known.
    *
@@ -9702,7 +9767,7 @@ export interface RuntimeClientSubagent1 {
    * When the ownership committed; clients derive elapsed time from it.
    */
   started_at: string;
-  workspace: RuntimeClientSubagentWorkspace;
+  workspace: RuntimeClientAgentWorkspace;
 }
 /**
  * The deterministic capability projection.

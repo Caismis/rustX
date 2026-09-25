@@ -25,7 +25,7 @@ pub(super) fn eligible(definition: &ToolDefinition) -> bool {
         // (Issue #259). Naming it here too would imply it could otherwise
         // have been selected.
         && !(definition.origin == crate::tools::types::ToolOrigin::Builtin
-            && matches!(definition.name.as_str(), "subagent" | "execution"))
+            && (definition.name == "subagent" || crate::tools::executor::DOMAIN_CONTROL_TOOL_NAMES.contains(&definition.name.as_str())))
 }
 
 impl WorkflowRuntime {

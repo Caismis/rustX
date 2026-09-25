@@ -63,7 +63,7 @@ enabled = true
 enabled = true
 timezone = "UTC"
 ` : '';
-    const writeSettings = (model = 'console-model') => writeFileSync(settings, catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "ask_user", "execution"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
+    const writeSettings = (model = 'console-model') => writeFileSync(settings, catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "ask_user", "job_list", "job_status", "job_wait", "job_cancel", "list_agents", "send_message", "wait_agent", "interrupt_agent"]\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
     if (scenario === 'web_workflow_conformance') {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });

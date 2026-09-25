@@ -174,7 +174,7 @@ export interface DebugDiagnostics {
 
 export class CommandDispatcher {
   #context: DispatcherContext;
-  #inspected = new Map<string, import('../../../protocol/app-server/v21.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v22.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -282,6 +282,38 @@ export class CommandDispatcher {
           return expandPreference(argument);
         case "/cancel":
           return await this.#cancel(session, argument);
+        case "/agents":
+          return inspect("Agents", state.agents.map(agent =>
+            `- ${agent.agent_id} · ${agent.agent} · ${agent.state} · activation ${agent.current_activation ?? "none"} · conversation ${agent.child_conversation_id}`,
+          ).join("\n") || "No child Agents.");
+        case "/send-message": {
+          const split = argument.indexOf(" ");
+          if (split < 1 || !argument.slice(split + 1).trim()) return usage("/send-message <agent-id> <message>");
+          await session.sendMessage(argument.slice(0, split), argument.slice(split + 1).trim());
+          return transient("info", "Message admitted by the Agent runtime.");
+        }
+        case "/wait-agent": {
+          if (!argument) return usage("/wait-agent <agent-id>");
+          const target = await session.waitAgent(argument);
+          return transient("info", target.activation_id == null
+            ? `${target.agent_id} was inactive at the wait boundary.`
+            : `${target.agent_id}: captured activation ${target.activation_id} settled${target.outcome == null ? "" : ` (${target.outcome})`}.`);
+        }
+        case "/interrupt-agent": {
+          if (!argument) return usage("/interrupt-agent <agent-id>");
+          const agent = await session.interruptAgent(argument);
+          return transient("info", `${agent.agent_id}: ${agent.state}. The Agent remains resumable.`);
+        }
+        case "/jobs":
+          return inspect("Jobs", state.jobs.map(job => `- ${job.job_id} · ${job.tool_name} · ${job.state}`).join("\n") || "No Jobs.");
+        case "/job-status":
+        case "/job-wait":
+        case "/job-cancel": {
+          if (!argument) return usage(`${name} <job-id>`);
+          const job = name === "/job-status" ? await session.jobStatus(argument)
+            : name === "/job-wait" ? await session.waitJob(argument) : await session.cancelJob(argument);
+          return inspect("Job", `- ${job.job_id} · ${job.tool_name} · ${job.state}`);
+        }
         case "/quit":
           return { kind: "quit" };
         default:
@@ -448,7 +480,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v21.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v22.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
@@ -656,15 +688,7 @@ export class CommandDispatcher {
     session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
-    if (argument.length > 0) {
-      // Cancellation of one background execution is a request. Acceptance is
-      // not settlement: the terminal fact arrives later, from the runtime.
-      const accepted = await session.cancelBackground(argument);
-      return transient(
-        "info",
-        `cancellation requested for ${accepted.execution_id} (registry state: ${accepted.state})\nThis is acceptance, not settlement.`,
-      );
-    }
+    if (argument.length > 0) return usage("/cancel (use /job-cancel <job-id> for a Job)");
     const attemptId = await session.cancelCurrentAttempt();
     return transient(
       "info",
@@ -711,7 +735,7 @@ function reasoningPreference(argument: string): CommandOutcome {
  *                                  interaction card
  * /expand none                     collapse all three domains
  * /expand <tool-call-id>           toggle one foreground card
- * /expand background <exec-id>     toggle one background card
+ * /expand job <exec-id>     toggle one background card
  * /expand interaction <conversation-id>::<interaction-id>  toggle one pending card
  * ```
  *
@@ -733,10 +757,10 @@ function expandPreference(argument: string): CommandOutcome {
     return { kind: "preference", preference: { type: "expand", target: argument } };
   }
   const [head, ...rest] = argument.split(/\s+/);
-  if (head === "background" || head === "bg") {
+  if (head === "job") {
     const executionId = rest.join(" ");
     if (executionId.length === 0) {
-      return usage("/expand background <execution-id>");
+      return usage("/expand job <job-id>");
     }
     return {
       kind: "preference",
@@ -1072,7 +1096,7 @@ export function renderDebug(
     ...contextDiagnosticsLines(state),
     `- inbound pending: ${(state.inbound.pending ?? []).length}`,
     ...lastDrainLines(state),
-    `- background executions: ${state.background.length} (${activeBackground(state).length} active)`,
+    `- Jobs: ${state.jobs.length} (${activeBackground(state).length} active)`,
     `- transcript entries: ${state.transcript.length}`,
     `- composed Agent Statuses: ${state.statuses.length}`,
     ...attemptDiagnosticsLines(state),

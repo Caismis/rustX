@@ -167,7 +167,9 @@ fn validate_profiles(
                     // MCP materializations have server-owned cwd and cannot be
                     // silently rebound. Nested orchestration is not admitted.
                     if tool.definition().origin != crate::tools::types::ToolOrigin::Builtin
-                        || matches!(tool.name(), "subagent" | "execution")
+                        || (tool.name() == "subagent"
+                            || crate::tools::executor::DOMAIN_CONTROL_TOOL_NAMES
+                                .contains(&tool.name()))
                     {
                         return Err(WorkflowRunError::IneligibleCapability(format!(
                             "{} cannot honor candidate child authority",

@@ -989,7 +989,7 @@ fn parent_pending_texts(plane: &ParentPlane) -> Vec<String> {
 
 /// Asserts the parent received exactly one successful terminal publication
 /// (Issue #192): the runtime-authored correlation notice first — naming the
-/// typed execution handle — then the byte-for-byte child-authored report as
+/// durable Agent and activation IDs — then the byte-for-byte child-authored report as
 /// the last item, and no other pending inbound.
 fn assert_parent_terminal_publication(plane: &ParentPlane, answer: &str) {
     let batch = plane
@@ -1018,9 +1018,20 @@ fn assert_parent_terminal_publication(plane: &ParentPlane, answer: &str) {
         report.message.id
     );
     let notice_text = parent_pending_texts(plane)[0].clone();
+    let UserSource::Agent { agent_id } = &report.message.source else {
+        panic!("the report is child-authored");
+    };
+    let activation_id = report
+        .message
+        .id
+        .as_str()
+        .strip_prefix("subagent-")
+        .expect("activation report prefix")
+        .strip_suffix("-terminal")
+        .expect("activation report suffix");
     assert!(
-        notice_text.contains("{\"kind\":\"subagent\",\"id\":\""),
-        "the notice names the typed execution handle: {notice_text}"
+        notice_text.starts_with(&format!("Agent {agent_id} activation {activation_id} ")),
+        "the notice names the exact durable Agent and finite activation: {notice_text}"
     );
     assert!(
         !notice_text.contains(answer),
@@ -2089,7 +2100,8 @@ async fn retry_is_activity_never_lifecycle() {
         SubagentState::Running => {}
         // The closed lifecycle vocabulary: there is no retry state; the
         // retry exists only as observation-plane activity.
-        SubagentState::Cancelling
+        SubagentState::Stopping
+        | SubagentState::Cancelling
         | SubagentState::PublishingTerminal
         | SubagentState::Succeeded
         | SubagentState::Failed
@@ -4353,8 +4365,8 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
             tokio::time::timeout(LIVENESS, async {
                 loop {
                     let (snapshot, _) = host.snapshot().expect("projection snapshot");
-                    if snapshot.subagents.iter().any(|view| {
-                        view.subagent_id == subagent_id && view.observation == settled.observation
+                    if snapshot.agents.iter().any(|view| {
+                        view.activation_id == subagent_id && view.observation == settled.observation
                     }) {
                         return;
                     }
@@ -4411,25 +4423,25 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         record
     }
 
-    let standalone = run(
+    let standalone = Box::pin(run(
         "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
         Topology::Standalone,
-    )
+    ))
     .await;
-    let drained = run(
+    let drained = Box::pin(run(
         "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
         Topology::Draining,
-    )
+    ))
     .await;
-    let stalled = run(
+    let stalled = Box::pin(run(
         "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
         Topology::Stalled,
-    )
+    ))
     .await;
-    let observation_broken = run(
+    let observation_broken = Box::pin(run(
         "conv_11117c63-28d3-7f8d-88ff-b49c8225bfc1",
         Topology::ObservationBroken,
-    )
+    ))
     .await;
 
     // The shared workload really ran in every topology: three provider
@@ -4590,9 +4602,9 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
                 .observation;
             let (snapshot, _) = host.snapshot().expect("projection snapshot");
             let view = snapshot
-                .subagents
+                .agents
                 .iter()
-                .find(|view| view.subagent_id == subagent_id)
+                .find(|view| view.activation_id == subagent_id)
                 .expect("the child is in the projection");
             if view.observation.revision == latest.revision {
                 break latest;
@@ -4604,9 +4616,9 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     .expect("the projection converges to the registry's latest revision");
     let (snapshot, _) = host.snapshot().expect("projection snapshot");
     let view = snapshot
-        .subagents
+        .agents
         .iter()
-        .find(|view| view.subagent_id == subagent_id)
+        .find(|view| view.activation_id == subagent_id)
         .expect("the child is in the projection");
     assert_eq!(
         view.observation, converged,
@@ -5436,6 +5448,7 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     #[derive(Default)]
     struct RecordingObserver(std::sync::Mutex<Vec<SubagentSnapshot>>);
     impl SubagentObserver for RecordingObserver {
+        fn observe_agent(&self, _snapshot: &rustx::runtime::subagent::AgentSnapshot) {}
         fn on_snapshot(&self, snapshot: &SubagentSnapshot) {
             self.0
                 .lock()
@@ -5557,7 +5570,7 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
         loop {
             let (snapshot, _) = host.snapshot().expect("projection snapshot");
             if snapshot
-                .subagents
+                .agents
                 .iter()
                 .any(|view| view.observation == live.observation)
             {
@@ -5579,9 +5592,9 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
         panic!("attach initializes: {initialized:?}");
     };
     let view = snapshot
-        .subagents
+        .agents
         .iter()
-        .find(|view| view.subagent_id == wired.accepted.subagent_id)
+        .find(|view| view.activation_id == wired.accepted.subagent_id)
         .expect("the child is in the snapshot");
     assert_eq!(
         view.observation, live.observation,
@@ -5597,7 +5610,10 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
         "the redacted profile repairs with the snapshot"
     );
     assert_eq!(view.started_at, live.started_at);
-    assert_eq!(view.state, rustx::runtime::subagent::SubagentState::Running);
+    assert_eq!(
+        view.activation_state,
+        rustx::runtime::subagent::SubagentState::Running
+    );
 
     // An explicit snapshot_get agrees — the same repair primitive.
     let response =
@@ -5611,9 +5627,9 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
     };
     assert_eq!(
         snapshot
-            .subagents
+            .agents
             .iter()
-            .find(|view| view.subagent_id == wired.accepted.subagent_id)
+            .find(|view| view.activation_id == wired.accepted.subagent_id)
             .expect("the child is in the snapshot")
             .observation,
         live.observation
@@ -5806,17 +5822,17 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
     // real control IPC into the real child conversation.
     let accepted = plane
         .registry
-        .steer(
-            &wired.accepted.subagent_id,
+        .send_message(
+            &wired.accepted.child_agent_id,
             "Focus on cancellation ownership and ignore TUI code.",
         )
         .await
         .expect("the running child durably accepts the guidance");
     assert_eq!(
-        accepted.subagent_id, wired.accepted.subagent_id,
+        accepted.activation_id, wired.accepted.subagent_id,
         "steering names the SAME child; it never allocates another identity"
     );
-    assert_eq!(accepted.state, SubagentState::Running);
+    assert_eq!(accepted.agent_id, wired.accepted.child_agent_id);
 
     release.send(true).expect("release the parked child model");
     await_serve(wired.serve).await;
@@ -5891,7 +5907,7 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
 /// acceptance order.
 ///
 /// Determinism: acceptance order is program order — each
-/// `SubagentRegistry::steer` is awaited to its durable acceptance before the
+/// `SubagentRegistry::send_message` is awaited to its durable acceptance before the
 /// next is issued — and observation order is the child conversation's own
 /// canonical adoption order, which follows the durable inbound sequence
 /// domain. No scheduler ordering is involved on either side.
@@ -5917,7 +5933,7 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
     for message in ["steer A", "steer B", "steer C"] {
         plane
             .registry
-            .steer(&wired.accepted.subagent_id, message)
+            .send_message(&wired.accepted.child_agent_id, message)
             .await
             .unwrap_or_else(|error| panic!("{message} is accepted: {error}"));
     }
@@ -5948,65 +5964,6 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
             "the ordinary continuation turn observed {message}"
         );
     }
-}
-
-/// Steering a child that has already settled is refused, and the settled
-/// child's terminal publication stays exactly-once. `execution` never
-/// becomes a second result channel: the answer arrives only through the
-/// canonical parent inbound publication.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_settled_child_refuses_steering_and_keeps_exactly_one_terminal() {
-    let dir = tempfile::tempdir().expect("temp root");
-    let plane = standalone_parent_plane(&dir, "conv_e7c4ac45-ecea-7387-829c-1a3ac159864e");
-    let child = child_fixture(
-        &dir,
-        &ConversationId::new("conv_d3cd9640-6808-7427-8a23-771cbfa9bd5c"),
-        vec![answer_script("the one final answer")],
-        ToolRegistry::new(),
-        Vec::new(),
-    )
-    .await;
-    let wired = launch_wired_child(&plane, &child, "the delegated task").await;
-    await_serve(wired.serve).await;
-    let settled = plane
-        .registry
-        .wait_until_settled(&wired.accepted.subagent_id)
-        .await
-        .expect("terminal settlement");
-    assert_eq!(settled.state, SubagentState::Succeeded);
-
-    let refused = plane
-        .registry
-        .steer(&wired.accepted.subagent_id, "too late")
-        .await
-        .expect_err("a settled child is never steered");
-    assert!(
-        matches!(
-            refused,
-            rustx::runtime::subagent::SubagentSteerError::Settled { .. }
-        ),
-        "terminal authority already won: {refused}"
-    );
-    assert_eq!(
-        plane
-            .registry
-            .snapshot(&wired.accepted.subagent_id)
-            .expect("record")
-            .state,
-        SubagentState::Succeeded,
-        "terminal states stay absorbing: Succeeded never becomes Running"
-    );
-    assert_eq!(
-        terminal_publications(&journal(&plane.store)),
-        vec![SubagentTerminalState::Succeeded],
-        "the refused steer publishes nothing and duplicates nothing"
-    );
-    assert_parent_terminal_publication(&plane, "the one final answer");
-    assert_eq!(
-        child_parent_authored_texts(&child),
-        vec!["the delegated task".to_owned()],
-        "a refused steer never enters the child conversation"
-    );
 }
 
 /// The real native child terminal path supplies the wake: no unrelated Human

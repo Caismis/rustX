@@ -782,6 +782,8 @@ fn the_committed_identity_survives_a_durable_round_trip() {
         turn_id: None,
         timestamp: chrono::Utc::now(),
         event: RuntimeEvent::SubagentOwnershipCommitted {
+            parent_agent_id: rustx::runtime::identity::AgentId::new("agent-parent"),
+            admitted_authority: None,
             subagent_id: subagent_id.clone(),
             child_agent_id: AgentId::new(format!("agent-{subagent_id}")),
             child_conversation_id: crate::common::identity::child_conversation_id(
@@ -838,9 +840,11 @@ fn the_runtime_client_projection_carries_the_named_identity() {
     use rustx::runtime::subagent::{
         SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
     };
-    use rustx::runtime_client::snapshot::RuntimeClientSubagent;
+    use rustx::runtime_client::snapshot::RuntimeClientAgent;
 
     let snapshot = SubagentSnapshot {
+        ownership: rustx::events::types::SubagentOwnershipKind::Normal,
+        parent_agent_id: AgentId::new("parent"),
         subagent_id: SubagentId::new("conv-1-subagent-1"),
         child_agent_id: AgentId::new("agent-child"),
         child_conversation_id: ConversationId::new("conv_57d68983-5497-771e-8aaa-5f1356061697"),
@@ -862,19 +866,22 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         settled: false,
         started_at: chrono::Utc::now(),
     };
-    let view = RuntimeClientSubagent {
-        subagent_id: snapshot.subagent_id.clone(),
-        child_agent_id: snapshot.child_agent_id.clone(),
+    let view = RuntimeClientAgent {
+        activation_id: snapshot.subagent_id.clone(),
+        agent_id: snapshot.child_agent_id.clone(),
         child_conversation_id: snapshot.child_conversation_id.clone(),
         agent: snapshot.agent.clone(),
         definition_digest: snapshot.definition_digest.clone(),
         profile_digest: snapshot.profile_digest.clone(),
-        state: snapshot.state,
+        state: rustx::runtime::subagent::AgentState::Active,
+        activation_state: snapshot.state,
+        current_activation: Some(snapshot.subagent_id.clone()),
+        parent_agent_id: snapshot.parent_agent_id.clone(),
         detail: None,
         observation: snapshot.observation.clone(),
         execution_profile: None,
         started_at: snapshot.started_at,
-        workspace: rustx::runtime_client::snapshot::RuntimeClientSubagentWorkspace {
+        workspace: rustx::runtime_client::snapshot::RuntimeClientAgentWorkspace {
             borrowed_from: None,
             logical_workspace: snapshot.workspace.logical_workspace.clone(),
             isolation: rustx::runtime_client::snapshot::RuntimeClientWorkspaceIsolation::Shared,
@@ -904,7 +911,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         "state": "running"
     });
     assert!(
-        serde_json::from_value::<RuntimeClientSubagent>(obsolete).is_err(),
+        serde_json::from_value::<RuntimeClientAgent>(obsolete).is_err(),
         "the profile-shaped contract must fail"
     );
 }

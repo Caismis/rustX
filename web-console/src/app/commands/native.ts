@@ -1,4 +1,4 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v21';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v22';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 

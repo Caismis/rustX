@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
-import type { Request, RuntimeClientEvent } from '../../protocol/app-server/v21';
+import type { Request, RuntimeClientEvent } from '../../protocol/app-server/v22';
 import { cfg3Application } from './cfg3-data';
 import { Server, snapshot } from './fixture';
 afterEach(cleanup);
@@ -39,15 +39,15 @@ async function settlementReread(event: RuntimeClientEvent) {
 }
 
 it('C15 background settlement observation drives authoritative configuration reread', () => settlementReread({
-  type: 'background_execution_updated',
-  execution: { execution_id: 'execution-1', tool_id: 'bash', tool_name: 'bash', state: 'succeeded' },
+  type: 'job_updated',
+  job: { job_id: 'execution-1', tool_id: 'bash', tool_name: 'bash', state: 'succeeded' },
 }));
 
 it('C15 subagent settlement observation drives authoritative configuration reread', () => settlementReread({
-  type: 'subagent_updated',
-  subagent: {
-    subagent_id: 'subagent-1', child_agent_id: 'agent-1', child_conversation_id: 'conversation-child-1', agent: 'worker',
-    definition_digest: 'definition-1', profile_digest: 'profile-1', state: 'succeeded',
+  type: 'agent_updated',
+  agent: {
+    activation_id: 'subagent-1', agent_id: 'agent-1', parent_agent_id: 'parent-agent', current_activation: null, activation_state: 'succeeded', child_conversation_id: 'conversation-child-1', agent: 'worker',
+    definition_digest: 'definition-1', profile_digest: 'profile-1', state: 'inactive',
     observation: { revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
     started_at: '2026-09-21T00:00:00Z', workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
   },

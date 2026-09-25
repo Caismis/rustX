@@ -286,7 +286,7 @@ pub enum SubagentOverrideError {
         selector: String,
     },
     /// The override selects a capability whose lifecycle owner cannot exist
-    /// in a headless one-shot child.
+    /// in a headless child runtime.
     ChildUnsafeSelector {
         /// The offending selector.
         selector: String,
@@ -516,7 +516,7 @@ mod tests {
             recursive,
             Err(SubagentOverrideError::RecursiveSelector { .. })
         ));
-        let unsafe_owner = parse(serde_json::json!({"tools": {"builtin": ["execution"]}}))
+        let unsafe_owner = parse(serde_json::json!({"tools": {"builtin": ["send_message"]}}))
             .expect("parses")
             .validate_spelling();
         assert!(matches!(

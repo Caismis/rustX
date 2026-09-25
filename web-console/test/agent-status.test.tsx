@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v21';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v22';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { agentStatusAnchor, agentStatusPlacement, isAgentStatusContext, statusesAt } from '../src/bindings/agent-status';
@@ -114,7 +114,7 @@ describe('single-anchor Agent Status placement', () => {
   });
 
   it('renders only typed sections and never parses the rendered prose', () => {
-    const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Ship the dock'), { type: 'background_executions', executions: [{ execution_id: 'e1', tool_id: 'bash', tool_name: 'bash', state: 'running' }], omitted_count: 1 }])])} />);
+    const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Ship the dock'), { type: 'background_executions', executions: [{ job_id: 'e1', tool_id: 'bash', tool_name: 'bash', state: 'running' }], omitted_count: 1 }])])} />);
     const note = screen.getByRole('note', { name: 'Agent Status' });
     expect(note.textContent).toContain('todo 1 · background 2');
     expect(ui.container.textContent).not.toContain('rendered prose');

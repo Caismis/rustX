@@ -3258,6 +3258,8 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
             None,
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: rustx::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: subagent.clone(),
                 child_agent_id: AgentId::new(format!("agent-{subagent}")),
                 child_conversation_id: crate::identity_fixture::child_conversation_id(
@@ -3283,6 +3285,8 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
             None,
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: rustx::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: subagent.clone(),
                 child_agent_id: AgentId::new(format!("agent-{subagent}")),
                 child_conversation_id: crate::identity_fixture::child_conversation_id(

@@ -1,6 +1,6 @@
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v21';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v22';
 import type { FirstSubmitPort } from './first-submit';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean): FirstSubmitPort {

@@ -23,7 +23,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
       : 'not currently observed',
     cursor: view?.cursor, cwd: view?.settings?.cwd,
     attempt: snapshot?.attempt, pending_interactions: snapshot?.pending_interactions,
-    background_count: snapshot?.background?.length ?? 0, subagent_count: snapshot?.subagents?.length ?? 0,
+    job_count: snapshot?.jobs?.length ?? 0, agent_count: snapshot?.agents?.length ?? 0,
     workflows: snapshot?.workflows, model: snapshot?.model,
     settings_evidence: snapshot?.settings_evidence,
     resource_revision: snapshot?.resources?.revision, capability_revision: snapshot?.capabilities.revision,
@@ -33,7 +33,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     inbound_requests: view?.inboundRequests, interactions: Object.fromEntries(Object.entries(state.interactionOperations).filter(([, operation]) => view && operation.sessionId === view.id)),
     uncertain_operations: state.uncertain.filter(operation => view && operation.sessionId === view.id), model_mutation: view?.modelMutation,
     goal: snapshot?.goal, todos: snapshot?.todos, statuses: snapshot?.statuses,
-    background: snapshot?.background, subagents: snapshot?.subagents,
+    jobs: snapshot?.jobs, agents: snapshot?.agents,
     trace: view?.trace,
     connection_error: state.error, session_error: view?.error,
   };
@@ -45,7 +45,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     <SettingsCard title="Identity"><Facts rows={[["Session ID", view?.id], ["Conversation ID", facts.ConversationId], ["cwd", facts.cwd]]} /></SettingsCard>
     <SettingsCard title="Execution"><Facts rows={[["Attempt ID", snapshot?.attempt?.attempt_id], ["Exact phase", snapshot?.attempt?.phase.type], ["Exact outcome", snapshot?.attempt?.phase.type === 'settled' ? snapshot.attempt.phase.outcome.type : undefined], ["Cancellation request", view?.cancellation?.status]]} />
       <details><summary>Attempt and cancellation evidence</summary><pre>{json({ attempt: snapshot?.attempt, cancellation: view?.cancellation })}</pre></details>
-      <details><summary>Tools, Subagents and Workflows</summary><pre>{json({ background: facts.background, subagents: facts.subagents, workflows: facts.workflows })}</pre></details>
+      <details><summary>Jobs, Agents and Workflows</summary><pre>{json({ jobs: facts.jobs, agents: facts.agents, workflows: facts.workflows })}</pre></details>
       {/* `statuses` is the runtime's bounded window of past compositions, oldest
           first — not one current Agent Status value, and not current Todo, Goal or
           Queue state. The raw facts, including each composition's `rendered` text,

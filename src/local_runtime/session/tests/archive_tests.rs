@@ -550,22 +550,30 @@ fn claim_child(parent: &SqliteConversationStore, child: &ConversationId) {
     use crate::runtime::identity::{AgentId, SubagentId};
     let subagent = SubagentId::for_conversation(parent.conversation_id(), 1);
     parent
-        .append_event(crate::runtime::subagent::ownership_event(
-            parent.conversation_id(),
-            &subagent,
-            &AgentId::new("duplicate-owner"),
-            child,
-            &ToolCallId::new("duplicate-call"),
-            &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
-            crate::events::types::SubagentOwnershipKind::Normal,
-            &crate::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
-                "/authored/workspace",
-            )),
-            Utc::now(),
-        ))
+        .append_event(
+            crate::local_runtime::session::tests::deletion_tests::admit_agent(
+                crate::runtime::subagent::ownership_event(
+                    &crate::runtime::identity::AgentId::new("agent-parent"),
+                    parent.conversation_id(),
+                    &subagent,
+                    &AgentId::new("duplicate-owner"),
+                    child,
+                    &ToolCallId::new("duplicate-call"),
+                    &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+                    &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+                    &serde_json::from_value(serde_json::json!(format!(
+                        "sha256:{}",
+                        "a".repeat(64)
+                    )))
+                    .unwrap(),
+                    crate::events::types::SubagentOwnershipKind::Normal,
+                    &crate::runtime::workspace::WorkspaceSnapshot::shared(
+                        std::path::PathBuf::from("/authored/workspace"),
+                    ),
+                    Utc::now(),
+                ),
+            ),
+        )
         .unwrap();
 }
 

@@ -3667,6 +3667,9 @@ impl ConversationRuntime {
             for disposal in inner.recovery.settled_subagent_disposals() {
                 subagents.restore_recovered_disposal(disposal);
             }
+            subagents
+                .restore_agents(inner.store.as_ref())
+                .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
         }
         // The runtime is the durability-health owner of its background
         // plane (Issue #63): install the narrow failure seam the
@@ -4771,32 +4774,28 @@ impl ConversationRuntime {
     /// Success means exactly: *the guidance is durably accepted into this
     /// child conversation's Pending Inbound Inbox, ahead of this
     /// conversation's terminal seal.* Because the seal is what lets the
-    /// one-shot child driver publish a terminal at all, it follows that a
+    /// activation driver publish a terminal at all, it follows that a
     /// **naturally completing** child cannot publish an answer that
     /// predates this guidance.
     ///
     /// It does **not** mean the child model has observed it, that the
     /// in-flight provider request or tool call was interrupted, that
     /// anything changed yet, or that observation is guaranteed: a later
-    /// cancellation of this conversation, or physical loss of the child
-    /// process, legitimately ends the conversation with accepted guidance
+    /// cancellation of this activation, or physical loss of the child
+    /// process, legitimately ends the activation with accepted guidance
     /// unobserved. Cancellation stays authoritative.
     ///
-    /// Three refusals and the durable acceptance all commit under the **one
-    /// coordinator lock**, which is what makes the guarantee a linearization
-    /// rather than a timing hope:
+    /// The parent registry owns admission against stopping and interruption.
+    /// Messages already admitted there must remain durably deliverable even
+    /// after child-local cancellation. The child coordinator serializes the
+    /// durable acceptance against these remaining refusal boundaries:
     ///
     /// - the conversation's terminal seal already committed
     ///   ([`InboundAdmissionError::GuidanceSealed`]);
-    /// - the one-shot cancellation intent already committed, or the live
-    ///   attempt is already cancelled
-    ///   ([`InboundAdmissionError::GuidanceCancelled`]) — cancellation is
-    ///   never overtaken and a child is never steered back toward running;
     /// - the ordinary lifecycle/durability gates.
     ///
-    /// This is the *child* half only. The parent registry arbitrates this
-    /// answer against its own cancellation linearization point before it
-    /// reports `accepted` to the model.
+    /// The seal grant follows all previously admitted messages on the same
+    /// FIFO control lane. Child cancellation cannot revoke their acceptance.
     ///
     /// Multiple accepted guidance messages preserve their acceptance order
     /// by the durable inbox's own `InboundSequence` domain; no scheduler
@@ -4806,8 +4805,7 @@ impl ConversationRuntime {
     ///
     /// Returns the same variants as
     /// [`ConversationRuntime::submit_sourced_inbound`], plus
-    /// [`InboundAdmissionError::GuidanceSealed`] and
-    /// [`InboundAdmissionError::GuidanceCancelled`].
+    /// [`InboundAdmissionError::GuidanceSealed`].
     pub(crate) fn submit_parent_guidance(
         &self,
         source: UserSource,
@@ -4856,7 +4854,7 @@ impl ConversationRuntime {
     /// construction) before it is returned, so the degraded state is
     /// observable exactly once and the runtime rejects further durable work.
     ///
-    /// The seal is absorbing. It is used only by the one-shot subagent child
+    /// The seal is absorbing for one activation. It is used by that activation
     /// driver; an ordinary interactive conversation never seals, because its
     /// coordinator simply admits the next attempt.
     ///
@@ -5018,7 +5016,7 @@ impl ConversationRuntime {
         // saying so precisely is what makes the terminal race provable. It
         // is read here, inside the very critical section that performs the
         // durable acceptance below, so acceptance and the seal have one
-        // total order. Only the one-shot subagent child ever seals.
+        // total order. Only a native child activation seals its local inbox.
         if class.is_parent_guidance() && state.parent_guidance_sealed {
             return Err(InboundAdmissionError::GuidanceSealed);
         }
@@ -5036,21 +5034,9 @@ impl ConversationRuntime {
                 message: failure.diagnostic,
             });
         }
-        // Parent-authored guidance (Issue #193) also linearizes against this
-        // child's committed cancellation intent here, inside the very
-        // critical section that performs the durable acceptance below.
-        // Cancellation therefore wins outright or loses outright; there is
-        // no ordering in which a cancellation intent and a guidance
-        // acceptance both succeed.
-        if class.is_parent_guidance()
-            && (state.one_shot_cancel.is_some()
-                || state
-                    .current_attempt
-                    .as_ref()
-                    .is_some_and(|current| current.cancellation.is_cancelled()))
-        {
-            return Err(InboundAdmissionError::GuidanceCancelled);
-        }
+        // The parent Agent registry owns message-versus-interrupt arbitration.
+        // Envelopes already on its reliable lane won admission before stopping;
+        // child cancellation must not retroactively reject their durable input.
         // Test-only gate: parked while holding the coordinator lock, after
         // the shutdown/activation decision and before the durable acceptance,
         // so a race regression can prove shutdown cannot slip between the
@@ -5720,6 +5706,16 @@ impl ConversationRuntime {
         self.inner.subagents.as_ref()
     }
 
+    pub(crate) fn subagent_registry(&self) -> Option<&crate::runtime::subagent::SubagentRegistry> {
+        self.inner.subagents.as_ref()
+    }
+
+    pub(crate) fn background_registry(
+        &self,
+    ) -> &crate::tools::background::ConversationBackgroundRegistry {
+        self.inner.tool_runtime.background()
+    }
+
     /// Inspects one subagent child through the authoritative registry
     /// (Issue #60).
     #[must_use]
@@ -6042,10 +6038,6 @@ pub enum InboundAdmissionError {
     /// (Issue #193): its terminal linearization point already committed, so
     /// no further semantic input can reach an Agent Loop boundary.
     GuidanceSealed,
-    /// The conversation's cancellation intent already committed (Issue
-    /// #193): guidance never overtakes cancellation and never moves a child
-    /// back toward running.
-    GuidanceCancelled,
     /// Runtime drain has begun: no further inbound admission occurs.
     Shutdown,
     /// Inbound content must not be empty.
@@ -6066,9 +6058,6 @@ impl core::fmt::Display for InboundAdmissionError {
             Self::Inactive => f.write_str("the conversation runtime is not activated"),
             Self::GuidanceSealed => {
                 f.write_str("the child conversation already committed its terminal seal")
-            }
-            Self::GuidanceCancelled => {
-                f.write_str("the child cancellation intent is already committed")
             }
             Self::Shutdown => f.write_str("the conversation runtime is shutting down"),
             Self::EmptyContent => f.write_str("inbound content must not be empty"),
@@ -6504,6 +6493,12 @@ impl BackgroundObserver for RuntimeObserver {
 // publications are reliable; live-activity publications are disposable and
 // land in the coalescing latest-value lane.
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
+    fn observe_agent(&self, snapshot: &crate::runtime::subagent::AgentSnapshot) {
+        self.push(ConversationObservation::Agent {
+            snapshot: Box::new(snapshot.clone()),
+        });
+    }
+
     fn on_committed(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot, sequence: u64) {
         self.push(ConversationObservation::Published {
             journal_sequence: sequence,
@@ -11885,11 +11880,11 @@ mod tests {
                 .subagent_transcript_store_reads
                 .load(std::sync::atomic::Ordering::Relaxed)
         };
-        let unknown = crate::runtime::identity::SubagentId::new("unknown-child");
-        for id in [&accepted.subagent_id, &unknown] {
+        let unknown = crate::runtime::identity::AgentId::new("unknown-child");
+        for id in [&accepted.child_agent_id, &unknown] {
             for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
                 assert!(matches!(
-                    attachment.subagent_transcript_page(id, None, limit),
+                    attachment.agent_transcript_page(id, None, limit),
                     Err(RuntimeClientError::InvalidRequest { .. })
                 ));
             }
@@ -11901,19 +11896,19 @@ mod tests {
         );
         for limit in [1, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX] {
             assert!(matches!(
-                attachment.subagent_transcript_page(&unknown, None, limit),
-                Err(RuntimeClientError::UnknownSubagent { subagent_id }) if subagent_id == unknown
+                attachment.agent_transcript_page(&unknown, None, limit),
+                Err(RuntimeClientError::UnknownAgent { agent_id }) if agent_id == unknown
             ));
             assert!(matches!(
-                attachment.subagent_transcript_page(&accepted.subagent_id, None, limit),
+                attachment.agent_transcript_page(&accepted.child_agent_id, None, limit),
                 Err(RuntimeClientError::RuntimeFailure { message })
                     if message.starts_with("subagent history unavailable:")
             ));
         }
         assert_eq!(
             resolver_reads(),
-            4,
-            "valid limits must reach the real resolver"
+            2,
+            "only owned Agent identities reach history storage resolution"
         );
         let _ = subagents.cancel(&accepted.subagent_id, CancellationReason::UserRequested);
         subagents

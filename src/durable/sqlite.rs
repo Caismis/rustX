@@ -7487,8 +7487,12 @@ fn validate_subagent_terminal_publication(
                     "subagent {subagent_id} terminal notice does not carry the canonical producer correlation"
                 )));
             }
-            let expected =
-                crate::runtime::subagent::terminal_notice_text(subagent_id, &agent, retained);
+            let expected = crate::runtime::subagent::terminal_notice_text(
+                child_agent_id,
+                subagent_id,
+                &agent,
+                retained,
+            );
             if notice.content != [UserContentBlock::Text(TextBlock { text: expected })] {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} terminal notice is not the canonical runtime-authored terminal metadata"
@@ -8406,8 +8410,12 @@ fn validate_event_reference(
                     &crate::runtime::subagent::terminal_notice_message_id(subagent_id),
                     "subagent terminal",
                 )?;
-                let expected_notice =
-                    crate::runtime::subagent::terminal_notice_text(subagent_id, &agent, retained);
+                let expected_notice = crate::runtime::subagent::terminal_notice_text(
+                    child_agent_id,
+                    subagent_id,
+                    &agent,
+                    retained,
+                );
                 let notice_text_ok = notice.source == UserSource::Runtime
                     && notice.kind == InboundKind::Message
                     && notice.content
@@ -11542,6 +11550,8 @@ mod tests {
                 crate::runtime::subagent::subagent_ownership_event_id(subagent_id).as_ref(),
                 None,
                 RuntimeEvent::SubagentOwnershipCommitted {
+                    parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                    admitted_authority: None,
                     subagent_id: subagent_id.clone(),
                     child_agent_id: child_agent_id.clone(),
                     child_conversation_id:
@@ -11585,6 +11595,7 @@ mod tests {
             timestamp,
         );
         let notice = crate::runtime::subagent::terminal_notice(
+            child_agent_id,
             subagent_id,
             &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
             retained,
@@ -11757,10 +11768,8 @@ mod tests {
             other => panic!("the notice is text: {other:?}"),
         };
         assert!(
-            notice_text.contains(&format!(
-                "{{\"kind\":\"subagent\",\"id\":\"{subagent_id}\"}}"
-            )),
-            "the notice names the exact typed execution handle: {notice_text}"
+            notice_text.contains(&format!("Agent {child_agent_id} activation {subagent_id}")),
+            "the notice separately names the durable Agent and finite activation: {notice_text}"
         );
         assert!(
             !notice_text.contains("retained"),
@@ -11813,6 +11822,8 @@ mod tests {
             "not-a-terminal",
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: other.clone(),
                 child_agent_id: other_child,
                 child_conversation_id:
@@ -12016,6 +12027,7 @@ mod tests {
                 &none,
             );
             let notice = crate::runtime::subagent::terminal_notice(
+                &child,
                 &subagent_id,
                 &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
                 false,
@@ -12067,6 +12079,7 @@ mod tests {
         let (_, report, event) =
             success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
         let retained_notice = crate::runtime::subagent::terminal_notice(
+            &child_agent_id,
             &subagent_id,
             &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
             true,
@@ -12113,6 +12126,7 @@ mod tests {
         let (_, report, event) =
             success_publication(&store, &isolated_id, &isolated_child, "report", &retained);
         let bare_notice = crate::runtime::subagent::terminal_notice(
+            &isolated_child,
             &isolated_id,
             &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
             false,
@@ -12205,6 +12219,8 @@ mod tests {
                 crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
                 None,
                 RuntimeEvent::SubagentOwnershipCommitted {
+                    parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                    admitted_authority: None,
                     subagent_id: subagent_id.clone(),
                     child_agent_id: child_agent_id.clone(),
                     child_conversation_id:
@@ -12298,6 +12314,8 @@ mod tests {
                 crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
                 None,
                 RuntimeEvent::SubagentOwnershipCommitted {
+                    parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                    admitted_authority: None,
                     subagent_id: subagent_id.clone(),
                     child_agent_id: AgentId::new(format!("agent-{subagent_id}")),
                     child_conversation_id:
@@ -12885,6 +12903,8 @@ mod tests {
             crate::runtime::subagent::subagent_ownership_event_id(&s2).as_ref(),
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: s1.clone(),
                 child_agent_id: AgentId::new("agent-a"),
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
@@ -12918,6 +12938,8 @@ mod tests {
             crate::runtime::subagent::subagent_ownership_event_id(&s1).as_ref(),
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: s1.clone(),
                 child_agent_id: AgentId::new("agent-a"),
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
@@ -12958,6 +12980,8 @@ mod tests {
             crate::runtime::subagent::subagent_ownership_event_id(&s1).as_ref(),
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: s2.clone(),
                 child_agent_id: AgentId::new("agent-b"),
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
