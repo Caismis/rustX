@@ -162,6 +162,11 @@ impl UserConfigManager {
         let manager = Self::new(sources)?;
         Ok(manager)
     }
+    /// Canonical native process bindings, without a wire projection.
+    pub(crate) fn source_bindings(&self) -> &UserConfigSources {
+        &self.sources
+    }
+
     /// User-scoped product root, independent of any Session or process cwd.
     #[must_use]
     pub fn runtime_root(&self) -> &Path {

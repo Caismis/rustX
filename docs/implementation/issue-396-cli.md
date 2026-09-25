@@ -566,3 +566,118 @@ The isolated rerun
 `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --test tools --all-features --locked a_dependency_conflict_fails_only_its_own_managed_source`
 passed unchanged (1 test, 17.81 seconds). The original timeout remains recorded;
 its underlying cause was not established. No assertions/timeouts were relaxed.
+
+
+## Native source application identity and App Server wire bindings
+
+Source application identity is defined by native source inputs, never by
+`SourceSettings` JSON. The configuration owner captures the User document and,
+for Workspace targets, the Workspace document, plus each applicable authored
+resource tree revision. Absent and malformed source bytes still participate.
+It hashes their exact native paths and revisions with the existing
+`rustx-source-manifest-v1` encoding (BTreeMap order; big-endian u64 entry count
+and byte lengths; exact Unix path bytes and revision bytes). The capture retains
+its existing final document/resource revision checks. Source coordination uses
+that revision for no-op detection and application fencing; retry/attempt rules
+remain unchanged. Process bindings are immutable for a running manager and are
+not mutable source inputs. Derived settings, redaction, presentation and protocol
+schema changes cannot define source identity.
+
+`capture_source_settings` returns the native revision alongside the separately
+projectable settings. This removes `serde_json::to_vec(SourceSettings)` and its
+`expect("source projection")` from `capture_source_consumers`. No serializer or
+hashing framework was added, and source CAS tokens still use their native byte
+revisions.
+
+The boundaries are intentionally different:
+
+- OS-native CLI paths retain native identity through clap into filesystem owners.
+- Native configuration/source application revisions use native source facts.
+- CLI diagnostic JSON may omit unrepresentable path projections with
+  `projection_omitted` and `projection_encoding`, preserving classification/cause.
+- App Server JSON requires lossless Unicode process bindings. Its process owner
+  validates config, runtime root and home/resource root both before bootstrap and
+  after native canonical binding (including symlinks), before storage/readiness.
+  Failure is stderr-only, exit 2, without echoing a lossy path. Token-file paths
+  are native transport inputs, not SourceSettings bindings, and remain OS-native.
+
+This does not promise that every subsequently discovered filesystem entry can be
+encoded in protocol v20. Dynamic projection failures remain fallible transport
+errors; this bounded correction establishes process binding policy without a
+wire-schema redesign. Ordinary CLI configuration diagnostics are not subject to
+App Server's wire restriction. Linux-only exact-file fixtures remain Linux-only;
+Unix-wide typed argv and missing-path diagnostic tests do not materialize invalid
+filenames, including on macOS.
+
+Regressions:
+`native_source_application_identity_uses_exact_facts_not_projection` reads a
+Linux non-Unicode source, proves the view cannot serialize as JSON, and exercises
+source coordination directly. It verifies stable input revisions, changed source
+and resource revisions, distinct exact paths with equal lossy spellings, unchanged
+identity when a projection's runtime binding changes, and zero Sessions/runtimes.
+`app_server_non_unicode_bindings_fail_before_readiness` exercises the real binary
+with an existing non-Unicode config, a Unicode symlink to it, and a non-Unicode
+runtime-root binding. All reject semantically with clean stdout and unchanged
+filesystem state. Existing explicit Unicode config tests cover both transports.
+
+The targeted audit covered configuration.rs, configuration/settings.rs,
+configuration/application.rs and worker.rs, session_runtime_manager.rs,
+app_server/process.rs, connection.rs and transport/mod.rs. The removed source
+projection hash was the remaining JSON-derived native identity in those files.
+Configuration's JSON conversion is a diagnostic projection and its schema
+serialization is static; transport JSON encoding propagates errors. Existing
+resource-directory hashing uses native filename bytes; its lossy text is only a
+staging/lock filename filter, not path identity. No unrelated filesystem behavior
+was changed. No dependencies or protocol fixtures changed.
+
+### Final native-identity correction validation
+
+Linux local execution, starting at `b6f20b2e5b276f79949de07fb1037c3fe4faf66f`; latest fetched main remains `da43450b77d3c195d95b06818be8142317663c91`. No rebase/conflicts.
+
+| Working directory / command | Result |
+| --- | --- |
+| root: `git diff --check` | Pass |
+| root: `cargo fmt --all -- --check` | Pass |
+| root: `cargo test --lib --all-features --locked native_source_application_identity -- --nocapture` | 1 passed |
+| test-support/fake-provider: `uv sync --frozen` | Pass |
+| test-support/fake-provider: `uv run --frozen pytest` | 51 passed |
+| root: `cargo check --all-targets --all-features --locked` | Pass |
+| root: `cargo clippy --all-targets --all-features --locked -- -D warnings` | Pass |
+| root: `cargo build --bins --locked` | Pass |
+| root: `cargo +1.92 check --all-targets --all-features --locked --target-dir target/msrv` | Pass |
+| root: `cargo test --lib --all-features --locked local_runtime::configuration::` | 8 passed |
+| root: `cargo test --lib --all-features --locked local_runtime::cli::tests` | 12 passed |
+| root: `cargo test --lib --all-features --locked path_projection_tests` | 1 passed |
+| root: `cargo test --lib --all-features --locked local_runtime::session_runtime_manager::tests::configuration` | 37 passed |
+| root: `cargo test --test process --all-features --locked app_server_non_unicode_bindings_fail_before_readiness` | 1 passed |
+| root: `cargo test --test process --all-features --locked configuration_commands` | 14 passed |
+| root: `cargo test --test process --all-features --locked app_server::` | 14 passed |
+| root: `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | 3076 passed; 2 ignored |
+| root: `cargo test --test contracts --test provider --all-features --locked` | 194 passed; 5 ignored |
+| root: `cargo test --lib --all-features --locked -- boundary_suites::` | 225 passed |
+| root: `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | 417 passed |
+| tui: `pnpm typecheck` | Pass |
+| dev: `pnpm typecheck` | Pass |
+| dev: `pnpm test` | 37 passed |
+| web-console: `pnpm typecheck` | Pass |
+| web-console: `pnpm test` | 899 passed |
+| web-console: `pnpm check:provenance` | Pass |
+| web-console: `pnpm build` | Pass |
+| tui: `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 852 passed |
+| web-console: `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh --config .native-identity-review.config.ts test/e2e/dev-launcher.spec.ts test/e2e/workspaces.spec.ts test/e2e/trajectory-integration.spec.ts` | 3 passed |
+| protocol/app-server: `pnpm check` | Pass |
+| protocol/app-server: `pnpm typecheck` | Pass |
+
+The first targeted test compilation failed because its assertion referred to a
+nonexistent probe field; that test-only assertion was replaced with the real
+Session-list/registry assertions before the successful runs above. No final gate
+failed, including the managed-source tool test that timed out in the previous
+correction. No unrelated fixes or timeout changes were made.
+
+The Web launcher checks used an ephemeral configuration changing only two local
+ports to avoid unrelated servers; it was removed afterward. The three tests use
+the real App Server and Product Host. The full screenshot/browser suite and
+macOS were not executed locally. Final-head CI results must be reported separately;
+prior-head macOS success is not final-head validation. All requested Rust gates,
+MSRV, protocol drift, TUI and relevant launch checks passed without dependency or
+fixture changes. Logs are retained in ignored `target/review-403-native-identity`.

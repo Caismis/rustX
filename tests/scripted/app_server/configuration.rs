@@ -3942,3 +3942,81 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
     }))
     .await;
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn native_source_application_identity_uses_exact_facts_not_projection() {
+    use crate::local_runtime::configuration::{UserConfigManager, settings::SourceTarget};
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let mut f = Fixture::with_session_count(None, 0).await;
+    let mut sources = f.manager.configuration.source_bindings().clone();
+    let bytes = std::fs::read(&sources.config_path).unwrap();
+    let parent = sources.config_path.parent().unwrap();
+    let a = parent.join(OsString::from_vec(b"source-\xff.toml".to_vec()));
+    let b = parent.join(OsString::from_vec(b"source-\xfe.toml".to_vec()));
+    assert_eq!(a.to_string_lossy(), b.to_string_lossy());
+    for path in [&a, &b] {
+        std::fs::write(path, &bytes).unwrap();
+    }
+    sources.config_path = a.clone();
+    f.manager.configuration = UserConfigManager::new(sources.clone()).unwrap();
+    let target = SourceTarget::User;
+    let projection = f
+        .manager
+        .configuration
+        .read_source_settings(&target)
+        .unwrap();
+    assert_eq!(projection.user.path, a);
+    assert!(projection.user.authored.is_some());
+    assert!(serde_json::to_vec(&projection).is_err());
+    let capture = |manager: &SessionRuntimeManager| {
+        let mut state = manager.applications.lock();
+        manager.capture_source_consumers(&mut state, &target);
+        state
+            .view(&target.application_scope())
+            .unwrap()
+            .desired
+            .input_revision
+            .unwrap()
+    };
+    let original = capture(&f.manager);
+    assert_eq!(original, capture(&f.manager));
+
+    // The wire view changes, but an immutable process location is not an
+    // authored source input. Re-hashing SourceSettings would fail this contract.
+    sources.runtime_root = sources.runtime_root.join("other-binding");
+    f.manager.configuration = UserConfigManager::new(sources.clone()).unwrap();
+    let other = f
+        .manager
+        .configuration
+        .read_source_settings(&target)
+        .unwrap();
+    assert_ne!(projection.runtime_root, other.runtime_root);
+    assert_eq!(original, capture(&f.manager));
+
+    let mut changed = bytes.clone();
+    changed.extend_from_slice(b"\n# changed authored bytes\n");
+    std::fs::write(&a, changed).unwrap();
+    assert_ne!(original, capture(&f.manager));
+    std::fs::write(&a, &bytes).unwrap();
+    assert_eq!(original, capture(&f.manager));
+    sources.config_path = b;
+    f.manager.configuration = UserConfigManager::new(sources).unwrap();
+    assert_ne!(original, capture(&f.manager));
+    let root = f.manager.configuration.resource_root(&target);
+    std::fs::create_dir_all(&root).unwrap();
+    let before_resource_change = capture(&f.manager);
+    std::fs::write(root.join("AGENTS.md"), "new native instructions").unwrap();
+    assert_ne!(before_resource_change, capture(&f.manager));
+    assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+    assert!(
+        f.manager
+            .sessions
+            .list_sessions(None, 0, 32)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+}

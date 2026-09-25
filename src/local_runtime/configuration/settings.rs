@@ -856,11 +856,21 @@ impl UserConfigManager {
     /// Read redacted authored documents and exact byte revisions.
     /// # Errors
     /// Reports malformed documents, read failures, and resources changed during capture.
-    #[allow(clippy::too_many_lines)] // One captured-source transaction with final exact manifest validation.
     pub fn read_source_settings(
         &self,
         target: &SourceTarget,
     ) -> Result<SourceSettings, SettingsError> {
+        self.capture_source_settings(target)
+            .map(|(settings, _)| settings)
+    }
+
+    /// Capture source facts and their native identity in the same revision fence.
+    /// Presentation, redaction, and protocol fields never participate in identity.
+    #[allow(clippy::too_many_lines)] // One revision-fenced source capture.
+    pub(crate) fn capture_source_settings(
+        &self,
+        target: &SourceTarget,
+    ) -> Result<(SourceSettings, String), SettingsError> {
         target.validate()?;
         let user = self.config_path(&SourceTarget::User);
         let workspace = target
@@ -893,13 +903,22 @@ impl UserConfigManager {
                         .map(|directory| (SourceScope::Workspace, directory.join(".agents"))),
                 )
                 .collect();
-        let resource_revisions = roots
+        let resource_revisions: BTreeMap<_, _> = roots
             .iter()
             .map(|(_, root)| {
                 let revision = super::super::resource_directory::revision(root);
                 (root.clone(), revision)
             })
             .collect();
+        // Documents (including absent/malformed bytes) and authored resource
+        // trees are the inputs of this source transaction. Bound process roots
+        // and derived/presentation fields are not mutable source inputs.
+        let mut manifest = resource_revisions.clone();
+        manifest.insert(user.clone(), revision(user_bytes.as_deref()));
+        if let Some(path) = &workspace {
+            manifest.insert(path.clone(), revision(workspace_bytes.as_deref()));
+        }
+        let input_revision = super::source_manifest_revision(&manifest);
         let mut provenance = BTreeMap::new();
         let resolved = (|| {
             let mut merged = RuntimeLayer::default();
@@ -1011,7 +1030,7 @@ impl UserConfigManager {
                 });
             }
         }
-        Ok(result)
+        Ok((result, input_revision))
     }
     /// Commit one typed semantic-unit edit under the source revision fence.
     /// # Errors

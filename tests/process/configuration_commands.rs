@@ -718,3 +718,49 @@ fn os_argv_non_unicode_missing_config_reaches_native_owner() {
     }
     assert_eq!(state_tree(root.path()), before);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn app_server_non_unicode_bindings_fail_before_readiness() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let exact = workspace.join(OsString::from_vec(b"settings-\xff.toml".to_vec()));
+    std::fs::write(
+        &exact,
+        include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+    )
+    .unwrap();
+    let alias = workspace.join("unicode-config.toml");
+    std::os::unix::fs::symlink(&exact, &alias).unwrap();
+    let runtime = workspace.join(OsString::from_vec(b"runtime-\xff".to_vec()));
+    let before = state_tree(root.path());
+    for (flag, path) in [
+        ("--config", exact),
+        ("--config", alias),
+        ("--runtime-root", runtime),
+    ] {
+        let output = run(
+            root.path(),
+            &[
+                OsString::from("app-server"),
+                OsString::from("--listen=stdio"),
+                OsString::from(flag),
+                path.into_os_string(),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error = std::str::from_utf8(&output.stderr).unwrap();
+        assert!(
+            error.contains("App Server")
+                && error.contains("lossless UTF-8")
+                && error.contains("JSON protocol"),
+            "{error}"
+        );
+        assert!(!error.contains('\u{fffd}') && !error.contains("panicked") && error.len() < 512);
+        assert_eq!(state_tree(root.path()), before);
+    }
+}

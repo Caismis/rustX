@@ -52,6 +52,23 @@ pub struct Request {
     token: Option<PathBuf>,
 }
 
+// These roots are exposed by SourceSettings in the JSON protocol. This is
+// App Server policy, not a restriction on native configuration or CLI paths.
+fn validate_wire_bindings(sources: &UserConfigSources) -> Result<(), String> {
+    for (name, path) in [
+        ("config", &sources.config_path),
+        ("runtime-root", &sources.runtime_root),
+        ("home/resource root", &sources.home_directory),
+    ] {
+        if path.to_str().is_none() {
+            return Err(format!(
+                "App Server {name} binding requires a lossless UTF-8 representation for the JSON protocol"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn compose(options: &Request) -> Result<AppServerHost, String> {
     let host = HostEnvironment::capture()?;
     for (name, path) in [
@@ -67,22 +84,24 @@ fn compose(options: &Request) -> Result<AppServerHost, String> {
         .config
         .as_ref()
         .map_or_else(|| host.config_directory.join("rustx.toml"), absolute);
+    let sources = UserConfigSources {
+        config_path,
+        runtime_root: options.root.clone().unwrap_or(host.state_directory),
+        home_directory: host.home_directory,
+    };
+    validate_wire_bindings(&sources)?;
     // Explicit selection is required; only the omitted canonical default may
     // be absent. Parsing and canonical source binding remain in the shared owner.
     if options.config.is_some()
-        && !std::fs::metadata(&config_path).is_ok_and(|metadata| metadata.is_file())
+        && !std::fs::metadata(&sources.config_path).is_ok_and(|metadata| metadata.is_file())
     {
         return Err("explicit user settings source must be an existing readable TOML file".into());
     }
-    let configuration = UserConfigManager::bootstrap(
-        UserConfigSources {
-            config_path,
-            runtime_root: host.state_directory.clone(),
-            home_directory: host.home_directory,
-        },
-        options.root.as_ref().map(absolute),
-    )
-    .map_err(|error| error.to_string())?;
+    let configuration =
+        UserConfigManager::bootstrap(sources, None).map_err(|error| error.to_string())?;
+    // Canonical native bindings can differ through symlinks. Check those too,
+    // before opening storage or admitting any protocol traffic.
+    validate_wire_bindings(configuration.source_bindings())?;
     let sessions =
         SessionController::open(configuration.runtime_root()).map_err(|error| error.to_string())?;
     let policy = configuration.app_server_policy()?;
