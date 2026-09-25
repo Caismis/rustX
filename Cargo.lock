@@ -3877,6 +3877,7 @@ dependencies = [
  "sha2 0.10.9",
  "sse-stream",
  "tempfile",
+ "thiserror",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",

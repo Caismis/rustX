@@ -130,31 +130,18 @@ const PYTHON_TOOL_PROBE_TIMEOUT: std::time::Duration = RUNTIME_PROBE_TIMEOUT;
 const PYTHON_TOOL_UV_TIMEOUT: std::time::Duration = ENVIRONMENT_COMMAND_TIMEOUT;
 
 /// A package discovery/preparation failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PythonToolError {
     /// The package is malformed.
+    #[error("invalid Python tool package: {0}")]
     InvalidPackage(String),
     /// Prepared state could not be read or published.
+    #[error("Python tool storage failed: {0}")]
     Storage(String),
     /// The dependency environment could not be checked or materialized.
+    #[error("Python tool environment failed: {0}")]
     Environment(String),
 }
-
-impl std::fmt::Display for PythonToolError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidPackage(message) => {
-                write!(formatter, "invalid Python tool package: {message}")
-            }
-            Self::Storage(message) => write!(formatter, "Python tool storage failed: {message}"),
-            Self::Environment(message) => {
-                write!(formatter, "Python tool environment failed: {message}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for PythonToolError {}
 
 /// One discovered package: the frozen in-memory snapshot of every package
 /// byte, already validated against the package contract.
