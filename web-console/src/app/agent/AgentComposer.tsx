@@ -14,8 +14,8 @@ import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
-export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed, model, permission, onDraftSend, cancellationAvailable = !disabled }: {
-  disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
+export function AgentComposer({ disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed, model, permission, onDraftSend, cancellationAvailable = !disabled }: {
+  submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[]) => Promise<boolean>; cancellationAvailable?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
@@ -71,7 +71,7 @@ export function AgentComposer({ disabled, busy, active, onSend, onUpload, onCanc
   const selectedCommand = menu && rows[highlight] ? rows[highlight].id : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
-    blocked: disabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
+    blocked: disabled || submitDisabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
   const primary = composerSubmissionPolicy(facts);
   const invoke = (id: CommandId) => {
     if (disabled || busy) return;

@@ -58,4 +58,39 @@ it('folds a status by exact native Attempt without moving its inbound anchor or 
   fireEvent.click(screen.getByRole('button', { name: '1 message' }));
   expect(note.closest('[hidden]')).toBeNull();
   expect(note.closest('[data-chat-anchor-key]')).toBe(anchor);
+  const disclosure = screen.getByRole('button', { name: '1 message' });
+  expect(screen.getByText('steering').compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(disclosure.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(disclosure.compareDocumentPosition(screen.getByText('Answer middle')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it('Status-only completed process has a disclosure after its independent anchor and before the Status', () => {
+  const entries = [user, row('final', process())];
+  render(<AgentTranscript snapshot={{ ...snapshot(), conversation_id: 'c', transcript: { entries }, statuses: [{ attempt_id: 'a', turn: 1, status_message_id: 'only-status', opportunities: { fresh_inbound: { target_message_id: 'u' } }, sections: [], rendered: 'native context' }] }}/>);
+  const disclosure = screen.getByRole('button', { name: 'Thought for a while' });
+  const note = screen.getByRole('note', { name: 'Agent Status', hidden: true });
+  expect(note.closest('[hidden]')).not.toBeNull();
+  expect(screen.getByText('Answer final').closest('[hidden]')).toBeNull();
+  expect(screen.getByText('steering').compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(disclosure);
+  expect(note.closest('[hidden]')).toBeNull();
+  expect(disclosure.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(note.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key')).toBe('message:u');
+});
+it('pagination moves only the disclosure seat and preserves its expanded native identity', () => {
+  const owner = process(); const status = { attempt_id: 'a', turn: 1, status_message_id: 'status', opportunities: { fresh_inbound: { target_message_id: 'u' } }, sections: [], rendered: 'context' };
+  const state = { ...snapshot(), conversation_id: 'c', statuses: [status] };
+  const ui = render(<AgentTranscript snapshot={{ ...state, transcript: { entries: [row('middle', owner), row('final', owner, true)] } }}/>);
+  const disclosure = screen.getByRole('button', { name: '1 message' });
+  const id = disclosure.getAttribute('data-turn-process'); fireEvent.click(disclosure);
+  ui.rerender(<AgentTranscript snapshot={{ ...state, transcript: { entries: [user, row('middle', owner), row('final', owner, true), row('retry', process('retry', 'retry-final')), row('retry-final', process('retry', 'retry-final'))] } }}/>);
+  const controls = screen.getAllByRole('button', { name: '1 message' });
+  const same = controls.find(button => button.getAttribute('data-turn-process') === id)!;
+  expect(same.getAttribute('aria-expanded')).toBe('true');
+  const note = screen.getByRole('note', { name: 'Agent Status' });
+  expect(same.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(controls.find(button => button !== same)?.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(same);
+  expect(screen.getByText('Answer final').closest('[hidden]')).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Reasoning/ })).toBeNull();
 });

@@ -309,7 +309,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
           lineageSwitchSafe={lineageSwitchSafe(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
           consumed={consumed} cancellationAvailable={attached && !view.cancellation && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure}
-          permission={workspace && <WorkspaceControls client={client} host={workspaceHost} workspaceId={workspace}>{source => <WorkspacePermission source={source} disabled={composerDisabled}/>}</WorkspaceControls>}
+          permission={workspace && <WorkspaceControls client={client} host={workspaceHost} workspaceId={workspace}>{(source, approval) => <WorkspacePermission source={source} approval={approval} disabled={composerDisabled}/>}</WorkspaceControls>}
           model={<AgentControls key={`model:${view.id}`} client={client} view={view}/>}
           onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts, delivery) => {
             const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');

@@ -1,6 +1,8 @@
 import { createActor, waitFor } from 'xstate';
 import { expect, it, vi } from 'vitest';
 import { firstSubmitMachine, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
+import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
+import { WorkspaceHostError } from '../src/workspaces/host';
 import type { UploadReceipt } from '../../protocol/app-server/v21';
 function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 const session: CreatedSession = { id: 'native-session', node: 'native-node', conversation: 'native-conversation' };
@@ -53,4 +55,41 @@ it.each(['create', 'model', 'upload', 'send'] as const)('authority replacement f
   if (phase !== 'send') expect(port.send).not.toHaveBeenCalled();
   actor.send({ type: 'SUBMIT', draft }); expect(completion).toHaveBeenCalledTimes(1);
   actor.stop();
+});
+
+it.each([
+  new WorkspaceHostError('Workspace revoked'),
+  new RpcFailure({ code: -32000, message: 'Creation rejected' }),
+])('known pre-commit rejection preserves an editable draft and only explicit SUBMIT retries: %s', async error => {
+  const create = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(session);
+  const { actor, port } = fixture({ create });
+  actor.send({ type: 'SUBMIT', draft });
+  await waitFor(actor, s => s.matches('drafting') && s.context.error === error);
+  expect(actor.getSnapshot().context.draft).toEqual(draft);
+  expect(actor.getSnapshot().context.session).toBeUndefined();
+  expect(create).toHaveBeenCalledTimes(1); expect(port.attach).not.toHaveBeenCalled();
+  const corrected = { ...draft, workspaceId: 'corrected', text: 'Corrected task' };
+  actor.send({ type: 'SUBMIT', draft: corrected });
+  await waitFor(actor, s => s.matches('session'));
+  expect(create).toHaveBeenCalledTimes(2); expect(create).toHaveBeenLastCalledWith(corrected);
+  expect(actor.getSnapshot().context.error).toBeUndefined(); actor.stop();
+});
+it.each([new OutcomeUncertain(), new WorkspaceHostError('Unknown outcome', undefined, true)])('uncertain creation cannot be replayed by SUBMIT: %s', async error => {
+  const { actor, port } = fixture({ create: vi.fn(async () => { throw error; }) });
+  actor.send({ type: 'SUBMIT', draft }); await waitFor(actor, s => s.matches('uncertain_creation'));
+  expect(actor.getSnapshot().context.session).toBeUndefined();
+  expect(actor.getSnapshot().context.draft).toEqual(draft);
+  actor.send({ type: 'SUBMIT', draft });
+  expect(port.create).toHaveBeenCalledTimes(1); expect(port.attach).not.toHaveBeenCalled(); actor.stop();
+});
+it('records a confirmed create before the authority fence can stop attachment', async () => {
+  const creation = gate<CreatedSession>(); let current = true;
+  const { actor, port } = fixture({ current: () => current, create: vi.fn(() => creation.promise) });
+  actor.send({ type: 'SUBMIT', draft });
+  creation.resolve(session); current = false;
+  await waitFor(actor, s => s.matches('failed'));
+  expect(actor.getSnapshot().context.session).toEqual(session);
+  for (const effect of [port.attach, port.model, port.upload, port.send]) expect(effect).not.toHaveBeenCalled();
+  current = true; actor.send({ type: 'SUBMIT', draft });
+  expect(port.create).toHaveBeenCalledTimes(1); expect(actor.getSnapshot().context.session).toEqual(session); actor.stop();
 });

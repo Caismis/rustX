@@ -391,3 +391,26 @@ Write/Edit show explicitly labelled requested changes, not an invented filesyste
 baseline. Read/Search preserve bounded opaque native output without fabricating
 line coordinates, match counts or parsed structure. Unknown Tool IDs retain the
 bounded generic body and all renderers retain native lifecycle and artifacts.
+
+### PR #404 review corrections
+
+A known pre-commit rejection returns first-submit to editable drafting with its
+error and draft retained. Typed uncertain outcomes remain inspection-only. The
+create actor records the native acknowledgement before the next effect checks
+authority, so a stale continuation retains the real Session rather than erasing
+its commit. Attach/model/upload/send remain fenced.
+
+New Conversation reads submission readiness from the existing Workspace Settings
+target and approval-unit transaction. Send is disabled (the draft stays editable)
+while writing, awaiting authoritative observation, uncertain, conflicted, holding
+unapplied intent or otherwise denied by the target. A post-commit source read
+settles this fence: new Session composition resolves canonical sources; it does
+not wait for application to unrelated resident Sessions. The runtime still freezes
+approval when admitting each Attempt. No permission queue or replay is added.
+
+Completed native owners are indexed even when only final text is loaded. An exact
+Conversation/Attempt-owned Status can supply the only foldable presentation. A
+separate finite disclosure seat precedes the earliest controlled entry body or
+anchored Status. The Status stays after its original anchor; an independent User
+body stays outside the fold, before that seat. Pagination may move the seat but
+never changes the native disclosure key or canonical membership.

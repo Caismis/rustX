@@ -5,6 +5,7 @@ import type { Page } from '@playwright/test';
 export async function wireProbe(page: Page) {
   const requests: { id: string | number; method: string; params: any }[] = [];
   const responses: { method: string; result: any }[] = [];
+  const notifications: { method: string; params: any }[] = [];
   let lose: string | undefined;
   let lost = 0;
   await page.routeWebSocket(/ws:\/\//, socket => {
@@ -19,6 +20,7 @@ export async function wireProbe(page: Page) {
     });
     server.onMessage(message => {
       const response = JSON.parse(String(message));
+      if (response.method) notifications.push(response);
       const method = methods.get(response.id);
       if (method) {
         methods.delete(response.id);
@@ -34,5 +36,5 @@ export async function wireProbe(page: Page) {
       socket.send(message);
     });
   });
-  return { requests, responses, loseNext: (method: string) => { lose = method; }, lost: () => lost };
+  return { requests, responses, notifications, loseNext: (method: string) => { lose = method; }, lost: () => lost };
 }

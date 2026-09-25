@@ -1,3 +1,4 @@
+import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v21';
@@ -3318,4 +3319,41 @@ it('composer and Settings holders share one target transaction owner; opening re
   native.system.releaseTarget(actor);
   native.reconnect();
   expect(native.pending('configuration/sourcesRead')).toHaveLength(3);
+});
+
+// New Conversation reads this authority; it never owns a second approval actor.
+const approvalSource = (revision: string, mode: 'policy' | 'full_access'): SourceSettings => ({
+  ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' },
+  workspace: { path: '/workspace/rustx.toml', revision, authored: { approval_mode: mode } }, prospective_approval_mode: mode,
+});
+function requestApproval(actor: ReturnType<typeof settingsActor>) {
+  const mutation = approvalMutation('full_access');
+  actor.send({ type: 'UNIT.EDIT', identity: approvalIdentity, selector: revisionSelector(mutation), revision: 'workspace-1', value: 'full_access' });
+  actor.send({ type: 'UNIT.SUBMIT', identity: approvalIdentity, selector: revisionSelector(mutation), revision: 'workspace-1', mutation });
+}
+it('first-submit readiness remains closed across approval write, confirmed commit and failed reread until exact source observation', async () => {
+  const scripted = scriptedPort(); const actor = settingsActor(scripted.port, undefined, true);
+  scripted.reads[0].resolve(approvalSource('workspace-1', 'policy')); await flush();
+  expect(workspaceApprovalBlock(actor)).toBeUndefined();
+  requestApproval(actor);
+  expect(workspaceApprovalBlock(actor)).toBe('Applying Workspace permission…');
+  expect(scripted.writes[0].expected).toBe('workspace-1');
+  scripted.writes[0].resolve({ acknowledgement: approvalSource('workspace-2', 'full_access') }); await flush();
+  expect(workspaceApprovalBlock(actor)).toBe('Saved; awaiting authoritative observation.');
+  scripted.reads.at(-1)!.reject(new Error('Read unavailable')); await flush();
+  expect(workspaceApprovalBlock(actor)).toBe('Saved; awaiting authoritative observation.');
+  actor.send({ type: 'REFRESH' });
+  scripted.reads.at(-1)!.resolve(approvalSource('workspace-2', 'full_access')); await flush();
+  expect(workspaceApprovalBlock(actor)).toBeUndefined();
+  expect(actor.getSnapshot().context.observation?.prospective_approval_mode).toBe('full_access');
+  expect(scripted.writes).toHaveLength(1); actor.stop();
+});
+it.each([new OutcomeUncertain(), new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: 'workspace-1', actual: 'external' } })])('permission uncertainty/conflict preserves intent and refuses admission after a reread: %s', async error => {
+  const scripted = scriptedPort(); const actor = settingsActor(scripted.port, undefined, true);
+  scripted.reads[0].resolve(approvalSource('workspace-1', 'policy')); await flush(); requestApproval(actor);
+  scripted.writes[0].reject(error); await flush();
+  scripted.reads.at(-1)!.resolve(approvalSource('external', 'policy')); await flush();
+  expect(workspaceApprovalBlock(actor)).toMatch(/uncertain|review/);
+  expect(actor.getSnapshot().context.units[approvalIdentity]?.getSnapshot().context.draft?.value).toBe('full_access');
+  expect(scripted.writes).toHaveLength(1); actor.stop();
 });

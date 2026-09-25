@@ -5,6 +5,8 @@ import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openWorkspaceSettings, openSettingsPage, closeSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
+function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+
 test('Harness New Conversation, permission, model, native process and Models convergence', async ({ page }) => {
   const fixture = await startDogfood('web_harness_convergence');
   const wire = await wireProbe(page);
@@ -19,7 +21,12 @@ test('Harness New Conversation, permission, model, native process and Models con
   try {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => localStorage.setItem('rustx-appearance-v1', 'dark'));
-    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    const beforeWrite = gate(), releaseWrite = gate();
+    const observedWrite = gate(), releaseObservation = gate();
+    await routeWorkspaceHost(page, fixture, {
+      before: async () => { beforeWrite.resolve(); await releaseWrite.promise; },
+      observed: async () => { observedWrite.resolve(); await releaseObservation.promise; },
+    }); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByRole('region', { name: 'New Conversation', exact: true })).toBeVisible();
     expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
@@ -59,7 +66,21 @@ test('Harness New Conversation, permission, model, native process and Models con
     await expect(risk).toBeVisible(); await shot('05-elevated-confirmation');
     await risk.getByRole('checkbox').focus(); await page.keyboard.press('Space');
     await risk.getByRole('button', { name: 'Enable full access', exact: true }).focus(); await page.keyboard.press('Enter');
+    await beforeWrite.promise;
+    const send = page.getByRole('button', { name: 'Send', exact: true });
+    const noAdmission = () => { expect(wire.requests.filter(r => r.method === 'session/create' || r.method === 'turn/start')).toHaveLength(0); };
+    await expect(send).toBeDisabled();
+    await page.getByRole('textbox', { name: 'Message', exact: true }).press('Enter'); noAdmission();
+    await expect(page.getByText('Applying Workspace permission…', { exact: true })).toBeVisible();
+    await shot('05-permission-write-pending');
+    releaseWrite.resolve(); await observedWrite.promise;
+    // Native write and Host reread have completed, but their authoritative
+    // result has not reached the Settings actor. Admission must remain closed.
+    await expect(send).toBeDisabled();
+    await page.getByRole('textbox', { name: 'Message', exact: true }).press('Enter'); noAdmission();
+    releaseObservation.resolve();
     await expect(permissions).toContainText('Full access');
+    await expect(send).toBeEnabled();
     const model = page.getByRole('button', { name: 'Model and reasoning', exact: true });
     await expect(model).toBeEnabled(); await model.click();
     await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
@@ -70,6 +91,10 @@ test('Harness New Conversation, permission, model, native process and Models con
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
     expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(1);
+    expect(wire.requests.filter(r => r.method === 'turn/start')).toHaveLength(1);
+    const admitted = wire.notifications.filter(n => n.method === 'session/event' && n.params.event?.type === 'attempt_started');
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0].params.event.execution_settings.approval_mode).toBe('full_access');
     const methods = wire.requests.map(r => r.method);
     expect(methods.indexOf('session/setModel')).toBeLessThan(methods.indexOf('turn/start'));
     const process = page.locator('[data-turn-process]');
@@ -78,7 +103,9 @@ test('Harness New Conversation, permission, model, native process and Models con
     await shot('07-process-folded');
     await process.focus(); await page.keyboard.press('Enter');
     for (const reasoning of await page.getByRole('button', { name: /^Reasoning/ }).all()) await reasoning.click();
-    await expect(page.getByRole('note', { name: 'Agent Status' }).first()).toBeVisible(); await shot('08-process-expanded');
+    await expect(page.getByRole('note', { name: 'Agent Status' }).first()).toBeVisible();
+    expect(await page.locator('[aria-label="Canonical conversation"]').evaluate(root => { const disclosure = root.querySelector('[data-turn-process]')!; return [...root.querySelectorAll('[role="note"]')].every(note => !!(disclosure.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING)); })).toBe(true);
+    await shot('08-process-expanded');
     const bash = page.locator('[data-tool-call-id="bash-402"]');
     await bash.getByRole('button').first().click(); await shot('09-terminal');
     const write = page.locator('[data-tool-call-id="write-402"]');

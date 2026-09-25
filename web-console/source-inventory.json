@@ -19,7 +19,7 @@
       "destination": "web-console/src/app/agent/AgentComposer.tsx",
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
-      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import.",
+      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v21",
@@ -42,7 +42,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "cb1b5247704379a1c87687993acab0aba618ab7f4487bcc249d3699f07f56872"
+      "local_sha256": "1fd4858d8fb26d621e475eec585dc693e65a61aad9d10da033da9f75c45295d0"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2494,7 +2494,7 @@
       "destination": "web-console/src/app/new-conversation/NewConversation.tsx",
       "upstream_sha256": "6111132201e2e88ab7c68761db588b38dca1c500af14a2e0314a706f1315f28f",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v21",
@@ -2519,7 +2519,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "8d9b17d4103561fffe80a762a4ff7378eef217652f87c100e1d6d70c28703bee",
+      "local_sha256": "b2d5db0c4ce6c75f33e245521017a48abe2b9cb9dceaee0770056e0f0626c4d6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",

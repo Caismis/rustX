@@ -53,9 +53,11 @@ export function NewConversation({ client, host, initialWorkspace, current, opene
     } catch (e) { if (port.current()) setError(String(e)); }
     finally { if (port.current()) setAdopting(false); }
   };
-  const composer = (permission?: React.ReactNode, model?: React.ReactNode) => <AgentComposer disabled={!drafting || !port.current()} busy={!drafting && !flow.matches('failed')} active={false}
+  const composer = (block: () => string | undefined, permission?: React.ReactNode, model?: React.ReactNode) => <AgentComposer submitDisabled={!!block()} disabled={!drafting || !port.current()} busy={!drafting && !flow.matches('failed') && !flow.matches('uncertain_creation')} active={false}
     permission={permission} model={model} onCancel={() => {}} onUpload={async () => { throw new Error('No Session exists before submit.'); }} onSend={async () => false}
     onDraftSend={async (text, files) => {
+      const blocked = block();
+      if (blocked) { setError(blocked); return false; }
       if (!selected) { setError('Choose a Host-authorized registered Workspace before submitting.'); return false; }
       actor.send({ type: 'SUBMIT', draft: { workspaceId: selected.id, text, files, model: intent } }); return false;
     }}/>;
@@ -67,12 +69,12 @@ export function NewConversation({ client, host, initialWorkspace, current, opene
         onSelect={id => { if (id === '::add-workspace') { setMenu(false); setAdd(true); } else pick(id); }}
         anchor={<button type="button" className={hero.workspace} aria-label="Choose Workspace" aria-haspopup="menu" aria-expanded={menu} disabled={!drafting || adopting} onClick={() => setMenu(v => !v)}><IconFolderClose16 size={16}/><span className={hero.workspaceLabel}>{selected?.displayName ?? 'Choose Workspace'}</span><IconChevronDownOutline14 size={12}/></button>}/>
     </div>
-    {<WorkspaceControls client={client} host={host} workspaceId={workspaceId}>{source => composer(selected && <WorkspacePermission key={workspaceId} source={source} disabled={!drafting}/>, selected && <NewConversationModelControl key={workspaceId} source={source} intent={intent} choose={setIntent} disabled={!drafting}/>)}</WorkspaceControls>}
+    {<WorkspaceControls client={client} host={host} workspaceId={workspaceId}>{(source, approval) => <>{composer(approval.block, selected && <WorkspacePermission key={workspaceId} source={source} approval={approval} disabled={!drafting}/>, selected && <NewConversationModelControl key={workspaceId} source={source} intent={intent} choose={setIntent} disabled={!drafting}/>)}{selected && approval.block() && <small role="status">{approval.block()}</small>}</>}</WorkspaceControls>}
     </div>
     {catalog?.picker.kind === 'unavailable' && !selected && <small role="status">{catalog.picker.reason}</small>}
     {error && <p role="alert">{error}</p>}
-    {flow.matches('failed') && <p role="alert">{String(flow.context.error)}. Inspect native Sessions before starting another conversation. No mutation was replayed.</p>}
-    {!drafting && !flow.matches('failed') && <small role="status">{String(flow.value).replaceAll('_', ' ')}…</small>}
+    {flow.context.error != null && <p role="alert">{String(flow.context.error)}. {flow.matches('drafting') ? 'No Session was created. Correct the draft or Workspace and submit again.' : flow.context.session ? `Session ${flow.context.session.id} was created. Inspect that Session to recover; no operation was replayed.` : 'Creation outcome uncertain. Inspect native Sessions before starting another conversation. No mutation was replayed.'}</p>}
+    {!drafting && !flow.matches('failed') && !flow.matches('uncertain_creation') && <small role="status">{String(flow.value).replaceAll('_', ' ')}…</small>}
     <DialogSurface open={add} onClose={() => { if (!adopting) setAdd(false); }} title="Add Workspace" overlayClassName={`${modal.root} ${modal.scrim}`} className={modal.dialog}>
       <div className={modal.content}><div className={modal.header}><h2 className={modal.title}>Add Workspace</h2></div><div className={modal.body}><p>Choose a location authorized by this Product Host.</p>{catalog?.picker.kind === 'configured' && catalog.picker.locations.map(location => <Button key={location.id} disabled={adopting} onClick={() => void adopt(location.id)}>{location.displayName}</Button>)}<Button disabled={adopting} onClick={() => setAdd(false)}>Cancel</Button></div></div>
     </DialogSurface>

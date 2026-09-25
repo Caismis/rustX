@@ -1,5 +1,7 @@
 # Issue #402 implementation and acceptance
 
+[PR #404 review corrections and regression evidence](review-corrections.md).
+
 ## Repository and inspection
 
 Implementation worktree: `/home/caismis/Documents/codes/rustX-issue-402`.
@@ -25,7 +27,7 @@ Main exposed App Server 20, Runtime Client 46 and SQLite schema 43.
   authority; no arbitrary path field was added.
 - `firstSubmitMachine` is XState: drafting → creating_session → attaching_session
   → optional applying_session_model → individually uploading_attachments →
-  submitting_turn → session. Failed and retired states have no replay transition.
+  submitting_turn → session. Known pre-commit rejection returns to editable drafting; only a new explicit submission retries. Uncertain creation and committed-Session failures have no replay transition.
 - A confirmed `session/create` is the Session commit point. Its real native IDs
   survive later failures; the UI opens that Session with an accurate failure.
   An uncertain create leaves no fabricated identity and tells the user to inspect
