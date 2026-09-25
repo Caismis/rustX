@@ -123,6 +123,7 @@ export interface TranscriptInteractionSettled {
 
 /** One entry of the rendered transcript. */
 export type TranscriptEntry =
+  | { kind: "attempt_terminal"; key: string; cursor: RuntimeClientTranscriptCursor; turn: Extract<import("../protocol/app-server.ts").RuntimeClientTranscriptItem, { type: "attempt_terminal" }>["turn"] }
   | TranscriptCommitted
   | StreamingMessage
   | TranscriptPublicationAudit

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v22';
+import type { RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v24';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { json } from '../../bindings/projection';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';

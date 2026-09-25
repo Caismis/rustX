@@ -1227,7 +1227,10 @@ impl SessionRuntimeManager {
                         directory,
                         &owner.credentials,
                     ) {
-                        Ok(catalog) => SessionModelsView::Available { catalog },
+                        Ok((catalog, default_model)) => SessionModelsView::Available {
+                            catalog,
+                            default_model: Box::new(default_model),
+                        },
                         Err(diagnostic) => SessionModelsView::Unavailable { diagnostic },
                     }
                 });

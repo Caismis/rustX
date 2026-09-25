@@ -2,7 +2,7 @@
 import { useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RuntimeFacts } from '../../src/app/agent/Activity';
-import type { RuntimeClientAgent } from '../../../protocol/app-server/v22';
+import type { RuntimeClientAgent } from '../../../protocol/app-server/v24';
 import { Server, snapshot } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';

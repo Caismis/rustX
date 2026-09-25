@@ -103,7 +103,7 @@ Activity snapshots, control acknowledgements and wait results are not parallel
 report/history channels. The Event Journal records ownership and execution facts;
 it does not replace canonical child content.
 
-App Server v22 exposes separate `jobs` and `agents` snapshots and `job_updated`
+App Server v24 exposes separate `jobs` and `agents` snapshots and `job_updated`
 and `agent_updated` events. Agent rows carry `agent_id`, `parent_agent_id`, child
 ConversationId, `current_activation`, latest `activation_id`, `activation_state`
 and explicit Active/Stopping/Inactive state. Replay folds activations into the

@@ -257,6 +257,8 @@ export function renderEntryBlocks(
   context: TranscriptContext,
 ): TranscriptBlock[] {
   switch (entry.kind) {
+    case "attempt_terminal":
+      return [{ kind: "markdown", key: entry.key, markdown: entry.turn.outcome === "cancelled" ? "Stopped" : "Failed" }];
     case "streaming":
       return renderStreaming(entry, context);
     case "committed":

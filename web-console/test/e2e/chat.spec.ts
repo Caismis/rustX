@@ -53,8 +53,8 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - anchorTop)).toBeLessThan(2);
     // Historical tails retain native identity after paging; pointer reveal also
     // exposes equivalent keyboard controls without a permanent wide toolbar.
-    await expect(page.getByLabel('Completed response', { exact: true })).toHaveCount(34);
-    const oldTail = page.getByLabel('Completed response', { exact: true }).first();
+    await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(34);
+    const oldTail = page.getByLabel('Completed Turn', { exact: true }).first();
     const oldActions = oldTail;
     await page.getByLabel('Message', { exact: true }).focus();
     await page.mouse.move(0, 0);
@@ -64,11 +64,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await oldTail.hover();
     await expect(oldActions).toHaveCSS('opacity', '1');
     await page.setViewportSize({ width: 390, height: 844 });
-    await oldTail.getByRole('button', { name: 'Lineage', exact: true }).focus();
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('button', { name: 'Branch in this Session', exact: true })).toBeVisible();
+    await oldTail.getByRole('button', { name: 'Branch in this Session', exact: true }).focus();
+    await expect(oldTail.getByRole('button', { name: 'Branch in this Session', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.getByRole('button', { name: 'Close lineage', exact: true }).click();
     await page.screenshot({ path: 'test-results/response-tail-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     // WEB-03 uses this same native Session, transcript and provider scenario.
@@ -123,7 +121,8 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
-    await expect(page.getByLabel('Session status')).toContainText('Working…');
+    await expect(page.getByLabel('Session status')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);

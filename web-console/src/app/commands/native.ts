@@ -1,5 +1,6 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v22';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v24';
 import { AppServerClient, sameTarget } from '../../client/app-server';
+import { selectSessionModel } from '../model-preference';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
 /** A UI continuation fence, never a cancellation token for server mutations. */
@@ -41,7 +42,7 @@ export class CommandSession {
     this.requireCurrent();
     // Pick an exact catalog identity. Changing model resets model-specific overrides
     // to its native defaults; no provider inference or configuration editor.
-    await this.client.setAgentModel(this.sessionId, { model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) });
+    await selectSessionModel(this.client, this.sessionId, { model, ...(reasoningProfile === undefined ? {} : { reasoningProfile }) });
     if (!this.current()) return;
     await this.client.repairAgentModel(this.sessionId);
     if (this.current()) return this.models();

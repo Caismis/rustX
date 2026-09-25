@@ -375,7 +375,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v22').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v24').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -434,7 +434,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by one App-owned epoch. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v22').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v24').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();

@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v22';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v24';
 import { isOutcomeUncertain, RpcFailure, type ConnectionState } from '../../../client/app-server';
 import { WorkspaceHostError } from '../../../workspaces/host';
 import { applicationScope, selectedRevision, type RevisionSelector, type SettingsTarget } from '../projection';

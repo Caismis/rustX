@@ -251,8 +251,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v22 (`rustx.app-server.v22` and generated
-`protocol/app-server/v22.ts` / `v22.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v24 (`rustx.app-server.v24` and generated
+`protocol/app-server/v24.ts` / `v24.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -332,7 +332,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v22, Runtime Client v48, SQLite v44, and Session catalog v13, with no
+App Server v24, Runtime Client v50, SQLite v44, and Session catalog v13, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -381,15 +381,13 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v22 / Runtime Client v48 project `completed_process` from the native
-Attempt evidence fold. It carries original execution provenance and the local
-final-message identity, including through remapped lineage. SQLite v44 persists
-the bounded member identities in bootstrap provenance; it refuses older stores.
-The browser groups only those exact identities. Steering messages, final answers,
-response actions and independent canonical rows stay outside the fold. Live rows
-have no completed membership. Disclosure state never edits or reorders canonical
-history or its pagination cursors. Agent Status keeps its native anchor even when
-that anchor is inside a folded process.
+App Server v24 / Runtime Client v50 project one `turn_process` owner on exact
+canonical Assistant and Tool members. Native Journal identities, whole-process
+counts and an immutable control cursor survive unsuccessful settlement and
+bounded paging. Failed/stopped processes stay open; successful final-answer,
+inline-reasoning and TurnTail contracts remain unchanged. Agent Status retains
+its independent native anchor. See [terminal process ownership](../docs/issue-406/terminal-process-ownership.md)
+for control placement, reconstruction and the deliberate selective lineage policy.
 
 Reasoning uses the compact variant of the existing Markdown renderer; ordinary
 answers use normal Markdown. Parsing, streaming and sanitization are shared.

@@ -23,7 +23,7 @@ const id = {
 };
 
 it("canonical Workflow identity survives details retirement, snapshot/event fold, and pure rendering", () => {
-  const result = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/workflow-result-v22.json", import.meta.url), "utf8"));
+  const result = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/workflow-result-v24.json", import.meta.url), "utf8"));
   const messages = [assistantBlocks("assistant", [toolCallBlock("outer", "opaque", "not_a_workflow_hint", {})]),
     toolMessage("result", "outer", "opaque", result)];
   const initial = replaceFromSnapshot(snapshot({ messages }), runtimeCursor(0));

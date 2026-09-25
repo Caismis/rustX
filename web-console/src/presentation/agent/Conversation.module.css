@@ -365,6 +365,14 @@
   --dsh-composer-dock-inset: 8px;
 }
 
+.root[data-phase='hero'] .body {
+  justify-content: center;
+}
+
+.root[data-phase='hero'] .composerSeat {
+  padding-bottom: 32px;
+}
+
 .embeddedBody {
   overflow: hidden;
   --dsh-chat-content-width: min(calc(100% - 32px), 920px);

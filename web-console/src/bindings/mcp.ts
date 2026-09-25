@@ -1,4 +1,4 @@
-import type { McpWrite } from '../../../protocol/app-server/v22';
+import type { McpWrite } from '../../../protocol/app-server/v24';
 /** Display native transport intent without materializing an inferred type in the draft. */
 export function mcpTransport(definition: McpWrite['definition']): 'http' | 'stdio' {
   if (definition.type != null) return definition.type;

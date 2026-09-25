@@ -38,7 +38,7 @@ root-only scope, and the drain frontier.
 Canonical `ProductRoot` is the sole authority for rustX-owned product storage
 paths. Session, Conversation and child allocations are derived from that identity
 before any private path is authored. Equivalent root aliases converge; symlinks
-below the product root remain invalid private identities. Subagent IPC v22 carries
+below the product root remain invalid private identities. Subagent IPC v24 carries
 canonical product identity plus child Conversation identity and an incarnation
 name, never a second absolute private runtime root. Inspection uses the same
 identity-derived allocation. Embedded workspace managers may remain independent;

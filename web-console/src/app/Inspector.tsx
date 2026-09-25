@@ -1,11 +1,16 @@
 import { SettingsCard, Facts } from '../presentation/settings/SettingsContent';
 import css from '../presentation/settings/SettingsContent.module.css';
 import { useState, useSyncExternalStore } from 'react';
-import type { ClientView, SessionView } from '../client/app-server';
+import { useClientSelector, selectClient } from '../client/selectors';
+import type { AppServerClient, ClientView, SessionView } from '../client/app-server';
 import { filterLog, type ProtocolLog } from '../client/protocol-log';
 import { json } from '../bindings/projection';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
+export function LiveInspector({ client, sessionId }: { client: AppServerClient; sessionId?: string }) {
+  const state = useClientSelector(client, selectClient);
+  return <Inspector log={client.log} state={state} view={sessionId ? state.views[sessionId] : undefined}/>;
+}
 export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog; state: ClientView; view?: SessionView }) {
   const log = useSyncExternalStore(protocolLog.subscribe, protocolLog.getSnapshot);
   const [method, setMethod] = useState('');

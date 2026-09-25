@@ -1,3 +1,4 @@
+import { useClientSelector, transportSelection, sameValue } from '../../../client/selectors';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import type { AppServerClient } from '../../../client/app-server';
@@ -25,7 +26,7 @@ export function useSettingsActor(): SettingsTargetActor {
  * delivered to it by its `ConfigurationSystem`, so no read, reconnect or
  * convergence ever depends on this component rendering. */
 export function useSettingsTarget(client: AppServerClient, target: SettingsTarget, host: ProductHostWorkspaces | undefined, enabled = true) {
-  const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const transport = useClientSelector(client, transportSelection, sameValue);
   // The Product Host object identity is a presentation detail that may change
   // on any render; the port and its actor are bound to the authority instead.
   const hostRef = useRef(host);
@@ -52,7 +53,7 @@ export function useSettingsTarget(client: AppServerClient, target: SettingsTarge
  * read a reconnected generation owes — is driven by the transport the
  * `ConfigurationSystem` delivers, never by this component's effects. */
 export function useSessionConfiguration(client: AppServerClient, sessionId: string) {
-  const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const transport = useClientSelector(client, transportSelection, sameValue);
   const lifetime = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${sessionId}`;
   const [binding, setBinding] = useState<{ lifetime: string; actor: SessionConfigurationActor }>();
   useEffect(() => {

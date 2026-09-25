@@ -1775,6 +1775,32 @@ impl ConversationStore for SqliteConversationStore {
         ids.iter().map(|id| load_message(&connection, id)).collect()
     }
 
+    fn message_transcript_cursor(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        let position: Option<i64> = self.lock()?.query_row(
+            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+            [message_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("process control position: {error}")))?;
+        position
+            .map(|value| nonnegative(value, "process control position").map(TranscriptCursor::new))
+            .transpose()
+    }
+
+    fn event_transcript_cursor(
+        &self,
+        event_id: &EventId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        let position: Option<i64> = self.lock()?.query_row(
+            "SELECT position FROM transcript_order WHERE reference_kind='attempt_terminal' AND reference_id=?1",
+            [event_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("terminal control position: {error}")))?;
+        position
+            .map(|value| nonnegative(value, "terminal control position").map(TranscriptCursor::new))
+            .transpose()
+    }
+
     fn message_append_revision(
         &self,
         message_id: &MessageId,
@@ -6200,40 +6226,55 @@ fn load_transcript_item(
             }
             Ok(TranscriptItem::PublicationAudit { audit })
         }
-        "interaction_event" => {
-            let json: String = connection
-                .query_row(
-                    "SELECT event_json FROM events WHERE event_id=?1",
-                    [reference_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| storage(format!("transcript interaction lookup: {error}")))?
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(format!(
-                        "transcript interaction reference {reference_id} has no durable event"
-                    ))
-                })?;
-            let event: RuntimeEventEnvelope = decode(&json, "transcript interaction")?;
-            if event.event_id.as_str() != reference_id {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "transcript interaction reference {reference_id} contains a different event"
-                )));
-            }
-            match &event.event {
-                RuntimeEvent::InteractionRequested { .. } => {
-                    Ok(TranscriptItem::InteractionRequested { event })
-                }
-                RuntimeEvent::InteractionSettled { .. } => {
-                    Ok(TranscriptItem::InteractionSettled { event })
-                }
-                _ => Err(ConversationStoreError::InvalidReference(format!(
-                    "transcript interaction reference {reference_id} is not an interaction audit"
-                ))),
-            }
+        "interaction_event" | "attempt_terminal" => {
+            load_transcript_event(connection, reference_kind, reference_id)
         }
         other => Err(ConversationStoreError::InvalidReference(format!(
             "unknown transcript reference kind {other}"
+        ))),
+    }
+}
+
+fn load_transcript_event(
+    connection: &Connection,
+    reference_kind: &str,
+    reference_id: &str,
+) -> Result<TranscriptItem, ConversationStoreError> {
+    let json: String = connection
+        .query_row(
+            "SELECT event_json FROM events WHERE event_id=?1",
+            [reference_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("transcript event lookup: {error}")))?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "transcript event reference {reference_id} has no durable event"
+            ))
+        })?;
+    let event: RuntimeEventEnvelope = decode(&json, "transcript event")?;
+    if event.event_id.as_str() != reference_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "transcript event reference {reference_id} contains a different event"
+        )));
+    }
+    match (reference_kind, &event.event) {
+        (
+            "attempt_terminal",
+            RuntimeEvent::AttemptCancelled { .. }
+            | RuntimeEvent::AttemptFailed { .. }
+            | RuntimeEvent::AttemptTimedOut { .. }
+            | RuntimeEvent::AttemptLimitExceeded { .. },
+        ) => Ok(TranscriptItem::AttemptTerminal { event }),
+        ("interaction_event", RuntimeEvent::InteractionRequested { .. }) => {
+            Ok(TranscriptItem::InteractionRequested { event })
+        }
+        ("interaction_event", RuntimeEvent::InteractionSettled { .. }) => {
+            Ok(TranscriptItem::InteractionSettled { event })
+        }
+        _ => Err(ConversationStoreError::InvalidReference(format!(
+            "transcript event reference {reference_id} is not a matching transcript event"
         ))),
     }
 }
@@ -6746,6 +6787,18 @@ fn persist_event_tx(
         )
         .map_err(|error| storage(format!("update event sequence: {error}")))?;
     let transcript_cursor = if matches!(
+        &event.event,
+        RuntimeEvent::AttemptCancelled { .. }
+            | RuntimeEvent::AttemptFailed { .. }
+            | RuntimeEvent::AttemptTimedOut { .. }
+            | RuntimeEvent::AttemptLimitExceeded { .. }
+    ) {
+        Some(append_transcript_reference(
+            transaction,
+            "attempt_terminal",
+            event.event_id.as_str(),
+        )?)
+    } else if matches!(
         &event.event,
         RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. }
     ) {

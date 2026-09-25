@@ -1,50 +1,36 @@
-import { NewConversation } from './new-conversation/NewConversation';
-import { WorkspaceControls, WorkspacePermission } from './new-conversation/WorkspaceControls';
-import { ConversationStats } from './agent/ConversationStats';
-import { navigateTabs } from '../presentation/primitives/tabs';
+import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
+import { ConversationHeader } from './agent/ConversationHeader';
+import { useClientSelector, selectShell, sameValue } from '../client/selectors';
+import { ConversationLive } from './agent/ConversationLive';
+import { ConversationSeat, ConversationStatus } from './agent/ConversationSeat';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
 import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { WorkspaceSessionNavigation } from '../workspaces/navigation';
-import { Trajectory } from './trajectory/Trajectory';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { useActorRef, useSelector } from '@xstate/react';
+import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v22';
+import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v24';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
-import { goalDock, queueRows, todoDock } from '../bindings/composer-context';
-import { ComposerContextStack } from './composer/ComposerContextStack';
-import { GoalDock } from './composer/GoalDock';
-import { QueueDock } from './composer/QueueDock';
-import { TodoDock } from './composer/TodoDock';
+import { goalDock } from '../bindings/composer-context';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactPreview, PreviewContext, type PreviewArtifact } from './components/ArtifactPreview';
 import { ArtifactContext } from './components/Artifact';
-import { ChatViewport } from '../presentation/layout/ChatViewport';
 import { AppFrame } from '../presentation/layout/AppFrame';
 import { SidebarRoot } from '../presentation/sidebar/SidebarRoot';
 import { SettingsTrigger } from '../presentation/settings/SettingsRoot';
-import { IconInspectOutline12 } from '../presentation/primitives/icons';
 import { ConnectionController } from '../connection/controller';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
-import { AgentComposer } from './agent/AgentComposer';
-import { AgentControls } from './agent/AgentControls';
 import agentCss from '../presentation/agent/Conversation.module.css';
 import { Button } from '../presentation/primitives/Button';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { sessionDeletionNotice } from '../bindings/session-deletion';
-import { AgentTranscript } from './agent/AgentTranscript';
-import { Interactions } from './agent/Interactions';
-import { RuntimeFacts } from './agent/Activity';
-import { Inspector } from './Inspector';
-import { Menu } from '../presentation/primitives/Menu';
-import { deriveSessionProductState } from '../bindings/session-product';
-import { SessionStatus } from './SessionStatus';
-import { SessionConfiguration } from './SessionConfiguration';
+import { LiveInspector } from './Inspector';
+import { SessionDeletion } from './SessionDeletion';
 import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './settings/projection';
 import { createOwnerLookup, settingsNavigationMachine } from './settings/machines/navigation';
 
@@ -58,12 +44,12 @@ function readPreferences(): { endpoint?: string; openViews: string[] } {
 }
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 export function App({ client, workspaceHost = defaultWorkspaceHost, connection: providedConnection }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces; connection?: ConnectionController }) {
-  const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const state = useClientSelector(client, selectShell, sameValue);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
-  type CenterRoute = { kind: 'new-conversation'; epoch: number; workspaceId?: string } | { kind: 'session'; sessionId: string };
-  const centerEpoch = useRef(0);
-  const [center, setCenter] = useState<CenterRoute>({ kind: 'new-conversation', epoch: 0 });
+  type CenterRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string };
+  const [draftBinding, setDraftBinding] = useState(0);
+  const [center, setCenter] = useState<CenterRoute>({ kind: 'new-conversation' });
   // Top-level Settings navigation is an explicit machine, not an epoch counter.
   // Every navigation-affecting decision re-enters its idle state, which stops
   // any owning-Workspace lookup in flight: a stale lookup therefore has no
@@ -71,12 +57,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // overwrite a newer decision, reopen a closed dialog or publish an obsolete
   // error. Async resolution is preparation, never ongoing navigation authority.
   const navigationActor = useActorRef(settingsNavigationMachine, { input: { lookup: createOwnerLookup(workspaceHost, client) } });
-  const navigationError = useSelector(navigationActor, snapshot => snapshot.context.error);
   const openSettings = (target: SettingsTarget) => navigationActor.send({ type: 'OPEN', target });
   const openConnectionSettings = () => navigationActor.send({ type: 'OPEN.CONNECTION' });
-  const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: ArtifactResources }>();
   const [theme, setTheme] = useState(readTheme);
   useEffect(() => applyTheme(theme), [theme]);
@@ -98,16 +81,16 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // Released views are not restored. Sidebar rows remain catalog-owned.
   const resumeViews = JSON.stringify(openViews.filter(id => state.views[id]?.attachmentIntent !== 'released'));
   const [error, setError] = useState('');
-  const [sending, setSending] = useState<Record<string, number>>({});
-  const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
+  const [deletingSession, setDeletingSession] = useState<string>();
   const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
   // The client owns authority retirement. This render adjustment retires only
   // browser presentation before any children can reinterpret an old Session ID.
   if (presentationAuthority !== state.authorityRevision) {
     setPresentationAuthority(state.authorityRevision);
     navigation.invalidate(); setOpenViews([]); setFocus({}); setCommand(undefined); setRestored(undefined);
-    setPreview(undefined); setError(''); setConsumed(undefined); setSending({});
-    setCenter({ kind: 'new-conversation', epoch: ++centerEpoch.current }); setSessionMenuOpen(false); setArtifactPreview(undefined);
+    setDeletingSession(undefined); setError(''); setConsumed(undefined);
+    setDraftBinding(value => value + 1);
+    setCenter({ kind: 'new-conversation' }); setArtifactPreview(undefined);
   }
 
   // The client owns authority retirement; this retires the browser navigation
@@ -116,15 +99,15 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
   const selectedView = selected ? state.views[selected] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
-  const product = deriveSessionProductState(state, view);
   const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
   const attached = !view?.deleting && connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
-  const composerDisabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
   const invokeCommand = (request: CommandRequest | { id: 'new' }) => {
-    if (!view || composerDisabled) return;
+    const currentState = client.getSnapshot();
+    const view = selected ? currentState.views[selected] : undefined;
+    if (!view || currentState.connection !== 'connected' || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.modelMutation || view.snapshot?.shutting_down || view.snapshot?.durability_failure) return;
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
     if (request.id === 'new') { createInWorkspace(workspace); return; }
@@ -136,7 +119,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     navigation.invalidate();
     setCommand({ request, current: navigation.capture(), generation: state.generation, sessionId: view.id, conversationId: view.target?.conversation_id });
   };
-  const run = (action: () => Promise<unknown>) => {
+  const runGlobal = (action: () => Promise<unknown>) => {
     const generation = client.getSnapshot().generation; setError('');
     void action().catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
   };
@@ -161,15 +144,16 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   }, [endpoint, resumeViews]);
   // Every Session focus path publishes the same pair. Until native cwd has been
   // classified, its Workspace is explicitly empty rather than inherited.
-  const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean } = {}) => {
+  const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean; commitDraft?: boolean } = {}) => {
+    if (!options.preserveDraft && !options.commitDraft) setDraftBinding(value => value + 1);
     navigation.invalidate(); const current = navigation.capture();
     const generation = state.generation;
-    setCenter(id ? { kind: 'session', sessionId: id } : { kind: 'new-conversation', epoch: ++centerEpoch.current });
+    setCenter(id ? { kind: 'session', sessionId: id } : { kind: 'new-conversation' });
     setCommand(undefined); if (!options.preserveDraft) setRestored(undefined); setFocus({ sessionId: id });
     if (!id) return;
     client.restoreViews([id]);
     if (!connected) return;
-    run(async () => {
+    runGlobal(async () => {
       try {
         if (options.attach) await client.attach(id, undefined, current);
         if (!current() || generation !== client.getSnapshot().generation) return;
@@ -192,16 +176,17 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     const remaining = openViews.filter(item => item !== id);
     setOpenViews(remaining);
     if (selected === id) focusSession(remaining[0]);
-    run(() => client.release(id));
+    runGlobal(() => client.release(id));
   };
   const closeAllViews = () => {
     const closing = [...openViews];
     setOpenViews([]); focusSession();
-    run(() => Promise.all(closing.map(id => client.release(id))));
+    runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   };
   const createInWorkspace = (id?: string) => {
+    setDraftBinding(value => value + 1);
     navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation });
-    setCenter({ kind: 'new-conversation', workspaceId: id, epoch: ++centerEpoch.current });
+    setCenter({ kind: 'new-conversation', workspaceId: id });
   };
   const newConversationCurrent = useMemo(() => navigation.capture(), [navigation, center]);
   // Owner-specific Settings navigation from one native authored source owner.
@@ -212,111 +197,68 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // revoked one is reported explicitly and never rerouted to User authoring,
   // and no Workspace, Session or runtime is allocated to resolve it.
   const openOwningSettings = (owner: SourceTarget) => {
-    setError('');
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory });
   };
-  const deletePreview = (id: string) => run(async () => {
-    const generation = client.getSnapshot().generation;
-    const result = await client.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion');
-    if (generation !== client.getSnapshot().generation) return;
-    if (result.result.status === 'preview') setPreview(result.result.preview);
-    else setError(sessionDeletionNotice(result.result));
-  });
   return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
       workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={createInWorkspace}
-      openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={deletePreview}
+      openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={setDeletingSession}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
-    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <Inspector log={client.log} state={state} view={view} />}</RightPanel>}
+    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <LiveInspector client={client} sessionId={view?.id} />}</RightPanel>}
     overlay={<>
       {/* Settings renders the navigation machine's state and nothing else: which
           target, page and detail are open is decided there, including whether
           this target may reach the client-owned Connection surface at all. */}
       <Settings navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
     </>}>
-    {!view && <header className="console-header"><strong>rustX</strong><Button aria-label="Toggle Inspector" onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></header>}
     {!connected && !view && <section className="notice" aria-label="Connection recovery"><p>{selection.busy ? 'Connecting…' : 'Unable to connect to rustX'}</p>
       {selection.mode === 'local' && !selection.busy && <p>No local managed connection is available. Reopen the launcher URL or configure a Remote App Server in Settings.</p>}
       <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>Reconnect</Button><Button onClick={openConnectionSettings}>Show details</Button>
     </section>}
     {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={`Deletion recovery for ${sessionDisplayTitle(item.summary)}`}>
       <p>{sessionDisplayTitle(item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? 'Session removed. Cleanup is still pending.' : 'Deletion durability needs verification.'}</p>
-      <Button disabled={!connected || item.recoveringDeletion} onClick={() => run(async () => {
+      <Button disabled={!connected || item.recoveringDeletion} onClick={() => runGlobal(async () => {
         const result = await client.recoverSessionDeletion(item.id);
-        if (result) setError(sessionDeletionNotice(result));
+        if (result && result.status !== 'deleted' && result.status !== 'not_found') setError(sessionDeletionNotice(result));
       })}>{item.recoveringDeletion ? 'Recovering deletion…' : 'Retry deletion recovery'}</Button>
     </section>)}
-    {(error || navigationError) && <div className="notice error" role="alert">{error || navigationError}<Button size="sm" onClick={() => { setError(''); navigationActor.send({ type: 'DISMISS' }); }}>Dismiss notice</Button></div>}
+    {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>Dismiss notice</Button></div>}
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">A global operation needs verification. Inspect Global / other Session diagnostics and check the affected work before trying again.</div>}
-    {preview && <section className="delete-preview" aria-label="Confirm Session deletion"><h2>Delete {sessionDisplayTitle(state.sessions.find(session => session.id === preview.session_id) ?? state.views[preview.session_id]?.summary)}?</h2>
-      <p>This permanently deletes the Session and its saved history.</p>
-      <p>Saved conversations: {preview.owned_conversation_count} · History nodes: {preview.owned_node_count} · Child conversations: {preview.owned_child_count}</p>
-      <p>Any active work will be settled before deletion.</p>
-      <div className="row"><Button onClick={() => setPreview(undefined)}>Keep Session</Button><Button variant="primary" disabled={!connected || !!state.views[preview.session_id]?.deleting} onClick={() => run(async () => {
-        const generation = client.getSnapshot().generation;
-        const current = navigation.capture();
-        const result = await client.deleteSession(preview.session_id, preview.target_revision);
-        if (generation !== client.getSnapshot().generation || !result) return;
-        if (result.status === 'deleted' || result.status === 'not_found' || result.status === 'committed_cleanup_pending') {
-          const remaining = openViews.filter(id => id !== preview.session_id); setOpenViews(value => value.filter(id => id !== preview.session_id));
-          if (current() && selected === preview.session_id) {
-            const next = remaining[0] ?? client.getSnapshot().sessions.find(session => session.id !== preview.session_id)?.id;
-            if (next) open(next); else focusSession();
-          }
-        }
-        setError(sessionDeletionNotice(result)); setPreview(undefined);
-      })}>Confirm delete</Button></div>
-    </section>}
-    {center.kind === 'session' && view ? <section className={`session-panel ${agentCss.root}`} data-phase="active" id="session-view" role="region" aria-labelledby="session-title">
-      <header className={agentCss.header}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong id="session-title" aria-label="Session title">{sessionDisplayTitle(state.sessions.find(session => session.id === view.id) ?? view.summary)}</strong><small aria-label="Session location" title={view.settings?.cwd}>{view.settings?.cwd ?? 'Location unavailable'}</small></div>
-        <div className="row"><Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" autoFocus
-          anchor={<Button aria-label="Session actions" aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}>•••</Button>}
-          items={[{ id: 'settings', label: 'Session settings' }, { id: 'export', label: 'Export', disabled: state.connection !== 'connected' }, { id: 'tree', label: 'Session tree', disabled: !attached || commandOpen || !lineageSwitchSafe(view) }]}
-          onSelect={id => { setSessionMenuOpen(false); if (id === 'settings') setSessionSettingsOpen(value => !value); else if (id === 'tree') invokeCommand({ id: 'tree' }); else if (id === 'export') run(() => client.exportSession(view.id)); }} />
-          <Button aria-label="Toggle Inspector" aria-expanded={inspectorOpen} onClick={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }}><IconInspectOutline12 /></Button></div>
-      </div>
-      <SessionConfiguration key={`${state.authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />
-      {sessionSettingsOpen && <section aria-label="Session settings"><p>Workspace: {view.settings?.cwd ?? 'Unavailable'}</p><AgentControls key={`settings:${view.id}`} client={client} view={view} /><Button onClick={() => setSessionSettingsOpen(false)}>Close Session settings</Button></section>}
-      <div className={agentCss.tabs} role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
-      </header>
-      <SessionStatus product={product} recover={action => {
+    {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
+      const remaining = openViews.filter(id => id !== deletingSession);
+      setOpenViews(remaining);
+      if (selected === deletingSession) {
+        const next = remaining[0] ?? client.getSnapshot().sessions.find(session => session.id !== deletingSession)?.id;
+        if (next) open(next); else focusSession();
+      }
+    }}/>}
+    <section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
+      <ConversationHeader client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
+        connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
+        toggleInspector={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }} invokeCommand={invokeCommand}
+        settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
+
+      {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {
         if (action === 'connection-settings') openConnectionSettings();
         else if (action === 'connect') void connection.reconnect();
-        else if (action === 'refresh') run(() => client.refresh(view.id));
+        else if (action === 'refresh') runGlobal(() => client.refresh(view.id));
         else focusSession(view.id, { attach: true, preserveDraft: true });
-      }} />
+      }} />}
 
-      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role="tabpanel" aria-labelledby={`view-tab-${conversationMode}`} tabIndex={0}>
-      <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={`${view.id}:${view.target?.conversation_id}:${view.target?.attachment_id ?? state.generation}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
-        {view.snapshot && <><AgentTranscript snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
-          lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })} /><RuntimeFacts snapshot={view.snapshot} client={client} sessionId={view.id} />
+      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
+      <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
+      <ConversationSeat client={client} host={workspaceHost} sessionId={view?.id}
+        initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
+        binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
+        onCommand={id => invokeCommand({ id })}
+        opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); }}/>
 
-        </>}
-      </ChatViewport>}</ArtifactContext.Provider></PreviewContext>
-      {/* Keyed by Session: no dock or draft state crosses Session views. */}
-      <div className={agentCss.composerSeat}><div hidden={!!view.snapshot?.pending_interactions?.length}><ComposerContextStack key={view.id}
-        todo={<TodoDock state={todoDock(view.snapshot)} />}
-        goal={<GoalDock state={goalDock(view.snapshot)} observation={view.snapshot} disabled={composerDisabled}
-          mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} />}
-        queue={<QueueDock key={`${view.id}:${view.target?.attachment_id ?? state.generation}`} disabled={composerDisabled} observation={view.snapshot} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)} />}
-        composer={<AgentComposer key={`${view.snapshot?.conversation_id ?? view.id}:${restored?.conversation === view.snapshot?.conversation_id ? 'restored' : 'draft'}`} initialContent={restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined}
-          disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
-          lineageSwitchSafe={lineageSwitchSafe(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
-          consumed={consumed} cancellationAvailable={attached && !view.cancellation && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure}
-          permission={workspace && <WorkspaceControls client={client} host={workspaceHost} workspaceId={workspace}>{(source, approval) => <WorkspacePermission source={source} approval={approval} disabled={composerDisabled}/>}</WorkspaceControls>}
-          model={<AgentControls key={`model:${view.id}`} client={client} view={view}/>}
-          onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts, delivery) => {
-            const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
-            try { await client.send(view.id, text, receipts, delivery); return generation === client.getSnapshot().generation; }
-            catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
-            finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
-          }} />} /><ConversationStats snapshot={view.snapshot}/></div><Interactions client={client} state={state} view={view} run={run}/></div>
       </section>
       {commandOpen && <CommandPanel key={`${command.generation}:${command.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.sessionId} current={() => command.current() && client.getSnapshot().generation === command.generation}
         succeeded={() => { setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 })); }}
@@ -329,8 +271,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
           setOpenViews(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section> : center.kind === 'session' ? <section aria-label="Session recovery"><p>Session {center.sessionId} exists. Open its native state to continue.</p><Button disabled={!connected} onClick={() => open(center.sessionId)}>Open Session</Button></section> : <NewConversation key={center.epoch} client={client} host={workspaceHost}
-      initialWorkspace={center.kind === 'new-conversation' ? center.workspaceId : undefined} current={newConversationCurrent}
-      opened={(id, failure) => { open(id); if (failure) setError(failure); }}/>}
+    </section>
   </AppFrame>;
 }

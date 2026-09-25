@@ -1,5 +1,12 @@
 # WEB-RESET-02 Agent ownership
 
+Current conversation/composer ownership is specified by
+[WEB-16](../docs/issue-406/conversation-surface.md), referencing Harness
+`477b4f420553e8a52c2fbccc464d7561b239c443`. The notes below record earlier
+layers; the resident composer, turn-local running state and Turn tails replace
+their earlier lifecycle/status ownership. App Server is now v24 / Runtime Client
+v50, with native whole-conversation Turn/Step statistics and authored model seed.
+
 Base: `204f7ccc8fbaf4bc1b6842e02e8d0d68f19d5837`.
 Harness: `ddefc45fbc7f8e46dd73185e68295696d1297887`.
 
@@ -57,13 +64,11 @@ Harness-derived composer accepts browser File drafts before Session creation;
 navigation and the exact native attachment. Settings target actors are shared
 with the permission seat; no configuration coordinator lives in the composer.
 
-App Server v22 / Runtime Client v48 publishes `completed_process` on canonical
-Assistant and Tool entries using native Attempt event evidence. Its origin and
-local final-message identity survive pagination and lineage remapping. Only
-those facts create process disclosure membership; final answers and actions
-stay outside. Agent Status retains its native anchor and shares disclosure only
-when its exact Conversation/Attempt matches a loaded completed process. Live or
-unclassified annotations remain visible. No canonical cache is modified.
+App Server v24 / Runtime Client v50 publishes one native `turn_process` summary
+on exact Assistant/Tool members for running, completed and unsuccessful Attempts.
+Control identity, cursor, counts and clock come from native evidence; failed and
+stopped Turns always remain open. CompletedResponseView still owns successful
+answer boundaries and TurnTail actions. See the [ownership contract](../docs/issue-406/terminal-process-ownership.md).
 
 ## Jobs and continuable child Agents (#411)
 

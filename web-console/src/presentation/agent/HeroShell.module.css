@@ -145,6 +145,9 @@
   min-width: 0;
   /* figma 75:8208 workspace row: px 8 above the card. */
   padding-left: 8px;
+  width: min(100%, var(--dsh-composer-card-max-width));
+  margin-inline: auto;
+  box-sizing: border-box;
 }
 
 /* Folder + label + chevron — transparent at rest; fill only on hover / open.

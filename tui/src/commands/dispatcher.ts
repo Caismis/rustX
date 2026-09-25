@@ -174,7 +174,7 @@ export interface DebugDiagnostics {
 
 export class CommandDispatcher {
   #context: DispatcherContext;
-  #inspected = new Map<string, import('../../../protocol/app-server/v22.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v24.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -480,7 +480,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v22.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v24.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');

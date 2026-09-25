@@ -1,7 +1,7 @@
 import { assign, fromPromise, setup } from 'xstate';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { WorkspaceHostError } from '../../workspaces/host';
-import type { SessionModelConfig, UploadReceipt } from '../../../../protocol/app-server/v22';
+import type { SessionModelConfig, UploadReceipt } from '../../../../protocol/app-server/v24';
 
 /** Only draft values and acknowledged native facts. No provisional identity. */
 export interface FirstDraft { workspaceId: string; text: string; files: readonly File[]; model?: SessionModelConfig }
@@ -24,7 +24,7 @@ const step = (action: (context: Context & { port: FirstSubmitPort }) => Promise<
  * has no retry edge. Capture the create acknowledgement before fencing the next
  * effect: a changed authority must never erase a committed native identity. */
 export const firstSubmitMachine = setup({
-  types: { context: {} as Context, events: {} as { type: 'SUBMIT'; draft: FirstDraft; port: FirstSubmitPort } | { type: 'RETIRE' } },
+  types: { context: {} as Context, events: {} as { type: 'SUBMIT'; draft: FirstDraft; port: FirstSubmitPort } | { type: 'RETIRE' } | { type: 'RESET' } },
   actors: {
     create: fromPromise(async ({ input }: { input: Context }) => { live(input.port!); return input.port!.create(input.draft!); }),
     attach: step(c => { if (c.session!.diagnostic) throw new Error(c.session!.diagnostic); return c.port.attach(c.session!); }),
@@ -35,7 +35,7 @@ export const firstSubmitMachine = setup({
   actions: { fail: assign({ error: ({ event }) => 'error' in event ? event.error : undefined }) },
 }).createMachine({
   id: 'firstSubmit', initial: 'drafting', context: { receipts: [] },
-  on: { RETIRE: '.retired' },
+  on: { RETIRE: '.retired', RESET: { target: '.drafting', actions: assign(() => ({ port: undefined, draft: undefined, session: undefined, receipts: [], error: undefined })) } },
   states: {
     drafting: { on: { SUBMIT: { guard: ({ event }) => event.port.current() && !!event.draft.workspaceId && (!!event.draft.text.trim() || event.draft.files.length > 0), target: 'creating_session', actions: assign({ port: ({ event }) => event.port, draft: ({ event }) => event.draft, error: () => undefined }) } } },
     creating_session: { invoke: { src: 'create', input: ({ context }) => context, onDone: { target: 'attaching_session', actions: assign({ session: ({ event }) => event.output as CreatedSession }) }, onError: [{ guard: ({ event }) => isOutcomeUncertain(event.error) || event.error instanceof WorkspaceHostError && event.error.uncertain, target: 'uncertain_creation', actions: 'fail' }, { target: 'drafting', actions: 'fail' }] } },
@@ -45,6 +45,6 @@ export const firstSubmitMachine = setup({
     next_attachment: { always: [{ guard: ({ context }) => context.receipts.length < context.draft!.files.length, target: 'uploading_attachments' }, { target: 'submitting_turn' }] },
     uploading_attachments: { invoke: { src: 'upload', input: ({ context }) => context, onDone: { target: 'next_attachment', actions: assign({ receipts: ({ context, event }) => [...context.receipts, event.output as UploadReceipt] }) }, onError: { target: 'failed', actions: 'fail' } } },
     submitting_turn: { invoke: { src: 'send', input: ({ context }) => context, onDone: 'session', onError: { target: 'failed', actions: 'fail' } } },
-    session: { type: 'final' }, uncertain_creation: {}, failed: {}, retired: { type: 'final' },
+    session: {}, uncertain_creation: {}, failed: {}, retired: {},
   },
 });

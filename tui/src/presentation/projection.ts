@@ -760,6 +760,8 @@ function transcriptEntryFromWire(
   entry: RuntimeClientTranscriptEntry,
 ): TranscriptEntry {
   switch (entry.item.type) {
+    case "attempt_terminal":
+      return { kind: "attempt_terminal", key: `attempt:${entry.item.turn.conversation_id}:${entry.item.turn.attempt_id}`, cursor: entry.cursor, turn: entry.item.turn };
     case "message": {
       const messageId = messageIdOf(entry.item.message);
       return {

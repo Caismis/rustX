@@ -80,7 +80,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await settings.getByRole('row', { name: 'loss-fixture', exact: true }).click();
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
     await openEmptySession(page, fixture, 'Workspace B');
-    await expect(page.getByLabel('Session location', { exact: true })).toContainText(fixture.workspaceB);
+    await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     expect(await selectedSettingsPage(page)).toBe('General');
     await openMcp();

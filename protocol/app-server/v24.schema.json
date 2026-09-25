@@ -10204,6 +10204,37 @@
       "description": "Whole-conversation execution totals, independent of any transcript window.\nForked Conversations start a fresh execution epoch, as native lineage does.",
       "type": "object",
       "properties": {
+        "turns": {
+          "description": "Harness-style Turn and Step counts: native Attempt starts and Loop turns.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "steps": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "latest_turn": {
+          "description": "Latest native Turn clock; never a browser receipt timestamp.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationTurnClock"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timing": {
+          "description": "Complete measured request timing, separate from usage coverage.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompletedResponseTiming"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "completed_responses": {
           "type": "string",
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
@@ -10230,20 +10261,91 @@
       },
       "additionalProperties": false,
       "required": [
+        "turns",
+        "steps",
         "completed_responses",
         "model_requests",
         "requests_with_usage"
       ]
     },
+    "ConversationTurnClock": {
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "started_at"
+      ]
+    },
+    "CompletedResponseTiming": {
+      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+      "type": "object",
+      "properties": {
+        "total_duration_ms": {
+          "description": "Authoritative successful Attempt completion minus its start timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttft_ms": {
+          "description": "First actual request's adapter-dispatch-to-first-output duration.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "generation_ms": {
+          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens_per_second": {
+          "description": "Fully covered output usage divided by fully covered positive generation work.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
     "RuntimeClientTranscriptEntry": {
       "description": "One derived transcript item and its stable durable cursor.",
       "type": "object",
       "properties": {
-        "completed_process": {
-          "description": "Exact successful Attempt process membership, derived by native owners.\nAbsence is not permission for a client to infer a process boundary.",
+        "turn_process": {
+          "description": "Exact native Attempt process membership, derived by native owners.\nAbsence is not permission for a client to infer a process boundary.",
           "anyOf": [
             {
-              "$ref": "#/$defs/CompletedProcessView"
+              "$ref": "#/$defs/TurnProcessView"
             },
             {
               "type": "null"
@@ -10288,25 +10390,8 @@
         "item"
       ]
     },
-    "CompletedProcessView": {
-      "description": "Native ownership of a completed Attempt's process. Destination final address\nand immutable origin are distinct, including through lineage copies.",
-      "type": "object",
-      "properties": {
-        "origin": {
-          "$ref": "#/$defs/ResponseOrigin"
-        },
-        "final_message_id": {
-          "$ref": "#/$defs/MessageId"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "origin",
-        "final_message_id"
-      ]
-    },
-    "ResponseOrigin": {
-      "description": "Original execution owner, unchanged through arbitrarily deep lineage copies.",
+    "TurnProcessView": {
+      "description": "One native process owner shared by live, successful and unsuccessful Turns.\nRepeated on each exact member so bounded pages are independently resolvable.",
       "type": "object",
       "properties": {
         "conversation_id": {
@@ -10315,16 +10400,84 @@
         "attempt_id": {
           "$ref": "#/$defs/AttemptId"
         },
-        "closing_message_id": {
-          "description": "Provenance only; never a destination content address.",
-          "$ref": "#/$defs/MessageId"
+        "event_id": {
+          "description": "Original terminal Journal identity, absent while running or inherited.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "control_cursor": {
+          "description": "Control sorts immediately before this immutable native transcript position.\nNo-content terminal Attempts use their terminal event position.",
+          "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+        },
+        "final_message_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "tool_call_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "outcome": {
+          "$ref": "#/$defs/TurnProcessOutcome"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
         }
       },
       "additionalProperties": false,
       "required": [
         "conversation_id",
         "attempt_id",
-        "closing_message_id"
+        "control_cursor",
+        "message_count",
+        "tool_call_count",
+        "outcome"
+      ]
+    },
+    "EventId": {
+      "description": "Identifies one durable runtime event.",
+      "type": "string"
+    },
+    "TurnProcessOutcome": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "cancelled",
+        "failed",
+        "timed_out",
+        "limit_exceeded"
       ]
     },
     "CompletedResponseView": {
@@ -10388,50 +10541,27 @@
         "surface_revision"
       ]
     },
-    "CompletedResponseTiming": {
-      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+    "ResponseOrigin": {
+      "description": "Original execution owner, unchanged through arbitrarily deep lineage copies.",
       "type": "object",
       "properties": {
-        "total_duration_ms": {
-          "description": "Authoritative successful Attempt completion minus its start timestamp.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
         },
-        "ttft_ms": {
-          "description": "First actual request's adapter-dispatch-to-first-output duration.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
         },
-        "generation_ms": {
-          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "output_tokens_per_second": {
-          "description": "Fully covered output usage divided by fully covered positive generation work.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
+        "closing_message_id": {
+          "description": "Provenance only; never a destination content address.",
+          "$ref": "#/$defs/MessageId"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id",
+        "closing_message_id"
+      ]
     },
     "ForegroundToolExecution": {
       "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",
@@ -10560,6 +10690,24 @@
     "RuntimeClientTranscriptItem": {
       "description": "The explicit Runtime Client transcript vocabulary.",
       "oneOf": [
+        {
+          "description": "Journal-owned terminal execution history, including attempts without messages.",
+          "type": "object",
+          "properties": {
+            "turn": {
+              "$ref": "#/$defs/TurnProcessView"
+            },
+            "type": {
+              "type": "string",
+              "const": "attempt_terminal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "turn"
+          ]
+        },
         {
           "description": "A user, Assistant, or Tool message body from Pending Inbound or Ledger.",
           "type": "object",
@@ -11538,10 +11686,6 @@
           ]
         }
       ]
-    },
-    "EventId": {
-      "description": "Identifies one durable runtime event.",
-      "type": "string"
     },
     "InteractionSubject": {
       "description": "The bounded terminal answer facts used by all interaction layers.",
@@ -18064,6 +18208,9 @@
             "catalog": {
               "$ref": "#/$defs/ModelCatalogView"
             },
+            "default_model": {
+              "$ref": "#/$defs/SessionModelConfig"
+            },
             "kind": {
               "type": "string",
               "const": "available"
@@ -18072,7 +18219,8 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "catalog"
+            "catalog",
+            "default_model"
           ]
         },
         {

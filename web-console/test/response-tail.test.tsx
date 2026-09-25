@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationStats } from '../src/app/agent/ConversationStats';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v22';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v24';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -13,7 +13,7 @@ function conversation(): RuntimeClientSnapshot {
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'input-a', source: 'human', timestamp: '2026-09-19T07:59:00Z', content: [{ type: 'text', text: 'Question' }] } } },
     { cursor: '2', item: { type: 'message', message: { role: 'assistant', id: 'internal-a', content: [{ type: 'text', text: 'Intermediate prose' }] } } },
     { cursor: '3', completed_response: response, item: { type: 'message', message: { role: 'assistant', id: 'final-a', content: [{ type: 'reasoning', text: 'Private reasoning' }, { type: 'text', text: 'Final ' }, { type: 'refusal', text: 'answer' }] } } },
-  ], statistics: { completed_responses: '12', model_requests: '34', requests_with_usage: '34', reported_usage: { input_tokens: 1000, output_tokens: 200, total_tokens: 1200 } } } };
+  ], statistics: { turns: '12', steps: '34', completed_responses: '12', model_requests: '34', requests_with_usage: '34', reported_usage: { input_tokens: 1000, output_tokens: 200, total_tokens: 1200 } } } };
 }
 it('durable User chrome has Copy and only the native timestamp, without primary lineage actions', () => {
   const ui=render(<AgentTranscript snapshot={conversation()} onHistorical={vi.fn()}/>);
@@ -26,8 +26,10 @@ it('one completed response tail copies only final visible text and keeps missing
   const writeText=vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText}});
   const ui=render(<AgentTranscript snapshot={conversation()} onHistorical={vi.fn()} lineageSwitchSafe/>);
-  expect(ui.getAllByLabelText('Completed response')).toHaveLength(1);
-  const tail=within(ui.getByLabelText('Completed response'));
+  expect(ui.getAllByLabelText('Completed Turn')).toHaveLength(1);
+  expect(ui.getByLabelText('Completed Turn').closest('article')).toBeNull();
+  expect(ui.getByLabelText('Completed Turn').getAttribute('data-turn-tail')).toBe(JSON.stringify(['origin-conversation','attempt-a']));
+  const tail=within(ui.getByLabelText('Completed Turn'));
   await act(async()=>fireEvent.click(tail.getByRole('button',{name:'Copy'})));
   expect(writeText).toHaveBeenCalledWith('Final answer');
   fireEvent.click(tail.getByRole('button',{name:'Usage 120 tokens'}));
@@ -40,12 +42,12 @@ it('one completed response tail copies only final visible text and keeps missing
 it('unfinalized output has no fabricated tail, usage or lineage', () => {
   const state=conversation(); delete state.transcript.entries![2].completed_response;
   const ui=render(<AgentTranscript snapshot={state} onHistorical={vi.fn()}/>);
-  expect(ui.queryByLabelText('Completed response')).toBeNull();
+  expect(ui.queryByLabelText('Completed Turn')).toBeNull();
   expect(ui.queryByRole('button',{name:'Lineage'})).toBeNull();
 });
-it('lineage menu forwards the exact native response and keeps switching conservative', () => {
+it('direct Turn actions forward the exact native response and keeps switching conservative', () => {
   const onHistorical=vi.fn(); const ui=render(<AgentTranscript snapshot={conversation()} onHistorical={onHistorical} lineageSwitchSafe={false}/>);
-  fireEvent.click(ui.getByRole('button',{name:'Lineage'}));
+  expect(ui.queryByRole('button',{name:'Lineage'})).toBeNull();
   expect(ui.getByRole('button',{name:'Branch in this Session'})).toHaveProperty('disabled',true);
   expect(ui.getByRole('button',{name:'Retry / Regenerate'})).toHaveProperty('disabled',true);
   fireEvent.click(ui.getByRole('button',{name:'Fork to new Session'}));
@@ -64,9 +66,9 @@ it('composer totals ignore the loaded transcript and context uses only native me
   const state=conversation(); state.transcript.entries=[];
   state.context={compaction_count:0,compaction_in_progress:false,last_request_occupancy:{input_tokens:1024,context_window_tokens:4096,model:'historical-model'}};
   const ui=render(<ConversationStats snapshot={state}/>);
-  expect(ui.getByText('12 responses · 34 requests')).toBeTruthy();
+  expect(ui.getByText('12 Turns · 34 Steps')).toBeTruthy();
   expect(ui.getByRole('button',{name:'Conversation usage 1200 tokens'})).toBeTruthy();
-  expect(ui.getByLabelText('Last request context 25%')).toBeTruthy();
+  expect(ui.queryByLabelText('Last request context 25%')).toBeNull();
   delete state.context!.last_request_occupancy;
   ui.rerender(<ConversationStats snapshot={state}/>);
   expect(ui.queryByLabelText('Last request context 25%')).toBeNull();

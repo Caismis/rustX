@@ -1,10 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { NewConversation } from '../src/app/new-conversation/NewConversation';
+import { ConversationComposer } from '../src/app/new-conversation/ConversationComposer';
 import { NavigationEpoch } from '../src/app/commands/native';
 import { RpcFailure } from '../src/client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v22';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v24';
 import { cfg3Source } from './cfg3-data';
 import { Server } from './fixture';
 let server: Server;
@@ -18,7 +18,7 @@ const authored = { provider: 'transport', id: 'wire', protocol: 'openai_response
 /** A Workspace source read whose configuration documents name a model the
  * native Session catalog does not publish, and whose catalog carries native
  * reasoning vocabulary the documents never mention. */
-function workspaceSource(session_models: SourceSettings['session_models'] = { kind: 'available', catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high'), nativeModel('fixture/second')] } }): SourceSettings {
+function workspaceSource(session_models: SourceSettings['session_models'] = { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high'), nativeModel('fixture/second')] } }): SourceSettings {
   return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'policy',
     resolved: { models: { 'fixture/configuration-only': authored, 'fixture/native': authored } }, session_models };
 }
@@ -30,7 +30,7 @@ async function mount({ current = () => true, source = workspaceSource(), configu
     configureWorkspace: vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(configureWorkspace ?? (async () => ({ kind: 'read' as const, projection: source }))),
   };
   const opened = vi.fn();
-  await act(async () => { render(<NewConversation client={server.client} host={host} initialWorkspace="workspace-a" current={current} opened={opened}/>); });
+  await act(async () => { render(<ConversationComposer binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={current} opened={opened}/>); });
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Preserved draft' } });
   if (ready) await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
   return { host, opened };
@@ -108,6 +108,7 @@ it('offers exactly the native Session catalog, in native order, never a configur
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
   // The native default reasoning profile is shown as published, not invented.
   expect(screen.getByRole('button', { name: 'Model and reasoning' }).textContent).toBe('fixture/nativehigh');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
   expect(['low', 'high'].map(name => !!screen.queryByRole('menuitem', { name }))).toEqual([true, true]);
   expect(screen.queryByRole('menuitem', { name: 'fixture/configuration-only' })).toBeNull();
@@ -116,6 +117,7 @@ it('a model choice is draft Session intent: nothing is written, created or start
   const { host } = await mount();
   await openModelMenu();
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Reasoning profile' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'low' })));
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);
@@ -141,13 +143,13 @@ it.each([
 });
 it('an obsolete Workspace catalog read cannot replace the current Workspace catalog', async () => {
   const obsolete = gate<{ kind: 'read'; projection: SourceSettings }>();
-  const current = workspaceSource({ kind: 'available', catalog: { models: [nativeModel('fixture/current-workspace')] } });
+  const current = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/current-workspace')] } });
   await mount({ configureWorkspace: async id => id === 'workspace-a' ? obsolete.promise : { kind: 'read', projection: current }, ready: false });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
   await openModelMenu();
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
-  await act(async () => obsolete.resolve({ kind: 'read', projection: workspaceSource({ kind: 'available', catalog: { models: [nativeModel('fixture/obsolete-workspace')] } }) }));
+  await act(async () => obsolete.resolve({ kind: 'read', projection: workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/obsolete-workspace')] } }) }));
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
   expect(screen.queryByRole('menuitem', { name: 'fixture/obsolete-workspace' })).toBeNull();
 });
@@ -157,7 +159,7 @@ it('a draft model the native catalog stops publishing blocks Send instead of rea
   await openModelMenu();
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/second' })));
   const reads = host.configureWorkspace.mock.calls.length;
-  projection = workspaceSource({ kind: 'available', catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high')] } });
+  projection = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high')] } });
   await act(async () => { server.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: {
     scope: 'source:workspace:/workspace', sources: [{ kind: 'workspace', directory: '/workspace' }], version: '2',
     desired: { input_revision: 'input-2', attempt: '2' }, units: {}, candidate: null, eligibility: { status: 'unavailable' } } } }); });

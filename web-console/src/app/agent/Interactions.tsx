@@ -5,9 +5,11 @@ import { json } from '../../bindings/projection';
 import { ApprovalTakeover } from '../../presentation/agent/ApprovalTakeover';
 import { Questionnaire } from './Questionnaire';
 import { Button } from '../../presentation/primitives/Button';
-export function Interactions({ client, state, view, run }: {
-  client: AppServerClient; state: ClientView; view: SessionView; run: (action: () => Promise<unknown>) => void;
+export function Interactions({ client, state, view }: {
+  client: AppServerClient; state: ClientView; view: SessionView;
 }) {
+  const [failure, setFailure] = useState<{ key: string; message: string }>();
+  const run = (key: string, action: () => Promise<unknown>) => { setFailure(undefined); void action().catch(cause => setFailure({ key, message: String(cause) })); };
   return view.snapshot?.pending_interactions?.map(item => {
     const key = interactionKey(item.interaction);
     const operation = state.interactionOperations[key]?.status;
@@ -16,8 +18,9 @@ export function Interactions({ client, state, view, run }: {
       : operation === 'acknowledged' ? 'Response received — updating…'
       : operation === 'in-flight' ? 'Sending response…' : disabled ? 'Reconnect to respond' : 'Waiting for your response';
     const kind = item.request.kind;
-    const response = (answer: Parameters<AppServerClient['answer']>[2]) => run(() => client.answer(view.id, item.interaction, answer));
+    const response = (answer: Parameters<AppServerClient['answer']>[2]) => run(key, () => client.answer(view.id, item.interaction, answer));
     return <div key={key} className="interaction">
+      {failure?.key === key && <p role="alert">{failure.message}</p>}
       {item.source.type === 'subagent' && <small className="inset muted">Subagent request</small>}
       {kind.type === 'approval' ? <ApprovalTakeover title={`${kind.tool_name}: ${kind.reason}`} detail={<pre>{json(kind.arguments)}</pre>}
         disabled={disabled} status={status} onAllow={() => response({ type: 'approval', decision: { type: 'allow' } })}
@@ -28,7 +31,7 @@ export function Interactions({ client, state, view, run }: {
           : <Review key={key} title={status} detail={json({ subject: kind.review.subject, context: kind.review.context })} disabled={disabled}
             accept={() => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'accepted' } } })}
             reject={feedback => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'rejected', feedback } } })} />}
-      <Button size="sm" disabled={disabled} onClick={() => run(() => client.answer(view.id, item.interaction))}>Cancel interaction</Button>
+      <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>Cancel interaction</Button>
     </div>;
   });
 }

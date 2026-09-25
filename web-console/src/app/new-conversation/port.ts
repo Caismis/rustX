@@ -1,7 +1,8 @@
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v22';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v24';
 import type { FirstSubmitPort } from './first-submit';
+import { selectSessionModel } from '../model-preference';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean): FirstSubmitPort {
   const { generation, authorityRevision, endpoint } = client.getSnapshot();
@@ -28,7 +29,7 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       await client.listSessions();
     },
     async model(session, intent) {
-      await client.setAgentModel(session.id, intent); requireCurrent();
+      await selectSessionModel(client, session.id, intent); requireCurrent();
       await client.repairAgentModel(session.id); requireCurrent();
       const observed = client.getSnapshot().views[session.id];
       if (observed?.modelMutation || observed?.snapshot?.model?.configured.model !== intent.model

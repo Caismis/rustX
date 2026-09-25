@@ -1,18 +1,23 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from StatsPills and ContextMeter; see PROVENANCE.md. */
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v22';
-import { Tooltip } from '../../presentation/primitives/Tooltip';
-import { Usage } from './ResponseTail';
-import css from './ResponseTail.module.css';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v24';
+import { useState } from 'react';
+import { Modal } from '../../presentation/primitives/Modal';
+import { Usage } from './TurnTail';
+import css from './TurnTail.module.css';
 
 export function ConversationStats({ snapshot }: { snapshot?: RuntimeClientSnapshot }) {
   const statistics = snapshot?.transcript.statistics;
-  const context = snapshot?.context?.last_request_occupancy;
-  if (!statistics && !context) return null;
-  const percent = context ? Math.round(100 * context.input_tokens / context.context_window_tokens) : undefined;
+  const [details, setDetails] = useState(false);
+  if (!statistics) return null;
+  const timing = statistics.timing;
   return <div className={css.stats} aria-label="Conversation statistics">
-    {statistics && <><span>{statistics.completed_responses} {statistics.completed_responses === '1' ? 'response' : 'responses'} · {statistics.model_requests} {statistics.model_requests === '1' ? 'request' : 'requests'}</span>
-      {statistics.requests_with_usage !== statistics.model_requests && <span>{statistics.requests_with_usage}/{statistics.model_requests} usage reports</span>}
+    {statistics && <><button className={css.stat} type="button" aria-haspopup="dialog" aria-expanded={details} onClick={() => setDetails(true)}>{statistics.turns} Turns · {statistics.steps} Steps{timing?.output_tokens_per_second != null && <> · {timing.output_tokens_per_second.toFixed(1)} tok/s</>}</button>
       {statistics.reported_usage && <Usage showCache usage={statistics.reported_usage} label={statistics.requests_with_usage === statistics.model_requests ? 'Conversation usage' : `Reported usage (${statistics.requests_with_usage} of ${statistics.model_requests} requests)`}/>}</>}
-    {context && <Tooltip label={`${context.input_tokens.toLocaleString()} / ${context.context_window_tokens.toLocaleString()} tokens · ${context.model} · Last provider-measured request; excludes unsent input`}><span tabIndex={0} className={css.stat} aria-label={`Last request context ${percent}%`}><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" opacity=".2" strokeWidth="2"/><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray={`${Math.min(100, percent!) * .3456} 34.56`} transform="rotate(-90 7 7)"/></svg>Last request context {percent}%</span></Tooltip>}
+    <Modal open={details} title="Conversation statistics" closeLabel="Close statistics" onClose={() => setDetails(false)}><dl className={css.metrics}>
+      <dt>Turns</dt><dd>{statistics.turns}</dd><dt>Steps</dt><dd>{statistics.steps}</dd>
+      <dt>Model requests</dt><dd>{statistics.model_requests}</dd><dt>Usage reports</dt><dd>{statistics.requests_with_usage}</dd>
+      {timing?.generation_ms != null && <><dt>Model generation work</dt><dd>{(timing.generation_ms / 1000).toFixed(2)} s</dd></>}
+      {timing?.ttft_ms != null && <><dt>First request TTFT</dt><dd>{(timing.ttft_ms / 1000).toFixed(2)} s</dd></>}
+    </dl></Modal>
   </div>;
 }

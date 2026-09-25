@@ -12,7 +12,7 @@
  * use provider evidence; Journal terminal timing cannot replace a missing bridge.
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
-import type { TraceRecord } from '../../../../protocol/app-server/v22';
+import type { TraceRecord } from '../../../../protocol/app-server/v24';
 import {
   TRAJECTORY_LANES,
   formatDuration,

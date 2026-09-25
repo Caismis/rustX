@@ -175,7 +175,8 @@ fn page_message_ids(page: &rustx::durable::TranscriptPage) -> Vec<String> {
             TranscriptItem::Message { message } => Some(message_id(message).as_str().to_owned()),
             TranscriptItem::PublicationAudit { .. }
             | TranscriptItem::InteractionRequested { .. }
-            | TranscriptItem::InteractionSettled { .. } => None,
+            | TranscriptItem::InteractionSettled { .. }
+            | TranscriptItem::AttemptTerminal { .. } => None,
         })
         .collect()
 }
@@ -191,7 +192,8 @@ fn client_page_message_ids(
             }
             rustx::runtime_client::RuntimeClientTranscriptItem::PublicationAudit { .. }
             | rustx::runtime_client::RuntimeClientTranscriptItem::InteractionRequested { .. }
-            | rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. } => None,
+            | rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. }
+            | rustx::runtime_client::RuntimeClientTranscriptItem::AttemptTerminal { .. } => None,
         })
         .collect()
 }
@@ -876,7 +878,8 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             TranscriptItem::PublicationAudit { audit } => Some(audit),
             TranscriptItem::Message { .. }
             | TranscriptItem::InteractionRequested { .. }
-            | TranscriptItem::InteractionSettled { .. } => None,
+            | TranscriptItem::InteractionSettled { .. }
+            | TranscriptItem::AttemptTerminal { .. } => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -1387,7 +1390,8 @@ fn requirement_16_read_tool_result_is_pageable_after_source_disappears() {
         TranscriptItem::Message { .. }
         | TranscriptItem::PublicationAudit { .. }
         | TranscriptItem::InteractionRequested { .. }
-        | TranscriptItem::InteractionSettled { .. } => None,
+        | TranscriptItem::InteractionSettled { .. }
+        | TranscriptItem::AttemptTerminal { .. } => None,
     });
     let result = result.expect("ToolResult remains in transcript");
     assert!(result.result.content.iter().any(|content| {

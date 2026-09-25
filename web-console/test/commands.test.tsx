@@ -11,7 +11,7 @@ import { CommandSession, NavigationEpoch } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v22';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v24';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -318,7 +318,7 @@ describe('typed native operations and continuation fencing', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
       expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
       fireEvent.keyDown(document, { key: 'Escape' });
-      expect(screen.getByRole('button', { name: 'Lineage' })).toHaveProperty('disabled', false);
+      expect(screen.getByRole('button', { name: 'Branch in this Session' })).toHaveProperty('disabled', true);
       fireEvent.change(screen.getByLabelText('Message'), { target: { value: '/branch' } });
       expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
       await act(async () => { server.reply(request); await work; });
@@ -333,7 +333,7 @@ describe('typed native operations and continuation fencing', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
       expect(screen.getByRole('menuitem', { name: 'Session tree' })).toHaveProperty('disabled', true);
       fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.getByRole('button', { name: 'Lineage' })).toHaveProperty('disabled', false);
+    expect(screen.getByRole('button', { name: 'Branch in this Session' })).toHaveProperty('disabled', true);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: '/branch' } });
     expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
@@ -558,8 +558,8 @@ describe('typed native operations and continuation fencing', () => {
 });
 
 function expectTailSwitching(disabled: boolean) {
-  fireEvent.click(screen.getByRole('button', { name: 'Lineage' }));
+  expect(screen.queryByRole('button', { name: 'Lineage' })).toBeNull();
   for (const name of ['Branch in this Session', 'Retry / Regenerate']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', disabled);
   expect(screen.getByRole('button', { name: 'Fork to new Session' })).toHaveProperty('disabled', false);
-  fireEvent.click(screen.getByRole('button', { name: 'Close lineage' }));
+
 }

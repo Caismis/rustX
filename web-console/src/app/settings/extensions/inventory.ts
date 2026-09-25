@@ -1,6 +1,6 @@
 import type {
   CapabilityInspection1, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
-} from '../../../../../protocol/app-server/v22';
+} from '../../../../../protocol/app-server/v24';
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../capability';
 import type { ExtensionFamily } from '../projection';
 

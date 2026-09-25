@@ -306,16 +306,25 @@ impl ApplicationState {
         configuration: &super::UserConfigManager,
         cwd: &std::path::Path,
         credentials: &crate::credentials::CredentialSnapshot,
-    ) -> Result<crate::model::catalog::ModelCatalogView, String> {
+    ) -> Result<
+        (
+            crate::model::catalog::ModelCatalogView,
+            crate::model::session::SessionModelConfig,
+        ),
+        String,
+    > {
         let key = super::canonical_directory(cwd)?;
         let capture = self.creation_capture(configuration, &key, credentials)?;
         let catalog = capture
             .models
             .resolve(credentials)
             .map_err(|error| error.to_string())?;
-        Ok(crate::model::invocation::ModelBindingRegistry::new(catalog)
-            .map_err(|error| error.to_string())?
-            .catalog_view())
+        Ok((
+            crate::model::invocation::ModelBindingRegistry::new(catalog)
+                .map_err(|error| error.to_string())?
+                .catalog_view(),
+            capture.config.initial_model().clone(),
+        ))
     }
 
     /// Join the captured desired source without rereading authored files. The

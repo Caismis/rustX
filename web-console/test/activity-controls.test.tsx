@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v22';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v24';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts } from '../src/app/agent/Activity';
 import { Server, snapshot } from './fixture';
