@@ -20,9 +20,10 @@ export function parseRecommendedLabel(label: string) {
 function AnswerField({ value, disabled, onChange, label }: {
   value: string; disabled: boolean; onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void; label: string;
 }) {
-  const tx = useTranslation();
+  // The mirror is an invisible layout ruler, not copy: the trailing newline
+  // sizes an empty final line, so it never passes through the locale.
   return <div className={clsx(css.field, css.customBlock)}>
-    <div aria-hidden className={css.fieldMirror}>{tx('interactions:questionnaire.value', { p0: value })}</div>
+    <div aria-hidden className={css.fieldMirror}>{`${value}\n`}</div>
     <textarea className={css.fieldInput} value={value} disabled={disabled} rows={1} aria-label={label} placeholder={label} onChange={onChange} />
   </div>;
 }

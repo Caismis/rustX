@@ -1,7 +1,7 @@
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v23';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v23';
 
 export type TrajectoryFacet = 'Summary' | 'System Prompt' | 'Diff' | 'Context' | 'Tools' | 'Options' | 'Usage' | 'Timing' | 'Native' | 'Content' | 'Thinking' | 'Raw' | 'Input' | 'Code' | 'Result' | 'Schema' | 'Artifacts';
 export interface TrajectorySelection {
@@ -44,6 +44,10 @@ export function isInspectable(item: TrajectoryDisplayItem): item is InspectableD
   return item.type !== 'HistoryBoundary' && item.type !== 'GroupHeader' && item.type !== 'TurnHeader';
 }
 export const displayKey = (...parts: (string | number | null | undefined)[]) => JSON.stringify(parts);
+/** The only visible names of these closed domains. The native context kind and
+ * the facet identity stay untranslated; only their labels follow the locale. */
+export const contextKindLabel = (tx: Translate, kind: TraceContextKind) => tx(`trajectory:context.${kind}`);
+export const facetLabel = (tx: Translate, facet: TrajectoryFacet) => tx(`trajectory:facet.${facet}`);
 
 function origin(record: TraceRecord, tag: string, label: string, preview = '', facet: TrajectoryFacet = 'Summary', ...parts: string[]): Origin {
   return { record, owner_record_id: record.id, display_key: displayKey(tag, ...parts), facet, label, preview };
@@ -109,7 +113,7 @@ function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   const change = systemPresentation(tx, record);
   if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? (request.tool_catalog === 'changed' ? tx('trajectory:copy.frozen-tool-catalog-changed') : tx('trajectory:copy.initial-frozen-tool-catalog')) : tx('trajectory:copy.prompt-preview-unavailable')), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
   for (const context of request.context_additions) {
-    cells.push({ ...origin(record, 'context', context.context_kind.replaceAll('_', ' '), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'Context', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
+    cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'Context', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
   }
   cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model, 'Summary', record.id, request.request_id), type: 'RequestBoundary' });
   return cells;

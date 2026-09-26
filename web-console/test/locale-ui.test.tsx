@@ -102,6 +102,24 @@ it('retained questionnaire validation switches language without changing the dra
   expect(submissions).toBe(0);
 });
 
+it('the Questionnaire textarea mirror is the exact draft plus its layout newline in every locale', async () => {
+  const { Questionnaire } = await import('../src/app/agent/Questionnaire');
+  act(() => localeController.setLocale('en'));
+  render(<Questionnaire questions={[{ header: 'Free text', question: 'User-authored question', answer: { type: 'text' } }]}
+    disabled={false} status="native-status" onSubmit={() => {}} onDecline={() => {}}/>);
+  const input = screen.getByRole('textbox') as HTMLTextAreaElement;
+  const mirror = input.previousElementSibling!;
+  expect(mirror.getAttribute('aria-hidden')).toBe('true');
+  for (const draft of ['', 'single line', 'first\nsecond', 'ends with newline\n', '\n\n', ' {p0} 中文 ']) {
+    fireEvent.change(input, { target: { value: draft } });
+    for (const locale of ['zh', 'en'] as const) {
+      act(() => localeController.setLocale(locale));
+      expect(mirror.textContent).toBe(`${draft}\n`);
+      expect(input.value).toBe(draft);
+    }
+  }
+});
+
 it('Session renaming never promotes a localized fallback title into native data and keeps the same request sequence', async () => {
   const sequences = [];
   for (const locale of ['en', 'zh'] as const) {

@@ -1,5 +1,5 @@
 import { message } from '../../locale/translation';
-import type { Translate, TranslationKey } from '../../locale/translation';
+import type { Translate } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx inspector; see PROVENANCE.md. */
 /**
@@ -20,7 +20,6 @@ import { createContext, useContext, useEffect, useRef, type ReactNode, type RefO
 import type {
   TraceArtifact,
   TraceContentBlock,
-  TraceContextKind,
   TraceContextPresentation,
   TraceDetail,
   TraceGeneration,
@@ -37,7 +36,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { diffLines } from 'diff';
-import type { StructuralDisplayItem, TrajectoryFacet, TrajectorySelection } from './layout';
+import { contextKindLabel, facetLabel, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
@@ -292,9 +291,6 @@ function SYSTEM_PROMPT_STATE(tx: Translate): Record<
   },
 }; }
 
-/** Display names for the closed Context presentation families. */
-const CONTEXT_KIND: Record<TraceContextKind, TranslationKey> = { native_environment: "trajectory:context.native_environment", goal_status: "trajectory:context.goal_status", runtime_tool_observation: "trajectory:context.runtime_tool_observation", extension_environment: "trajectory:context.extension_environment", agent_status: "trajectory:context.agent_status" };
-
 /**
  * The exact native producer the server copied from the canonical message.
  *
@@ -361,7 +357,7 @@ function ContextAdditions({
       {additions.map(addition => (
         <section key={addition.message_id} className={css.requestMessage} data-context-message-id={addition.message_id} data-selected={addition.message_id === selectedId || undefined}>
           <h4 className={css.blockLabel}>
-            {tx(CONTEXT_KIND[addition.context_kind])} · {contextSource(tx, addition.source)}
+            {contextKindLabel(tx, addition.context_kind)} · {contextSource(tx, addition.source)}
             <span className={css.machine}> {addition.message_id}</span>
           </h4>
           {addition.preview ? <p>{addition.preview.text || tx('trajectory:trajectory-inspector.empty')}</p> : <p>{tx('trajectory:trajectory-inspector.content-unavailable')}</p>}
@@ -418,11 +414,11 @@ function toolDetailState(detail: TraceDetail | undefined, loading: boolean | und
   if (loading || !detail) return { type: 'pending', loading: loading === true };
   return { type: detail.tool ? 'loaded_tool' : 'loaded_missing_tool' };
 }
-function ToolFacet({ state, facet, children }: { state: ToolDetailState; facet: string; children: ReactNode }) {
+function ToolFacet({ state, facet, children }: { state: ToolDetailState; facet: TrajectoryFacet; children: ReactNode }) {
   const tx = useTranslation();
   switch (state.type) {
     case 'pending': return <p role="status" className={css.unavailable}>{state.loading ? tx('trajectory:trajectory-inspector.loading-record-detail') : tx('trajectory:trajectory-inspector.historical-tool-detail-has-not-been-loaded')}</p>;
-    case 'read_error': return <p role="alert" className={css.error}>{facet} {tx('trajectory:trajectory-inspector.could-not-be-established-because-the-historical-detail-read-fail')}{' '}{state.error}</p>;
+    case 'read_error': return <p role="alert" className={css.error}>{facetLabel(tx, facet)} {tx('trajectory:trajectory-inspector.could-not-be-established-because-the-historical-detail-read-fail')}{' '}{state.error}</p>;
     case 'loaded_missing_tool': return <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.tool-detail-is-unavailable-in-this-bounded-detail-projection')}</p>;
     case 'loaded_tool': return children;
   }
@@ -484,7 +480,7 @@ export function TrajectoryInspector({
       </header>
       <Tabs className={css.inspectorTabs} selectedKey={active} onSelectionChange={key => onFacet(key as TrajectoryFacet)}>
       <TabList aria-label={tx('trajectory:trajectory-inspector.record-sections')} className={css.tabs}>
-        {sections.map(name => <Tab key={name} id={name}>{tx(`trajectory:facet.${name}`)}</Tab>)}
+        {sections.map(name => <Tab key={name} id={name}>{facetLabel(tx, name)}</Tab>)}
       </TabList>
       {loading && !toolFactFacet && (
         <p role="status" className={css.unavailable}>

@@ -1136,6 +1136,58 @@ it('locale changes preserve Trajectory search membership for both vocabularies a
   }
 });
 
+it('ContextRow labels localize the native context kind while the kind and search membership stay locale-independent', () => {
+  const record = richRequest();
+  record.request!.context_additions = [context('context-a'), { ...context('context-goal'), context_kind: 'goal_status' }];
+  const en = translator('en'); const zh = translator('zh');
+  const english = projectTrajectory(en, [record]); const chinese = projectTrajectory(zh, [record]);
+  const rows = (tx: typeof en, projection: typeof english) => flattenTrajectory(tx, projection)
+    .flatMap(item => item.type === 'ContextRow' ? [{ key: item.display_key, label: item.label, kind: item.context.context_kind }] : []);
+  const [native, goal] = rows(en, english);
+  expect(rows(en, english)).toEqual([
+    { key: native!.key, label: 'Native context', kind: 'native_environment' },
+    { key: goal!.key, label: 'Goal status', kind: 'goal_status' },
+  ]);
+  expect(rows(zh, chinese)).toEqual([
+    { key: native!.key, label: zh('trajectory:context.native_environment'), kind: 'native_environment' },
+    { key: goal!.key, label: zh('trajectory:context.goal_status'), kind: 'goal_status' },
+  ]);
+  expect(zh('trajectory:context.goal_status')).not.toBe('Goal status');
+  for (const query of [en('trajectory:context.goal_status'), zh('trajectory:context.goal_status'), 'goal_status']) {
+    expect(searchItems(english, query), query).toEqual(new Set([goal!.key]));
+    expect(searchItems(chinese, query), query).toEqual(new Set([goal!.key]));
+  }
+
+  render(<Trajectory cache={cacheOf([record])} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  const goalRow = () => [...document.querySelectorAll<HTMLElement>('[data-display-type="ContextRow"]')].find(node => node.dataset.displayKey === goal!.key)!;
+  expect(goalRow().textContent).toContain('Goal status');
+  act(() => localeController.setLocale('zh'));
+  expect(goalRow().textContent).toContain(zh('trajectory:context.goal_status'));
+  expect(goalRow().textContent).not.toContain('Goal status');
+  act(() => localeController.setLocale('en'));
+  expect(record.request!.context_additions.map(addition => addition.context_kind)).toEqual(['native_environment', 'goal_status']);
+});
+
+it('Tool facet read errors localize the facet name, keep the facet identity and render the native error byte-for-byte', async () => {
+  const { reads, pending } = controlledDetails([traceTool(10)]);
+  fireEvent.click(row('RecordRow', 'trace:10'));
+  fireEvent.click(screen.getByRole('tab', { name: 'Result' }));
+  const error = 'Controlled read failure: Input Result Schema 原始 <raw>';
+  await act(async () => pending.get('trace:10')!.reject(new Error(error)));
+  const zh = translator('zh');
+  const failed = zh('trajectory:trajectory-inspector.could-not-be-established-because-the-historical-detail-read-fail');
+  act(() => localeController.setLocale('zh'));
+  expect(screen.getByRole('tab', { name: zh('trajectory:facet.Result') }).getAttribute('aria-selected')).toBe('true');
+  for (const facet of ['Input', 'Result', 'Schema'] as const) {
+    fireEvent.click(screen.getByRole('tab', { name: zh(`trajectory:facet.${facet}`) }));
+    expect(within(screen.getByRole('tabpanel')).getByRole('alert').textContent).toBe(`${zh(`trajectory:facet.${facet}`)} ${failed} ${error}`);
+  }
+  act(() => localeController.setLocale('en'));
+  expect(screen.getByRole('tab', { name: 'Schema' }).getAttribute('aria-selected')).toBe('true');
+  expect(within(screen.getByRole('tabpanel')).getByRole('alert').textContent).toBe(`Schema could not be established because the historical detail read failed: ${error}`);
+  expect(reads).toEqual(['trace:10']);
+});
+
 it('folded Turn preview and summary Status localize native lifecycle states without changing membership, native state or reads', () => {
   const states = ['running', 'completed', 'failed', 'waiting', 'outcome_unknown'] as const;
   const records = [

@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/trajectory-search-index.ts; see PROVENANCE.md. */
-import { recordLabel, systemPresentation, type InspectableDisplayItem, type TrajectoryProjection } from './layout';
+import { contextKindLabel, recordLabel, systemPresentation, type InspectableDisplayItem, type TrajectoryProjection } from './layout';
 import { translator } from '../../locale/translation';
 
 // Search accepts both built-in vocabularies regardless of the active locale.
@@ -14,8 +14,8 @@ export function searchItems(projection: TrajectoryProjection, query: string): Re
   const matches = new Set<string>();
   const match = (item: InspectableDisplayItem, structure: readonly string[]) => {
     const record = item.record;
-    const labels = item.type === 'ContextRow' ? [item.context.context_kind.replaceAll('_', ' ')]
-      : vocabulary.map(tx => item.type === 'SystemPromptCell' ? systemPresentation(tx, record)?.label : recordLabel(tx, record));
+    const labels = vocabulary.map(tx => item.type === 'ContextRow' ? contextKindLabel(tx, item.context.context_kind)
+      : item.type === 'SystemPromptCell' ? systemPresentation(tx, record)?.label : recordLabel(tx, record));
     const preview = item.type === 'ContextRow' ? item.context.preview?.text
       : item.type === 'SystemPromptCell' ? record.request?.system_prompt.preview?.text
         : record.preview?.text;
