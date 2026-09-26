@@ -478,7 +478,7 @@ impl CurrentRuntimeConfig {
             .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
         let native = crate::tools::native::definitions(
             crate::tools::native::NativeToolPolicies::default(),
-            &crate::runtime::subagent::AgentCatalog::default(),
+            Some(&crate::runtime::subagent::AgentCatalog::default()),
         );
         for name in &self.agent.tools.builtin {
             if !native

@@ -571,3 +571,173 @@ Follow-up validation:
 Only tests and this evidence note changed after the complete validation ledger
 above. A new GitHub run must confirm the macOS correction; the previous failed
 run is not represented as green.
+
+### Review correction: Web controls and truthful activation provenance
+
+- Web wait and interrupt now consume the same real `agent_wait` DTO. Notices use
+  the captured activation ID/outcome; the embedded current Agent is not folded
+  over cursor-observed state. Standard snapshot reconciliation refreshes it.
+- Separate interrupt request ownership keeps an activation/admission interruptible
+  while a wait or resume request is pending. Native Admitting disables additional
+  sends but exposes wait/interrupt; precommit rollback shows “admission ended
+  before execution”. Native Stopping→Active reopening restores message controls
+  on the same row/activation and preserves drafts.
+- `TraceRecord.activation_origin` retains the frozen CreationTool, MessageTool or
+  ClientControl source. Only real Tool origins supply `originating_tool_call_id`.
+  The native Trace regression projects all three origins under one durable Agent,
+  including the real message Tool call and absence of a fabricated client call.
+- Web `activity-controls.test.tsx` deterministically holds replies while changing
+  native projections: stale captured wait/interrupt outcome cannot overwrite a
+  resumed activation, pending admission remains interruptible, and seal reopening
+  preserves identity and draft. `trajectory.test.tsx` checks three typed origins
+  through replay. Core race proofs use no sleeps.
+- New real browser `test/e2e/agent-native.spec.ts` uses fake-provider scenario
+  `web_agent_continuation` and explicit provider gates to create, wait, interrupt,
+  and resume a real native child, verify canonical child reports, capture actual
+  `agent_wait` wire responses, and inspect Creation Tool/Client control Trace
+  origins. The original control-only version passed against the native binary;
+  final provenance/Admitting binary validation is recorded separately below.
+- Current review frontend unit suite: `pnpm test` passed 980 tests / 56 files;
+  targeted control/trajectory 45 tests passed. Provenance check passed 135 source
+  records / 131 package notices. Final generated-schema/build/browser checks are
+  pending integrated runtime generation and are not implied by these results.
+
+Review validation after generated App Server v25 / Runtime Client v51:
+`cargo test --lib --all-features runtime_client::trace::` passed 75 tests;
+Web `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` (980 / 56
+files), `pnpm check:provenance` (135 source records, 131 notices) and `pnpm build`
+passed. Source import closures and local provenance hashes moved with v25.
+Real-browser continuation additionally waits for the actual resumed-message
+acknowledgement and reads that input from the public child transcript before the
+held child model response may complete. Final browser execution awaits the
+integrated v25 native binary.
+
+Final review browser gate: `CONTAINER_ENGINE=podman pnpm test:e2e` passed
+**92 / 92** in the pinned Playwright container (5.5 minutes), log
+`/tmp/411-review-web-e2e25.log`. The native Agent case passed all actual wire,
+canonical-admission-before-model-completion, retained identity, and typed Trace
+origin assertions against the rebuilt App Server v25 binary. No screenshot
+baselines changed in this review correction. `git diff --check` passed for Web,
+Trace and this evidence update.
+
+Additional final gates: developer launcher `pnpm install --frozen-lockfile`,
+`pnpm typecheck`, `pnpm test` passed (37 tests); fake-provider `uv sync --frozen`
+and `uv run --frozen pytest` passed (51 tests). Trace projection removed an
+unnecessary temporary binding to satisfy the 100-line Clippy gate. Finite
+Workflow activation provenance is presented explicitly as Workflow, with a
+regression rejecting a fabricated Message Tool label or ToolCall relation.
+Current UI architecture/handshake/import references audited at App Server v25 /
+Runtime Client v51; historical provenance audit records remain historical.
+Workflow provenance schema final validation: Web typecheck, provenance and build
+passed; full Web unit suite rerun passed **981 tests / 56 files** after the new
+Workflow-origin regression (`/tmp/411-review-web-unit25-final.log`).
+
+## Final review contract correction
+
+The current protocol is App Server 25, native Runtime Client 51, and child IPC 28.
+Earlier dated command logs retain the versions they actually validated. Final
+review adds canonical delegation acknowledgement, acknowledged seal reopening,
+explicit Admitting state, durable precommit reservation/rollback evidence,
+recovered failed-reservation targets, and authoritative Agent bootstrap cuts.
+Unresolved staging never inherits physical proof from an older activation.
+
+Final validation rerun after admission-receipt stream repair:
+- Developer launcher frozen install/typecheck/37 tests and fake-provider frozen
+  sync/51 tests passed again (`/tmp/411-final-dev.log`,
+  `/tmp/411-final-provider.log`). Web typecheck/provenance remained clean.
+- Trace correlation fixture now uses real private authority admission and exact
+  conversation-ordinal Reserved records before resumed ownership. Targeted test
+  passed (`/tmp/411-final-trace-fix.log`); no relaxed production validation.
+- Browser first retry found the native admission-receipt publication defect;
+  runtime correction resolved the actual Agent regression without client repair.
+  A subsequent unrelated commands teardown fetch/context closure race was fixed
+  by closing Page before its Host, matching existing native browser fixtures.
+- Full `CONTAINER_ENGINE=podman pnpm test:e2e` now passed **92 / 92** on the corrected
+  native binary (`/tmp/411-final-web-e2e-cleanup.log`). No screenshot changes.
+
+Final frozen-source binary follow-up (`/tmp/411-final-build4.log`):
+`CONTAINER_ENGINE=podman bash scripts/browser-tests.sh agent-native.spec.ts workflow.spec.ts commands.spec.ts`
+passed **3 / 3** (21.1 seconds), log `/tmp/411-final-web-affected-build4.log`.
+This reruns all affected real native Agent continuation, Workflow, and command
+flows after the final physical-settlement/shutdown correction. Earlier complete
+92-test browser coverage remains green; no Rust builds/tests ran concurrently
+from the Web validation agent.
+
+## Second architecture review: final ownership corrections
+
+Reviewed starting HEAD: `94dd68ba3e08f877b0543bd629a0130ff47a91c0`.
+All ten numbered review findings were confirmed from production paths. The
+macOS Session-deletion ownership fixture correction remains intact.
+
+| Finding | Final correction and deterministic evidence |
+| --- | --- |
+| Interrupt contract | Both request methods return only `agent_wait`; real stdio, WebSocket and browser clients consume captured ID/outcome/latest snapshot. |
+| Mixed authority/provenance | `DurableAgentAuthority` is Agent-lifetime only. `ActivationAdmission` carries fresh input and typed CreationTool/MessageTool/ClientControl/Workflow origin. SQLite compaction and Trace regressions prove truthful later provenance. |
+| Public secrets | Public ownership DTO stores an opaque AgentId reference; entire executable authority plus captured credentials is private. Real transaction/raw SQLite test checks twelve secret canaries, exact reopen, archive and lineage exclusion. |
+| Seal reopening | SealOpen restores Active under the owner arbiter; AdmissionReopened releases the child's next turn. Owner/control-frame gates prove same-activation messaging after reopen. |
+| Admission controls | Reserved generation has cancellation and a watch. Wait/interrupt capture it through commit/rollback. Tool cancellation releases the waiter without abandoning owner settlement. |
+| Recovery authority | Durable physical proof controls live and recovered eligibility. Proven Interrupted resumes; unproven terminal remains Stopping with its exact target and fails wait/interrupt/resume. |
+| Bootstrap | Owner Agent snapshot plus exact latest activation replaces arbitrary historical folding; reordered 1/3/2 history projects3 and accepts live4. |
+| Allocation | Fixed resume conflict fails once; an allocation counter proves one attempt. Fresh allocation retains new-identity retry. |
+| Listing | Creation-journal order, newest first;70 identities prove64 returned/70 matched and honest truncation. |
+| Control names | Native Job/Agent name sets are the sole authority; executable/advertised definitions agree for each runtime composition. |
+
+Additional canonical-input correction: resumed send success requires child
+`DelegateAccepted` after its actual canonical inbox transaction. Production child
+SQLite fault injection proves no acknowledgement and no model request on durable
+failure. Control loss before or after Delegate never reports accepted without
+acknowledgement. Recovery does not replay an uncertain input effect.
+
+A Reserved fact commits before physical staging and a RolledBack fact records
+containment proof. Failed rollback retains its generation and cannot reuse its ID
+or inherit proof from the previous activation. Reservation/rollback observations
+publish their journal receipts after native owner-state installation. The real
+TUI regression caught an unpublished receipt blocking subsequent canonical
+reports; the production receipt-order regression now proves the frontier advances.
+
+Final physical-proof audit also corrected all direct owner decisions: Goal idle
+admission includes reservations and unproven terminal activations; runtime drain
+reports exact unresolved generations instead of claiming quiescence; cold Session
+deletion preserves private authority for both shared and clean isolated
+unproven activations. Shared containment failure records physical proof=false
+without inventing a disposable workspace resource. Tests include
+`unproven_control_or_cleanup_terminal_blocks_live_and_recovered_agent`,
+`runtime_shutdown_rejects_unproven_child_physical_settlement`, both cold deletion
+regressions, and the real hard-parent-death/two-restart test. Transport EOF can
+close normally after the shutdown request returned its explicit settlement
+failure; transport closure is not quiescence evidence.
+
+No sleeps establish the core ordering proofs. Tests use production mutex
+boundaries, first-poll gates, watches, channels, SQLite fault hooks and actual
+control frames. Existing liveness timeouts and supervised test processes are not
+race-ordering evidence.
+
+## Second review: final local validation ledger
+
+All applicable commands from current `.github/workflows/ci.yml` were inspected and run locally. Rust boundary lanes ran serially to preserve the self-executing fixture binaries. Core race tests use gates/watches/channels, never sleeps as ordering evidence.
+
+| Working directory | Command | Result |
+| --- | --- | --- |
+| repository | `cargo fmt --all -- --check` | passed |
+| repository | `cargo clippy --all-targets --all-features -- -D warnings` | passed |
+| repository | `git diff --check` | passed |
+| repository | `cargo build --bins` | passed |
+| repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 3,114 passed; 2 existing opt-in fixture/profile utilities ignored |
+| repository | `cargo test --test contracts --test provider --all-features` | contracts 28; provider 166 passed; 5 existing live-provider smokes ignored |
+| repository | `RUST_TEST_THREADS=1 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::` | 190 passed |
+| repository | `RUST_TEST_THREADS=1 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | 418 passed: 129 durable, 62 process, 44 subagent, 130 tools, 22 conformance, 26 catalog, 5 managed-output |
+| `test-support/fake-provider` | `uv sync --frozen`; `uv run --frozen pytest` | passed; 51 tests |
+| `tui` | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | passed; 869 tests, zero skipped; real stdio and WebSocket Agent controls |
+| `web-console` | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `pnpm test` | passed; 981 tests across 56 files |
+| `web-console` | `pnpm check:provenance`; `pnpm build` | passed; 135 source records, 131 dependency notices |
+| `web-console` | `CONTAINER_ENGINE=podman pnpm test:e2e` | passed; 92 browser cases against the final native binary; no screenshot updates |
+| `protocol/app-server` | `pnpm install --frozen-lockfile`; `pnpm check`; `pnpm typecheck` | passed; generated schema/TypeScript regeneration produces no diff |
+| `dev` | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `pnpm test` | passed; 37 tests |
+
+The seven GitHub CI lanes will be inspected on the correction commit; the previous reviewed HEAD's green checks are not used as evidence for this correction.
+
+Final logs: `/tmp/411-publish-unit2.log`, `/tmp/411-publish-contracts.log`,
+`/tmp/411-final-boundary3.log`, `/tmp/411-publish-external2.log`,
+`/tmp/411-publish-build.log`, `/tmp/411-publish-clippy.log`,
+`/tmp/411-publish-tui.log`, `/tmp/411-publish-web-e2e.log`.
+Final native browser run passed 92/92 in 5.4 minutes.

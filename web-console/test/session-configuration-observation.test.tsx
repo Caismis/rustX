@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
-import type { Request, RuntimeClientEvent } from '../../protocol/app-server/v24';
+import type { Request, RuntimeClientEvent } from '../../protocol/app-server/v25';
 import { cfg3Application } from './cfg3-data';
 import { Server, snapshot } from './fixture';
 afterEach(cleanup);

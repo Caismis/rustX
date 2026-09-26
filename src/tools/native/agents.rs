@@ -37,10 +37,10 @@ struct MessageInput {
 
 pub(super) fn definitions() -> Vec<ToolDefinition> {
     [
-        (NAMES[0], "List this conversation's durable child Agents, bounded to 64 stable identities. Active Agents accept messages, Stopping rejects transiently, and Inactive Agents can resume through send_message.", input_schema::<ListInput>()),
-        (NAMES[1], "Send input to a durable child Agent. The owner atomically admits it to the current activation or starts one activation of the same inactive child conversation. Stopping rejects transiently; do not choose steer versus resume.", input_schema::<MessageInput>()),
-        (NAMES[2], "Wait for the activation current when this operation captures its target to physically settle. A later resumed activation cannot extend this wait. Inactive returns immediately.", input_schema::<TargetInput>()),
-        (NAMES[3], "Interrupt only the activation current at this operation's capture boundary and wait for physical settlement. The durable Agent remains available for later send_message.", input_schema::<TargetInput>()),
+        (NAMES[0], "List this conversation's durable child Agents, bounded to 64 stable identities. Newest-created first, with matched/truncated counts. Active accepts messages; Admitting and Stopping reject new messages transiently; Inactive resumes through send_message.", input_schema::<ListInput>()),
+        (NAMES[1], "Send input to a durable child Agent. The owner atomically admits it to the current activation or starts one activation of the same inactive child conversation. Admitting and Stopping reject new messages transiently. Success means the child durably accepted the input; do not choose steer versus resume.", input_schema::<MessageInput>()),
+        (NAMES[2], "Wait for the reserved or current activation captured by this operation to physically settle. A later resumed activation cannot extend this wait. Inactive returns immediately.", input_schema::<TargetInput>()),
+        (NAMES[3], "Interrupt the exact reserved admission or current activation captured by this operation and wait for physical settlement. The durable Agent remains available for later send_message.", input_schema::<TargetInput>()),
     ].into_iter().map(|(name, description, input_schema)| ToolDefinition {
         id: ToolId::new(format!("tool-{name}")), name: name.into(), description: description.into(), input_schema,
         execution_policy: ToolExecutionPolicy::ForegroundOnly, concurrency_policy: ToolConcurrencyPolicy::Sequential,
@@ -73,18 +73,33 @@ impl ToolExecutor for AgentExecutor {
                     if let Err(error) = decode::<ListInput>(NAMES[0], &invocation.arguments) {
                         return failed_result(error);
                     }
-                    return success_json(
-                        serde_json::json!({"agents": self.0.list_agents(64), "limit":64}),
-                    );
+                    let listing = self.0.list_agents(64);
+                    return success_json(serde_json::json!({
+                        "returned": listing.agents.len(), "matched": listing.matched,
+                        "truncated": listing.matched > listing.agents.len(), "limit":64,
+                        "agents": listing.agents,
+                    }));
                 }
                 if invocation.tool_name == NAMES[1] {
                     let input = match decode::<MessageInput>(NAMES[1], &invocation.arguments) {
                         Ok(input) => input,
                         Err(error) => return failed_result(error),
                     };
-                    return match self.0.send_message(&input.agent_id, &input.message).await {
-                        Ok(accepted) => success_json(serde_json::json!(accepted)),
-                        Err(error) => failed_result(error.to_string()),
+                    let input_cancellation = cancellation.child_signal();
+                    let origin = crate::runtime::subagent::AgentActivationOrigin::MessageTool {
+                        tool_call_id: invocation
+                            .id
+                            .canonical_call_id()
+                            .expect("Agent-owned invocation")
+                            .clone(),
+                    };
+                    return tokio::select! {
+                        biased;
+                        result = self.0.send_message(&input.agent_id, &input.message, origin, input_cancellation) => match result {
+                            Ok(accepted) => success_json(serde_json::json!(accepted)),
+                            Err(error) => failed_result(error.to_string()),
+                        },
+                        () = cancellation.cancelled() => cancelled_result(cancellation.reason()),
                     };
                 }
                 let input =

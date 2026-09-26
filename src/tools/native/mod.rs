@@ -8,7 +8,7 @@
 //! `ModelSelectable` execution, `Sequential`/`Parallel` concurrency, and
 //! `Never`/`Always` approval through the concrete bounded
 //! [`NativeToolPolicies`] configuration. The only intentionally fixed
-//! policy is the runtime intrinsic `execution` (foreground-only,
+//! policies belong to Job/Agent controls (foreground-only,
 //! sequential, approval-never), and `ask_user` is likewise fixed to
 //! foreground-only, sequential, approval-never because it is the native
 //! Questionnaire capability itself.
@@ -54,7 +54,7 @@ mod bash;
 mod edit;
 mod glob;
 mod goal;
-mod jobs;
+pub(crate) mod jobs;
 pub(crate) use goal::NAMES as GOAL_TOOL_NAMES;
 pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
@@ -86,10 +86,15 @@ use registration::NativeToolRegistration;
 pub use subagent::SUBAGENT_TOOL_NAME;
 pub(crate) use workflow::{definition as workflow_definition, tool_id as workflow_tool_id};
 
+/// Domain-owned vocabulary shared by admission policy and nested-tool eligibility.
+pub(crate) fn is_domain_control(name: &str) -> bool {
+    jobs::NAMES.contains(&name) || agents::NAMES.contains(&name)
+}
+
 /// Canonical native metadata without constructing any execution resource.
 pub(crate) fn definitions(
     policies: NativeToolPolicies,
-    subagents: &crate::runtime::subagent::AgentCatalog,
+    subagents: Option<&crate::runtime::subagent::AgentCatalog>,
 ) -> Vec<(
     crate::tools::types::ToolDefinition,
     crate::tools::deadline::ForegroundPolicy,
@@ -104,8 +109,10 @@ pub(crate) fn definitions(
         bash::definition(policies.bash),
     ];
     definitions.extend(jobs::definitions());
-    definitions.extend(agents::definitions());
-    definitions.extend(subagent::definition(subagents));
+    if let Some(subagents) = subagents {
+        definitions.extend(agents::definitions());
+        definitions.extend(subagent::definition(subagents));
+    }
     definitions
         .into_iter()
         .map(|definition| (definition, NativeToolRegistration::ordinary_foreground()))
@@ -174,8 +181,7 @@ pub(crate) fn native_file_operation(call: &ToolCall) -> Option<NativeFileOperati
 /// execution context.
 #[derive(Clone)]
 pub struct NativeToolResources {
-    /// The conversation background registry used by the `execution`
-    /// intrinsic.
+    /// The conversation background registry used by Job controls.
     pub background: ConversationBackgroundRegistry,
     /// The conversation subagent registry used by the `subagent` intrinsic
     /// (Issue #60). Registration also requires a non-empty catalog below;
@@ -194,7 +200,7 @@ pub struct NativeToolResources {
 }
 
 /// The concrete, bounded per-tool policy configuration of the six ordinary
-/// configurable native tools. `ask_user`, `execution`, and `todo` own
+/// configurable native tools. `ask_user`, domain controls, and `todo` own
 /// fixed policies and are not configurable through this table.
 ///
 /// Execution policy belongs to the registered tool definition, not to the
@@ -260,15 +266,15 @@ impl NativeToolPolicies {
 /// Each ordinary native tool definition receives exactly its own policy:
 /// `read` from `policies.read`, `write` from `policies.write`, `edit` from
 /// `policies.edit`, `glob` from `policies.glob`, `grep` from
-/// `policies.grep`, and `bash` from `policies.bash`. The runtime intrinsic
-/// `execution` is intentionally outside this configurable set and
-/// stays fixed to foreground-only sequential execution, which the registry
+/// `policies.grep`, and `bash` from `policies.bash`. Job/Agent controls
+/// are intentionally outside this configurable set and stay fixed to
+/// foreground-only sequential execution, which the registry
 /// enforces regardless of the configured policies.
 ///
 /// # Errors
 ///
 /// Returns the specific [`ToolRegistryError`] of the first registration
-/// violation; the fixed intrinsic policy of `execution` is enforced by
+/// violation; fixed domain control policies are enforced by
 /// the registry itself.
 pub fn register_native_tools(
     registry: &mut ToolRegistry,
@@ -377,7 +383,7 @@ pub(crate) fn native_tool_registrations(
 /// deliberately not a factory, plugin loader, strategy registry, or
 /// reflective lookup. Two capabilities are structurally absent from it and
 /// therefore unregistrable in a child however a definition was written:
-/// `subagent` (recursive delegation), and `execution` (a child holds no
+/// `subagent` and Agent controls (recursive delegation), and Job controls (a child holds no
 /// conversation-owned detached execution plane of its own). `ask_user` is
 /// intentionally present: its questionnaire is routed through the child
 /// conversation's coordinator to the root Runtime Client surface.

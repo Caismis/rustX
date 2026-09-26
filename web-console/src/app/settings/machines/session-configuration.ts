@@ -1,5 +1,5 @@
 import { assign, fromPromise, raise, setup, stateIn, type SnapshotFrom } from 'xstate';
-import type { AvailableConfiguration, ConfigurationApplication, RuntimeClientSnapshot } from '../../../../../protocol/app-server/v24';
+import type { AvailableConfiguration, ConfigurationApplication, RuntimeClientSnapshot } from '../../../../../protocol/app-server/v25';
 import { isOutcomeUncertain, type AppServerClient, type ClientView, type ConnectionState } from '../../../client/app-server';
 
 /** The native Session configuration authority of exactly one Session. */

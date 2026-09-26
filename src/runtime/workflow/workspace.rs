@@ -168,8 +168,7 @@ fn validate_profiles(
                     // silently rebound. Nested orchestration is not admitted.
                     if tool.definition().origin != crate::tools::types::ToolOrigin::Builtin
                         || (tool.name() == "subagent"
-                            || crate::tools::executor::DOMAIN_CONTROL_TOOL_NAMES
-                                .contains(&tool.name()))
+                            || crate::tools::native::is_domain_control(tool.name()))
                     {
                         return Err(WorkflowRunError::IneligibleCapability(format!(
                             "{} cannot honor candidate child authority",

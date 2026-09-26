@@ -5340,6 +5340,27 @@
                 "$ref": "#/$defs/RuntimeClientAgent"
               }
             },
+            "returned": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "matched": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "limit": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "truncated": {
+              "type": "boolean"
+            },
             "type": {
               "type": "string",
               "const": "agents"
@@ -5348,7 +5369,11 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "agents"
+            "agents",
+            "returned",
+            "matched",
+            "limit",
+            "truncated"
           ]
         },
         {
@@ -7307,6 +7332,17 @@
             }
           ]
         },
+        "activation_origin": {
+          "description": "Frozen admission source; client controls never invent a model Tool call.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentActivationOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "originating_tool_call_id": {
           "description": "The exact outer `ToolCall` this Tool-owned domain record belongs to,\ncopied from the native start fact. It is presentation and navigation\ncorrelation only: it confers no lifecycle, ownership, settlement or\ncancellation authority, and it is never resolved from a Tool name, a\ntimestamp, row adjacency or the loaded page.",
           "anyOf": [
@@ -8171,6 +8207,75 @@
         "call_id",
         "tool_id",
         "name"
+      ]
+    },
+    "AgentActivationOrigin": {
+      "description": "Truthful admission source. Client controls have no model `ToolCall` identity.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "tool_call_id": {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "creation_tool"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "tool_call_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tool_call_id": {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "message_tool"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "tool_call_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "client_control"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "node_id": {
+              "$ref": "#/$defs/WorkflowNodeInstance"
+            },
+            "kind": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "node_id"
+          ]
+        }
       ]
     },
     "TraceDetail": {
@@ -12518,6 +12623,7 @@
     "AgentState": {
       "type": "string",
       "enum": [
+        "admitting",
         "active",
         "stopping",
         "inactive"

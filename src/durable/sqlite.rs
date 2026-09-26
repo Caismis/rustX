@@ -301,9 +301,10 @@ fn count_conversation_store_open() {
 /// Version 40 makes Tool-result occurrence ownership canonical; prior shapes are refused.
 /// Version 41 adds generation evidence to persisted request terminal events.
 /// Version 42 retains immutable completed-response provenance in lineage bootstrap.
-/// Version 45 commits durable Agent credentials privately with frozen admission.
+/// Version 46 stores complete executable Agent authority privately; ownership
+/// events contain only an opaque Agent identity reference.
 /// Older development stores are rejected; secrets never enter execution facts.
-pub const SQLITE_SCHEMA_VERSION: i64 = 45;
+pub const SQLITE_SCHEMA_VERSION: i64 = 46;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -477,7 +478,8 @@ impl SqliteConversationStore {
     {
         if matches!(
             event,
-            RuntimeEvent::SubagentOwnershipCommitted { .. }
+            RuntimeEvent::AgentActivationAdmission { .. }
+                | RuntimeEvent::SubagentOwnershipCommitted { .. }
                 | RuntimeEvent::SubagentTerminalPublished { .. }
                 | RuntimeEvent::SubagentTerminalSettled { .. }
                 | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
@@ -1090,6 +1092,7 @@ impl SqliteConversationStore {
     fn append_event_internal(
         &self,
         event: RuntimeEventEnvelope,
+        authority: Option<&crate::runtime::subagent::DurableAgentAuthority>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         let _ownership = self.ownership_transition(&event.event)?;
         let mut connection = self.lock()?;
@@ -1114,6 +1117,7 @@ impl SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: event commit"));
         }
+        persist_agent_authority_tx(&transaction, &event.event, authority)?;
         process_death::reach_event("before:event", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
@@ -1205,23 +1209,47 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
-    fn load_agent_credentials(
+    fn load_agent_authority(
         &self,
         agent_id: &crate::runtime::identity::AgentId,
-    ) -> Result<crate::credentials::CredentialSnapshot, ConversationStoreError> {
+    ) -> Result<crate::runtime::subagent::DurableAgentAuthority, ConversationStoreError> {
         let connection = self.lock()?;
         let encoded: Option<String> = connection
             .query_row(
-                "SELECT credentials_json FROM agent_credentials WHERE agent_id=?1",
+                "SELECT authority_json FROM agent_authorities WHERE agent_id=?1",
                 [agent_id.as_str()],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| storage("read private Agent credentials"))?;
-        let encoded = encoded.ok_or_else(|| storage("missing admitted Agent credentials"))?;
-        let values: Vec<(String, String)> = serde_json::from_str(&encoded)
-            .map_err(|_| storage("decode private Agent credentials"))?;
-        Ok(crate::credentials::CredentialSnapshot::new(values))
+            .map_err(|_| storage("read private Agent authority"))?;
+        let encoded = encoded.ok_or_else(|| storage("missing admitted Agent authority"))?;
+        let mut private: PrivateAgentAuthority = serde_json::from_str(&encoded)
+            .map_err(|_| storage("decode private Agent authority"))?;
+        let credentials = crate::credentials::CredentialSnapshot::new(private.credentials);
+        private
+            .authority
+            .resolved
+            .model
+            .restore_admitted_credentials(&credentials)
+            .map_err(|_| storage("restore private Agent provider credentials"))?;
+        for binding in private
+            .authority
+            .resolved
+            .materialization
+            .sources
+            .values_mut()
+        {
+            binding.credentials.capture(credentials.clone());
+        }
+        Ok(private.authority)
+    }
+
+    fn append_agent_admission(
+        &self,
+        event: RuntimeEventEnvelope,
+        authority: &crate::runtime::subagent::DurableAgentAuthority,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        self.append_event_internal(event, Some(authority))
     }
 
     fn conversation_id(&self) -> &ConversationId {
@@ -2414,7 +2442,7 @@ impl ConversationStore for SqliteConversationStore {
                 "this event kind must use its specialized durable transition".to_owned(),
             ));
         }
-        self.append_event_internal(event)
+        self.append_event_internal(event, None)
     }
 
     fn commit_subagent_workspace_disposal_intent(
@@ -5052,9 +5080,9 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 stream_id TEXT PRIMARY KEY,
                 audit_json TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS agent_credentials (
+            CREATE TABLE IF NOT EXISTS agent_authorities (
                 agent_id TEXT PRIMARY KEY,
-                credentials_json TEXT NOT NULL
+                authority_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS events (
                 sequence INTEGER PRIMARY KEY,
@@ -5241,7 +5269,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "event_json",
             ],
         ),
-        ("agent_credentials", &["agent_id", "credentials_json"]),
+        ("agent_authorities", &["agent_id", "authority_json"]),
         ("lifecycle_state", &["lifecycle_key", "terminal_event_id"]),
     ];
     for (table, required_columns) in required {
@@ -5266,7 +5294,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("inbound_correlation", "message_id"),
         ("message_ledger", "message_id"),
         ("canonical_tool_calls", "result_message_id"),
-        ("agent_credentials", "agent_id"),
+        ("agent_authorities", "agent_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
         ("publication_streams", "stream_id"),
@@ -6715,39 +6743,66 @@ struct PersistedEvent {
     transcript_cursor: Option<TranscriptCursor>,
 }
 
-#[allow(clippy::too_many_lines)] // One event persistence contract, one place.
-/// The Agent admission transaction owns both its public frozen references and
-/// its private credential capture. Copies of history never copy this table.
-fn persist_agent_credentials_tx(
+/// Private executable authority and every captured credential share one row.
+/// This type is never included in `RuntimeEvent`, projections or archives.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateAgentAuthority {
+    authority: crate::runtime::subagent::DurableAgentAuthority,
+    credentials: Vec<(String, String)>,
+}
+
+fn persist_agent_authority_tx(
     transaction: &Transaction<'_>,
-    event: &mut RuntimeEvent,
+    event: &RuntimeEvent,
+    authority: Option<&crate::runtime::subagent::DurableAgentAuthority>,
 ) -> Result<(), ConversationStoreError> {
-    if let RuntimeEvent::SubagentOwnershipCommitted {
-        child_agent_id,
-        admitted_authority: Some(authority),
-        ..
-    } = event
-    {
-        let mut credentials = Vec::new();
-        authority
-            .resolved
-            .model
-            .export_process_credentials(&mut credentials);
-        for binding in authority.resolved.materialization.sources.values_mut() {
-            binding
-                .credentials
+    match (event, authority) {
+        (
+            RuntimeEvent::SubagentOwnershipCommitted {
+                child_agent_id,
+                admitted_authority: Some(reference),
+                ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                ..
+            },
+            Some(authority),
+        ) if reference == child_agent_id => {
+            let mut authority = authority.clone();
+            let mut credentials = Vec::new();
+            authority
+                .resolved
+                .model
                 .export_process_credentials(&mut credentials);
+            for binding in authority.resolved.materialization.sources.values_mut() {
+                binding
+                    .credentials
+                    .export_process_credentials(&mut credentials);
+            }
+            let encoded = serde_json::to_string(&PrivateAgentAuthority {
+                authority,
+                credentials,
+            })
+            .map_err(|_| storage("encode private Agent authority"))?;
+            transaction
+                .execute(
+                    "INSERT INTO agent_authorities(agent_id,authority_json) VALUES(?1,?2)",
+                    params![child_agent_id.as_str(), encoded],
+                )
+                .map_err(|_| storage("commit private Agent authority"))?;
+            Ok(())
         }
-        let encoded = serde_json::to_string(&credentials)
-            .map_err(|_| storage("encode private Agent credentials"))?;
-        transaction
-            .execute(
-                "INSERT INTO agent_credentials(agent_id,credentials_json) VALUES(?1,?2)",
-                params![child_agent_id.as_str(), encoded],
-            )
-            .map_err(|_| storage("commit private Agent credentials"))?;
+        (
+            RuntimeEvent::SubagentOwnershipCommitted {
+                admitted_authority: Some(_),
+                ..
+            },
+            _,
+        )
+        | (_, Some(_)) => Err(ConversationStoreError::InvalidReference(
+            "Agent admission requires matching private authority and public identity".to_owned(),
+        )),
+        (_, None) => Ok(()),
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
@@ -6770,6 +6825,7 @@ fn persist_event_tx(
     }
     validate_event_identity(&event)?;
     validate_attempt_start_uniqueness(transaction, &event)?;
+    validate_agent_admission_reference(transaction, &event)?;
     validate_event_reference(transaction, &event)?;
     let current: i64 = transaction
         .query_row(
@@ -6827,7 +6883,6 @@ fn persist_event_tx(
             }
         }
     }
-    persist_agent_credentials_tx(transaction, &mut event.event)?;
     let json = encode(&event, "runtime event")?;
     transaction
         .execute(
@@ -7498,6 +7553,7 @@ fn validate_subagent_terminal_publication(
         message_id,
         state,
         workspace_resource,
+        ..
     } = &event.event
     else {
         return Err(ConversationStoreError::InvalidReference(
@@ -7779,6 +7835,73 @@ fn find_workflow_workspace(
             "wrong Workflow workspace owner".into(),
         )),
     }
+}
+
+fn validate_agent_admission_reference(
+    transaction: &Transaction<'_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    use crate::events::types::AgentActivationAdmissionPhase;
+    let (agent_id, activation_id, origin, phase) = match &envelope.event {
+        RuntimeEvent::AgentActivationAdmission {
+            agent_id,
+            activation_id,
+            origin,
+            phase,
+        } => (agent_id, activation_id, origin, Some(phase)),
+        RuntimeEvent::SubagentOwnershipCommitted {
+            child_agent_id,
+            subagent_id,
+            origin,
+            admitted_authority: None,
+            ownership: crate::events::types::SubagentOwnershipKind::Normal,
+            ..
+        } => (child_agent_id, subagent_id, origin, None),
+        _ => return Ok(()),
+    };
+    let invalid = || {
+        ConversationStoreError::InvalidReference(
+            "Agent activation admission must reference its durable Agent and exact reservation"
+                .to_owned(),
+        )
+    };
+    if activation_id
+        .conversation_ordinal(&envelope.conversation_id)
+        .is_none()
+    {
+        return Err(invalid());
+    }
+    if let Some(phase) = phase
+        && envelope.event_id != crate::runtime::subagent::admission_event_id(activation_id, phase)
+    {
+        return Err(invalid());
+    }
+    let admitted: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_authorities WHERE agent_id=?1)",
+            [agent_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("Agent admission authority: {error}")))?;
+    if !admitted {
+        return Err(invalid());
+    }
+    if matches!(phase, Some(AgentActivationAdmissionPhase::Reserved)) {
+        return Ok(());
+    }
+    let reserved_id = crate::runtime::subagent::admission_event_id(
+        activation_id,
+        &AgentActivationAdmissionPhase::Reserved,
+    );
+    let reserved = find_event_by_id(transaction, &reserved_id)?.ok_or_else(invalid)?;
+    if !matches!(reserved.event, RuntimeEvent::AgentActivationAdmission {
+        agent_id: owner, activation_id: target, origin: admitted_origin,
+        phase: AgentActivationAdmissionPhase::Reserved,
+    } if owner == *agent_id && target == *activation_id && admitted_origin == *origin)
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)] // Closed validation of every durable event family.
@@ -8132,7 +8255,7 @@ fn validate_event_reference(
         }
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id,
-            tool_call_id,
+            origin,
             workspace,
             ownership,
             ..
@@ -8153,16 +8276,18 @@ fn validate_event_reference(
                     ));
                 }
             }
-            record_tool_proposal_dependency(
-                transaction,
-                tool_call_id,
-                envelope.attempt_id.as_ref(),
-                envelope.turn_id.as_ref(),
-                None,
-                runtime_event_dependency_name(&envelope.event),
-                true,
-                None,
-            )?;
+            if let Some(tool_call_id) = origin.tool_call_id() {
+                record_tool_proposal_dependency(
+                    transaction,
+                    tool_call_id,
+                    envelope.attempt_id.as_ref(),
+                    envelope.turn_id.as_ref(),
+                    None,
+                    runtime_event_dependency_name(&envelope.event),
+                    true,
+                    None,
+                )?;
+            }
             // The durable identity of an ownership fact is canonical: the
             // EventId must be the deterministic `subagent-committed-event:{id}`
             // derived from the very SubagentId embedded in the payload. A
@@ -9083,6 +9208,7 @@ fn workflow_workspace_lifecycle(event: &RuntimeEventEnvelope) -> Option<(String,
     None
 }
 
+#[allow(clippy::too_many_lines)] // Closed mapping from durable facts to exact terminal domains.
 fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     if let Some(lifecycle) = workflow_workspace_lifecycle(event) {
         return vec![lifecycle];
@@ -9104,8 +9230,34 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     // exactly once by the terminal publication, so a restart can tell an
     // owned-but-unsettled child from one that never existed, and a second
     // terminal publication is a typed `TerminalViolation`.
-    if let RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } = &event.event {
-        return vec![(format!("subagent:{subagent_id}"), false)];
+    if let RuntimeEvent::AgentActivationAdmission {
+        activation_id,
+        phase,
+        ..
+    } = &event.event
+    {
+        return vec![(
+            format!("agent-admission:{activation_id}"),
+            matches!(
+                phase,
+                crate::events::types::AgentActivationAdmissionPhase::RolledBack { .. }
+            ),
+        )];
+    }
+    if let RuntimeEvent::SubagentOwnershipCommitted {
+        subagent_id,
+        admitted_authority,
+        ownership,
+        ..
+    } = &event.event
+    {
+        let mut keys = vec![(format!("subagent:{subagent_id}"), false)];
+        if admitted_authority.is_none()
+            && *ownership == crate::events::types::SubagentOwnershipKind::Normal
+        {
+            keys.push((format!("agent-admission:{subagent_id}"), true));
+        }
+        return keys;
     }
     if let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event {
         return vec![(format!("subagent:{subagent_id}"), true)];
@@ -11637,7 +11789,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)] // Full admission, private capture, reopen and tamper boundaries.
-    fn agent_credentials_reopen_from_private_capture_without_journal_secrets() {
+    fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
         use crate::credentials::{CredentialSnapshot, SourceCredentials};
         use crate::model::catalog::{CredentialSource, ResolvedCredential};
         use crate::runtime::identity::SubagentId;
@@ -11648,7 +11800,7 @@ mod tests {
         let agent_id = AgentId::new("private-agent");
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
         store.initialize(&[]).unwrap();
-        let mut event =
+        let (event, mut authority) =
             crate::local_runtime::session::tests::deletion_tests::admit_agent(envelope(
                 &id,
                 crate::runtime::subagent::subagent_ownership_event_id(
@@ -11662,7 +11814,9 @@ mod tests {
                     child_agent_id: agent_id.clone(),
                     child_conversation_id: child_id,
                     admitted_authority: None,
-                    tool_call_id: ToolCallId::new("private-call"),
+                    origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                        tool_call_id: ToolCallId::new("private-call"),
+                    },
                     agent: "explore".into(),
                     definition_digest: "sha256:definition".into(),
                     profile_digest: "sha256:profile".into(),
@@ -11672,13 +11826,6 @@ mod tests {
                     ),
                 },
             ));
-        let RuntimeEvent::SubagentOwnershipCommitted {
-            admitted_authority: Some(authority),
-            ..
-        } = &mut event.event
-        else {
-            panic!("authority")
-        };
         authority.resolved.model.primary.binding.credential =
             CredentialSource::Literal("private-literal".into());
         authority.resolved.model.primary.binding.resolved_credential = None;
@@ -11702,16 +11849,70 @@ mod tests {
                 credentials: source,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: "test-server".into(),
-                    args: Vec::new(),
+                    args: vec!["private-mcp-arg".into()],
                     cwd: None,
-                    environment: std::collections::BTreeMap::default(),
+                    environment: [("TOKEN".into(), "private-mcp-env".into())].into(),
                 },
                 policy: crate::tools::ToolInvocationPolicy::default(),
             },
         );
-        store.append_event(event.clone()).unwrap();
+        authority
+            .resolved
+            .environment
+            .push(("TOOL_TOKEN".into(), "private-tool-env".into()));
+        authority.resolved.instructions = "private-instructions".into();
+        authority.resolved.materialization.sources.insert(
+            crate::capabilities::ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("private-http")),
+            crate::tools::mcp::McpServerBinding {
+                credentials: SourceCredentials::default(),
+                transport: crate::tools::mcp::McpTransportConfig::StreamableHttp {
+                    endpoint: "https://private-url-user:private-url-password@example.test/api?token=private-url-query".into(),
+                    headers: [("Authorization".into(), "private-http-auth".into()), ("X-Private".into(), "private-http-header".into())].into(),
+                },
+                policy: crate::tools::ToolInvocationPolicy::default(),
+            },
+        );
+        let canaries = [
+            "private-literal",
+            "captured-provider",
+            "captured-source",
+            "private-mcp-arg",
+            "private-mcp-env",
+            "private-tool-env",
+            "private-instructions",
+            "private-url-user",
+            "private-url-password",
+            "private-url-query",
+            "private-http-auth",
+            "private-http-header",
+        ];
+        let public = serde_json::to_string(&event).unwrap();
+        for secret in canaries {
+            assert!(!public.contains(secret), "public DTO contains {secret}");
+        }
         assert!(
-            store.append_event(event).is_err(),
+            store.append_event(event.clone()).is_err(),
+            "public event alone cannot admit private authority"
+        );
+        let mut invalid = event.clone();
+        invalid.schema_version = 0;
+        assert!(store.append_agent_admission(invalid, &authority).is_err());
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM agent_authorities", [], |row| row
+                    .get::<_, i64>(0),)
+                .unwrap(),
+            0,
+            "failed public event commit rolls back the private authority row"
+        );
+        assert!(store.read_events(None, 10).unwrap().events.is_empty());
+        store
+            .append_agent_admission(event.clone(), &authority)
+            .unwrap();
+        assert!(
+            store.append_agent_admission(event, &authority).is_err(),
             "duplicate admission rolls back"
         );
         let journal: String = store
@@ -11719,7 +11920,7 @@ mod tests {
             .unwrap()
             .query_row("SELECT event_json FROM events", [], |row| row.get(0))
             .unwrap();
-        for secret in ["private-literal", "captured-provider", "captured-source"] {
+        for secret in canaries {
             assert!(
                 !journal.contains(secret),
                 "Event Journal contains private material"
@@ -11727,20 +11928,28 @@ mod tests {
         }
         drop(store);
         let reopened = SqliteConversationStore::open(id, &path).unwrap();
-        let capture = reopened.load_agent_credentials(&agent_id).unwrap();
-        let mut events = reopened.read_events(None, 10).unwrap().events;
-        let RuntimeEvent::SubagentOwnershipCommitted {
-            admitted_authority: Some(mut authority),
-            ..
-        } = events.remove(0).event
-        else {
-            panic!("authority")
-        };
-        authority
-            .resolved
-            .model
-            .restore_admitted_credentials(&capture)
-            .unwrap();
+        let restored = reopened.load_agent_authority(&agent_id).unwrap();
+        assert_eq!(
+            restored.resolved.environment,
+            authority.resolved.environment
+        );
+        assert_eq!(
+            restored.resolved.instructions,
+            authority.resolved.instructions
+        );
+        for (name, binding) in &authority.resolved.materialization.sources {
+            assert_eq!(
+                restored.resolved.materialization.sources[name].transport,
+                binding.transport
+            );
+        }
+        let events = reopened.read_events(None, 10).unwrap().events;
+        assert!(
+            matches!(&events[0].event, RuntimeEvent::SubagentOwnershipCommitted {
+            admitted_authority: Some(reference), ..
+        } if reference == &agent_id)
+        );
+        let authority = restored;
         assert_eq!(
             authority
                 .resolved
@@ -11767,8 +11976,18 @@ mod tests {
                 .expose(),
             "captured-provider"
         );
-        for source in authority.resolved.materialization.sources.values_mut() {
-            source.credentials.capture(capture.clone());
+        for source in authority
+            .resolved
+            .materialization
+            .sources
+            .values()
+            .filter(|source| {
+                matches!(
+                    source.transport,
+                    crate::tools::mcp::McpTransportConfig::Stdio { .. }
+                )
+            })
+        {
             let resolved = source.credentials.resolve().unwrap();
             assert_eq!(resolved.environment["TOKEN"].expose(), "captured-source");
             assert_eq!(
@@ -11779,12 +11998,159 @@ mod tests {
         reopened
             .lock()
             .unwrap()
-            .execute("DELETE FROM agent_credentials", [])
+            .execute("DELETE FROM agent_authorities", [])
             .unwrap();
         assert!(
-            reopened.load_agent_credentials(&agent_id).is_err(),
+            reopened.load_agent_authority(&agent_id).is_err(),
             "missing private capture must fail closed"
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Real compaction, later Tool admission, and client admission.
+    fn resumed_agent_origin_survives_creation_call_compaction() {
+        use crate::runtime::identity::SubagentId;
+        use crate::runtime::subagent::AgentActivationOrigin;
+        let store = store();
+        let conversation = store.conversation_id().clone();
+        let agent = AgentId::new("continuable-agent");
+        let child = ConversationId::generate();
+        let call_message = |message: &str, call: &str, name: &str| {
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new(message),
+                content: vec![AssistantContentBlock::ToolCall(ToolCall {
+                    id: ToolCallId::new(call),
+                    tool_id: ToolId::new(name),
+                    name: name.into(),
+                    arguments: serde_json::json!({}),
+                })],
+            })
+        };
+        store
+            .initialize(&[call_message("creation", "create-call", "subagent")])
+            .unwrap();
+        let admission = |sequence, origin| {
+            let activation = SubagentId::for_conversation(&conversation, sequence);
+            envelope(
+                &conversation,
+                crate::runtime::subagent::subagent_ownership_event_id(&activation).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    parent_agent_id: AgentId::new("parent"),
+                    subagent_id: activation,
+                    child_agent_id: agent.clone(),
+                    child_conversation_id: child.clone(),
+                    admitted_authority: None,
+                    origin,
+                    agent: "explore".into(),
+                    definition_digest: "sha256:definition".into(),
+                    profile_digest: "sha256:profile".into(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
+                        std::path::PathBuf::from("<shared-workspace>"),
+                    ),
+                },
+            )
+        };
+        let (creation, authority) =
+            crate::local_runtime::session::tests::deletion_tests::admit_agent(admission(
+                1,
+                AgentActivationOrigin::CreationTool {
+                    tool_call_id: ToolCallId::new("create-call"),
+                },
+            ));
+        store.append_agent_admission(creation, &authority).unwrap();
+        let settle = |sequence| {
+            let (notice, report, event) = success_publication(
+                &store,
+                &SubagentId::for_conversation(&conversation, sequence),
+                &agent,
+                "done",
+                &crate::events::types::SubagentWorkspaceTerminalResource::None,
+            );
+            store
+                .accept_subagent_terminal(Some(notice), report, event)
+                .unwrap();
+        };
+        settle(1);
+        store
+            .commit_compaction(CompactionCommitInput {
+                summary: summary_message("summary", "creation retired"),
+                span: SurfaceSpan::new(MessageId::new("creation"), MessageId::new("creation")),
+                expected_revision: store.load_head().unwrap().revision,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 20,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 2,
+                attempt_id: None,
+                turn_id: None,
+                timestamp: Utc::now(),
+            })
+            .unwrap();
+        assert!(
+            !store
+                .load_head()
+                .unwrap()
+                .active_message_ids
+                .contains(&MessageId::new("creation"))
+        );
+        store
+            .append_canonical(&call_message("followup", "message-call", "send_message"))
+            .unwrap();
+        let resume = |sequence, origin: AgentActivationOrigin| {
+            store
+                .append_event(crate::runtime::subagent::admission_event(
+                    &conversation,
+                    &agent,
+                    &SubagentId::for_conversation(&conversation, sequence),
+                    &origin,
+                    crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                    Utc::now(),
+                ))
+                .unwrap();
+            store.append_event(admission(sequence, origin)).unwrap();
+        };
+        resume(
+            2,
+            AgentActivationOrigin::MessageTool {
+                tool_call_id: ToolCallId::new("message-call"),
+            },
+        );
+        settle(2);
+        resume(3, AgentActivationOrigin::ClientControl);
+        let origins = store
+            .read_events(None, 100)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter_map(|event| match event.event {
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    child_agent_id,
+                    child_conversation_id,
+                    origin,
+                    ..
+                } => {
+                    assert_eq!(child_agent_id, agent);
+                    assert_eq!(child_conversation_id, child);
+                    Some(origin)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            origins,
+            vec![
+                AgentActivationOrigin::CreationTool {
+                    tool_call_id: ToolCallId::new("create-call")
+                },
+                AgentActivationOrigin::MessageTool {
+                    tool_call_id: ToolCallId::new("message-call")
+                },
+                AgentActivationOrigin::ClientControl,
+            ]
+        );
+        assert!(store.load_agent_authority(&agent).is_ok());
     }
 
     /// Commits the canonical Normal-ownership fact of one subagent child
@@ -11812,29 +12178,51 @@ mod tests {
         child_agent_id: &AgentId,
         workspace: crate::runtime::workspace::WorkspaceSnapshot,
     ) {
-        store
-            .append_event(envelope(
-                store.conversation_id(),
-                crate::runtime::subagent::subagent_ownership_event_id(subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
-                    admitted_authority: None,
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id:
-                        crate::scripted_suites::common::identity::child_conversation_id(
-                            subagent_id.as_str(),
-                        ),
+        let event = envelope(
+            store.conversation_id(),
+            crate::runtime::subagent::subagent_ownership_event_id(subagent_id).as_ref(),
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
+                subagent_id: subagent_id.clone(),
+                child_agent_id: child_agent_id.clone(),
+                child_conversation_id:
+                    crate::scripted_suites::common::identity::child_conversation_id(
+                        subagent_id.as_str(),
+                    ),
+                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
                     tool_call_id: ToolCallId::new("call-sub"),
-                    agent: "explore".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    profile_digest: "sha256:profile".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace,
                 },
-            ))
-            .expect("ownership fact");
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
+                ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                workspace,
+            },
+        );
+        if store.load_agent_authority(child_agent_id).is_ok() {
+            let RuntimeEvent::SubagentOwnershipCommitted { origin, .. } = &event.event else {
+                unreachable!("ownership fixture")
+            };
+            store
+                .append_event(crate::runtime::subagent::admission_event(
+                    store.conversation_id(),
+                    child_agent_id,
+                    subagent_id,
+                    origin,
+                    crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                    Utc::now(),
+                ))
+                .unwrap();
+            store.append_event(event).expect("resumed ownership fact");
+        } else {
+            let (event, authority) =
+                crate::local_runtime::session::tests::deletion_tests::admit_agent(event);
+            store
+                .append_agent_admission(event, &authority)
+                .expect("ownership fact");
+        }
     }
 
     /// The canonical successful terminal publication triple (notice,
@@ -11860,6 +12248,7 @@ mod tests {
                 text: report_text.to_owned(),
             })],
             workspace_resource,
+            true,
             timestamp,
         );
         let notice = crate::runtime::subagent::terminal_notice(
@@ -11891,6 +12280,7 @@ mod tests {
                 text: text.to_owned(),
             })],
             workspace_resource,
+            true,
             Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
         )
     }
@@ -12096,7 +12486,9 @@ mod tests {
                 child_agent_id: other_child,
                 child_conversation_id:
                     crate::scripted_suites::common::identity::child_conversation_id(other.as_str()),
-                tool_call_id: ToolCallId::new("call-other"),
+                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: ToolCallId::new("call-other"),
+                },
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
@@ -12495,7 +12887,9 @@ mod tests {
                         crate::scripted_suites::common::identity::child_conversation_id(
                             subagent_id.as_str(),
                         ),
-                    tool_call_id: ToolCallId::new("workflow-call"),
+                    origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                        tool_call_id: ToolCallId::new("workflow-call"),
+                    },
                     agent: "reviewer".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
                     profile_digest: "sha256:profile".to_owned(),
@@ -12590,7 +12984,9 @@ mod tests {
                         crate::scripted_suites::common::identity::child_conversation_id(
                             subagent_id.as_str(),
                         ),
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
+                    origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                        tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
+                    },
                     agent: "worker".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
                     profile_digest: "sha256:profile".to_owned(),
@@ -13178,7 +13574,9 @@ mod tests {
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
                     "conv_4761f81f-3cff-7c88-84c5-21410a0b63f3",
                 ),
-                tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
+                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
+                },
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
@@ -13188,8 +13586,10 @@ mod tests {
                 ),
             },
         );
+        let (malformed, authority) =
+            crate::local_runtime::session::tests::deletion_tests::admit_agent(malformed);
         assert!(matches!(
-            store.append_event(malformed),
+            store.append_agent_admission(malformed, &authority),
             Err(ConversationStoreError::InvalidReference(_))
         ));
         assert!(
@@ -13213,7 +13613,9 @@ mod tests {
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
                     "conv_4761f81f-3cff-7c88-84c5-21410a0b63f3",
                 ),
-                tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
+                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
+                },
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
@@ -13223,8 +13625,10 @@ mod tests {
                 ),
             },
         );
+        let (canonical, authority) =
+            crate::local_runtime::session::tests::deletion_tests::admit_agent(canonical);
         store
-            .append_event(canonical)
+            .append_agent_admission(canonical, &authority)
             .expect("canonical binding succeeds");
     }
 
@@ -13255,7 +13659,9 @@ mod tests {
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
                     "conv_027fd54f-460d-7e47-84f4-ffff3ee8af4a",
                 ),
-                tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
+                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
+                },
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
@@ -13798,7 +14204,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 45);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 46);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -13867,7 +14273,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 45);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 46);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

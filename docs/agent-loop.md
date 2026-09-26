@@ -2063,9 +2063,16 @@ ConversationRuntime. Native `send_message` input follows the same durable inbox
 and legal loop boundaries as ordinary input; it is not a second message/result
 channel. Before a successful activation seals guidance, `SealRequested` arbitrates
 with parent admission under the registry lock, changes the Agent to Stopping and
-drains already-admitted FIFO messages before `SealGranted`. Active therefore
-always means message admission remains open. Inactive resumes through one owner
-reservation with fresh activation identity and the same frozen child authority.
+drains already-admitted FIFO messages before `SealGranted`. If draining reveals
+more work, `SealOpen` reopens admission under the owner mutex; the child waits for
+`AdmissionReopened` before advancing its next turn. Cancellation prevents reopening.
+Active therefore always means message admission remains open. Inactive resumes
+through one durable owner reservation with fresh activation identity and the same
+frozen child authority. The Admitting phase covers staging until activation control is installed.
+`send_message` additionally awaits `DelegateAccepted`, sent after durable child inbound commit, which
+proves delivery. A lost acknowledgement reports unknown delivery without replaying
+input. Unproven precommit rollback retains the exact reserved target as Stopping,
+including after recovery; it cannot grant a fresh physical activation.
 See [Jobs and continuable Agents](jobs-and-agents.md) for exact boundaries.
 
 ## 10. Unsupported behavior (non-goals)

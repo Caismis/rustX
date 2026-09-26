@@ -100,7 +100,7 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// inspection describes the same composition that execution materializes.
 /// Version 25 carries explicit response/cancel controls to the originating
 /// interaction coordinator. It is independent of App Server protocol v3.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 27;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 28;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -121,6 +121,7 @@ const KIND_PROVIDER_AVAILABILITY: u8 = 7;
 const KIND_INTERACTION_ADMISSION_RESULT: u8 = 8;
 const KIND_GUIDANCE: u8 = 9;
 const KIND_SEAL_GRANTED: u8 = 10;
+const KIND_ADMISSION_REOPENED: u8 = 11;
 
 // Child -> parent frame kinds (reliable control channel, fd 0).
 const KIND_READY: u8 = 101;
@@ -135,6 +136,8 @@ const KIND_INTERACTION_RESPONSE_RESULT: u8 = 110;
 const KIND_INTERACTION_ADMISSION_REQUESTED: u8 = 111;
 const KIND_GUIDANCE_RESULT: u8 = 112;
 const KIND_SEAL_REQUESTED: u8 = 113;
+const KIND_DELEGATE_ACCEPTED: u8 = 114;
+const KIND_SEAL_OPEN: u8 = 115;
 
 // Observation channel frame kind (disposable, fd 1, child -> parent only).
 const KIND_ACTIVITY: u8 = 107;
@@ -488,6 +491,10 @@ pub(crate) struct InteractionPublicationAdmissionFrame {
 /// One decoded parent-bound frame of the reliable control channel.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildFrame {
+    /// Canonical input committed; correlated by the unique activation control channel.
+    DelegateAccepted,
+    /// Child inbox remains open and another semantic turn is owed.
+    SealOpen,
     /// Request the owner to close message admission before the local seal.
     SealRequested,
     /// Composition and activation completed.
@@ -526,6 +533,8 @@ pub(crate) enum ChildFrame {
 /// One decoded child-bound frame.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ParentFrame {
+    /// The owner restored Active after the child proved an open inbox.
+    AdmissionReopened,
     /// Admission is closed; every previously admitted message precedes this frame.
     SealGranted,
     /// The startup specification (exactly once, first).
@@ -695,6 +704,8 @@ pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>
     frame: &ChildFrame,
 ) -> Result<(), ProtocolError> {
     match frame {
+        ChildFrame::DelegateAccepted => write_frame(stream, KIND_DELEGATE_ACCEPTED, &[]).await,
+        ChildFrame::SealOpen => write_frame(stream, KIND_SEAL_OPEN, &[]).await,
         ChildFrame::SealRequested => write_frame(stream, KIND_SEAL_REQUESTED, &[]).await,
         ChildFrame::Ready(payload) => write_frame(stream, KIND_READY, &encode(payload)?).await,
         ChildFrame::StartupError(payload) => {
@@ -751,6 +762,8 @@ pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         return Ok(None);
     };
     let frame = match kind {
+        KIND_DELEGATE_ACCEPTED if payload.is_empty() => ChildFrame::DelegateAccepted,
+        KIND_SEAL_OPEN if payload.is_empty() => ChildFrame::SealOpen,
         KIND_SEAL_REQUESTED if payload.is_empty() => ChildFrame::SealRequested,
         KIND_READY => ChildFrame::Ready(decode(&payload)?),
         KIND_STARTUP_ERROR => ChildFrame::StartupError(decode(&payload)?),
@@ -810,6 +823,7 @@ pub(crate) async fn write_parent_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized
     frame: &ParentFrame,
 ) -> Result<(), ProtocolError> {
     match frame {
+        ParentFrame::AdmissionReopened => write_frame(stream, KIND_ADMISSION_REOPENED, &[]).await,
         ParentFrame::SealGranted => write_frame(stream, KIND_SEAL_GRANTED, &[]).await,
         ParentFrame::Hello(payload) => write_frame(stream, KIND_HELLO, &encode(payload)?).await,
         ParentFrame::Delegate(payload) => {
@@ -854,6 +868,7 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         return Ok(None);
     };
     let frame = match kind {
+        KIND_ADMISSION_REOPENED if payload.is_empty() => ParentFrame::AdmissionReopened,
         KIND_SEAL_GRANTED if payload.is_empty() => ParentFrame::SealGranted,
         KIND_HELLO => ParentFrame::Hello(Box::new(decode(&payload)?)),
         KIND_DELEGATE => ParentFrame::Delegate(decode(&payload)?),

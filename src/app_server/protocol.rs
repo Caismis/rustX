@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v24 envelope and method vocabulary.
+//! Rust authority for the App Server v25 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 24;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -492,6 +492,10 @@ pub enum MethodResult {
     },
     Agents {
         agents: Vec<crate::runtime_client::snapshot::RuntimeClientAgent>,
+        returned: usize,
+        matched: usize,
+        limit: usize,
+        truncated: bool,
     },
     AgentMessage {
         agent_id: crate::runtime::identity::AgentId,

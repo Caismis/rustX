@@ -750,6 +750,12 @@ fn deletion_live_ownership_cannot_claim_a_pending_frozen_child() {
             )
         })
         .unwrap();
+    let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { child_agent_id, .. } =
+        &event.event
+    else {
+        unreachable!("selected ownership event")
+    };
+    let authority = store.load_agent_authority(child_agent_id).unwrap();
     drop(store);
     let _work = catalog
         .commit_delete(&preview.session_id, &preview.target_revision)
@@ -770,7 +776,7 @@ fn deletion_live_ownership_cannot_claim_a_pending_frozen_child() {
     event.conversation_id = active.active_conversation_id.clone();
     event.sequence = 0;
     let store = store_for(&catalog, &active.id, &active.active_conversation_id);
-    store.append_event(event).unwrap();
+    store.append_agent_admission(event, &authority).unwrap();
     drop(store);
     let error = DeletionTargetSnapshot::inspect(dir.path(), &active.id).unwrap_err();
     assert!(error.to_string().contains("deleted Conversation identity"));

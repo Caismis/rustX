@@ -947,7 +947,11 @@ Current source review used DeepSeek Harness commit
 separate finite Job output/control patterns inform rustX-authored ActivityCards.
 The old one-shot/continuable mode branch is deliberately not adopted.
 
-Reviewed local inventory changes update App Server imports to v24 and ToolCard's
+Reviewed local inventory changes update App Server imports to v25 and ToolCard's
 identity discriminator to finite `job`, including its `data-job-id` marker.
 Existing Tool dispatch, primitives, styling, licenses and pinned upstream hashes
 are retained. Inventory local hashes and import closure reflect those edits.
+
+Review corrections retain native Admitting state and typed creation/message/client/
+Workflow activation provenance. Current local hashes and import closures track
+App Server v25; the preceding #409 v24 record describes its historical audit.

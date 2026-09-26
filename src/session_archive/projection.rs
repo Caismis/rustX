@@ -315,6 +315,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
             message_id,
             state,
             workspace_resource,
+            ..
         } => {
             json!({"type":"subagent_terminal_published","subagent_id":subagent_id,"child_agent_id":child_agent_id,"message_id":message_id,"state":state,"workspace_resource":subagent_resource(workspace_resource)})
         }
@@ -385,6 +386,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::CompactionCompleted { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }
         | RuntimeEvent::BackgroundTerminalPublished { .. }
+        | RuntimeEvent::AgentActivationAdmission { .. }
         | RuntimeEvent::SubagentOwnershipCommitted { .. }
         | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
         | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }

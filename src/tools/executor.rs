@@ -843,17 +843,6 @@ impl ToolRegistration {
     }
 }
 
-/// Domain controls cannot detach themselves or race within a model Tool batch.
-pub const DOMAIN_CONTROL_TOOL_NAMES: [&str; 8] = [
-    "job_list",
-    "job_status",
-    "job_wait",
-    "job_cancel",
-    "list_agents",
-    "send_message",
-    "wait_agent",
-    "interrupt_agent",
-];
 /// The native human-questionnaire tool.
 pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 /// The model-facing name reserved for Workflow Agent terminalization.
@@ -977,7 +966,7 @@ impl ToolRegistry {
                 name: definition.name.clone(),
                 reason: error.to_string(),
             })?;
-        if DOMAIN_CONTROL_TOOL_NAMES.contains(&definition.name.as_str())
+        if crate::tools::native::is_domain_control(&definition.name)
             && (definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
                 || definition.concurrency_policy != ToolConcurrencyPolicy::Sequential)
@@ -1264,8 +1253,8 @@ fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value
 #[cfg(test)]
 mod tests {
     use super::{
-        DOMAIN_CONTROL_TOOL_NAMES, PreflightOutcome, ToolPreflightError, ToolRegistry,
-        ToolRegistryError, WORKFLOW_OUTPUT_TOOL_NAME,
+        PreflightOutcome, ToolPreflightError, ToolRegistry, ToolRegistryError,
+        WORKFLOW_OUTPUT_TOOL_NAME,
     };
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::tools::artifacts::ArtifactStore;
@@ -1520,8 +1509,8 @@ mod tests {
         let error = register(
             &mut registry,
             definition(
-                DOMAIN_CONTROL_TOOL_NAMES[0],
-                DOMAIN_CONTROL_TOOL_NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::BackgroundOnly,
                 ToolConcurrencyPolicy::Sequential,
                 object_schema(),
@@ -1532,8 +1521,8 @@ mod tests {
         let error = register(
             &mut registry,
             definition(
-                DOMAIN_CONTROL_TOOL_NAMES[0],
-                DOMAIN_CONTROL_TOOL_NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolConcurrencyPolicy::Parallel,
                 object_schema(),
@@ -1544,8 +1533,8 @@ mod tests {
         register(
             &mut registry,
             definition(
-                DOMAIN_CONTROL_TOOL_NAMES[0],
-                DOMAIN_CONTROL_TOOL_NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolConcurrencyPolicy::Sequential,
                 object_schema(),

@@ -1005,6 +1005,10 @@ export type MethodResult =
     }
   | {
       agents: RuntimeClientAgent[];
+      returned: number;
+      matched: number;
+      limit: number;
+      truncated: boolean;
       type: 'agents';
     }
   | {
@@ -1307,6 +1311,25 @@ export type ToolId = string;
  */
 export type TraceToolOutcome =
   'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
+/**
+ * Truthful admission source. Client controls have no model `ToolCall` identity.
+ */
+export type AgentActivationOrigin =
+  | {
+      tool_call_id: ToolCallId;
+      kind: 'creation_tool';
+    }
+  | {
+      tool_call_id: ToolCallId;
+      kind: 'message_tool';
+    }
+  | {
+      kind: 'client_control';
+    }
+  | {
+      node_id: WorkflowNodeInstance;
+      kind: 'workflow';
+    };
 /**
  * The rustX-owned logical identity of a context contributor.
  *
@@ -4797,6 +4820,10 @@ export interface TraceRecord {
   agent_id?: AgentId | null;
   activation_id?: SubagentId | null;
   /**
+   * Frozen admission source; client controls never invent a model Tool call.
+   */
+  activation_origin?: AgentActivationOrigin | null;
+  /**
    * The exact outer `ToolCall` this Tool-owned domain record belongs to,
    * copied from the native start fact. It is presentation and navigation
    * correlation only: it confers no lifecycle, ownership, settlement or
@@ -6809,7 +6836,7 @@ export interface RuntimeClientAgent {
   /**
    * The authoritative lifecycle state.
    */
-  state: 'active' | 'stopping' | 'inactive';
+  state: 'admitting' | 'active' | 'stopping' | 'inactive';
   current_activation?: SubagentId | null;
   activation_state: SubagentState;
   /**
@@ -9776,7 +9803,7 @@ export interface RuntimeClientAgent1 {
   /**
    * The authoritative lifecycle state.
    */
-  state: 'active' | 'stopping' | 'inactive';
+  state: 'admitting' | 'active' | 'stopping' | 'inactive';
   current_activation?: SubagentId | null;
   activation_state: SubagentState;
   /**

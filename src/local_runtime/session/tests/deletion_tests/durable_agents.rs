@@ -1,5 +1,6 @@
 use super::*;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope, SubagentWorkspaceTerminalResource};
+use crate::local_runtime::session::deletion::SessionDeleteResult;
 
 fn activation(parent: &SqliteConversationStore, ordinal: u64) -> RuntimeEventEnvelope {
     let mut event = parent
@@ -13,11 +14,24 @@ fn activation(parent: &SqliteConversationStore, ordinal: u64) -> RuntimeEventEnv
     if let RuntimeEvent::SubagentOwnershipCommitted {
         subagent_id,
         admitted_authority,
+        child_agent_id,
+        origin,
         ..
     } = &mut event.event
     {
         *subagent_id = id.clone();
         *admitted_authority = None;
+        *origin = crate::runtime::subagent::AgentActivationOrigin::ClientControl;
+        parent
+            .append_event(crate::runtime::subagent::admission_event(
+                parent.conversation_id(),
+                child_agent_id,
+                &id,
+                origin,
+                crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                Utc::now(),
+            ))
+            .unwrap();
     }
     event.event_id = crate::runtime::subagent::subagent_ownership_event_id(&id);
     event
@@ -37,13 +51,18 @@ fn resumed_agent_is_one_session_ownership_edge_and_keeps_workspace_blocker() {
     drop(before);
     parent.append_event(activation(&parent, 2)).unwrap();
     let id = SubagentId::for_conversation(parent.conversation_id(), 2);
-    let (draft, terminal) = crate::runtime::subagent::recovery_terminal_publication(
+    let (draft, terminal) = crate::runtime::subagent::terminal_publication(
         parent.conversation_id(),
         &id,
         &AgentId::new(format!("agent-{child_id}")),
-        "explore",
-        "sha256:definition",
+        crate::events::types::SubagentTerminalState::Interrupted,
+        vec![crate::message::types::UserContentBlock::Text(
+            crate::message::content::TextBlock {
+                text: "fixture physical settlement proven".into(),
+            },
+        )],
         &SubagentWorkspaceTerminalResource::None,
+        true,
         Utc::now(),
     );
     parent
@@ -99,12 +118,19 @@ fn activation_replay_rejects_agent_conversation_aliases_and_authority_readmissio
             }
         }
         if case == "readmitted-authority" {
-            next = admit_agent(next);
+            let (next, authority) = admit_agent(next);
             assert!(
-                parent.append_event(next).is_err(),
+                parent.append_agent_admission(next, &authority).is_err(),
                 "frozen credential ownership cannot be readmitted"
             );
-            assert_eq!(parent.read_events(None, 256).unwrap().events.len(), 1);
+            assert_eq!(parent.read_events(None, 256).unwrap().events.len(), 2);
+            continue;
+        }
+        if case == "different-agent" {
+            assert!(
+                parent.append_event(next).is_err(),
+                "reservation cannot authorize another Agent"
+            );
             continue;
         }
         parent.append_event(next).unwrap();
@@ -114,6 +140,136 @@ fn activation_replay_rejects_agent_conversation_aliases_and_authority_readmissio
             "{case}: {error}"
         );
     }
+}
+
+#[test]
+fn resumed_admission_deletion_requires_exact_generation_settlement_proof() {
+    use crate::events::types::AgentActivationAdmissionPhase;
+    use crate::runtime::subagent::AgentActivationOrigin;
+    for proof in [None, Some(false), Some(true)] {
+        let (root, catalog, _) = open_catalog();
+        let session = first_session(&catalog);
+        let (node, _) = catalog.lineage(&session, None).unwrap();
+        let parent = store_for(&catalog, &session, &node.conversation_id);
+        let child_id = child(root.path(), &parent, 1, true);
+        let agent_id = AgentId::new(format!("agent-{child_id}"));
+        assert!(DeletionTargetSnapshot::inspect(root.path(), &session).is_ok());
+        let activation_id = SubagentId::for_conversation(parent.conversation_id(), 2);
+        let fact = |phase| {
+            crate::runtime::subagent::admission_event(
+                parent.conversation_id(),
+                &agent_id,
+                &activation_id,
+                &AgentActivationOrigin::ClientControl,
+                phase,
+                Utc::now(),
+            )
+        };
+        parent
+            .append_event(fact(AgentActivationAdmissionPhase::Reserved))
+            .unwrap();
+        if let Some(physical_settlement_proven) = proof {
+            parent
+                .append_event(fact(AgentActivationAdmissionPhase::RolledBack {
+                    physical_settlement_proven,
+                }))
+                .unwrap();
+        }
+        let target = DeletionTargetSnapshot::inspect(root.path(), &session);
+        if proof == Some(true) {
+            assert!(
+                target.is_ok(),
+                "proved rollback releases the new admission blocker"
+            );
+        } else {
+            let error = target.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Agent activation admission has no proven physical settlement"),
+                "{error}"
+            );
+        }
+    }
+}
+
+fn publish_unproven_terminal(
+    parent: &SqliteConversationStore,
+    activation_id: &SubagentId,
+    agent_id: &AgentId,
+) {
+    let (draft, terminal) = crate::runtime::subagent::recovery_terminal_publication(
+        parent.conversation_id(),
+        activation_id,
+        agent_id,
+        "explore",
+        "sha256:definition",
+        &SubagentWorkspaceTerminalResource::None,
+        Utc::now(),
+    );
+    parent
+        .accept_subagent_terminal(None, draft, terminal)
+        .unwrap();
+}
+
+#[test]
+fn cold_shared_agent_deletion_retains_unproven_terminal_evidence() {
+    let (root, catalog, _) = open_catalog();
+    let session = first_session(&catalog);
+    let (node, _) = catalog.lineage(&session, None).unwrap();
+    let parent = store_for(&catalog, &session, &node.conversation_id);
+    let child_id = child(root.path(), &parent, 1, false);
+    let agent_id = AgentId::new(format!("agent-{child_id}"));
+    publish_unproven_terminal(
+        &parent,
+        &SubagentId::for_conversation(parent.conversation_id(), 1),
+        &agent_id,
+    );
+    let error = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Agent activation terminal has no proven physical settlement")
+    );
+    assert!(matches!(
+        catalog.delete_preview(&session),
+        SessionDeleteResult::Blocked { .. }
+    ));
+    assert!(parent.load_agent_authority(&agent_id).is_ok());
+    assert!(catalog.database_path(&session, &child_id).exists());
+}
+
+#[tokio::test]
+async fn cold_clean_isolated_agent_deletion_cannot_substitute_git_inspection_for_process_proof() {
+    let fixture = physical_agent().await;
+    let (node, _) = fixture.catalog.lineage(&fixture.session, None).unwrap();
+    let parent = store_for(&fixture.catalog, &fixture.session, &node.conversation_id);
+    let resumed = activation(&parent, 2);
+    parent.append_event(resumed).unwrap();
+    let agent_id = AgentId::new("durable-clean-agent");
+    publish_unproven_terminal(
+        &parent,
+        &SubagentId::for_conversation(parent.conversation_id(), 2),
+        &agent_id,
+    );
+    let error = DeletionTargetSnapshot::inspect(fixture.root.path(), &fixture.session).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Agent activation terminal has no proven physical settlement")
+    );
+    assert!(matches!(
+        fixture.catalog.delete_preview(&fixture.session),
+        SessionDeleteResult::Blocked { .. }
+    ));
+    assert!(fixture.worktree.exists());
+    assert!(parent.load_agent_authority(&agent_id).is_ok());
+    assert!(
+        fixture
+            .catalog
+            .database_path(&fixture.session, &fixture.child)
+            .exists()
+    );
 }
 
 struct PhysicalAgent {
@@ -192,13 +348,15 @@ async fn physical_agent_at_root(root_alias: Option<&std::path::Path>) -> Physica
     let worktree = workspace.logical_workspace.clone();
     let child = ConversationId::generate();
     let agent = AgentId::new("durable-clean-agent");
-    let ownership = admit_agent(crate::runtime::subagent::ownership_event(
+    let (ownership, authority) = admit_agent(crate::runtime::subagent::ownership_event(
         &AgentId::new("agent-parent"),
         parent.conversation_id(),
         &allocation,
         &agent,
         &child,
-        &ToolCallId::new("delegation"),
+        &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+            tool_call_id: ToolCallId::new("delegation"),
+        },
         &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
         &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
         &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
@@ -206,14 +364,21 @@ async fn physical_agent_at_root(root_alias: Option<&std::path::Path>) -> Physica
         &workspace,
         Utc::now(),
     ));
-    parent.append_event(ownership).unwrap();
-    let (draft, terminal) = crate::runtime::subagent::recovery_terminal_publication(
+    parent
+        .append_agent_admission(ownership, &authority)
+        .unwrap();
+    let (draft, terminal) = crate::runtime::subagent::terminal_publication(
         parent.conversation_id(),
         &allocation,
         &agent,
-        "explore",
-        "sha256:definition",
+        crate::events::types::SubagentTerminalState::Interrupted,
+        vec![crate::message::types::UserContentBlock::Text(
+            crate::message::content::TextBlock {
+                text: "fixture physical settlement proven".into(),
+            },
+        )],
         &SubagentWorkspaceTerminalResource::None,
+        true,
         Utc::now(),
     );
     parent
@@ -243,7 +408,6 @@ async fn physical_agent_at_root(root_alias: Option<&std::path::Path>) -> Physica
 
 #[tokio::test]
 async fn session_deletion_releases_clean_agent_workspace_and_replays_frozen_cleanup() {
-    use crate::local_runtime::session::deletion::SessionDeleteResult;
     let mut fixture = physical_agent().await;
     let SessionDeleteResult::Preview { preview } = fixture.catalog.delete_preview(&fixture.session)
     else {
@@ -286,7 +450,6 @@ async fn session_deletion_releases_clean_agent_workspace_and_replays_frozen_clea
 
 #[tokio::test]
 async fn session_deletion_never_forces_dirty_agent_workspace_removal() {
-    use crate::local_runtime::session::deletion::SessionDeleteResult;
     let mut fixture = physical_agent().await;
     std::fs::write(fixture.worktree.join("new-work.txt"), "preserve").unwrap();
     assert!(matches!(
@@ -335,7 +498,6 @@ async fn session_deletion_never_forces_dirty_agent_workspace_removal() {
 #[cfg(unix)]
 #[tokio::test]
 async fn session_deletion_preserves_canonical_allocation_through_product_root_alias() {
-    use crate::local_runtime::session::deletion::SessionDeleteResult;
     let aliases = tempfile::tempdir().unwrap();
     let alias = aliases.path().join("product-root");
     let mut fixture = physical_agent_at_root(Some(&alias)).await;

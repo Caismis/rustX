@@ -1908,8 +1908,8 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     assert_eq!(agent.agent_id, agent_id);
     assert_eq!(agent.child_conversation_id, child_conversation_id);
     assert_eq!(agent.activation_id, activation_id);
-    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Inactive);
-    assert!(agent.current_activation.is_none());
+    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Stopping);
+    assert_eq!(agent.current_activation.as_ref(), Some(&activation_id));
     assert_eq!(
         agent.activation_state,
         rustx::runtime::subagent::SubagentState::Interrupted
@@ -1932,17 +1932,46 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         "recovery never relaunches the old child"
     );
 
+    let wait = recovered
+        .request(|id| RuntimeClientRequest::AgentWait {
+            id: rustx::runtime_client::RequestId::new(id),
+            agent_id: agent_id.clone(),
+        })
+        .await;
+    assert!(
+        wait.error.is_some(),
+        "unproven activation cannot satisfy wait"
+    );
+    let send = recovered
+        .request(|id| RuntimeClientRequest::AgentSendMessage {
+            id: rustx::runtime_client::RequestId::new(id),
+            agent_id: agent_id.clone(),
+            message: "must not resume unproven physical ownership".into(),
+        })
+        .await;
+    assert!(
+        send.error.is_some(),
+        "recovery cannot grant new physical ownership"
+    );
+
     let response = recovered
         .request(|id| RuntimeClientRequest::Shutdown {
             id: rustx::runtime_client::RequestId::new(id),
         })
         .await;
-    assert!(matches!(
-        response.result,
-        Some(RuntimeClientResult::ShutdownCompleted)
-    ));
+    assert!(
+        matches!(
+            response.error,
+            Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { ref message })
+                if message.contains("physical settlement is unresolved")
+        ),
+        "unproven crash settlement must fail shutdown: {response:?}"
+    );
     let (status, stderr) = recovered.close_and_wait().await;
-    assert!(status.success(), "recovered runtime shuts down: {stderr}");
+    assert!(
+        status.success(),
+        "transport closes after reporting unresolved settlement: {stderr}"
+    );
 
     // A second restart must observe the absorbing terminal identity and must
     // not publish a second Runtime notice or relaunch anything.
@@ -1988,8 +2017,8 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     assert_eq!(agent.agent_id, agent_id);
     assert_eq!(agent.child_conversation_id, child_conversation_id);
     assert_eq!(agent.activation_id, activation_id);
-    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Inactive);
-    assert!(agent.current_activation.is_none());
+    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Stopping);
+    assert_eq!(agent.current_activation.as_ref(), Some(&activation_id));
     assert_eq!(
         agent.activation_state,
         rustx::runtime::subagent::SubagentState::Interrupted
@@ -2000,12 +2029,19 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
             id: rustx::runtime_client::RequestId::new(id),
         })
         .await;
-    assert!(matches!(
-        response.result,
-        Some(RuntimeClientResult::ShutdownCompleted)
-    ));
+    assert!(
+        matches!(
+            response.error,
+            Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { ref message })
+                if message.contains("physical settlement is unresolved")
+        ),
+        "unproven crash settlement must fail shutdown: {response:?}"
+    );
     let (status, stderr) = repeated.close_and_wait().await;
-    assert!(status.success(), "repeated runtime shuts down: {stderr}");
+    assert!(
+        status.success(),
+        "repeated transport closes after reporting unresolved settlement: {stderr}"
+    );
 }
 
 #[path = "continuation.rs"]

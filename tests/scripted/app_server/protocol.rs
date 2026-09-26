@@ -604,7 +604,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 24, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 25, requested: 12 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -2897,17 +2897,17 @@ async fn archive_preflight_failures_reach_the_protocol_without_private_diagnosti
         let session = &f.sessions[0];
         let store = SqliteConversationStore::open(session.active_conversation_id.clone(), &catalog.database_path(&session.id, &session.active_conversation_id)).unwrap();
         let child = ConversationId::generate();
-        let event = crate::local_runtime::session::tests::deletion_tests::admit_agent(crate::runtime::subagent::ownership_event(
+        let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(crate::runtime::subagent::ownership_event(
             &AgentId::new("archive-parent"),
             &session.active_conversation_id, &SubagentId::for_conversation(&session.active_conversation_id, 1),
-            &AgentId::new("archive-child"), &child, &ToolCallId::new("archive-child-call"),
+            &AgentId::new("archive-child"), &child, &crate::runtime::subagent::AgentActivationOrigin::CreationTool { tool_call_id: ToolCallId::new("archive-child-call") },
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
             &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
             &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
             &crate::runtime::workspace::WorkspaceSnapshot::shared(f.workspaces[0].clone()), chrono::Utc::now(),
         ));
-        store.append_event(event).unwrap(); // Required child deliberately has no allocation.
+        store.append_agent_admission(event, &authority).unwrap(); // Required child deliberately has no allocation.
         let session = &f.sessions[1];
         let store = SqliteConversationStore::open(session.active_conversation_id.clone(), &catalog.database_path(&session.id, &session.active_conversation_id)).unwrap();
         let mut message = crate::message::types::UserMessageBlock {

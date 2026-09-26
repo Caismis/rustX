@@ -202,6 +202,7 @@ fn read_facts_while(
     let mut workflow_owners = BTreeMap::new();
     let mut borrowed_children = BTreeSet::new();
     let mut agents = BTreeMap::new();
+    let mut pending_admissions = BTreeSet::new();
     let mut activation_resources = BTreeMap::new();
     let mut durable_resources = BTreeSet::new();
     let mut agent_owners = BTreeMap::new();
@@ -225,6 +226,23 @@ fn read_facts_while(
                 return Err(invalid("foreign ownership envelope"));
             }
             match envelope.event {
+                RuntimeEvent::AgentActivationAdmission {
+                    activation_id,
+                    phase,
+                    ..
+                } => match phase {
+                    crate::events::types::AgentActivationAdmissionPhase::Reserved => {
+                        pending_admissions.insert(activation_id);
+                    }
+                    crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                        physical_settlement_proven: true,
+                    } => {
+                        pending_admissions.remove(&activation_id);
+                    }
+                    crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                        physical_settlement_proven: false,
+                    } => {}
+                },
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id,
                     child_agent_id,
@@ -235,6 +253,7 @@ fn read_facts_while(
                     ..
                 } => {
                     workspace.validate().map_err(invalid)?;
+                    pending_admissions.remove(&subagent_id);
                     let activation_key = format!("child:{subagent_id}");
                     let key = if admitted_authority.is_some() {
                         if ownership != crate::events::types::SubagentOwnershipKind::Normal
@@ -298,6 +317,14 @@ fn read_facts_while(
                     } else if workspace.is_isolated() {
                         blockers.insert(key, (workspace, WorkspaceBlockerState::Owned));
                     }
+                }
+                RuntimeEvent::SubagentTerminalPublished {
+                    physical_settlement_proven: false,
+                    ..
+                } => {
+                    return Err(invalid(
+                        "Agent activation terminal has no proven physical settlement",
+                    ));
                 }
                 RuntimeEvent::SubagentTerminalPublished {
                     subagent_id,
@@ -455,6 +482,11 @@ fn read_facts_while(
                 _ => {}
             }
         }
+    }
+    if !pending_admissions.is_empty() {
+        return Err(invalid(
+            "Agent activation admission has no proven physical settlement",
+        ));
     }
     Ok(Facts {
         agent_owners,

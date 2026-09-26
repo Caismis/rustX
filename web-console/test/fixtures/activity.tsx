@@ -2,7 +2,7 @@
 import { useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RuntimeFacts } from '../../src/app/agent/Activity';
-import type { RuntimeClientAgent } from '../../../protocol/app-server/v24';
+import type { RuntimeClientAgent } from '../../../protocol/app-server/v25';
 import { Server, snapshot } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -27,8 +27,8 @@ server.handlers.set('agent/sendMessage', request => {
   if (resumed) { agent.state = 'active'; agent.activation_state = 'running'; agent.current_activation = 'activation-b'; agent.activation_id = 'activation-b'; }
   return { type: 'agent_message', agent_id: agent.agent_id, activation_id: agent.activation_id, resumed };
 });
-server.handlers.set('agent/interrupt', () => { agent.state = 'inactive'; agent.current_activation = null; agent.activation_state = 'cancelled'; return { type: 'agent', agent }; });
-server.handlers.set('agent/wait', () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: agent.current_activation, agent }));
+server.handlers.set('agent/interrupt', () => { agent.state = 'inactive'; agent.current_activation = null; agent.activation_state = 'cancelled'; return { type: 'agent_wait', agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: 'cancelled', agent }; });
+server.handlers.set('agent/wait', () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: agent.current_activation, outcome: agent.current_activation ? 'succeeded' : null, agent }));
 server.handlers.set('job/status', () => ({ type: 'job', job: s.jobs![0] }));
 server.handlers.set('job/wait', () => ({ type: 'job', job: s.jobs![0] }));
 server.handlers.set('job/cancel', () => { s.jobs![0] = { ...s.jobs![0], state: 'cancelled', result: { status: { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' }, duration_ms: 1, content: [{ type: 'text', text: 'Process settled' }] } }; return { type: 'job', job: s.jobs![0] }; });

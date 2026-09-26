@@ -174,7 +174,7 @@ export interface DebugDiagnostics {
 
 export class CommandDispatcher {
   #context: DispatcherContext;
-  #inspected = new Map<string, import('../../../protocol/app-server/v24.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v25.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -297,12 +297,18 @@ export class CommandDispatcher {
           const target = await session.waitAgent(argument);
           return transient("info", target.activation_id == null
             ? `${target.agent_id} was inactive at the wait boundary.`
-            : `${target.agent_id}: captured activation ${target.activation_id} settled${target.outcome == null ? "" : ` (${target.outcome})`}.`);
+            : target.outcome == null
+              ? `${target.agent_id}: admission ${target.activation_id} ended before an activation committed.`
+              : `${target.agent_id}: captured activation ${target.activation_id} settled (${target.outcome}).`);
         }
         case "/interrupt-agent": {
           if (!argument) return usage("/interrupt-agent <agent-id>");
-          const agent = await session.interruptAgent(argument);
-          return transient("info", `${agent.agent_id}: ${agent.state}. The Agent remains resumable.`);
+          const target = await session.interruptAgent(argument);
+          return transient("info", target.activation_id == null
+            ? `${target.agent_id} was inactive at the interrupt boundary.`
+            : target.outcome == null
+              ? `${target.agent_id}: admission ${target.activation_id} ended before an activation committed.`
+              : `${target.agent_id}: captured activation ${target.activation_id} settled (${target.outcome}).`);
         }
         case "/jobs":
           return inspect("Jobs", state.jobs.map(job => `- ${job.job_id} · ${job.tool_name} · ${job.state}`).join("\n") || "No Jobs.");
@@ -480,7 +486,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v24.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v25.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');

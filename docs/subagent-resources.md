@@ -55,3 +55,11 @@ proof that the old direct child and nested processes settled. It preserves the
 same inactive Agent/history projection but refuses another physical activation;
 clean Git inspection or a shared workspace does not supply that missing proof.
 Disposed or unresolved workspace authority likewise cannot be reacquired by resume.
+
+Resume preparation has its own durable `AgentActivationAdmission` obligation.
+Reserved commits before staging, under the same product ownership fence used by
+Session management. Committed activation ownership consumes that reservation;
+rollback closes it only with an explicit containment result. An unresolved or
+unproven rollback reconstructs Stopping with the exact reserved activation ID,
+blocks further admission, and prevents Session deletion from removing resources.
+A prior successful activation cannot settle this later physical obligation.

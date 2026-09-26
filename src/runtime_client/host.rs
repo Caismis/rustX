@@ -1621,10 +1621,7 @@ impl ClientInner {
                 agent_id: id.clone(),
             }
         })?;
-        let mut view = subagent_view(&activation);
-        view.state = agent.state;
-        view.current_activation = agent.current_activation;
-        Ok(view)
+        Ok(super::projection::agent_view(&agent, &activation))
     }
 
     pub(crate) fn agent_status(
@@ -1637,13 +1634,20 @@ impl ClientInner {
     }
 
     pub(crate) fn agent_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let agents = self
-            .agent_registry()?
-            .list_agents(64)
+        let listing = self.agent_registry()?.list_agents(64);
+        let agents = listing
+            .agents
             .into_iter()
             .map(|a| self.agent_view(&a.agent_id))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(RuntimeClientResult::Agents { agents })
+        let returned = agents.len();
+        Ok(RuntimeClientResult::Agents {
+            agents,
+            returned,
+            matched: listing.matched,
+            limit: 64,
+            truncated: returned < listing.matched,
+        })
     }
 
     pub(crate) async fn agent_send_message(
@@ -1654,7 +1658,12 @@ impl ClientInner {
         self.ensure_writable_runtime()?;
         let accepted = self
             .agent_registry()?
-            .send_message(id, &message)
+            .send_message(
+                id,
+                &message,
+                crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                crate::runtime::cancellation::CancellationSignal::new(),
+            )
             .await
             .map_err(|error| agent_control_error(id, error))?;
         Ok(RuntimeClientResult::AgentMessage { accepted })

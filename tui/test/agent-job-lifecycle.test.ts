@@ -80,7 +80,7 @@ test("interrupt forwards stable identity and never removes the resumable Agent r
   const interrupting = h.dispatcher.submit("/interrupt-agent agent-child");
   const request = await nextRequest(h, "agent/interrupt");
   assert.deepEqual(request.params, { target: h.target, agent_id: "agent-child" });
-  h.transport.respond(request.id, { type: "agent", agent: { ...agent, state: "inactive", current_activation: null, activation_state: "cancelled" } });
+  h.transport.respond(request.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: "cancelled", agent: { ...agent, state: "inactive", current_activation: null, activation_state: "cancelled" } });
   await interrupting;
   assert.deepEqual(h.session.state.agents, [agent], "control responses do not invent lifecycle events");
   h.client.close();
@@ -105,3 +105,33 @@ for (const [command, method] of [["/job-status", "job/status"], ["/job-wait", "j
 test("Stopping rejection is transient and leaves resume admission to the owner", () => {
   assert.match(describeRpcError({ code: -32000, message: "stopping", data: { kind: "agent_stopping", agent_id: "agent-child" } }), /retry after it becomes inactive/);
 });
+
+for (const outcome of ["cancelled", "succeeded"] as const) {
+  test(`interrupt captures ${outcome} on A without overwriting resumed B`, async () => {
+    const first = subagent("worker", "frozen", "active", { activation_id: "activation-a", current_activation: "activation-a" });
+    const h = await harness(snapshot({ agents: [first] }));
+    const interrupting = h.session.interruptAgent(first.agent_id);
+    const request = await nextRequest(h, "agent/interrupt");
+    const resumed = { ...first, activation_id: "activation-b", current_activation: "activation-b" };
+    h.session.updateState(state => ({ ...state, agents: [resumed] }));
+    h.transport.respond(request.id, { type: "agent_wait", agent_id: first.agent_id, activation_id: "activation-a", outcome, agent: resumed });
+    const result = await interrupting;
+    assert.equal(result.activation_id, "activation-a");
+    assert.equal(result.outcome, outcome);
+    assert.equal(h.session.state.agents[0]?.current_activation, "activation-b");
+    h.client.close();
+  });
+}
+
+for (const command of ["/wait-agent", "/interrupt-agent"] as const) {
+  test(`${command} distinguishes a rolled-back admission from a committed activation`, async () => {
+    const agent = subagent("worker", "frozen", "admitting", { current_activation: "reserved-b" });
+    const h = await harness(snapshot({ agents: [agent] }));
+    const controlling = h.dispatcher.submit(`${command} agent-child`);
+    const request = await nextRequest(h, command === "/wait-agent" ? "agent/wait" : "agent/interrupt");
+    h.transport.respond(request.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: "reserved-b", outcome: null, agent: { ...agent, state: "inactive", current_activation: null } });
+    assert.match(JSON.stringify(await controlling), /ended before an activation committed/);
+    assert.deepEqual(h.session.state.agents, [agent]);
+    h.client.close();
+  });
+}

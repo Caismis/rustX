@@ -53,7 +53,7 @@ Management resolves existing product identity without creating missing state.
 `confined()` still rejects escapes and symlinks below that root; it does not
 canonicalize arbitrary caller-authored private paths into authority.
 
-`SubagentSpawnPlan` retains `ProductRoot`. Child IPC version 24 carries its canonical
+`SubagentSpawnPlan` retains `ProductRoot`. Child IPC version 28 carries its canonical
 root, the child Conversation identity, and a validated incarnation name. It carries
 no second absolute runtime root. The child derives
 `subagents/<ConversationId>/<incarnation>/` and requires that exact private
@@ -364,7 +364,7 @@ execute reacquires them. Conversation admission checks catalog deletion authorit
 after acquiring its allocation lock. Cleanup begins only after file/parent-directory
 durability and runs outside the root freeze and supervisor catalog mutex.
 See [session-deletion-lifecycle.md](session-deletion-lifecycle.md) for commit points,
-uncertainty, recovery, allocator monotonicity, catalog generations, bounded App Server protocol v24 and test mapping.
+uncertainty, recovery, allocator monotonicity, catalog generations, bounded App Server protocol v25 and test mapping.
 
 Preview never retains `ConversationExclusion` while awaiting user confirmation.
 Final inspection remains under the ownership snapshot through exclusion acquisition,

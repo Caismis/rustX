@@ -892,6 +892,7 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::CompactionFailed { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }
         | RuntimeEvent::BackgroundTerminalPublished { .. }
+        | RuntimeEvent::AgentActivationAdmission { .. }
         | RuntimeEvent::SubagentOwnershipCommitted { .. }
         | RuntimeEvent::SubagentTerminalPublished { .. }
         | RuntimeEvent::SubagentTerminalSettled { .. }
@@ -999,7 +1000,9 @@ mod tests {
             child_conversation_id: crate::scripted_suites::common::identity::child_conversation_id(
                 subagent_id,
             ),
-            tool_call_id: ToolCallId::new("call-1"),
+            origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                tool_call_id: ToolCallId::new("call-1"),
+            },
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:p1".to_owned(),

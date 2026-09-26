@@ -134,10 +134,11 @@ pub use process::SubagentSpawnPlan;
 pub(crate) use registry::CommitBoundaryHook;
 pub(crate) use registry::InteractionPublicationAuthority;
 pub use registry::{
-    AgentControlError, AgentMessageAccepted, AgentSnapshot, AgentState, AgentWaitResult,
-    FrozenAgentAuthority, PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink,
-    SubagentListing, SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
-    SubagentStartError, SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentSteerError,
+    ActivationAdmission, AgentActivationOrigin, AgentControlError, AgentMessageAccepted,
+    AgentSnapshot, AgentState, AgentWaitResult, DurableAgentAuthority, PreparedSubagent,
+    SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing, SubagentObserver,
+    SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,
+    SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentSteerError,
     SubagentTerminalMode, SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError,
     SubagentWorkspaceResourceState,
 };
@@ -158,9 +159,7 @@ use crate::events::types::{
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
-use crate::runtime::identity::{
-    AgentId, ConversationId, EventId, MessageId, SubagentId, ToolCallId,
-};
+use crate::runtime::identity::{AgentId, ConversationId, EventId, MessageId, SubagentId};
 use crate::runtime::types::ApprovalMode;
 
 /// The attempt-scoped subagent resolution view (Issue #144).
@@ -588,7 +587,7 @@ pub(crate) fn ownership_event(
     subagent_id: &SubagentId,
     child_agent_id: &AgentId,
     child_conversation_id: &ConversationId,
-    tool_call_id: &ToolCallId,
+    origin: &AgentActivationOrigin,
     agent: &SubagentName,
     definition_digest: &NamedAgentDefinitionDigest,
     profile_digest: &resolver::SubagentExecutionProfileDigest,
@@ -610,7 +609,7 @@ pub(crate) fn ownership_event(
             subagent_id: subagent_id.clone(),
             child_agent_id: child_agent_id.clone(),
             child_conversation_id: child_conversation_id.clone(),
-            tool_call_id: tool_call_id.clone(),
+            origin: origin.clone(),
             agent: agent.as_str().to_owned(),
             definition_digest: definition_digest.as_str().to_owned(),
             profile_digest: profile_digest.as_str().to_owned(),
@@ -821,6 +820,42 @@ pub(crate) fn terminal_workspace_resource(
     }
 }
 
+pub(crate) fn admission_event_id(
+    activation_id: &SubagentId,
+    phase: &crate::events::types::AgentActivationAdmissionPhase,
+) -> EventId {
+    let phase = match phase {
+        crate::events::types::AgentActivationAdmissionPhase::Reserved => "reserved",
+        crate::events::types::AgentActivationAdmissionPhase::RolledBack { .. } => "rolled-back",
+    };
+    EventId::new(format!("agent-admission:{activation_id}:{phase}"))
+}
+
+pub(crate) fn admission_event(
+    conversation_id: &ConversationId,
+    agent_id: &AgentId,
+    activation_id: &SubagentId,
+    origin: &AgentActivationOrigin,
+    phase: crate::events::types::AgentActivationAdmissionPhase,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: admission_event_id(activation_id, &phase),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event: RuntimeEvent::AgentActivationAdmission {
+            agent_id: agent_id.clone(),
+            activation_id: activation_id.clone(),
+            origin: origin.clone(),
+            phase,
+        },
+    }
+}
+
 /// The deterministic event identity of a committed Workflow Agent value.
 /// This fact is committed in the same transaction as the corresponding
 /// `SubagentTerminalSettled` lifecycle fact.
@@ -893,6 +928,7 @@ pub(crate) fn workflow_output_event(
 /// through the narrow `accept_subagent_terminal` transition — the one
 /// durable authority for every normal `SubagentTerminalPublished` fact
 /// (Issue #192).
+#[allow(clippy::too_many_arguments)] // One terminal publication carries exact identity, content and physical proof.
 pub(crate) fn terminal_publication(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
@@ -900,6 +936,7 @@ pub(crate) fn terminal_publication(
     state: SubagentTerminalState,
     content: Vec<UserContentBlock>,
     workspace_resource: &SubagentWorkspaceTerminalResource,
+    physical_settlement_proven: bool,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
     debug_assert!(
@@ -930,6 +967,7 @@ pub(crate) fn terminal_publication(
             child_agent_id: child_agent_id.clone(),
             message_id: message.id.clone(),
             state,
+            physical_settlement_proven,
             workspace_resource: workspace_resource.clone(),
         },
     };
@@ -997,6 +1035,7 @@ pub fn recovery_terminal_publication(
             ),
         })],
         workspace_resource,
+        false,
         timestamp,
     )
 }

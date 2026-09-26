@@ -1167,7 +1167,19 @@ fn native_result(
         RuntimeClientResult::Agent { agent } => MethodResult::Agent {
             agent: Box::new(agent),
         },
-        RuntimeClientResult::Agents { agents } => MethodResult::Agents { agents },
+        RuntimeClientResult::Agents {
+            agents,
+            returned,
+            matched,
+            limit,
+            truncated,
+        } => MethodResult::Agents {
+            agents,
+            returned,
+            matched,
+            limit,
+            truncated,
+        },
         RuntimeClientResult::AgentMessage { accepted } => MethodResult::AgentMessage {
             agent_id: accepted.agent_id,
             activation_id: accepted.activation_id,

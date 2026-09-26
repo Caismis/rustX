@@ -211,17 +211,23 @@ impl ToolExecutor for SubagentExecutor {
                     Err(error) => return failed_result(error.to_string()),
                 };
                 let spec = SubagentStartSpec {
-                    execution_policy: subagent_context.execution_policy(),
-                    resolved,
-                    approval_mode: subagent_context.approval_mode(),
-                    task: input.task,
-                    context: input.context,
-                    tool_call_id: invocation
-                        .id
-                        .canonical_call_id()
-                        .expect("Agent-owned invocation")
-                        .clone(),
-                    terminal: SubagentTerminalMode::Normal,
+                    authority: crate::runtime::subagent::DurableAgentAuthority {
+                        execution_policy: subagent_context.execution_policy(),
+                        resolved,
+                        approval_mode: subagent_context.approval_mode(),
+                    },
+                    admission: crate::runtime::subagent::ActivationAdmission {
+                        task: input.task,
+                        context: input.context,
+                        origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                            tool_call_id: invocation
+                                .id
+                                .canonical_call_id()
+                                .expect("Agent-owned invocation")
+                                .clone(),
+                        },
+                        terminal: SubagentTerminalMode::Normal,
+                    },
                 };
                 // One attempt-derived cancellation authority owns the whole
                 // pre-commit lifecycle: preparation (identity, spawn, startup

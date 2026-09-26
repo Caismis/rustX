@@ -98,6 +98,7 @@ type InteractionAdmissionWaiter = (
 /// One control event the child's semantic driver must act on.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildControlEvent {
+    AdmissionReopened,
     /// The registry closed message admission for this activation.
     SealGranted,
     /// The delegated task arrived (exactly once, after `Ready`).
@@ -591,6 +592,15 @@ impl ChildControlDispatcher {
                     Ok(Some(ParentFrame::InteractionProviderAvailable { available })) => {
                         if events_tx
                             .send(ChildControlEvent::InteractionProviderAvailable { available })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(ParentFrame::AdmissionReopened)) => {
+                        if events_tx
+                            .send(ChildControlEvent::AdmissionReopened)
                             .await
                             .is_err()
                         {

@@ -336,6 +336,22 @@ impl RuntimeClientProjection {
         self.snapshot.effective_plugins = Some(extensions);
     }
 
+    fn bootstrap_agents(
+        &mut self,
+        agents: &[(
+            crate::runtime::subagent::AgentSnapshot,
+            crate::runtime::subagent::SubagentSnapshot,
+        )],
+    ) {
+        self.snapshot.agents.clear();
+        self.seen_activations.clear();
+        for (agent, activation) in agents {
+            self.seen_activations
+                .insert(agent.latest_activation.clone());
+            self.snapshot.agents.push(agent_view(agent, activation));
+        }
+    }
+
     pub(crate) fn bootstrap(
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
@@ -353,19 +369,7 @@ impl RuntimeClientProjection {
         for existing in &seed.background {
             upsert_background(&mut self.snapshot.jobs, background_view(existing));
         }
-        for existing in &seed.subagents {
-            if !matches!(
-                existing.ownership,
-                crate::events::types::SubagentOwnershipKind::Normal
-            ) {
-                continue;
-            }
-            upsert_subagent(
-                &mut self.snapshot.agents,
-                &mut self.seen_activations,
-                subagent_view(existing),
-            );
-        }
+        self.bootstrap_agents(&seed.agents);
         self.snapshot.resources = resources_view(&seed.resources);
         // The bootstrap cut is the *only* place the Todo composition fact
         // enters this projection: `None` here means the attached runtime
@@ -1355,6 +1359,7 @@ impl RuntimeClientProjection {
             // background/subagent/mailbox/message projections.
             RuntimeEvent::BackgroundExecutionCommitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
+            | RuntimeEvent::AgentActivationAdmission { .. }
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
@@ -2195,6 +2200,17 @@ fn upsert_background(background: &mut Vec<RuntimeClientJob>, view: RuntimeClient
 
 /// Projects one authoritative subagent registry snapshot into the external
 /// Runtime Client shape (Issue #60).
+pub(crate) fn agent_view(
+    agent: &crate::runtime::subagent::AgentSnapshot,
+    activation: &crate::runtime::subagent::SubagentSnapshot,
+) -> super::snapshot::RuntimeClientAgent {
+    let mut view = subagent_view(activation);
+    view.state = agent.state;
+    view.current_activation
+        .clone_from(&agent.current_activation);
+    view
+}
+
 pub(crate) fn subagent_view(
     snapshot: &crate::runtime::subagent::SubagentSnapshot,
 ) -> super::snapshot::RuntimeClientAgent {
@@ -5821,7 +5837,9 @@ mod tests {
             ),
             child_agent_id: AgentId::new("agent-child"),
             child_conversation_id: ConversationId::new("conv_57d68983-5497-771e-8aaa-5f1356061697"),
-            tool_call_id: ToolCallId::new("call-1"),
+            origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                tool_call_id: ToolCallId::new("call-1"),
+            },
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:p1".to_owned(),
@@ -5910,6 +5928,42 @@ mod tests {
                 (first.child_agent_id, AgentState::Active)
             ]
         );
+    }
+
+    #[test]
+    fn authoritative_agent_bootstrap_keeps_latest_activation_then_accepts_live_resume() {
+        use crate::runtime::subagent::{AgentSnapshot, AgentState, SubagentState};
+        let mut projection = projection();
+        let mut latest =
+            agent_activation_snapshot(crate::runtime::subagent::SubagentObservation::default());
+        latest.subagent_id = crate::runtime::identity::SubagentId::new("activation-3");
+        latest.state = SubagentState::Succeeded;
+        latest.settled = true;
+        let owner = AgentSnapshot {
+            agent_id: latest.child_agent_id.clone(),
+            conversation_id: latest.child_conversation_id.clone(),
+            parent_agent_id: latest.parent_agent_id.clone(),
+            agent: latest.agent.clone(),
+            state: AgentState::Inactive,
+            current_activation: None,
+            latest_activation: latest.subagent_id.clone(),
+            observation: latest.observation.clone(),
+        };
+        projection.bootstrap_agents(&[(owner, latest.clone())]);
+        let (snapshot, cursor) = projection.snapshot().unwrap();
+        assert_eq!(cursor, RuntimeClientCursor::new(0));
+        assert_eq!(snapshot.agents.len(), 1);
+        assert_eq!(snapshot.agents[0].activation_id, latest.subagent_id);
+        assert_eq!(snapshot.agents[0].state, AgentState::Inactive);
+        let mut next = latest.clone();
+        next.subagent_id = crate::runtime::identity::SubagentId::new("activation-4");
+        next.state = SubagentState::Running;
+        next.settled = false;
+        projection.apply(ConversationObservation::SubagentLifecycle(next.clone()));
+        let (resumed, _) = projection.snapshot().unwrap();
+        assert_eq!(resumed.agents.len(), 1);
+        assert_eq!(resumed.agents[0].agent_id, latest.child_agent_id);
+        assert_eq!(resumed.agents[0].current_activation, Some(next.subagent_id));
     }
 
     #[test]

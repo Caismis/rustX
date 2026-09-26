@@ -38,7 +38,7 @@ root-only scope, and the drain frontier.
 Canonical `ProductRoot` is the sole authority for rustX-owned product storage
 paths. Session, Conversation and child allocations are derived from that identity
 before any private path is authored. Equivalent root aliases converge; symlinks
-below the product root remain invalid private identities. Subagent IPC v24 carries
+below the product root remain invalid private identities. Subagent IPC v28 carries
 canonical product identity plus child Conversation identity and an incarnation
 name, never a second absolute private runtime root. Inspection uses the same
 identity-derived allocation. Embedded workspace managers may remain independent;
@@ -167,7 +167,7 @@ froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
 descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
-heads, and the Todo-specific durable progress sequence. Current schema 45
+heads, and the Todo-specific durable progress sequence. Current schema 46
 replaces these with producer-scoped contribution receipts, generic logical-step
 progress, and typed accepted RequestSnapshot contributions; no old reader remains. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool
@@ -2022,7 +2022,7 @@ The observation plane adds live activity visibility without creating a
 second authority:
 
 - **Lifecycle and activity are orthogonal dimensions.** The closed
-  `AgentState` (Active/Stopping/Inactive) and finite activation `SubagentState`
+  `AgentState` (Admitting/Active/Stopping/Inactive) and finite activation `SubagentState`
   remain distinct authoritative facts. Activity never decides whether a child
   can accept input, resume, or settle. `SubagentActivity`
   (`awaiting_activity`, `model`, `retrying_model`, `tool`, `compacting`,
@@ -2042,7 +2042,7 @@ second authority:
   carries everything except `Activity` onto the fd 0 control stream, while
   one disposable latest-value watch slot is drained by a dedicated
   observation writer onto the fd 1 observation stream (subagent IPC
-  version 9, frame kind 107). Reliable control traffic and disposable
+  version 28, frame kind 107). Reliable control traffic and disposable
   observation traffic therefore have independent backpressure domains: a
   stalled observation writer stalls only itself and can never delay a
   terminal `Result`, a containment `AnchorReleased`, or any other reliable
@@ -2122,7 +2122,7 @@ at the next legal Agent Loop boundary. A send that loses closure sees Stopping,
 never a hidden queue that restarts the Agent after settlement.
 
 Inactive admission reserves one next activation; preparation is transient
-Stopping and cannot create two live activations. The reserved input and frozen
+Admitting and cannot create two live activations. The reserved input and frozen
 Agent authority enter the same child conversation. A failed preparation releases
 the reservation. Later activation IDs are distinct from the Agent and all prior
 activations. Configuration reload or resource reconciliation cannot re-author an admitted Agent.
@@ -2130,7 +2130,9 @@ activations. Configuration reload or resource reconciliation cannot re-author an
 Interrupt captures one current activation, commits cancellation through the
 shared physical-settlement substrate and returns the durable Agent to Inactive.
 Wait captures one activation under the owner lock and never retargets to a later
-resume. Inactive returns immediately; a resume reservation rejects transiently.
+resume. Inactive returns immediately. Admitting captures that reservation and
+waits through commit or conclusive rollback; failed physical rollback reports a
+settlement error. Interrupt can cancel that same reserved admission generation.
 Neither a wait nor a control acknowledgement provides another final-report
 channel. Canonical inbound publishes each activation's report exactly once.
 
@@ -2410,9 +2412,10 @@ ownership commits. Global invocation policies remain global, not profile prose.
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 22 and there is no compatibility decoding.** A
+- **The subagent IPC version is 28 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
-  anything. Version 22 removes the independently authored absolute child runtime
+  anything. Version 28 includes canonical delegation acceptance and acknowledged
+  admission reopening. Version 22 removed the independently authored absolute child runtime
   path: the child derives its private allocation from canonical `ProductRoot`,
   child `ConversationId`, and incarnation identity. Version 21 introduced
   canonical product-root identity for child lifecycle participation (Issue #254).

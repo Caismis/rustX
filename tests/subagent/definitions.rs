@@ -789,7 +789,9 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             child_conversation_id: crate::common::identity::child_conversation_id(
                 subagent_id.as_str(),
             ),
-            tool_call_id: ToolCallId::new("call-sub"),
+            origin: rustx::runtime::subagent::AgentActivationOrigin::CreationTool {
+                tool_call_id: ToolCallId::new("call-sub"),
+            },
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:profile".to_owned(),
@@ -799,8 +801,9 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             ),
         },
     };
+    let (committed, authority) = crate::agent_authority::admit_agent(committed);
     store
-        .append_event(committed)
+        .append_agent_admission(committed, &authority)
         .expect("durable ownership commit");
 
     let events = store.read_events(None, 64).expect("read events").events;
@@ -848,7 +851,9 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         subagent_id: SubagentId::new("conv-1-subagent-1"),
         child_agent_id: AgentId::new("agent-child"),
         child_conversation_id: ConversationId::new("conv_57d68983-5497-771e-8aaa-5f1356061697"),
-        tool_call_id: ToolCallId::new("call-1"),
+        origin: rustx::runtime::subagent::AgentActivationOrigin::CreationTool {
+            tool_call_id: ToolCallId::new("call-1"),
+        },
         agent: "explore".to_owned(),
         definition_digest: "sha256:d1".to_owned(),
         profile_digest: "sha256:p1".to_owned(),

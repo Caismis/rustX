@@ -183,6 +183,9 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     });
     throw error;
   } finally {
+    // Close the browser connection before shutting down its Host so reconnect
+    // cannot race Playwright context teardown.
+    await page.close();
     const report = await fixture.stop(passed);
     await test.info().attach('retry-native-fixture-report', { contentType: 'application/json',
       body: JSON.stringify({ phase, report, diagnostics: fixture.diagnostics() }, null, 2) });

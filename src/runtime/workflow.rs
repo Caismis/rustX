@@ -2694,20 +2694,23 @@ impl WorkflowRuntime {
             }
         })?;
         let spec = crate::runtime::subagent::SubagentStartSpec {
-            execution_policy: context.execution_policy(),
-            resolved,
-            approval_mode: context.approval_mode(),
-            task: agent.task.clone(),
-            context: Some(context_package),
-            tool_call_id: crate::runtime::identity::ToolCallId::new(format!(
-                "workflow-child:{:x}",
-                Sha256::digest(serde_json::to_vec(node_id).expect("instance serialization"))
-            )),
-            terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
-                output_schema: agent.output_schema.clone(),
-                workflow_id: run.program.id().clone(),
-                run_id: run.run_id.clone(),
-                node_id: Box::new(node_id.clone()),
+            authority: crate::runtime::subagent::DurableAgentAuthority {
+                execution_policy: context.execution_policy(),
+                resolved,
+                approval_mode: context.approval_mode(),
+            },
+            admission: crate::runtime::subagent::ActivationAdmission {
+                task: agent.task.clone(),
+                context: Some(context_package),
+                origin: crate::runtime::subagent::AgentActivationOrigin::Workflow {
+                    node_id: Box::new(node_id.clone()),
+                },
+                terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
+                    output_schema: agent.output_schema.clone(),
+                    workflow_id: run.program.id().clone(),
+                    run_id: run.run_id.clone(),
+                    node_id: Box::new(node_id.clone()),
+                },
             },
         };
         let child_cancellation = cancellation.child_signal();

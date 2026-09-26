@@ -1,4 +1,4 @@
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v24';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v25';
 import type { AppServerClient } from '../../client/app-server';
 import { AgentCard, JobCard, WorkflowCard, workflowKey } from '../components/ActivityCards';
 

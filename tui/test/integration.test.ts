@@ -841,3 +841,68 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
     await host.shutdown(); await external?.stop(); server.cleanup(); await provider.finish();
   }
 });
+
+
+for (const carrier of ["stdio", "websocket"] as const) it(`native Agent interrupt ${carrier}: captured settlement, same identity resume, inactive no-op`, { skip: SKIP, timeout: 120_000 }, async () => {
+  const provider = await ProviderEmulator.start("tui_agent_interrupt");
+  const server = ServerFixture.create("rustx-agent-interrupt-", provider.url());
+  const workspace = server.workspace("parent");
+  writeFileSync(join(workspace, "rustx.toml"), '[agent]\nagents = ["reviewer"]\n');
+  mkdirSync(join(workspace, ".agents/agents"), { recursive: true });
+  writeFileSync(join(workspace, ".agents/agents/reviewer.toml"), 'description = "Review"\ninstructions = "Inspect the workspace"\n[tools]\nbuiltin = ["read"]\n');
+  const external = carrier === "websocket" ? await ExternalAppServer.start(server) : undefined;
+  const host = external ? await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN }) : await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: server.runtimeRoot }, env: server.env });
+  try {
+    const session = await openSession(host, { cwd: workspace });
+    const stop = host.client.onNotification(message => session.applyNotification(message));
+    await session.submitInbound([{ type: "text", text: "TUI_AGENT_PARENT: delegate a review" }]);
+    await Promise.all([provider.awaitGate("interrupt-initial-0"), provider.awaitGate("interrupt-initial-1")]);
+    await session.resync();
+    const first = session.state.agents[0]!;
+    assert.equal(first.state, "active");
+    const interrupted = await session.interruptAgent(first.agent_id);
+    assert.equal(interrupted.type, "agent_wait");
+    assert.equal(interrupted.activation_id, first.activation_id);
+    assert.equal(interrupted.outcome, "cancelled");
+    assert.equal(interrupted.agent.agent_id, first.agent_id);
+    await Promise.all([provider.releaseGate("interrupt-initial-0"), provider.releaseGate("interrupt-initial-1")]);
+    await session.resync();
+    assert.equal(session.state.agents[0]?.state, "inactive");
+    await provider.awaitGate("interrupt-parent-notice");
+    await provider.releaseGate("interrupt-parent-notice");
+    if (!JSON.stringify(session.state.transcript).includes("Parent observed interruption.")) {
+      await new Promise<void>(resolve => {
+        const unsubscribe = session.onState(() => {
+          if (JSON.stringify(session.state.transcript).includes("Parent observed interruption.")) { unsubscribe(); resolve(); }
+        });
+      });
+    }
+    const resumed = await session.sendMessage(first.agent_id, "TUI_AGENT_RESUME: continue the review");
+    assert.equal(resumed.resumed, true);
+    assert.notEqual(resumed.activation_id, first.activation_id);
+    await provider.awaitGate("interrupt-resumed");
+    await session.resync();
+    assert.equal(session.state.agents[0]?.agent_id, first.agent_id);
+    assert.equal(session.state.agents[0]?.child_conversation_id, first.child_conversation_id);
+    const waiting = session.waitAgent(first.agent_id);
+    await provider.releaseGate("interrupt-resumed");
+    const completed = await waiting;
+    assert.equal(completed.activation_id, resumed.activation_id);
+    assert.equal(completed.outcome, "succeeded");
+    const inactive = await session.interruptAgent(first.agent_id);
+    assert.equal(inactive.activation_id, null);
+    assert.equal(inactive.outcome, null);
+    assert.equal(inactive.agent.agent_id, first.agent_id);
+    // Await the canonical parent report through its native stream, not a timer.
+    if (!JSON.stringify(session.state.transcript).includes("Parent received resumed report.")) {
+      await new Promise<void>(resolve => {
+        const unsubscribe = session.onState(() => {
+          if (JSON.stringify(session.state.transcript).includes("Parent received resumed report.")) { unsubscribe(); resolve(); }
+        });
+      });
+    }
+    stop();
+  } finally {
+    await host.shutdown(); await external?.stop(); server.cleanup(); await provider.finish();
+  }
+});

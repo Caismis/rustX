@@ -730,13 +730,19 @@ async fn launch_wired_child_full(
         .registry
         .prepare(
             &SubagentStartSpec {
-                execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                resolved: resolved_child_spec("conformance"),
-                approval_mode: rustx::runtime::ApprovalMode::Policy,
-                task: task.to_owned(),
-                context: None,
-                tool_call_id: ToolCallId::new("call-138"),
-                terminal: rustx::runtime::subagent::SubagentTerminalMode::Normal,
+                authority: crate::runtime::subagent::DurableAgentAuthority {
+                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                    resolved: resolved_child_spec("conformance"),
+                    approval_mode: rustx::runtime::ApprovalMode::Policy,
+                },
+                admission: crate::runtime::subagent::ActivationAdmission {
+                    task: task.to_owned(),
+                    context: None,
+                    origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                        tool_call_id: ToolCallId::new("call-138"),
+                    },
+                    terminal: rustx::runtime::subagent::SubagentTerminalMode::Normal,
+                },
             },
             &CancellationSignal::new(),
         )
@@ -5462,7 +5468,7 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     let recorded = Arc::new(RecordingObserver::default());
     plane
         .registry
-        .install_observer_and_snapshots(Arc::clone(&recorded) as Arc<dyn SubagentObserver>);
+        .install_observer_and_agent_snapshots(Arc::clone(&recorded) as Arc<dyn SubagentObserver>);
     let child = child_fixture(
         &dir,
         &ConversationId::new("conv_ece31631-4cc9-772b-8aab-e3433f26747a"),
@@ -5825,6 +5831,8 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
         .send_message(
             &wired.accepted.child_agent_id,
             "Focus on cancellation ownership and ignore TUI code.",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
         )
         .await
         .expect("the running child durably accepts the guidance");
@@ -5933,7 +5941,12 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
     for message in ["steer A", "steer B", "steer C"] {
         plane
             .registry
-            .send_message(&wired.accepted.child_agent_id, message)
+            .send_message(
+                &wired.accepted.child_agent_id,
+                message,
+                crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                crate::runtime::cancellation::CancellationSignal::new(),
+            )
             .await
             .unwrap_or_else(|error| panic!("{message} is accepted: {error}"));
     }

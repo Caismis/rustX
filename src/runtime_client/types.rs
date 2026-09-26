@@ -389,7 +389,8 @@ pub enum RuntimeClientSessionRequest {
 /// Version 49 unifies native Turn process ownership, counts and control seats.
 /// Version 50 separates finite Jobs from durable Agents and exposes exact
 /// activation correlation and owner-arbitrated continuation controls (#411).
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 50;
+/// Version 51 makes admission state, activation origin and bounded Agent listing explicit.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 51;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1180,6 +1181,10 @@ pub enum RuntimeClientResult {
     },
     Agents {
         agents: Vec<RuntimeClientAgent>,
+        returned: usize,
+        matched: usize,
+        limit: usize,
+        truncated: bool,
     },
     AgentMessage {
         accepted: crate::runtime::subagent::AgentMessageAccepted,
@@ -1404,7 +1409,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 50);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 51);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

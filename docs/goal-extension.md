@@ -122,7 +122,7 @@ enabled Goal fails `unsupported_child_scope` before child spawn. Workflow applie
 that same check; root Goal is never implicitly inherited.
 
 `goal_state` is one native singleton record inside the existing conversation
-SQLite database (schema 45; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
+SQLite database (schema 46; Goal storage introduced in schema 34). Its bounded JSON snapshot stores GoalRef, objective,
 phase, blocked reason, origin, autonomous budget/consumed count and the last
 round's ordinary MessageId. Identity is conversation-scoped. Complete is terminal;
 a subsequent create starts a new identity. Revision increases exactly once for

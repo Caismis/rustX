@@ -85,7 +85,7 @@ test('native generated preparation failures survive the remote client and create
   const transport = new FakeTransport();
   const initializing = AppServerClient.initialize({ transport });
   const [initialize] = await transport.log.awaitMethod('initialize');
-  transport.respond(initialize!.id, { type: 'initialized', protocol_version: 24, capabilities: {
+  transport.respond(initialize!.id, { type: 'initialized', protocol_version: 25, capabilities: {
     multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [],
   } });
   const client = await initializing;

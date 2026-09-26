@@ -4,7 +4,7 @@ import { ConversationComposer } from '../src/app/new-conversation/ConversationCo
 import { NavigationEpoch } from '../src/app/commands/native';
 import { RpcFailure } from '../src/client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v24';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v25';
 import { cfg3Source } from './cfg3-data';
 import { Server } from './fixture';
 let server: Server;

@@ -557,9 +557,8 @@ export class AppServerSession {
     return this.#client.call("agent/wait", { target: this.#target, agent_id: agentId }, "agent_wait");
   }
 
-  async interruptAgent(agentId: AgentId): Promise<RuntimeClientAgent> {
-    const result = await this.#client.call("agent/interrupt", { target: this.#target, agent_id: agentId }, "agent");
-    return result.agent;
+  async interruptAgent(agentId: AgentId) {
+    return this.#client.call("agent/interrupt", { target: this.#target, agent_id: agentId }, "agent_wait");
   }
 
   /** Disposes one retained subagent workspace through the runtime authority. */

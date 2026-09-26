@@ -1331,7 +1331,7 @@ async fn handshake_core(
                 Ok(Some(ChildFrame::Diagnostic(_))) => {}
                 // Guidance is only ever routed to a committed, delegated
                 // child, so an acceptance answer cannot precede `Ready`.
-                Ok(Some(ChildFrame::SealRequested | ChildFrame::GuidanceResult(_))) => {
+                Ok(Some(ChildFrame::SealRequested | ChildFrame::SealOpen | ChildFrame::DelegateAccepted | ChildFrame::GuidanceResult(_))) => {
                     return Err(SpawnError::Handshake {
                         detail: "the child answered guidance before Ready".to_owned(),
                     });
@@ -1793,6 +1793,17 @@ async fn drive_child_control(
             }
             frame = read_child_frame(&mut control) => {
                 match frame {
+                    Ok(Some(ChildFrame::DelegateAccepted)) => {
+                        if let Some(owner) = &interactions { owner.accept_delegate(); }
+                    }
+                    Ok(Some(ChildFrame::SealOpen)) => {
+                        if interactions.as_ref().is_some_and(super::registry::SubagentInteractionSink::reopen_admission)
+                            && let Err(error) = write_parent_frame(&mut control, &ParentFrame::AdmissionReopened).await {
+                            violation = Some(error.to_string());
+                        }
+                        // Cancellation won: its already-owned FIFO command answers
+                        // the child instead; never grant a new semantic turn.
+                    }
                     Ok(Some(ChildFrame::SealRequested)) => {
                         if let Some(owner) = &interactions { owner.begin_seal(); }
                         seal_pending = true;

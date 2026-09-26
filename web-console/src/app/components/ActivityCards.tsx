@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v24';
+import type { RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v25';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { json } from '../../bindings/projection';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
@@ -14,6 +14,7 @@ import { Message } from '../agent/Message';
 const label = (value: string) => value.replaceAll('_', ' ');
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
+type AgentWait = Extract<MethodResult, { type: 'agent_wait' }>;
 type Controls = { client?: AppServerClient; sessionId?: string };
 
 /** Request presentation only: native state always comes from the next snapshot.
@@ -39,7 +40,9 @@ function useActivityRequest({ client, sessionId }: Controls) {
 export function AgentCard({ agent, ...controls }: { agent: RuntimeClientAgent } & Controls) {
   const request = useActivityRequest(controls);
   const waitRequest = useActivityRequest(controls);
-  const [waitedActivation, setWaitedActivation] = useState<string | null>();
+  const interruptRequest = useActivityRequest(controls);
+  const [settledActivation, setSettledActivation] = useState<Pick<AgentWait, 'activation_id' | 'outcome'>>();
+  const observeSettlement = (result: AgentWait) => setSettledActivation({ activation_id: result.activation_id, outcome: result.outcome });
   const [message, setMessage] = useState('');
   const [transcript, setTranscript] = useState<RuntimeClientTranscriptPage>();
   const [open, setOpen] = useState(false);
@@ -69,26 +72,27 @@ export function AgentCard({ agent, ...controls }: { agent: RuntimeClientAgent } 
     if (current()) { setTranscript(previous => before && previous ? { ...result.page, entries: [...(result.page.entries ?? []), ...(previous.entries ?? [])] } : result.page); setOpen(true); }
   });
   return <section data-agent-id={agent.agent_id} data-agent-state={agent.state} data-activation-id={agent.current_activation ?? undefined} aria-label={`Agent ${agent.agent}`}>
-    <SettingsCard title={`Agent · ${agent.agent}`} meta={<Badge>{agent.state === 'active' ? 'Working' : agent.state === 'stopping' ? 'Stopping…' : 'Inactive'}</Badge>}>
+    <SettingsCard title={`Agent · ${agent.agent}`} meta={<Badge>{agent.state === 'active' ? 'Working' : agent.state === 'admitting' ? 'Admitting…' : agent.state === 'stopping' ? 'Stopping…' : 'Inactive'}</Badge>}>
       <small className={css.identity}>Agent {agent.agent_id} · Parent {agent.parent_agent_id} · Conversation {agent.child_conversation_id}</small>
-      <p>{agent.state === 'inactive' ? `Last activation: ${label(agent.activation_state)}` : activity.type === 'waiting' ? `Waiting for ${label(activity.on.type)}` : label(activity.type)}
-        {(activity.type === 'model' || activity.type === 'retrying_model') && activity.retry > 0 && <> · Retry {activity.retry}</>}
+      <p>{agent.state === 'inactive' ? `Last activation: ${label(agent.activation_state)}` : agent.state === 'admitting' ? 'Preparing activation' : activity.type === 'waiting' ? `Waiting for ${label(activity.on.type)}` : label(activity.type)}
+        {agent.state === 'active' && (activity.type === 'model' || activity.type === 'retrying_model') && activity.retry > 0 && <> · Retry {activity.retry}</>}
       </p>
       <small className={css.identity}>{agent.current_activation ? `Activation ${agent.current_activation}` : `Last activation ${agent.activation_id}`}</small>
       {agent.detail && <p>{detail(agent.detail)}</p>}
       {controls.client && <>
         <div className={css.controls}>
           <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => { setOpen(true); refreshTranscript(value => value + 1); }}>Transcript</Button>
-          <Button size="sm" variant="outline" disabled={waitRequest.disabled} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) setWaitedActivation(result.activation_id ?? null); })}>Wait for activation</Button>
-          <Button size="sm" variant="outline" disabled={request.disabled || agent.state !== 'active'} onClick={() => void request.run(async (client, target) => { await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent'); })}>Interrupt</Button>
+          <Button size="sm" variant="outline" disabled={waitRequest.disabled} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>Wait for activation</Button>
+          <Button size="sm" variant="outline" disabled={interruptRequest.disabled || agent.state === 'inactive'} onClick={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>Interrupt</Button>
         </div>
         <form className={css.message} onSubmit={event => { event.preventDefault(); if (!message.trim()) return; const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message'); if (current()) setMessage(value => value === submitted ? '' : value); }); }}>
-          <Input aria-label={`Message Agent ${agent.agent}`} placeholder={agent.state === 'inactive' ? 'Send a message to resume' : 'Message this Agent'} value={message} onChange={event => setMessage(event.target.value)} disabled={request.disabled || agent.state === 'stopping'}/>
-          <Button size="sm" type="submit" disabled={request.disabled || agent.state === 'stopping' || !message.trim()}>Send message</Button>
+          <Input aria-label={`Message Agent ${agent.agent}`} placeholder={agent.state === 'inactive' ? 'Send a message to resume' : 'Message this Agent'} value={message} onChange={event => setMessage(event.target.value)} disabled={request.disabled || agent.state === 'stopping' || agent.state === 'admitting'}/>
+          <Button size="sm" type="submit" disabled={request.disabled || agent.state === 'stopping' || agent.state === 'admitting' || !message.trim()}>Send message</Button>
         </form>
-        {(request.pending || waitRequest.pending) && <small role="status">Waiting for runtime…</small>}
+        {(request.pending || waitRequest.pending || interruptRequest.pending) && <small role="status">Waiting for runtime…</small>}
         {waitRequest.error && <p role="alert">{waitRequest.error}</p>}
-        {waitedActivation !== undefined && <small role="status">{waitedActivation === null ? 'Agent was inactive when Wait observed it.' : `Activation ${waitedActivation} settled.`}</small>}
+        {interruptRequest.error && <p role="alert">{interruptRequest.error}</p>}
+        {settledActivation && <small role="status">{settledActivation.activation_id == null ? 'Agent was inactive when the operation observed it.' : `Activation ${settledActivation.activation_id}: ${settledActivation.outcome ? label(settledActivation.outcome) : 'admission ended before execution'}.`}</small>}
         {request.error && <p role="alert">{request.error}</p>}
       </>}
       {transcriptLoading && <small role="status">Reading child conversation…</small>}
