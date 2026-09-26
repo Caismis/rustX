@@ -1,5 +1,4 @@
 mod borrowed_workspace;
-mod durable_agents;
 mod lifecycle;
 mod workflow_disposal;
 
@@ -7,64 +6,6 @@ use super::*;
 use crate::local_runtime::session_deletion::DeletionTargetSnapshot;
 use crate::runtime::identity::{AgentId, SubagentId};
 use crate::runtime::workspace::{GitWorktreeSnapshot, WorkspaceIsolation, WorkspaceSnapshot};
-
-/// Current native Agent admission fixture. Workflow children have no durable
-/// continuation authority and keep their finite Workflow owner unchanged.
-pub(crate) fn admit_agent(
-    mut envelope: crate::events::types::RuntimeEventEnvelope,
-) -> (
-    crate::events::types::RuntimeEventEnvelope,
-    crate::runtime::subagent::DurableAgentAuthority,
-) {
-    if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
-        admitted_authority,
-        child_agent_id,
-        ownership: crate::events::types::SubagentOwnershipKind::Normal,
-        agent,
-        definition_digest,
-        workspace,
-        ..
-    } = &mut envelope.event
-    {
-        *admitted_authority = Some(child_agent_id.clone());
-        let authority = crate::runtime::subagent::DurableAgentAuthority {
-            resolved: crate::runtime::subagent::ResolvedSubagentSpec {
-                environment: Vec::new(),
-                generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
-                skill_roots: Vec::new(),
-                selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
-                agent: crate::runtime::subagent::SubagentName::parse(agent).unwrap(),
-                definition_digest: serde_json::from_value(serde_json::json!(definition_digest))
-                    .unwrap(),
-                execution_deadline: None,
-                workspace_policy: if workspace.is_isolated() {
-                    crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-                        require_clean_parent: true,
-                    }
-                } else {
-                    crate::runtime::workspace::WorkspacePolicy::SharedWorkspace
-                },
-                instructions: "fixture".into(),
-                model: crate::model::frozen::test_frozen_model_spec(
-                    serde_json::from_value(serde_json::json!("local/model")).unwrap(),
-                ),
-                tools: Vec::new(),
-                skills: Vec::new(),
-                project_instructions: Vec::new(),
-                materialization:
-                    crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
-                extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
-                    crate::context::AgentStatusConfig::default(),
-                )
-                .and_todo(),
-            },
-            execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-            approval_mode: crate::runtime::ApprovalMode::Policy,
-        };
-        return (envelope, authority);
-    }
-    panic!("fixture requires native Agent ownership")
-}
 
 pub(super) fn child(
     root: &std::path::Path,
@@ -93,26 +34,20 @@ pub(super) fn child(
     } else {
         WorkspaceSnapshot::shared(root.join("external-project"))
     };
-    let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
-        crate::runtime::subagent::ownership_event(
-            &crate::runtime::identity::AgentId::new("agent-parent"),
-            parent.conversation_id(),
-            &subagent,
-            &AgentId::new(format!("agent-{id}")),
-            &id,
-            &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                tool_call_id: ToolCallId::new(format!("call-{id}")),
-            },
-            &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
-            crate::events::types::SubagentOwnershipKind::Normal,
-            &workspace,
-            Utc::now(),
-        ),
+    let event = crate::runtime::subagent::ownership_event(
+        parent.conversation_id(),
+        &subagent,
+        &AgentId::new(format!("agent-{id}")),
+        &id,
+        &ToolCallId::new(format!("call-{id}")),
+        &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+        &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+        &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
+        crate::events::types::SubagentOwnershipKind::Normal,
+        &workspace,
+        Utc::now(),
     );
-    parent.append_agent_admission(event, &authority).unwrap();
+    parent.append_event(event).unwrap();
     if isolated {
         let tree = workspace.git_worktree().unwrap();
         std::fs::create_dir_all(&tree.physical_worktree_root).unwrap();
@@ -131,18 +66,13 @@ pub(super) fn child(
                 dirty: true,
             },
         };
-        let (draft, event) = crate::runtime::subagent::terminal_publication(
+        let (draft, event) = crate::runtime::subagent::recovery_terminal_publication(
             parent.conversation_id(),
             &subagent,
             &AgentId::new(format!("agent-{id}")),
-            crate::events::types::SubagentTerminalState::Interrupted,
-            vec![crate::message::types::UserContentBlock::Text(
-                crate::message::content::TextBlock {
-                    text: "fixture physical settlement proven".into(),
-                },
-            )],
+            "explore",
+            "sha256:definition",
             &resource,
-            true,
             Utc::now(),
         );
         parent.accept_subagent_terminal(None, draft, event).unwrap();
@@ -512,28 +442,20 @@ fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
     )
     .unwrap();
     let subagent = SubagentId::for_conversation(&id, 1);
-    let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
-        crate::runtime::subagent::ownership_event(
-            &crate::runtime::identity::AgentId::new("agent-parent"),
-            &id,
-            &subagent,
-            &AgentId::new("agent-cycle"),
-            &node.conversation_id,
-            &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                tool_call_id: ToolCallId::new("cycle"),
-            },
-            &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
-            crate::events::types::SubagentOwnershipKind::Normal,
-            &WorkspaceSnapshot::shared(root.path().join("external")),
-            Utc::now(),
-        ),
+    let event = crate::runtime::subagent::ownership_event(
+        &id,
+        &subagent,
+        &AgentId::new("agent-cycle"),
+        &node.conversation_id,
+        &ToolCallId::new("cycle"),
+        &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+        &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+        &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
+        crate::events::types::SubagentOwnershipKind::Normal,
+        &WorkspaceSnapshot::shared(root.path().join("external")),
+        Utc::now(),
     );
-    child_store
-        .append_agent_admission(event.clone(), &authority)
-        .unwrap();
+    child_store.append_event(event.clone()).unwrap();
     assert!(DeletionTargetSnapshot::inspect(root.path(), &session).is_err());
     // Simulate a tampered durable child reference without following or creating it.
     let path = crate::runtime::subagent::child_conversation_store_path(root.path(), &session, &id);
@@ -788,14 +710,19 @@ fn deletion_revision_changes_for_target_nodes_children_and_nested_children() {
 }
 
 #[test]
-fn activation_disposal_cannot_release_durable_agent_workspace_ownership() {
+fn deletion_revision_tracks_retained_and_partial_and_complete_disposal() {
     use crate::events::types::SubagentWorkspaceDisposalSettlement;
     let (root, catalog, _) = open_catalog();
-    let session = first_session(&catalog);
-    let (node, _) = catalog.lineage(&session, None).unwrap();
+    let (session, node, _) = catalog
+        .lineage(&first_session(&catalog), None)
+        .map(|(node, state)| (first_session(&catalog), node, state))
+        .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
+    let initial = revision(root.path(), &session);
     child(root.path(), &parent, 1, true);
     let preflight = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
+    let retained = *preflight.ownership_revision();
+    assert_ne!(initial, retained);
     let workspace = &preflight.workspace_blockers()[0].workspace;
     let tree = workspace.git_worktree().unwrap();
     let handoff = crate::runtime::workspace::WorkspaceHandoff {
@@ -818,6 +745,27 @@ fn activation_disposal_cannot_release_durable_agent_workspace_ownership() {
             ),
         )
         .unwrap();
+    assert_eq!(
+        revision(root.path(), &session),
+        retained,
+        "intent alone removes no blocker or allocation"
+    );
+    parent
+        .commit_subagent_workspace_disposal_settlement(
+            crate::runtime::subagent::workspace_disposal_settled_event(
+                &node.conversation_id,
+                &id,
+                &handoff,
+                SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+    let branch_only = revision(root.path(), &session);
+    assert_ne!(
+        retained, branch_only,
+        "partial disposal leaves only a branch blocker"
+    );
     parent
         .commit_subagent_workspace_disposal_settlement(
             crate::runtime::subagent::workspace_disposal_settled_event(
@@ -829,9 +777,12 @@ fn activation_disposal_cannot_release_durable_agent_workspace_ownership() {
             ),
         )
         .unwrap();
-    assert!(
-        DeletionTargetSnapshot::inspect(root.path(), &session).is_err(),
-        "finite activation disposal must not erase its durable Agent's resource"
+    let disposed = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
+    assert!(disposed.workspace_blockers().is_empty());
+    assert_ne!(
+        &branch_only,
+        disposed.ownership_revision(),
+        "complete disposal clears the blocker"
     );
 }
 
@@ -912,29 +863,21 @@ fn deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events() 
     let snapshot = DeletionTargetSnapshot::inspect(root.path(), &target).unwrap();
     activity(&store, 42);
     let id = SubagentId::for_conversation(&other.conversation_id, 1);
-    let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
-        crate::runtime::subagent::ownership_event(
-            &crate::runtime::identity::AgentId::new("agent-parent"),
-            &other.conversation_id,
-            &id,
-            &AgentId::new("agent"),
-            &ConversationId::generate(),
-            &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                tool_call_id: ToolCallId::new("call"),
-            },
-            &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
-            crate::events::types::SubagentOwnershipKind::Normal,
-            &WorkspaceSnapshot::shared(root.path().join("external")),
-            Utc::now(),
-        ),
+    let event = crate::runtime::subagent::ownership_event(
+        &other.conversation_id,
+        &id,
+        &AgentId::new("agent"),
+        &ConversationId::generate(),
+        &ToolCallId::new("call"),
+        &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+        &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+        &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
+        crate::events::types::SubagentOwnershipKind::Normal,
+        &WorkspaceSnapshot::shared(root.path().join("external")),
+        Utc::now(),
     );
     assert!(
-        store
-            .append_agent_admission(event.clone(), &authority)
-            .is_err(),
+        store.append_event(event.clone()).is_err(),
         "no graph transition can race the retained ownership freeze"
     );
     assert!(
@@ -943,7 +886,7 @@ fn deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events() 
             .is_err()
     );
     drop(snapshot);
-    store.append_agent_admission(event, &authority).unwrap();
+    store.append_event(event).unwrap();
 }
 
 #[test]
@@ -959,28 +902,20 @@ fn deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change() {
         .unwrap();
     let other_store = store_for(&catalog, &other.session_id, &other.conversation_id);
     let id = SubagentId::for_conversation(&other.conversation_id, 1);
-    let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
-        crate::runtime::subagent::ownership_event(
-            &crate::runtime::identity::AgentId::new("agent-parent"),
-            &other.conversation_id,
-            &id,
-            &AgentId::new("agent"),
-            &owned_child,
-            &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                tool_call_id: ToolCallId::new("call"),
-            },
-            &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
-            crate::events::types::SubagentOwnershipKind::Normal,
-            &WorkspaceSnapshot::shared(root.path().join("external")),
-            Utc::now(),
-        ),
+    let event = crate::runtime::subagent::ownership_event(
+        &other.conversation_id,
+        &id,
+        &AgentId::new("agent"),
+        &owned_child,
+        &ToolCallId::new("call"),
+        &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+        &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+        &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
+        crate::events::types::SubagentOwnershipKind::Normal,
+        &WorkspaceSnapshot::shared(root.path().join("external")),
+        Utc::now(),
     );
-    other_store
-        .append_agent_admission(event, &authority)
-        .unwrap();
+    other_store.append_event(event).unwrap();
     assert!(
         DeletionTargetSnapshot::inspect(root.path(), &target).is_err(),
         "a foreign ownership claim must fail closed, not merely yield a different token"

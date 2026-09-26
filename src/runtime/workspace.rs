@@ -32,9 +32,6 @@
 //! artifacts alone are disposable execution output and do not force a
 //! handoff.
 
-mod agent;
-pub(crate) use agent::{AgentWorkspace, AgentWorkspaceAccess};
-
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{ErrorKind, Read};
@@ -423,8 +420,6 @@ pub enum WorkspaceUnresolvedReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkspaceSettlementDisposition {
-    /// Returned to the durable Agent; its workspace remains exclusively owned.
-    AgentRetained,
     /// Physical node access returned to its run; the child owns no resource.
     Borrowed,
     /// Shared workspace: there is no runtime-owned isolated worktree.
@@ -540,8 +535,7 @@ impl WorkspaceSettlement {
     pub fn handoff(&self) -> Option<&WorkspaceHandoff> {
         match &self.disposition {
             WorkspaceSettlementDisposition::Retained { handoff, .. } => Some(handoff),
-            WorkspaceSettlementDisposition::AgentRetained
-            | WorkspaceSettlementDisposition::Borrowed
+            WorkspaceSettlementDisposition::Borrowed
             | WorkspaceSettlementDisposition::Shared
             | WorkspaceSettlementDisposition::Removed
             | WorkspaceSettlementDisposition::PreservedUnresolved { .. } => None,
@@ -557,8 +551,7 @@ impl WorkspaceSettlement {
                 WorkspaceCleanup::Shared
             }
             WorkspaceSettlementDisposition::Removed => WorkspaceCleanup::Removed,
-            WorkspaceSettlementDisposition::AgentRetained
-            | WorkspaceSettlementDisposition::Retained { .. }
+            WorkspaceSettlementDisposition::Retained { .. }
             | WorkspaceSettlementDisposition::PreservedUnresolved { .. } => {
                 WorkspaceCleanup::Preserved
             }
@@ -577,8 +570,7 @@ impl WorkspaceSettlement {
             | WorkspaceSettlementDisposition::PreservedUnresolved { detail: error, .. } => {
                 Some(error)
             }
-            WorkspaceSettlementDisposition::AgentRetained
-            | WorkspaceSettlementDisposition::Borrowed
+            WorkspaceSettlementDisposition::Borrowed
             | WorkspaceSettlementDisposition::Shared
             | WorkspaceSettlementDisposition::Removed
             | WorkspaceSettlementDisposition::Retained {
@@ -593,8 +585,7 @@ impl WorkspaceSettlement {
     pub const fn unresolved_reason(&self) -> Option<WorkspaceUnresolvedReason> {
         match self.disposition {
             WorkspaceSettlementDisposition::PreservedUnresolved { reason, .. } => Some(reason),
-            WorkspaceSettlementDisposition::AgentRetained
-            | WorkspaceSettlementDisposition::Borrowed
+            WorkspaceSettlementDisposition::Borrowed
             | WorkspaceSettlementDisposition::Shared
             | WorkspaceSettlementDisposition::Removed
             | WorkspaceSettlementDisposition::Retained { .. } => None,
@@ -1108,7 +1099,6 @@ impl WorkspaceManager {
             WorkspaceDisposalPhase::Authorized,
             false,
             None,
-            false,
         )
         .await
     }
@@ -1133,38 +1123,11 @@ impl WorkspaceManager {
             phase,
             true,
             None,
-            false,
         )
         .await
     }
 
-    /// Release an unchanged durable Agent workspace after Session deletion committed.
-    /// Git's unforced removal protects edits racing the frozen cleanup workset.
-    pub(crate) async fn dispose_agent_workspace_for_session_delete(
-        &self,
-        owner_id: &SubagentId,
-        snapshot: &WorkspaceSnapshot,
-        handoff: &WorkspaceHandoff,
-    ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
-        if handoff.dirty || handoff.head_commit != handoff.base_commit {
-            return Err(WorkspaceDisposalError::OwnershipMismatch {
-                detail: "Session deletion cannot discard Agent workspace changes".into(),
-            });
-        }
-        let _disposal = self.disposal_lock.lock().await;
-        self.dispose_authorized_workspace_inner(
-            &owner_id.into(),
-            snapshot,
-            handoff,
-            WorkspaceDisposalPhase::Authorized,
-            true,
-            None,
-            true,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One ordered physical settlement protocol.
+    #[allow(clippy::too_many_lines)] // One ordered physical settlement protocol.
     async fn dispose_authorized_workspace_inner(
         &self,
         owner_id: &WorkspaceOwner,
@@ -1174,7 +1137,6 @@ impl WorkspaceManager {
         durable_intent_committed: bool,
         // A proven terminal candidate or a last-proven recovery baseline.
         content_reference: Option<&CandidateReference>,
-        require_pristine: bool,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
         fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
             WorkspaceDisposalError::OwnershipMismatch {
@@ -1262,14 +1224,18 @@ impl WorkspaceManager {
                         }
                         self.verify_retained_workspace(owner_id, snapshot, handoff)
                             .await?;
-                        let mut arguments = vec!["worktree".into(), "remove".into()];
-                        if !require_pristine {
-                            arguments.push("--force".into());
-                        }
-                        arguments.push("--".into());
-                        arguments.push(worktree.physical_worktree_root.clone().into_os_string());
                         let removed = self
-                            .git_raw(&worktree.source_repository_root, arguments, None)
+                            .git_raw(
+                                &worktree.source_repository_root,
+                                vec![
+                                    "worktree".into(),
+                                    "remove".into(),
+                                    "--force".into(),
+                                    "--".into(),
+                                    worktree.physical_worktree_root.clone().into_os_string(),
+                                ],
+                                None,
+                            )
                             .await;
                         match removed {
                             Ok(output) if output.status.success() => {

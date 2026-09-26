@@ -253,15 +253,15 @@ describe("RustxTuiApp lifecycle", () => {
   it("inspects a selected subagent from authoritative status, without a second client", async () => {
     const state = {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
-      agents: [subagent("explore", "sha256:child")],
+      subagents: [subagent("explore", "sha256:child")],
     };
     const session = fakeSession(state);
     let statusReads = 0;
     (session as unknown as {
-      agentStatus: (id: string) => Promise<unknown>;
-    }).agentStatus = async (id) => {
+      subagentStatus: (id: string) => Promise<unknown>;
+    }).subagentStatus = async (id) => {
       statusReads += 1;
-      assert.equal(id, "agent-child");
+      assert.equal(id, "conv_57d68983-5497-771e-baaa-5f1356061697");
       return subagent("explore", "sha256:child");
     };
     const app = appOver(session as unknown as AppServerSession);
@@ -274,7 +274,7 @@ describe("RustxTuiApp lifecycle", () => {
     process.stdin.emit("data", "i");
     await waitForApplicationContinuation();
 
-    // The child is read through `agent/status`. No second conversation
+    // The child is read through `subagent/status`. No second conversation
     // client is composed, and no process is spawned to look at a child.
     assert.equal(statusReads, 1);
     assert.equal(session.state, state, "inspection does not replace state");
@@ -2141,12 +2141,12 @@ for (const status of ["committed_cleanup_pending", "committed_durability_uncerta
 it("remote recovery reconstructs selected child from replacement authority without replay", async () => {
   let close!: (error: TransportClosedError) => void;
   const child = subagent("researcher", "sha256:child");
-  const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
-  const next = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
+  const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), subagents: [child] });
+  const next = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), subagents: [child] });
   const late = deferred<{ entries: [] }>();
   const reads: string[] = [];
-  Object.assign(old, { agentTranscriptPage: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
-  Object.assign(next, { agentTranscriptPage: async (id: string) => { reads.push(`new:${id}`); return { entries: [] }; } });
+  Object.assign(old, { subagentTranscriptPage: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
+  Object.assign(next, { subagentTranscriptPage: async (id: string) => { reads.push(`new:${id}`); return { entries: [] }; } });
   let attachments = 0;
   const first = fakeHost({ ownership: "external", onClose: listener => { close = listener; } });
   const second = fakeHost({ ownership: "external", attach: async id => { assert.equal(id, old.sessionId); attachments++; return next; } });
@@ -2155,25 +2155,25 @@ it("remote recovery reconstructs selected child from replacement authority witho
   try {
     process.stdin.emit("data", "\x1b[1;5B"); await waitForApplicationContinuation();
     process.stdin.emit("data", "\r"); await waitForApplicationContinuation();
-    assert.deepEqual(reads, [`old:${child.agent_id}`]);
+    assert.deepEqual(reads, [`old:${child.subagent_id}`]);
     const error = new TransportClosedError("input_eof", "lost connection");
     Object.defineProperty(first.client, "closed", { value: error }); close(error);
     await waitForApplicationContinuation();
-    assert.deepEqual(reads, [`old:${child.agent_id}`, `new:${child.agent_id}`]);
+    assert.deepEqual(reads, [`old:${child.subagent_id}`, `new:${child.subagent_id}`]);
     assert.equal(attachments, 1);
     late.resolve({ entries: [] }); await waitForApplicationContinuation();
-    assert.equal(next.state.agents[0], child);
+    assert.equal(next.state.subagents[0], child);
   } finally { await app.quit(); await running; }
 });
 
 it("switching parent Session fences a child page while the old parent remains attached", async () => {
   const child = subagent("researcher", "sha256:child");
-  const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
+  const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), subagents: [child] });
   const next = fakeSession(emptyPresentationState(sessionModel("beta/model-b")), "ses_e8de016f-bd70-782f-ad23-25e81df82550");
   const late = deferred<{ entries: [] }>();
   const read = deferred<void>(); const attached = deferred<void>();
   let detached = 0;
-  Object.assign(old, { agentTranscriptPage: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });
+  Object.assign(old, { subagentTranscriptPage: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });
   const app = appOver(old, fakeHost({
     attach: async () => { attached.resolve(); return next; },
     catalog: { createSession: async () => ({ session: sessionView({ id: next.sessionId }) }) },

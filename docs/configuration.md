@@ -442,12 +442,3 @@ formats. There are no compatibility readers, aliases, trust commands, migration
 shims or persisted-effective-config fallbacks. Old split configuration files are
 not read. Incompatible durable schemas are refused. Author the current layout
 explicitly; retain old development data separately if needed.
-
-## Child authority across activation boundaries
-
-A native Agent's resolved profile/resources and effective execution policies
-freeze at Agent creation and remain fixed across `send_message` resume. Reloads
-and Session configuration changes do not re-resolve that child's authority.
-`subagents.max_concurrent` limits simultaneous finite child activations, not the
-number of inactive durable identities. Job controls and Agent controls are
-separate fixed foreground control Tools. See [Jobs and Agents](jobs-and-agents.md).

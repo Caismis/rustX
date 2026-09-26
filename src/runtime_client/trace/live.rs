@@ -108,9 +108,9 @@ fn repair<'a>(
         }
         let live = match record.kind {
             TraceKind::Background => snapshot
-                .jobs
+                .background
                 .iter()
-                .find(|current| record.native_id == Some(current.job_id.as_str()))
+                .find(|current| record.native_id == Some(current.execution_id.as_str()))
                 .and_then(|current| match current.state {
                     B::Starting => Some(TraceState::Pending),
                     B::Running => Some(TraceState::Running),
@@ -119,10 +119,10 @@ fn repair<'a>(
                     _ => None,
                 }),
             TraceKind::Subagent => snapshot
-                .agents
+                .subagents
                 .iter()
-                .find(|current| record.native_id == Some(current.activation_id.as_str()))
-                .and_then(|current| match current.activation_state {
+                .find(|current| record.native_id == Some(current.subagent_id.as_str()))
+                .and_then(|current| match current.state {
                     S::Running => Some(TraceState::Running),
                     S::Cancelling => Some(TraceState::Cancelling),
                     S::PublishingTerminal => Some(TraceState::Settling),

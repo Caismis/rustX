@@ -99,7 +99,7 @@ No Harness runtime or source code was imported in this correction.
   member and terminal pages, later Attempt, JSON reconstruction and remount.
 - Existing `conversation-residency.test.tsx` retains no-client-terminal-inference,
   real shell function isolation and local-error regressions.
-- App Server v24 generated schema/TypeScript and Runtime Client v49 replace their
+- App Server v23 generated schema/TypeScript and Runtime Client v49 replace their
   predecessors without compatibility shims. All Web/TUI consumers move together.
 
 ## Main integration

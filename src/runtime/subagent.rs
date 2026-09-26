@@ -1,24 +1,84 @@
-//! Durable native child Agents and finite activation supervision.
+//! The conversation-owned asynchronous one-shot subagent plane (Issue #60).
 //!
-//! SubagentRegistry owns each stable AgentId, child ConversationId, lineage,
-//! frozen admitted authority and retained workspace, plus zero or one current
-//! activation. SubagentId names a finite activation, not the durable Agent.
-//! Catalog/resolver freeze creation authority; later send_message calls reuse it.
+//! A rustX v1 subagent is a **conversation-owned, asynchronous, one-shot,
+//! separate-OS-process child rustX runtime**. The child reuses the real
+//! rustX stack — `ConversationRuntime`, the Agent Loop, Context Assembly,
+//! the Tool Plane, and the ModelAdapter — headlessly, with the exact
+//! capability set its invoking attempt froze into `ResolvedSubagentSpec` and
+//! an isolated conversation. That set is the named definition's, or the
+//! definition's with the dimensions an authorized invocation override
+//! replaced (Issue #258); either way the child consumes one frozen contract
+//! and rediscovers nothing.
 //!
-//! Active message admission and activation sealing use the same registry mutex.
-//! Child SealRequested closes admission before the driver grants local sealing;
-//! previously admitted envelopes drain in FIFO order. Inactive message admission
-//! reserves one next activation. Stopping rejects transiently.
+//! # Ownership
 //!
-//! Drivers alone own process handles, cancellation escalation, reap and nested
-//! containment. Activation completion or interruption leaves the Agent inactive
-//! and resumable. Workflow-owned finite children share supervision primitives
-//! without becoming native durable Agents.
+//! ```text
+//! AgentCatalog (catalog)
+//!   owns: the immutable named definitions of one runtime resource
+//!         generation and their deterministic definition digests
+//!   never owns: live execution state of any kind
 //!
-//! Canonical child history owns content. Each final report enters parent canonical
-//! inbound exactly once for its activation, adjacent to runtime-authored Agent
-//! and activation correlation. The Event Journal owns execution/admission facts;
-//! it is not a second child transcript or result channel.
+//! SubagentResolver (resolver)
+//!   owns: definition + optional invocation override + caller delegation
+//!         authority + invoking RuntimeResourceSnapshot + invoking attempt
+//!         model authority -> frozen ResolvedSubagentSpec
+//!   never owns: mutable runtime-current resources, live child lifecycle,
+//!               the decision of WHICH authority mode a caller gets
+//!
+//! SubagentRegistry (registry)
+//!   owns: SubagentId allocation/correlation, child identity correlation,
+//!         committed (agent, definition_digest) identity, logical lifecycle,
+//!         ownership state, capacity, cancellation intent, terminal
+//!         metadata, bounded result metadata, and each owned child's
+//!         whole-lifecycle execution deadline
+//!   never owns: configuration/definition semantics, parent Ledger/Surface,
+//!               parent InboundSequence allocation, parent AgentExecution
+//!               admission, a private result queue, the OS process handle
+//!
+//! subagent process driver (subagent_process)
+//!   owns: spawn, the OS child handle, the control channel, signal
+//!         escalation, wait/reap, physical terminal proof, and the
+//!         retained nested process-unit anchors of that child (Issue #145)
+//!   never owns: canonical conversation state, lifecycle terminality
+//! ```
+//!
+//! # Nested process-unit anchors (Issue #145)
+//!
+//! A child that runs Bash, MCP stdio, Python/uv, or Skill environment work
+//! creates supervised units whose inner `setsid()` group is outside the
+//! child's own process group, so killing that group cannot reach them. Each
+//! such unit offers its containment anchor to this process and may not cross
+//! its local `START` gate until it is acknowledged; see
+//! [`anchors`] for the parent half and
+//! [`crate::runtime::nested_containment`] for the generic mechanism.
+//!
+//! Anchor ownership follows child ownership exactly:
+//!
+//! ```text
+//! StagedChild   direct child process + retained anchors
+//!      |  exactly-once move at the ownership commit
+//!      v
+//! child driver task
+//! ```
+//!
+//! and a direct child reap is not proof of physical settlement while any
+//! retained anchor is unresolved.
+//!
+//! # Message-bus invariant
+//!
+//! A subagent never writes another conversation's canonical history and
+//! never schedules another conversation's attempt directly. The delegated
+//! task enters the child through the child's ordinary durable inbound
+//! path (`UserSource::Agent(parent)`); the child's bounded result enters
+//! the parent through the parent's ordinary durable inbound acceptance
+//! (`UserSource::Agent(child)` on success, `UserSource::Runtime` for
+//! failure/cancellation/interruption notices). A successful report is
+//! preceded, in the same durable transaction, by exactly one
+//! runtime-authored terminal notice that names the typed execution handle
+//! the parent's `subagent` creation result returned, so the parent model
+//! can unambiguously correlate every report with its execution — the
+//! report body itself stays byte-for-byte child-authored (Issue #192).
+//! Child-process IPC only transports bounded envelopes and control.
 
 /// Exact child ownership and existing-history read failures.
 #[derive(Debug)]
@@ -130,17 +190,15 @@ pub use invocation::{
     MAX_OVERRIDE_SKILLS, MAX_OVERRIDE_TOOLS, SubagentInvocationOverride, SubagentOverrideError,
 };
 pub use process::SubagentSpawnPlan;
-#[cfg(test)]
-pub(crate) use registry::CommitBoundaryHook;
 pub(crate) use registry::InteractionPublicationAuthority;
+#[cfg(test)]
+pub(crate) use registry::{CancellationBoundaryHook, CommitBoundaryHook, TerminalAuthorityHook};
 pub use registry::{
-    ActivationAdmission, AgentActivationOrigin, AgentControlError, AgentMessageAccepted,
-    AgentSnapshot, AgentState, AgentWaitResult, DurableAgentAuthority, PreparedSubagent,
-    SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing, SubagentObserver,
-    SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,
-    SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentSteerError,
-    SubagentTerminalMode, SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError,
-    SubagentWorkspaceResourceState,
+    PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing,
+    SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
+    SubagentStartError, SubagentStartOutcome, SubagentStartSpec, SubagentState,
+    SubagentSteerAccepted, SubagentSteerError, SubagentTerminalMode, SubagentWorkspaceDisposal,
+    SubagentWorkspaceDisposalError, SubagentWorkspaceResourceState,
 };
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool,
@@ -159,7 +217,9 @@ use crate::events::types::{
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
-use crate::runtime::identity::{AgentId, ConversationId, EventId, MessageId, SubagentId};
+use crate::runtime::identity::{
+    AgentId, ConversationId, EventId, MessageId, SubagentId, ToolCallId,
+};
 use crate::runtime::types::ApprovalMode;
 
 /// The attempt-scoped subagent resolution view (Issue #144).
@@ -205,7 +265,7 @@ pub struct AttemptSubagentContext {
 
 /// Execution policies captured by the parent Attempt. Child preparation may
 /// run after publication, so the registry must never supply these values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InheritedExecutionPolicy {
     pub model_timeout: crate::model::ModelTimeoutPolicy,
     pub tool_deadline: crate::tools::deadline::ToolExecutionDeadlinePolicy,
@@ -485,7 +545,7 @@ pub(crate) const MAX_TASK_BYTES: usize = 32 * 1024;
 /// The bounded explicit context-package size.
 pub(crate) const MAX_CONTEXT_PACKAGE_BYTES: usize = 64 * 1024;
 
-/// The runtime-owned final-report instruction of every normal child
+/// The runtime-owned final-report instruction of every normal one-shot
 /// subagent child (Issue #192).
 ///
 /// This is generic subagent execution semantics — the Subagent Final Report
@@ -503,7 +563,7 @@ pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response 
 /// definition's instruction document (Issue #192).
 ///
 /// The user-authored instructions are preserved exactly; the generic
-/// final-report handoff rule is appended for a **normal** child activation,
+/// final-report handoff rule is appended for a **normal** one-shot child,
 /// whose final response is the whole semantic result the parent receives.
 ///
 /// A Workflow-owned child (`workflow_output` terminal protocol) is
@@ -582,12 +642,11 @@ pub(crate) fn subagent_ownership_event_id(subagent_id: &SubagentId) -> EventId {
 /// specification. Neither is ever reconstructed from current resources.
 #[allow(clippy::too_many_arguments)] // one durable fact, one construction boundary
 pub(crate) fn ownership_event(
-    parent_agent_id: &AgentId,
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
     child_agent_id: &AgentId,
     child_conversation_id: &ConversationId,
-    origin: &AgentActivationOrigin,
+    tool_call_id: &ToolCallId,
     agent: &SubagentName,
     definition_digest: &NamedAgentDefinitionDigest,
     profile_digest: &resolver::SubagentExecutionProfileDigest,
@@ -604,12 +663,10 @@ pub(crate) fn ownership_event(
         turn_id: None,
         timestamp,
         event: RuntimeEvent::SubagentOwnershipCommitted {
-            parent_agent_id: parent_agent_id.clone(),
-            admitted_authority: None,
             subagent_id: subagent_id.clone(),
             child_agent_id: child_agent_id.clone(),
             child_conversation_id: child_conversation_id.clone(),
-            origin: origin.clone(),
+            tool_call_id: tool_call_id.clone(),
             agent: agent.as_str().to_owned(),
             definition_digest: definition_digest.as_str().to_owned(),
             profile_digest: profile_digest.as_str().to_owned(),
@@ -654,22 +711,42 @@ pub(crate) fn terminal_notice_correlation(subagent_id: &SubagentId) -> String {
 pub(crate) const RETAINED_WORKSPACE_FACT: &str = "changes were retained and are not applied to your workspace; the user can inspect or \
      dispose of the retained workspace";
 
-/// Runtime-owned correlation for one final report. Stable Agent identity and
-/// finite activation identity are explicit and never supplied by child content.
-/// The store validates this exact notice in the same transaction as the report.
+/// The canonical model-facing text of a successful terminal's
+/// runtime-authored notice (Issue #192).
+///
+/// The notice is the parent-model correlation projection of the terminal
+/// publication: it names exactly the typed execution handle the `subagent`
+/// creation result returned (`{"kind":"subagent","id":...}`) plus the
+/// named agent, so the parent model can unambiguously attribute the
+/// child-authored report that immediately follows it — even when two
+/// concurrent children share one named agent. When terminal settlement
+/// retained changed isolated work, that runtime-observed semantic fact is
+/// folded into the same one notice. It carries no internal child identity:
+/// no `child_agent_id`, no child conversation id, no definition digest, no
+/// physical workspace path or ref.
+///
+/// This exact rendering is the durable contract: the store recomputes it
+/// from the committed ownership fact and the terminal event and rejects any
+/// other notice content, so a semantically unreachable publication cannot
+/// enter durable authority.
 pub(crate) fn terminal_notice_text(
-    agent_id: &AgentId,
     subagent_id: &SubagentId,
     agent: &str,
     retained: bool,
 ) -> String {
+    // The exact model-facing serialization of the typed execution handle
+    // the creation result returned; the boundary regression proves this
+    // spelling and the control plane's handle serialization cannot drift
+    // apart (the domain layering rule forbids naming the control-plane
+    // type from here).
+    let handle = serde_json::json!({"kind": "subagent", "id": subagent_id.to_string()});
     let retained_sentence = if retained {
         format!(" Its {RETAINED_WORKSPACE_FACT}.")
     } else {
         String::new()
     };
     format!(
-        "Agent {agent_id} activation {subagent_id} (profile \"{agent}\") completed; the message that follows \
+        "Subagent execution {handle} (agent \"{agent}\") completed; the message that follows \
          is its final report.{retained_sentence}"
     )
 }
@@ -686,7 +763,6 @@ pub(crate) fn terminal_notice_text(
 /// transaction as the terminal publication, ordered strictly before the
 /// report: the terminal result remains the last item of the publication.
 pub(crate) fn terminal_notice(
-    agent_id: &AgentId,
     subagent_id: &SubagentId,
     agent: &SubagentName,
     retained: bool,
@@ -697,7 +773,7 @@ pub(crate) fn terminal_notice(
         source: UserSource::Runtime,
         kind: InboundKind::Message,
         content: vec![UserContentBlock::Text(TextBlock {
-            text: terminal_notice_text(agent_id, subagent_id, agent.as_str(), retained),
+            text: terminal_notice_text(subagent_id, agent.as_str(), retained),
         })],
         timestamp,
         correlation: Some(terminal_notice_correlation(subagent_id)),
@@ -799,8 +875,7 @@ pub(crate) fn terminal_workspace_resource(
     settlement: &WorkspaceSettlement,
 ) -> SubagentWorkspaceTerminalResource {
     match &settlement.disposition {
-        WorkspaceSettlementDisposition::AgentRetained
-        | WorkspaceSettlementDisposition::Borrowed
+        WorkspaceSettlementDisposition::Borrowed
         | WorkspaceSettlementDisposition::Shared
         | WorkspaceSettlementDisposition::Removed => SubagentWorkspaceTerminalResource::None,
         WorkspaceSettlementDisposition::Retained { handoff, .. } => {
@@ -817,42 +892,6 @@ pub(crate) fn terminal_workspace_resource(
                 ),
             }
         }
-    }
-}
-
-pub(crate) fn admission_event_id(
-    activation_id: &SubagentId,
-    phase: &crate::events::types::AgentActivationAdmissionPhase,
-) -> EventId {
-    let phase = match phase {
-        crate::events::types::AgentActivationAdmissionPhase::Reserved => "reserved",
-        crate::events::types::AgentActivationAdmissionPhase::RolledBack { .. } => "rolled-back",
-    };
-    EventId::new(format!("agent-admission:{activation_id}:{phase}"))
-}
-
-pub(crate) fn admission_event(
-    conversation_id: &ConversationId,
-    agent_id: &AgentId,
-    activation_id: &SubagentId,
-    origin: &AgentActivationOrigin,
-    phase: crate::events::types::AgentActivationAdmissionPhase,
-    timestamp: DateTime<Utc>,
-) -> RuntimeEventEnvelope {
-    RuntimeEventEnvelope {
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id: admission_event_id(activation_id, &phase),
-        sequence: 0,
-        conversation_id: conversation_id.clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp,
-        event: RuntimeEvent::AgentActivationAdmission {
-            agent_id: agent_id.clone(),
-            activation_id: activation_id.clone(),
-            origin: origin.clone(),
-            phase,
-        },
     }
 }
 
@@ -928,7 +967,6 @@ pub(crate) fn workflow_output_event(
 /// through the narrow `accept_subagent_terminal` transition — the one
 /// durable authority for every normal `SubagentTerminalPublished` fact
 /// (Issue #192).
-#[allow(clippy::too_many_arguments)] // One terminal publication carries exact identity, content and physical proof.
 pub(crate) fn terminal_publication(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
@@ -936,7 +974,6 @@ pub(crate) fn terminal_publication(
     state: SubagentTerminalState,
     content: Vec<UserContentBlock>,
     workspace_resource: &SubagentWorkspaceTerminalResource,
-    physical_settlement_proven: bool,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
     debug_assert!(
@@ -967,7 +1004,6 @@ pub(crate) fn terminal_publication(
             child_agent_id: child_agent_id.clone(),
             message_id: message.id.clone(),
             state,
-            physical_settlement_proven,
             workspace_resource: workspace_resource.clone(),
         },
     };
@@ -1035,7 +1071,6 @@ pub fn recovery_terminal_publication(
             ),
         })],
         workspace_resource,
-        false,
         timestamp,
     )
 }
@@ -1128,23 +1163,13 @@ mod tests {
     #[test]
     fn the_terminal_notice_correlates_the_exact_execution_handle() {
         let subagent_id = SubagentId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-2");
-        let plain = super::terminal_notice_text(
-            &AgentId::new("agent-child"),
-            &subagent_id,
-            "explore",
-            false,
-        );
+        let plain = super::terminal_notice_text(&subagent_id, "explore", false);
         assert_eq!(
             plain,
-            "Agent agent-child activation conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-2 \
-             (profile \"explore\") completed; the message that follows is its final report."
+            "Subagent execution {\"kind\":\"subagent\",\"id\":\"conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-2\"} \
+             (agent \"explore\") completed; the message that follows is its final report."
         );
-        let retained = super::terminal_notice_text(
-            &AgentId::new("agent-child"),
-            &subagent_id,
-            "explore",
-            true,
-        );
+        let retained = super::terminal_notice_text(&subagent_id, "explore", true);
         assert!(
             retained.starts_with(&plain),
             "the retained fact extends the same one notice: {retained}"
@@ -1156,13 +1181,7 @@ mod tests {
 
         let agent = SubagentName::parse("explore").expect("name");
         let timestamp = chrono::Utc::now();
-        let draft = super::terminal_notice(
-            &AgentId::new("agent-child"),
-            &subagent_id,
-            &agent,
-            false,
-            timestamp,
-        );
+        let draft = super::terminal_notice(&subagent_id, &agent, false, timestamp);
         assert_eq!(draft.source, UserSource::Runtime);
         assert_eq!(draft.kind, InboundKind::Message);
         assert_eq!(

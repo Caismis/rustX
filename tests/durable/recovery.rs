@@ -3252,33 +3252,27 @@ fn two_concurrently_unsettled_attempts_fail_recovery_closed() {
 // ---------------------------------------------------------------------------
 
 fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &SubagentId) {
-    let event = envelope(
-        &format!("subagent-committed-event:{subagent}"),
-        None,
-        None,
-        RuntimeEvent::SubagentOwnershipCommitted {
-            parent_agent_id: rustx::runtime::identity::AgentId::new("agent-parent"),
-            admitted_authority: None,
-            subagent_id: subagent.clone(),
-            child_agent_id: AgentId::new(format!("agent-{subagent}")),
-            child_conversation_id: crate::identity_fixture::child_conversation_id(
-                subagent.as_str(),
-            ),
-            origin: rustx::runtime::subagent::AgentActivationOrigin::CreationTool {
-                tool_call_id: ToolCallId::new("call-sub"),
-            },
-            agent: "explore".to_owned(),
-            definition_digest: "sha256:definition".to_owned(),
-            profile_digest: "sha256:profile".to_owned(),
-            ownership: rustx::events::types::SubagentOwnershipKind::Normal,
-            workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
-                std::path::PathBuf::from("<shared-workspace>"),
-            ),
-        },
-    );
-    let (event, authority) = crate::agent_authority::admit_agent(event);
     store
-        .append_agent_admission(event, &authority)
+        .append_event(envelope(
+            &format!("subagent-committed-event:{subagent}"),
+            None,
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: subagent.clone(),
+                child_agent_id: AgentId::new(format!("agent-{subagent}")),
+                child_conversation_id: crate::identity_fixture::child_conversation_id(
+                    subagent.as_str(),
+                ),
+                tool_call_id: ToolCallId::new("call-sub"),
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
+                ownership: rustx::events::types::SubagentOwnershipKind::Normal,
+                workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
+            },
+        ))
         .expect("subagent ownership");
 }
 
@@ -3289,32 +3283,12 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
             None,
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
-                parent_agent_id: rustx::runtime::identity::AgentId::new("agent-parent"),
-                admitted_authority: None,
                 subagent_id: subagent.clone(),
                 child_agent_id: AgentId::new(format!("agent-{subagent}")),
                 child_conversation_id: crate::identity_fixture::child_conversation_id(
                     subagent.as_str(),
                 ),
-                origin: rustx::runtime::subagent::AgentActivationOrigin::Workflow {
-                    node_id: Box::new(rustx::runtime::workflow::WorkflowNodeInstance {
-                        block: rustx::runtime::workflow::WorkflowBlockInstance {
-                            run: rustx::runtime::workflow::WorkflowRunId {
-                                conversation_id: store.conversation_id().clone(),
-                                attempt_id: AttemptId::for_conversation(store.conversation_id(), 1),
-                                invocation: 1,
-                            },
-                            definition: rustx::runtime::workflow::WorkflowDefinitionPath {
-                                workflow_id: rustx::runtime::workflow::WorkflowId::parse("fixture")
-                                    .unwrap(),
-                                blocks: Vec::new(),
-                            },
-                            invocations: vec![0],
-                        },
-                        node: "child".to_owned(),
-                        visit: 1,
-                    }),
-                },
+                tool_call_id: ToolCallId::new("workflow-call"),
                 agent: "reviewer".to_owned(),
                 definition_digest: "sha256:workflow-definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),

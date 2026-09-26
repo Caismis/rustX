@@ -56,7 +56,7 @@ intact. No frontend dependency or Harness pin changed. The exact Harness pin is
 ## Protocol and provenance
 
 The single intentional transition remains App Server 20→21, Runtime Client 46→47
-and SQLite 43→44. There is no v24, v20 compatibility import, dual schema or
+and SQLite 43→44. There is no v22, v20 compatibility import, dual schema or
 migration. Current Rust constants, version assertions, generated schema/TypeScript,
 fixtures and Web/TUI consumers agree. Historical provenance notes mentioning v20
 describe the original #394 adaptation; current imports are v21.

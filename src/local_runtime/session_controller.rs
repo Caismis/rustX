@@ -988,11 +988,15 @@ impl SessionController {
         let record = work.record.clone();
         #[cfg(test)]
         let gate = self.cleanup_gate.lock().unwrap().clone();
-        #[cfg(test)]
-        if let Some(gate) = gate {
-            let _ = tokio::task::spawn_blocking(move || gate.enter()).await;
-        }
-        let result = work.settle().await;
+        let result = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.enter();
+            }
+            work.run()
+        })
+        .await
+        .unwrap_or_else(|error| Err(std::io::Error::other(error)));
         self.catalog.lock().await.finish_delete(&record, result)
     }
 }

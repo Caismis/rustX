@@ -1,15 +1,6 @@
-# App Server protocol v25
+# App Server protocol v23
 
-App Server v25 / Runtime Client v51 separate finite Jobs from durable Agents. `jobs`/`job_updated` carry
-`job_id` and terminal lifecycle; `agents`/`agent_updated` carry stable `agent_id`,
-parent lineage, child ConversationId, current/latest activation identity and explicit
-Admitting/Active/Stopping/Inactive state. Controls route directly to each domain owner. A
-resumed activation updates the same Agent row. Only current v25 generated artifacts are retained, following repository policy;
-Older peers are rejected without a compatibility decoder. See
-[Jobs and continuable Agents](jobs-and-agents.md).
-
-
-The reviewed #406 contract introduced App Server v23 / Runtime Client v49. The
+App Server v23 / Runtime Client v49 complete the reviewed #406 contract. The
 #409 follow-up replaces separate successful/terminal process DTOs with native
 `TurnProcessView`: exact Attempt ownership on each committed process member,
 whole-process message/tool counts, immutable `control_cursor`, native clock and
@@ -20,7 +11,8 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-
+Only v23/v49 are supported; v22/v48 and earlier peers are rejected without a
+compatibility path, and generated v22 artifacts are removed.
 
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
@@ -75,13 +67,13 @@ Catalog metadata after an asynchronous display-projection publication
 and every earlier version are rejected; there is no dual handling and no
 compatibility shim. Generated v16 artifacts are removed.
 
-App Server v25 also carries v16's producer identity on Trace context additions
+App Server v23 also carries v16's producer identity on Trace context additions
 and typed accepted contributions on request detail. These are historical
 RequestSnapshot facts, not live Todo/Goal authority. See
 [native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v25 identifies one complete mandatory vocabulary, including exact
+App Server v23 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -189,13 +181,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v25",
+  "rustx.app-server.v23",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v25` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v23` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -212,7 +204,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v25 subprotocols above.
+endpoint/token; the browser then connects directly using the v23 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -309,7 +301,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v25; pipeline individual requests instead. This limitation is
+supported in v23; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -331,10 +323,9 @@ explicitly rejected as an invalid request before any action occurs.
 | `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
 | `session/effectiveConfiguration`, `configuration/reconcile`, `session/adoptConfiguration` | Authoritative application state, native rescan/retry, and fenced explicit Session adoption |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
-| `job/list`, `job/status`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate snapshot, exact terminal wait and cancellation through physical settlement |
-| `agent/transcript` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `AgentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
-| `agent/list`, `agent/status`, `agent/sendMessage`, `agent/wait`, `agent/interrupt` | Durable Agent owner: atomic message/resume arbitration, captured activation wait and activation-only interruption |
-| `subagent/disposeWorkspace` | Activation-specific retained resource owner; no caller-supplied filesystem cleanup paths |
+| `background/status`, `background/cancel` | Existing background execution registry |
+| `subagent/transcript` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `SubagentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
+| `subagent/status`, `subagent/cancel`, `subagent/disposeWorkspace` | Existing child/resource owner; no caller-supplied filesystem cleanup paths |
 
 `turn/start` and `turn/steer` both submit native inbound content. The runtime
 decides whether it starts a fresh attempt or joins the inbound queue of the
@@ -399,7 +390,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v25 admits at most one writable external controller per resident
+Protocol v23 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -515,8 +506,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v25.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v25.ts`: TypeScript generated from that schema using pinned
+- `v23.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v23.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -781,7 +772,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v25; no compatibility path is provided.
+This remains mandatory protocol v23; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -810,8 +801,8 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 51 retains it and rejects older peers by strict negotiation. This remains mandatory
-App Server protocol v25, with no compatibility field and no activation mode.
+version 49 retains it under strict negotiation. This remains mandatory
+App Server protocol v23, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -826,7 +817,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v25 includes `inbound/edit { target, expected, text }` and
+Protocol v23 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -880,9 +871,8 @@ The pending revision column advances the SQLite store schema to 38. As with the
 other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
-Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 51 retains both with no
-compatibility decoder.
+Native Runtime Client version 37 carries the mandatory pending revision and
+`pending_inbound_changed` event; it also has no compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable
 storage under the mailbox publication cut. This repairs a committed mutation
@@ -997,7 +987,7 @@ literal values. `SourceSettings.user`, `SourceSettings.workspace`,
 redacted document view, so no source projection can carry a literal Tool
 environment value, and an override is authored by supplying a new value rather
 than by reading a lower owner's value back.
-Protocol v25 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v23 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -1121,9 +1111,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v25 and WebSocket requires `rustx.app-server.v25`.
-v24 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v25.ts`, `v25.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v23 and WebSocket requires `rustx.app-server.v23`.
+v22 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v23.ts`, `v23.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1152,7 +1142,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v25;
+explicit recovery action. These recovery semantics remain in App Server v23;
 native Runtime Client is v44.
 
 ## Rich historical Trace inspection (#364)
@@ -1174,8 +1164,8 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v25 vocabulary includes v12's
-read-only native `agent/transcript` contract and these Trace DTO changes.
+is unchanged and never repeats them. This v23 vocabulary includes v12's
+read-only native `subagent/transcript` contract and these Trace DTO changes.
 Version 19 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
 
@@ -1194,16 +1184,16 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Agent conversations (v25)
+## Read-only native Subagent conversations (v23)
 
-`agent/transcript { target, agent_id, before, limit }` returns the existing
+`subagent/transcript { target, subagent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,
 Conversation, runtime incarnation, attachment). App Server validates that route;
 Runtime Client checks its live runtime; the parent's SubagentRegistry resolves the
-exact committed AgentId to its owned child Conversation. No caller-supplied
+exact committed SubagentId to its owned child Conversation. No caller-supplied
 child ConversationId or filesystem path is accepted. Unknown identity yields
-`unknown_agent`; an owned child whose existing history cannot be read yields
-`agent_history_unavailable`. Both carry the exact AgentId. Missing stores
+`unknown_subagent`; an owned child whose existing history cannot be read yields
+`subagent_history_unavailable`. Both carry the exact SubagentId. Missing stores
 are never created by inspection, and storage diagnostics are not exposed.
 
 The registry acquires existing Conversation allocation access and opens the
@@ -1231,43 +1221,6 @@ pages pauses polling; Home returns to newest. Parent attachment epochs fence
 reads across repair, replacement and release. A disposable child-view generation
 also fences selection, page replacement and closing; neither stale successes nor
 stale errors update a replacement. Resync/reconnect remembers only the selected
-AgentId, reconstructs through the new parent authority, and explicitly shows
+SubagentId, reconstructs through the new parent authority, and explicitly shows
 unavailability if lookup fails. It does not reuse cached child history or replay
 mutations.
-
-
-## Exact Job and Agent synchronization (v25)
-
-Job status is non-blocking and `job/wait` waits on the registry's exact finite
-Job ID through physical settlement. No client poll loop discovers completion;
-`job_updated` and canonical inbound publish terminal facts proactively.
-
-`agent/sendMessage` accepts only stable AgentId and message. Active-vs-Inactive
-arbitration, resume reservation and guidance/seal ordering belong to the registry.
-Admitting and Stopping return deterministic transient rejection. `agent/wait` captures the
-current activation once; its result names that activation even if the Agent has
-since resumed. Inactive returns a null target. Clients must not automatically
-retry a lost Agent wait, since a new operation could capture a later activation.
-`agent/interrupt` ends only its captured current activation and preserves identity.
-Both synchronization methods return `agent_wait`, with the captured
-`activation_id`, its terminal `outcome`, and the current authoritative `agent`.
-A null target means the Agent was already inactive. A non-null reserved target
-with null outcome means admission ended without committing an activation. A later
-resumed activation may appear in `agent`; it never changes the captured outcome.
-Clients report the captured result and reconcile through the native stream or a
-fresh snapshot; they do not overwrite a newer projection with an unversioned reply.
-
-`agent/list` returns newest-created identities first, bounded to 64, with exact
-`returned`, `matched`, `limit`, and `truncated` counts. `Admitting` exposes the
-reserved current activation; only the owner arbitrates wait, interrupt and message
-admission during that phase. A failed or unproven physical rollback retains the
-reserved target in Stopping, including after reconnect; wait and interrupt return
-a settlement error instead of reporting completion of the previous activation.
-
-Replay/reconnect reconstructs authoritative Job terminal states and captures
-Agent owner state together with its exact latest committed activation under one
-registry lock. Finite activation record iteration order never selects the latest
-Agent; prior activations belong to Trace history. Clients render separate Job and
-Agent rows and preserve selection by AgentId. Child transcript reads span the same
-canonical conversation across activations; final reports are never reconstructed
-from diagnostic/activity snapshots.

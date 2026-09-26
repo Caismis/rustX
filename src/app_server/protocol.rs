@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v25 envelope and method vocabulary.
+//! Rust authority for the current mandatory App Server protocol envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 25;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 23;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -142,52 +142,33 @@ pub enum Method {
         target: AttachmentTarget,
         control: crate::goal::GoalControl,
     },
-    #[serde(rename = "job/status")]
-    JobStatus {
+    #[serde(rename = "background/status")]
+    BackgroundStatus {
         target: AttachmentTarget,
-        job_id: crate::runtime::identity::ToolExecutionId,
+        execution_id: crate::runtime::identity::ToolExecutionId,
     },
-    #[serde(rename = "job/list")]
-    JobList { target: AttachmentTarget },
-    #[serde(rename = "job/wait")]
-    JobWait {
+    #[serde(rename = "background/cancel")]
+    BackgroundCancel {
         target: AttachmentTarget,
-        job_id: crate::runtime::identity::ToolExecutionId,
+        execution_id: crate::runtime::identity::ToolExecutionId,
     },
-    #[serde(rename = "job/cancel")]
-    JobCancel {
+    /// Bounded canonical history of an exact child owned by the addressed parent.
+    #[serde(rename = "subagent/transcript")]
+    SubagentTranscript {
         target: AttachmentTarget,
-        job_id: crate::runtime::identity::ToolExecutionId,
-    },
-    #[serde(rename = "agent/status")]
-    AgentStatus {
-        target: AttachmentTarget,
-        agent_id: crate::runtime::identity::AgentId,
-    },
-    #[serde(rename = "agent/list")]
-    AgentList { target: AttachmentTarget },
-    #[serde(rename = "agent/sendMessage")]
-    AgentSendMessage {
-        target: AttachmentTarget,
-        agent_id: crate::runtime::identity::AgentId,
-        message: String,
-    },
-    #[serde(rename = "agent/wait")]
-    AgentWait {
-        target: AttachmentTarget,
-        agent_id: crate::runtime::identity::AgentId,
-    },
-    #[serde(rename = "agent/interrupt")]
-    AgentInterrupt {
-        target: AttachmentTarget,
-        agent_id: crate::runtime::identity::AgentId,
-    },
-    #[serde(rename = "agent/transcript")]
-    AgentTranscript {
-        target: AttachmentTarget,
-        agent_id: crate::runtime::identity::AgentId,
+        subagent_id: crate::runtime::identity::SubagentId,
         before: Option<crate::runtime_client::snapshot::RuntimeClientTranscriptCursor>,
         limit: usize,
+    },
+    #[serde(rename = "subagent/status")]
+    SubagentStatus {
+        target: AttachmentTarget,
+        subagent_id: crate::runtime::identity::SubagentId,
+    },
+    #[serde(rename = "subagent/cancel")]
+    SubagentCancel {
+        target: AttachmentTarget,
+        subagent_id: crate::runtime::identity::SubagentId,
     },
     #[serde(rename = "subagent/disposeWorkspace")]
     SubagentDispose {
@@ -345,15 +326,6 @@ pub enum ErrorData {
         reason: crate::session_archive::SessionArchivePrepareError,
     },
 
-    AgentStopping {
-        agent_id: crate::runtime::identity::AgentId,
-    },
-    UnknownAgent {
-        agent_id: crate::runtime::identity::AgentId,
-    },
-    AgentHistoryUnavailable {
-        agent_id: crate::runtime::identity::AgentId,
-    },
     UnknownSubagent {
         subagent_id: crate::runtime::identity::SubagentId,
     },
@@ -481,36 +453,15 @@ pub enum MethodResult {
     Goal {
         view: crate::goal::GoalView,
     },
-    Job {
-        job: crate::runtime_client::snapshot::RuntimeClientJob,
+    Background {
+        execution: crate::runtime_client::snapshot::RuntimeClientBackgroundExecution,
     },
-    Jobs {
-        jobs: Vec<crate::runtime_client::snapshot::RuntimeClientJob>,
-    },
-    Agent {
-        agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
-    },
-    Agents {
-        agents: Vec<crate::runtime_client::snapshot::RuntimeClientAgent>,
-        returned: usize,
-        matched: usize,
-        limit: usize,
-        truncated: bool,
-    },
-    AgentMessage {
-        agent_id: crate::runtime::identity::AgentId,
-        activation_id: crate::runtime::identity::SubagentId,
-        resumed: bool,
-    },
-    AgentWait {
-        agent_id: crate::runtime::identity::AgentId,
-        activation_id: Option<crate::runtime::identity::SubagentId>,
-        outcome: Option<crate::runtime::subagent::SubagentState>,
-        agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
+    Subagent {
+        subagent: Box<crate::runtime_client::snapshot::RuntimeClientSubagent>,
     },
     WorkspaceDisposed {
-        agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
-        outcome: crate::runtime_client::types::RuntimeClientAgentWorkspaceDisposalOutcome,
+        subagent: Box<crate::runtime_client::snapshot::RuntimeClientSubagent>,
+        outcome: crate::runtime_client::types::RuntimeClientSubagentWorkspaceDisposalOutcome,
     },
     Initialized {
         protocol_version: u16,
@@ -672,30 +623,4 @@ pub enum ProtocolMessage {
     Request(Box<Request>),
     Response(Response),
     Notification(Notification),
-}
-
-#[cfg(test)]
-mod lifecycle_protocol_tests {
-    use super::Method;
-
-    #[test]
-    fn retired_controls_are_not_wire_aliases() {
-        for method in [
-            "background/status",
-            "background/cancel",
-            "subagent/status",
-            "subagent/cancel",
-            "subagent/transcript",
-            "execution/status",
-            "execution/steer",
-        ] {
-            assert!(
-                serde_json::from_value::<Method>(
-                    serde_json::json!({"method": method, "params": {}})
-                )
-                .is_err(),
-                "retired method {method}"
-            );
-        }
-    }
 }

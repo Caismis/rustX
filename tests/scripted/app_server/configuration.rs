@@ -540,7 +540,6 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
         let settlement = runtime.settlement_signal();
         fixture.gates[0].release();
         settlement.notified().await;
-        runtime.wait_for_configuration_admissions().await;
         let requests = fixture.provider.request_bodies();
         assert_eq!(requests.len(), 2);
         for body in &requests {

@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 25;
+export const APP_SERVER_PROTOCOL_VERSION = 23;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -137,7 +137,7 @@ export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
 export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
-  "agent/transcript": "read",
+  "subagent/transcript": "read",
   "session/trace": "read",
   // Inspection detail is a pure historical read: it advances no cursor,
   // consumes no pending work, and settles nothing, so a lost response is
@@ -154,16 +154,10 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "resources/read": "read",
   "context/compact": "side_effecting",
   "goal/control": "side_effecting",
-  "job/status": "read",
-  "job/list": "read",
-  "job/wait": "read",
-  "agent/list": "read",
-  "agent/sendMessage": "side_effecting",
-  // A retry could capture a later activation, so a lost wait is never replayed.
-  "agent/wait": "side_effecting",
-  "job/cancel": "side_effecting",
-  "agent/status": "read",
-  "agent/interrupt": "side_effecting",
+  "background/status": "read",
+  "background/cancel": "side_effecting",
+  "subagent/status": "read",
+  "subagent/cancel": "side_effecting",
   "subagent/disposeWorkspace": "side_effecting",
   // Negotiation and subscriptions die with this connection; neither changes
   // authoritative product/runtime state. Re-establish them after reconnect.
@@ -355,7 +349,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v25 protocol message");
+      this.#fail("invalid App Server v23 protocol message");
       return;
     }
 

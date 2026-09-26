@@ -144,7 +144,7 @@ keep_recent_tokens = 8192
 
 [agent]
 [agent.tools]
-builtin = ["read", "write", "edit", "glob", "grep", "bash", "job_status"]
+builtin = ["read", "write", "edit", "glob", "grep", "bash", "execution"]
 [agent.model]
 model = "fixture/process-model"
 "#;
@@ -335,7 +335,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    for expected in ["job_status", "read", "write", "bash"] {
+    for expected in ["execution", "read", "write", "bash"] {
         assert!(
             names.contains(&expected),
             "{expected} missing from {names:?}"

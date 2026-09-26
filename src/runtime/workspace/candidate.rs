@@ -109,7 +109,6 @@ pub(crate) struct WorkspaceAccess {
 /// This sum is the process driver's only workspace lifecycle input.
 #[derive(Debug)]
 pub(crate) enum WorkspaceUse {
-    Agent(Box<super::AgentWorkspaceAccess>),
     Owned(Box<WorkspaceLease>),
     Borrowed(Box<WorkspaceAccess>),
 }
@@ -144,7 +143,6 @@ impl From<WorkspaceAccess> for WorkspaceUse {
 impl WorkspaceUse {
     pub(crate) fn snapshot(&self) -> &WorkspaceSnapshot {
         match self {
-            Self::Agent(access) => access.snapshot(),
             Self::Owned(lease) => lease.snapshot(),
             Self::Borrowed(access) => access.snapshot(),
         }
@@ -155,7 +153,6 @@ impl WorkspaceUse {
 
     pub(crate) async fn settle_after_child(self) -> WorkspaceUseSettlement {
         match self {
-            Self::Agent(access) => access.settle().into(),
             Self::Owned(lease) => lease.settle_after_child().await.into(),
             Self::Borrowed(access) => {
                 let snapshot = access.snapshot().clone();
@@ -176,7 +173,6 @@ impl WorkspaceUse {
         self,
     ) -> Result<WorkspaceSettlement, WorkspaceSettlementError> {
         match self {
-            Self::Agent(access) => access.rollback().await,
             Self::Owned(lease) => lease.settle_staged().await,
             borrowed @ Self::Borrowed(_) => Ok(borrowed.settle_after_child().await.workspace),
         }
@@ -186,7 +182,6 @@ impl WorkspaceUse {
         detail: impl Into<String>,
     ) -> WorkspaceSettlement {
         match self {
-            Self::Agent(access) => access.unresolved(detail.into()),
             Self::Owned(lease) => lease.preserve_after_unresolved_nested(detail),
             Self::Borrowed(access) => {
                 let snapshot = access.snapshot().clone();

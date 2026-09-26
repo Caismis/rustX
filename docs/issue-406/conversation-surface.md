@@ -2,7 +2,7 @@
 
 PR #409 terminal-process follow-up: [current ownership contract](terminal-process-ownership.md).
 The earlier terminal-marker representation described below is superseded by
-native `TurnProcessView` in App Server v24 / Runtime Client v49. Follow-up
+native `TurnProcessView` in App Server v23 / Runtime Client v49. Follow-up
 validation is recorded in the PR report.
 
 
@@ -109,8 +109,8 @@ same production client rather than a second UI implementation.
 - First-submit phase-copy rows and normal shell `Working…` / model-update rows.
 - Raw cwd from the ordinary header.
 - Old statistics footer hierarchy and confirmed-delete generic success banner.
-- App Server v21 generated artifacts in the initial v24/v48 change; v24 artifacts
-  were subsequently replaced by mandatory v24/v49, without a compatibility shim.
+- App Server v21 generated artifacts in the initial v22/v48 change; v22 artifacts
+  were subsequently replaced by mandatory v23/v49, without a compatibility shim.
 
 ## Convergence and deliberate native differences
 
@@ -146,12 +146,12 @@ Native adaptations, not legacy concessions:
 
 ## Protocol boundary
 
-App Server v24 / Runtime Client v48 introduced the initial #406 additions:
+App Server v22 / Runtime Client v48 introduced the initial #406 additions:
 whole-conversation Turn/Step statistics, measured request timing/latest Turn
 clock, and required authored `SessionModelsView::Available.default_model`.
 That revision used the earlier split successful/terminal process vocabulary.
 
-The final mandatory contract is App Server v24 / Runtime Client v49. It retains
+The final mandatory contract is App Server v23 / Runtime Client v49. It retains
 those capabilities and replaces the split representation with `TurnProcessView`:
 exact Attempt ownership on committed process members, an immutable native
 `control_cursor`, whole-process message/tool counts, and one semantic owner for
@@ -162,7 +162,7 @@ processes remain open. `CompletedResponseView` still owns finalized-answer and
 TurnTail provenance. Lineage remains selective: finalized completed-response
 provenance may cross into children; unsuccessful source execution outcomes do not.
 
-Generator, Web, TUI, transports and exact-version fixtures use v24/v49 together.
+Generator, Web, TUI, transports and exact-version fixtures use v23/v49 together.
 There is no Agent Loop semantic change, new execution store or database migration.
 SQLite's presentation-event query already contains native Turn starts.
 

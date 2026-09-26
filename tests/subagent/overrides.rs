@@ -577,7 +577,7 @@ async fn sub258_unknown_references_keep_their_own_failure_class() {
     // Structural child rules survive at the invocation boundary.
     for spelling in [
         serde_json::json!({"tools": {"builtin": ["subagent"]}}),
-        serde_json::json!({"tools": {"builtin": ["send_message"]}}),
+        serde_json::json!({"tools": {"builtin": ["execution"]}}),
     ] {
         assert!(
             matches!(

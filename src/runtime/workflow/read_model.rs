@@ -74,7 +74,6 @@ impl From<&crate::runtime::workspace::WorkspaceSettlement> for WorkflowHandoff {
     fn from(value: &crate::runtime::workspace::WorkspaceSettlement) -> Self {
         use crate::runtime::workspace::WorkspaceSettlementDisposition as D;
         let state = match value.disposition {
-            D::AgentRetained => "agent_retained",
             D::Borrowed => "borrowed",
             D::Shared => "shared",
             D::Removed => "removed",

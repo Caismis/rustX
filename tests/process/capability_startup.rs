@@ -220,7 +220,7 @@ async fn selected_invalid_python_refuses_composition_without_publication() {
     let (_canonical, paths) = startup(
         &root,
         &format!(
-            "{SESSION_TOML}\n[agent.tools]\nbuiltin = [\"read\", \"write\", \"edit\", \"glob\", \"grep\", \"bash\", \"job_status\"]\n[agent.tools.sources]\n\"python:broken-tool\" = \"all\"\n"
+            "{SESSION_TOML}\n[agent.tools]\nbuiltin = [\"read\", \"write\", \"edit\", \"glob\", \"grep\", \"bash\", \"execution\"]\n[agent.tools.sources]\n\"python:broken-tool\" = \"all\"\n"
         ),
     );
     // A package without `requirements.txt`: demanded preparation rejects it in place,
@@ -462,7 +462,7 @@ mod mcp {
                 },
             }),
         );
-        toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "job_status"], "sources": {"good": "all", "bad": []}}}}))
+        toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"good": "all", "bad": []}}}}))
         .unwrap()
     }
 
@@ -561,7 +561,7 @@ mod mcp {
                 },
             }),
         );
-        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "job_status"], "sources": {"alien": "all"}}}}))
+        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"alien": "all"}}}}))
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
@@ -618,7 +618,7 @@ mod mcp {
                 },
             }),
         );
-        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "job_status"], "sources": {"loud": "all"}}}}))
+        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"loud": "all"}}}}))
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
@@ -704,7 +704,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     )
     .expect("server source without the required requirements.txt");
     // ... and an MCP server whose program does not exist.
-    let session = serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "job_status"], "sources": {"exa": [], "python:broken-tool": []}}}});
+    let session = serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"exa": [], "python:broken-tool": []}}}});
     crate::launch_fixture::write_document(
         &root.path().join("rustx.toml"),
         &format!(

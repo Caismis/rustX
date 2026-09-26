@@ -59,7 +59,7 @@ RUSTX_FIXTURE = "1"
 
 [agent]
 [agent.tools]
-builtin = ["read", "write", "edit", "glob", "grep", "bash", "job_status"]
+builtin = ["read", "write", "edit", "glob", "grep", "bash", "execution"]
 [agent.model]
 model = "local/composed-model"
 "#;
@@ -146,15 +146,7 @@ async fn composition_owns_one_conversation_domain() {
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    for expected in [
-        "job_status",
-        "read",
-        "write",
-        "edit",
-        "glob",
-        "grep",
-        "bash",
-    ] {
+    for expected in ["execution", "read", "write", "edit", "glob", "grep", "bash"] {
         assert!(
             names.contains(&expected),
             "the native tool {expected} must be composed: {names:?}"
@@ -178,14 +170,14 @@ async fn composition_owns_one_conversation_domain() {
         .capabilities
         .tools
         .iter()
-        .find(|tool| tool.name == "job_status")
-        .expect("Job status is registered");
+        .find(|tool| tool.name == "execution")
+        .expect("execution is registered");
     assert_eq!(
         background.execution_policy,
         rustx::tools::types::ToolExecutionPolicy::ForegroundOnly
     );
 
-    // Job controls dispatch into *this* conversation's background
+    // `execution` dispatches into *this* conversation's background
     // registry: the composed registry and the host's projection agree.
     assert!(
         runtime
@@ -195,7 +187,7 @@ async fn composition_owns_one_conversation_domain() {
             .is_empty(),
         "a freshly composed conversation has no background executions"
     );
-    assert_eq!(snapshot.jobs.len(), 0);
+    assert_eq!(snapshot.background.len(), 0);
 
     // The session model resolved through the catalog, credential and all.
     assert_eq!(

@@ -988,14 +988,3 @@ describe("native Goal activity", () => {
     assert.match(card({ toolId: "mcp.create_goal", name: "create_goal" }), /create_goal/);
   });
 });
-
-it("Job and Agent controls display distinct identities without inventing lifecycle", async () => {
-  const { rendererFor } = await import("../src/ui/components/tool-renderers.ts");
-  const message = rendererFor("tool-send_message").renderCall({ agent_id: "agent-42", message: "continue" });
-  assert.equal(message?.title, "Message Agent");
-  assert.equal(message?.subject, "agent-42");
-  const wait = rendererFor("tool-job_wait").renderCall({ job_id: "job-42" });
-  assert.equal(wait?.title, "Wait for Job");
-  assert.equal(wait?.subject, "job-42");
-  assert.equal(hasSpecializedRenderer("tool-execution"), false);
-});

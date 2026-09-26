@@ -488,14 +488,20 @@ impl NamedAgentDefinition {
     }
 }
 
-/// Nested Agent ownership is not part of the child runtime composition.
-/// Finite Job controls remain available to a child's own background registry.
-pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 4] = [
-    "list_agents",
-    "send_message",
-    "wait_agent",
-    "interrupt_agent",
-];
+/// Native capabilities whose lifecycle owner cannot exist in a child, and
+/// which are therefore not selectable by a named definition.
+///
+/// `execution` is the exact case: its control plane owns no lifecycle of its
+/// own and routes to the
+/// conversation-owned registries, and a one-shot child conversation
+/// terminates with its single answer, so there is no detached execution or
+/// child registry in a child for it to control.
+///
+/// Naming it is a configuration error rather than a silently dropped
+/// capability. This is a short explicit list of known lifecycle owners
+/// reviewed against their actual owners, not a generic deny-policy
+/// framework.
+pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 1] = [crate::tools::executor::EXECUTION_TOOL_NAME];
 
 /// A definition-level validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -443,17 +443,12 @@ pub(crate) async fn serve_child_delegation(
                 let _ = runtime.shutdown().await;
                 return Ok(());
             }
-            Some(ChildControlEvent::SealGranted | ChildControlEvent::AdmissionReopened) => {
-                return Err(ChildExit::Protocol("unexpected seal grant".to_owned()));
-            }
             Some(ChildControlEvent::ProtocolViolation(message)) => {
                 return Err(ChildExit::Protocol(message));
             }
         }
     };
     runtime.set_interaction_provider_available(delegate.interaction_provider_available);
-
-    runtime.gate_child_turns();
 
     // The delegated task enters through the child's ordinary durable
     // inbound path. IPC transports the envelope; it never appends.
@@ -485,12 +480,6 @@ pub(crate) async fn serve_child_delegation(
         )
         .await;
     }
-
-    handle
-        .send_reliable(ChildFrame::DelegateAccepted)
-        .await
-        .map_err(|error| ChildExit::Protocol(error.to_string()))?;
-    runtime.release_child_turn();
 
     // Observe the attempt to its canonical terminal event while serving
     // Cancel frames through the ordinary cancellation path.
@@ -525,8 +514,8 @@ pub(crate) async fn serve_child_delegation(
     //
     // The seal is steering-specific terminal machinery. A Workflow-owned
     // `AgentRun` (`workflow_output` latch present) is structurally not
-    // messageable — it has no durable native Agent identity in the parent
-    // registry, so `send_message` rejects it before any frame exists. No accepted
+    // steerable — `SubagentRegistry::steer` refuses it from the ownership
+    // fact alone, before any `Guidance` frame exists — so no accepted
     // generic guidance can ever be pending in its conversation, and the
     // steering-specific seal must have **no semantic effect** on its
     // lifecycle or terminal result. Its natural completion is therefore its
@@ -552,33 +541,12 @@ pub(crate) async fn serve_child_delegation(
         // Workflow-owned child settles on its first natural completion too:
         // it never participates in the generic parent-guidance terminal
         // protocol (see above).
-        if workflow_output.is_some() || matches!(terminal, AttemptTerminal::Orphaned) {
-            break terminal;
-        }
-        close_parent_admission(dispatcher, handle, &runtime, &parent_agent_id).await?;
-        if matches!(terminal, AttemptTerminal::Cancelled) {
+        if !matches!(terminal, AttemptTerminal::Completed) || workflow_output.is_some() {
             break terminal;
         }
         match runtime.seal_parent_guidance(observed_terminals).await {
             ParentGuidanceSeal::Sealed => break terminal,
-            ParentGuidanceSeal::Open => {
-                handle
-                    .send_reliable(ChildFrame::SealOpen)
-                    .await
-                    .map_err(|error| ChildExit::Protocol(error.to_string()))?;
-                if !await_parent_admission_boundary(
-                    dispatcher,
-                    handle,
-                    &runtime,
-                    &parent_agent_id,
-                    true,
-                )
-                .await?
-                {
-                    break AttemptTerminal::Cancelled;
-                }
-                runtime.release_child_turn();
-            }
+            ParentGuidanceSeal::Open => {}
             // Fail closed: an unverifiable pending inbox is not an empty
             // one. The runtime already committed its absorbing
             // durability-failure fact; the completed attempt's answer is
@@ -644,84 +612,6 @@ pub(crate) async fn serve_child_delegation(
     report_and_drain(handle, &runtime, frame).await
 }
 
-/// The registry closes admission before the child can seal its inbox. Its grant
-/// follows every message admitted before the close, on the same FIFO control lane.
-async fn close_parent_admission(
-    dispatcher: &mut ChildControlDispatcher,
-    handle: &ChildControlHandle,
-    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
-    parent_agent_id: &crate::runtime::identity::AgentId,
-) -> Result<(), ChildExit> {
-    handle
-        .send_reliable(ChildFrame::SealRequested)
-        .await
-        .map_err(|error| ChildExit::Protocol(error.to_string()))?;
-    await_parent_admission_boundary(dispatcher, handle, runtime, parent_agent_id, false)
-        .await
-        .map(|_| ())
-}
-
-async fn await_parent_admission_boundary(
-    dispatcher: &mut ChildControlDispatcher,
-    handle: &ChildControlHandle,
-    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
-    parent_agent_id: &crate::runtime::identity::AgentId,
-    reopening: bool,
-) -> Result<bool, ChildExit> {
-    loop {
-        match dispatcher.next_event().await {
-            Some(ChildControlEvent::SealGranted) if !reopening => return Ok(true),
-            Some(ChildControlEvent::AdmissionReopened) if reopening => return Ok(true),
-            Some(ChildControlEvent::SealGranted | ChildControlEvent::AdmissionReopened) => {
-                return Err(ChildExit::Protocol(
-                    "out-of-order admission boundary".into(),
-                ));
-            }
-            Some(ChildControlEvent::Guidance {
-                guidance_id,
-                message,
-            }) => {
-                apply_parent_guidance(handle, runtime, parent_agent_id, guidance_id, message)
-                    .await?;
-            }
-            Some(ChildControlEvent::InteractionProviderAvailable { available }) => {
-                runtime.set_interaction_provider_available(available);
-            }
-            Some(ChildControlEvent::InteractionRespond {
-                response_id,
-                interaction,
-                response,
-            }) => {
-                send_interaction_response_result(
-                    handle,
-                    runtime,
-                    response_id,
-                    interaction,
-                    response,
-                )
-                .await?;
-            }
-            Some(ChildControlEvent::Cancel {
-                reason: Some(reason),
-            }) => {
-                let _ = runtime.cancel_current_or_next_attempt(reason);
-                if reopening {
-                    return Ok(false);
-                }
-            }
-            Some(ChildControlEvent::ProtocolViolation(message)) => {
-                return Err(ChildExit::Protocol(message));
-            }
-            Some(ChildControlEvent::Delegate(_) | ChildControlEvent::Cancel { reason: None })
-            | None => {
-                return Err(ChildExit::Protocol(
-                    "parent lost while closing message admission".to_owned(),
-                ));
-            }
-        }
-    }
-}
-
 /// Composes the child runtime as **cancellable owned work** (Issue #145).
 ///
 /// External capability materialization can take materially longer than the
@@ -775,10 +665,7 @@ async fn compose_cancellably(
                             .to_owned(),
                     ));
                 }
-                Some(ChildControlEvent::SealGranted | ChildControlEvent::AdmissionReopened) => {
-                return Err(ChildExit::Protocol("unexpected seal grant".to_owned()));
-            }
-            Some(ChildControlEvent::ProtocolViolation(message)) => {
+                Some(ChildControlEvent::ProtocolViolation(message)) => {
                     return Err(ChildExit::Protocol(message));
                 }
                 None => {
@@ -863,6 +750,9 @@ async fn apply_parent_guidance(
         Err(InboundAdmissionError::GuidanceSealed) => {
             ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Settled)
         }
+        Err(InboundAdmissionError::GuidanceCancelled) => {
+            ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Cancelled)
+        }
         Err(error) => ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Refused {
             detail: bound_diagnostic(error.to_string()),
         }),
@@ -873,8 +763,8 @@ async fn apply_parent_guidance(
 /// Answers exactly one parent-authored guidance envelope over the reliable
 /// control lane (Issue #193).
 ///
-/// The parent owns admission; this child answer proves canonical durability
-/// before the parent's `send_message` acknowledgement completes.
+/// The child conversation is the acceptance authority, so this answer — not
+/// any parent-side timing — is what the parent's `execution(steer)` reports.
 /// Every envelope receives exactly one answer; an envelope the child can no
 /// longer serve is refused by the driver task dropping its waiter, never by
 /// silence that the parent could mistake for acceptance.
@@ -1064,10 +954,7 @@ where
                         )
                         .await?;
                     }
-                    Some(ChildControlEvent::SealGranted | ChildControlEvent::AdmissionReopened) => {
-                return Err(ChildExit::Protocol("unexpected seal grant".to_owned()));
-            }
-            Some(ChildControlEvent::ProtocolViolation(message)) => {
+                    Some(ChildControlEvent::ProtocolViolation(message)) => {
                         return Err(ChildExit::Protocol(message));
                     }
                     None => return Ok(AttemptTerminal::Orphaned),
@@ -1271,7 +1158,6 @@ mod tests {
             None,
             conversation_id,
             model,
-            None,
         )
         .await
     }
@@ -1294,7 +1180,6 @@ mod tests {
             Some(model_arbitration_pause),
             conversation_id,
             model,
-            None,
         )
         .await
     }
@@ -1313,21 +1198,22 @@ mod tests {
         model_arbitration_pause: Option<crate::agent::execution::test_sync::ModelArbitrationPause>,
         conversation_id: ConversationId,
         model: Arc<FakeModel>,
-        store: Option<Arc<crate::durable::SqliteConversationStore>>,
     ) -> ConversationRuntime {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let mut config = crate::tools::runtime::ConversationRuntimeConfig::new(
-            &workspace,
-            dir.path().join("artifacts"),
+        let tool_runtime = ConversationToolRuntime::from_config(
+            conversation_id.clone(),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
-        .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
-            crate::context::AgentStatusConfig::default(),
-        ));
-        config.durable_binding =
-            store.map(|store| crate::durable::ConversationStoreBinding::new(store));
-        let tool_runtime = ConversationToolRuntime::from_config(conversation_id.clone(), config)
-            .expect("tool runtime");
+        .expect("tool runtime");
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             conversation_id: conversation_id.clone(),
@@ -1918,58 +1804,7 @@ mod tests {
         runtime: &ConversationRuntime,
         workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
     ) -> SealFixture {
-        serve_child_with_reopen_gate(runtime, workflow_output, None)
-    }
-
-    fn serve_child_with_reopen_gate(
-        runtime: &ConversationRuntime,
-        workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
-        reopen_gate: Option<Arc<Gate>>,
-    ) -> SealFixture {
-        let (parent, relay) = tokio::net::UnixStream::pair().expect("test parent pair");
-        let (driver, child_end) = tokio::net::UnixStream::pair().expect("control pair");
-        let (mut driver_read, driver_write) = driver.into_split();
-        let driver_write = Arc::new(tokio::sync::Mutex::new(driver_write));
-        let (mut relay_read, mut relay_write) = relay.into_split();
-        let writer = Arc::clone(&driver_write);
-        tokio::spawn(async move {
-            use crate::runtime::subagent::ipc::{read_parent_frame, write_parent_frame};
-            while let Ok(Some(frame)) = read_parent_frame(&mut relay_read).await {
-                if write_parent_frame(&mut *writer.lock().await, &frame)
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        tokio::spawn(async move {
-            use crate::runtime::subagent::ipc::{
-                read_child_frame, write_child_frame, write_parent_frame,
-            };
-            while let Ok(Some(frame)) = read_child_frame(&mut driver_read).await {
-                // These tests isolate child-local durable sealing. Registry
-                // tests separately prove arbitration before granting this frame.
-                let result = if matches!(frame, ChildFrame::SealRequested) {
-                    write_parent_frame(&mut *driver_write.lock().await, &ParentFrame::SealGranted)
-                        .await
-                } else if matches!(frame, ChildFrame::SealOpen) {
-                    if let Some(gate) = &reopen_gate {
-                        tokio::task::block_in_place(|| gate.enter());
-                    }
-                    write_parent_frame(
-                        &mut *driver_write.lock().await,
-                        &ParentFrame::AdmissionReopened,
-                    )
-                    .await
-                } else {
-                    write_child_frame(&mut relay_write, &frame).await
-                };
-                if result.is_err() {
-                    break;
-                }
-            }
-        });
+        let (parent, child_end) = tokio::net::UnixStream::pair().expect("control pair");
         let (_observation_parent, observation_child) =
             tokio::net::UnixStream::pair().expect("observation pair");
         let observations = Arc::new(PendingObservations::new());
@@ -2007,70 +1842,6 @@ mod tests {
         )
         .await
         .expect("parent delegates");
-        assert!(matches!(
-            crate::runtime::subagent::ipc::read_child_frame(parent)
-                .await
-                .unwrap(),
-            Some(ChildFrame::DelegateAccepted)
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn delegation_durable_acceptance_failure_never_acknowledges_input() {
-        use crate::durable::ConversationStore;
-        let dir = tempfile::tempdir().unwrap();
-        let id = ConversationId::generate();
-        let store =
-            Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
-        let model = Arc::new(FakeModel::new(vec![answer("must not run")]));
-        let runtime = child_test_runtime_full(
-            &dir,
-            None,
-            None,
-            None,
-            None,
-            None,
-            id,
-            model.clone(),
-            Some(store.clone()),
-        )
-        .await;
-        let mut fixture = serve_child(&runtime);
-        // Fault the exact durable acceptance transaction before any Delegate arrives.
-        store.arm_fail_next_accept_commit();
-        crate::runtime::subagent::ipc::write_parent_frame(
-            &mut fixture.parent,
-            &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
-                task: "input that cannot commit".into(),
-                context: None,
-                interaction_provider_available: false,
-            }),
-        )
-        .await
-        .unwrap();
-        // The first reliable response must be failure, never DelegateAccepted.
-        let result = read_result(&mut fixture.parent).await;
-        assert_eq!(result.status, ChildResultStatus::Failed);
-        assert!(
-            result
-                .diagnostic
-                .unwrap()
-                .contains("delegated task was refused")
-        );
-        assert!(store.load_pending().unwrap().is_empty());
-        assert!(store.load_canonical().unwrap().is_empty());
-        assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(20),
-                crate::runtime::subagent::ipc::read_child_frame(&mut fixture.parent),
-            )
-            .await
-            .expect("control close liveness")
-            .unwrap()
-            .is_none()
-        );
-        fixture.serve.await.unwrap().unwrap();
-        assert!(model.requests().is_empty());
     }
 
     /// Reads the child's one terminal result frame.
@@ -2144,9 +1915,7 @@ mod tests {
             model.clone(),
         )
         .await;
-        let reopen_gate = Arc::new(Gate::default());
-        reopen_gate.arm();
-        let mut fixture = serve_child_with_reopen_gate(&runtime, None, Some(reopen_gate.clone()));
+        let mut fixture = serve_child(&runtime);
 
         seal_gate.arm();
         delegate(&mut fixture.parent, "delegated task").await;
@@ -2173,18 +1942,6 @@ mod tests {
             )
             .expect("guidance accepted before the seal commits");
         seal_gate.release();
-        tokio::task::spawn_blocking({
-            let gate = reopen_gate.clone();
-            move || gate.wait_entered()
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            model.requests().len(),
-            1,
-            "no continued model turn before parent Active acknowledgement"
-        );
-        reopen_gate.release();
 
         let result = read_result(&mut fixture.parent).await;
         assert_eq!(result.status, ChildResultStatus::Succeeded);
@@ -2445,11 +2202,29 @@ mod tests {
         );
     }
 
-    /// Parent admission is authoritative. Child-local cancellation cannot
-    /// reject a message that already won the registry arbiter. An exact model
-    /// arbitration gate holds the attempt while both messages are persisted.
+    /// A committed one-shot cancellation intent refuses guidance under the
+    /// very lock that committed it: a cancelled child is never steered, and
+    /// nothing moves it back toward running.
+    ///
+    /// # Why the attempt is held at an exact barrier
+    ///
+    /// Guidance is refused when the coordinator can still *read* a committed
+    /// cancellation: a one-shot intent, or a current attempt whose signal is
+    /// cancelled. `cancel_current_or_next_attempt` on a live attempt takes
+    /// the second form — and the Agent Loop's provider arbitration settles a
+    /// cancelled attempt as soon as its stream is merely pending, which
+    /// clears the current-attempt slot and with it the fact this test reads.
+    /// Waiting on `model.parked()` proved the attempt *started*, never that
+    /// it was still there one statement later, so the refusal was a race the
+    /// test usually won.
+    ///
+    /// [`ModelArbitrationPause`] holds the attempt inside its stream loop,
+    /// after the provider's first item and before the next
+    /// provider/cancellation arbitration, so it provably cannot settle while
+    /// this test exercises the coordinator. Both admission decisions below
+    /// are then about a runtime that is structurally unable to move.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn parent_admitted_guidance_remains_durable_after_child_cancellation_intent() {
+    async fn guidance_after_the_committed_cancellation_intent_is_refused() {
         use crate::agent::execution::test_sync::ModelArbitrationPause;
 
         let dir = tempfile::tempdir().expect("temp root");
@@ -2504,7 +2279,7 @@ mod tests {
         // The cancellation intent commits under the one coordinator lock.
         runtime.cancel_current_or_next_attempt(CancellationReason::UserRequested);
 
-        runtime
+        let refused = runtime
             .submit_parent_guidance(
                 UserSource::Agent {
                     agent_id: AgentId::new("agent-parent"),
@@ -2513,7 +2288,11 @@ mod tests {
                     text: "after cancellation".to_owned(),
                 })],
             )
-            .expect("parent-admitted guidance cannot be rejected by child-local cancellation");
+            .expect_err("a cancelled child refuses guidance");
+        assert!(
+            matches!(refused, InboundAdmissionError::GuidanceCancelled),
+            "the refusal names the committed cancellation intent: {refused:?}"
+        );
         // Only now may the held attempt observe its cancellation and settle.
         let _ = model_pause_release.send(());
         runtime.shutdown().await.expect("child runtime drains");
@@ -2608,7 +2387,6 @@ mod tests {
             None,
             ConversationId::new("conv_65454923-c390-7329-8410-7a51296c305b"),
             model.clone(),
-            None,
         )
         .await;
         let mut fixture = serve_child_with_output(&runtime, Some(Arc::clone(&latch)));

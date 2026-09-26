@@ -1,17 +1,19 @@
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v25';
-import type { AppServerClient } from '../../client/app-server';
-import { AgentCard, JobCard, WorkflowCard, workflowKey } from '../components/ActivityCards';
-
-/** Rows follow native identities. An activation change never remounts its Agent. */
-export function RuntimeFacts({ snapshot, client, sessionId }: { snapshot: RuntimeClientSnapshot; client?: AppServerClient; sessionId?: string }) {
-  const agents = snapshot.agents ?? [];
-  const jobs = snapshot.jobs ?? [];
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v23';
+import { json } from '../../bindings/projection';
+import { SubagentCard, WorkflowCard, workflowKey } from '../components/ActivityCards';
+import { ToolCard } from '../../presentation/agent/ToolCard';
+import { ToolArtifacts } from '../components/Artifact';
+export function RuntimeFacts({ snapshot }: { snapshot: RuntimeClientSnapshot }) {
+  const children = snapshot.subagents ?? [];
+  const background = snapshot.background ?? [];
   const workflows = snapshot.workflows.runs;
-  if (!agents.length && !workflows.length && !jobs.length) return null;
+  if (!children.length && !workflows.length && !background.length) return null;
   return <section className="runtime-facts" aria-label="Current activity">
     <small>Current activity</small>
-    {jobs.map(job => <JobCard key={job.job_id} job={job} client={client} sessionId={sessionId}/>)}
-    {agents.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={client} sessionId={sessionId}/>)}
+    {background.map(tool => <ToolCard key={tool.execution_id} tool={{ id: tool.execution_id, identity: 'execution', title: tool.tool_name, variant: 'generic', summary: 'Background task',
+      state: tool.state === 'succeeded' ? 'success' : tool.state === 'failed' || tool.state === 'denied' || tool.state === 'timed_out' ? 'failure' : tool.state === 'outcome_unknown' ? 'uncertain' : tool.state,
+      output: tool.result ? json(tool.result) : tool.progress ? json(tool.progress) : undefined, artifacts: tool.result ? <ToolArtifacts result={tool.result}/> : undefined }}/>) }
+    {children.map(child => <SubagentCard key={child.subagent_id} child={child} />)}
     {workflows.map(workflow => <WorkflowCard key={workflowKey(workflow.id)} run={workflow} />)}
   </section>;
 }

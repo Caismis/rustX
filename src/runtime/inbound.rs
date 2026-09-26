@@ -1090,25 +1090,27 @@ impl ConversationInboundMailbox {
         Ok(self.inbound.commit_background_ownership(event)?)
     }
 
-    /// Commits a precommit activation staging fact under the product ownership
-    /// fence, before spawning or after proving rollback containment.
-    pub(crate) fn commit_agent_activation_admission(
-        &self,
-        _ownership: &crate::runtime::local_storage::OwnershipMutation,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, MailboxError> {
-        Ok(self.inbound.commit_agent_activation_admission(event)?)
-    }
-
-    /// Commits child ownership before delegation permits semantic work.
-    /// The registry retains product ownership admission through publication.
+    /// Commits the durable subagent-ownership fact of one child runtime
+    /// (Issue #60).
+    ///
+    /// This is the narrow subagent start-commit capability, identical in
+    /// shape to [`ConversationInboundMailbox::commit_background_ownership`]:
+    /// the commit is the linearization point that grants a staged child the
+    /// right to receive its delegation, so the subagent registry performs
+    /// it strictly before releasing the child's start gate. The product ownership
+    /// admission is required here so this durable fact cannot bypass a native
+    /// ownership snapshot; the registry retains it through record publication.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Durable`] when the durable authority rejects
+    /// the fact; the caller must then tear the staged child down.
     pub(crate) fn commit_subagent_ownership(
         &self,
         _ownership: &crate::runtime::local_storage::OwnershipMutation,
         event: RuntimeEventEnvelope,
-        authority: Option<&crate::runtime::subagent::DurableAgentAuthority>,
     ) -> Result<RuntimeEventEnvelope, MailboxError> {
-        Ok(self.inbound.commit_subagent_ownership(event, authority)?)
+        Ok(self.inbound.commit_subagent_ownership(event)?)
     }
 
     /// Commits the durable terminal-settlement fact of a Workflow-owned

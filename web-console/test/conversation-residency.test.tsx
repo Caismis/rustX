@@ -11,7 +11,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v25';
+import type { CatalogModelView, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v23';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.

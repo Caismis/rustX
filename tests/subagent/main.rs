@@ -26,6 +26,3 @@ mod definitions;
 mod end_to_end;
 mod overrides;
 mod process_conformance;
-
-#[path = "../common/agent_authority.rs"]
-mod agent_authority;

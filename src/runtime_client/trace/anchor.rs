@@ -58,9 +58,6 @@ pub(super) struct AnchorFacts {
     pub preview: Option<TracePreview>,
     pub calls: Vec<TraceToolCall>,
     pub native_id: Option<String>,
-    pub agent_id: Option<crate::runtime::identity::AgentId>,
-    pub activation_id: Option<crate::runtime::identity::SubagentId>,
-    pub activation_origin: Option<crate::runtime::subagent::AgentActivationOrigin>,
     pub originating_tool_call_id: Option<ToolCallId>,
     pub message_id: Option<MessageId>,
     pub attachments: Vec<TraceArtifact>,
@@ -113,9 +110,6 @@ impl TraceProjection<'_> {
             preview: None,
             calls: vec![],
             native_id: None,
-            agent_id: None,
-            activation_id: None,
-            activation_origin: None,
             originating_tool_call_id: None,
             message_id: None,
             attachments: vec![],
@@ -345,17 +339,13 @@ impl TraceProjection<'_> {
             }
             E::SubagentOwnershipCommitted {
                 subagent_id,
-                child_agent_id,
                 agent,
-                origin,
+                tool_call_id,
                 ..
             } => {
                 facts.kind = TraceKind::Subagent;
                 facts.native_id = Some(subagent_id.to_string());
-                facts.agent_id = Some(child_agent_id.clone());
-                facts.activation_id = Some(subagent_id.clone());
-                facts.activation_origin = Some(origin.clone());
-                facts.originating_tool_call_id = origin.tool_call_id().cloned();
+                facts.originating_tool_call_id = Some(tool_call_id.clone());
                 facts.preview = Some(TracePreview::of(agent.as_str()));
                 self.ending(
                     FactScope::Subagent(subagent_id.to_string()),

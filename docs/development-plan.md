@@ -9,7 +9,7 @@ define this implementation; no dynamic plugin SDK or alternate config owner is i
 M9.6 (#84) composes the root-only Goal extension over revisioned durable state,
 following #256/#258/#259. Its [admission contract](goal-extension.md) uses ordinary
 ConversationRuntime ownership and keeps Scheduler #85's future WHEN semantics
-out of Goal. Workflow finite AgentRuns and durable native Agent activation semantics remain independent.
+out of Goal. Workflow and one-shot Subagent terminal semantics remain independent.
 
 This plan prioritizes proving the execution kernel locally before integrating rustX into production infrastructure.
 
@@ -203,10 +203,14 @@ Implemented in the M5 tool plane PR (Issue #8):
   `ConversationBackgroundRegistry` with the dispatch ownership commit,
   lifecycle state machine, cancel-vs-complete linearization, and
   exactly-once terminal inbound publication
-- Separate finite Job controls (`job_list`, `job_status`, `job_wait`,
-  `job_cancel`) and durable Agent controls (`subagent`, `list_agents`,
-  `send_message`, `wait_agent`, `interrupt_agent`), each routed to its domain
-  owner. No unified model-facing execution handle or action mega-tool remains.
+- The `execution` runtime intrinsic: the single model-facing observation,
+  discovery, and cancellation control plane for conversation-owned
+  asynchronous executions (status and idempotent cancel over explicit
+  `kind` + `id` targets, plus bounded conversation-scoped `list`
+  discovery, all routed to the owning domain registry). The input contract
+  is action-tagged; listing is a deterministically ordered, globally
+  bounded projection of the domain registries' own read models and is
+  never a result, transcript, or wait channel
 - The runtime-owned Agent Status `background_execution` built-in section
 - Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
   boundary, artifact store, managed tool-output store, and explicit tool
@@ -220,7 +224,7 @@ Implemented in the M5 tool plane PR (Issue #8):
 - The concrete bounded `NativeToolPolicies` configuration: each ordinary
   native tool independently selects its `ToolInvocationPolicy` (execution +
   concurrency axes; foreground-only sequential by default), with
-  Job/Agent control Tools fixed foreground-only sequential outside the
+  `execution` fixed foreground-only sequential outside the
   configurable set
 - One canonical conversation mailbox owned by the conversation tool
   runtime, drained by the Agent Loop at every safe boundary; a configured
@@ -1258,12 +1262,9 @@ No durable pending waiter, unanswered-Questionnaire replay, durable TUI state,
 human-task workflow engine, scheduler, or resource-watcher lifecycle change
 was added.
 
-### Native Subagents — durable identity and finite activations (#60, corrected by #411)
+### M9.25 — Native async one-shot subagents (Issue #60, delivered)
 
-Native Subagents are conversation-owned durable child Agents. Each finite
-activation runs in a supervised child rustX runtime; completing or interrupting
-it retains the same AgentId, child conversation and frozen authority for resume.
-See [Jobs and continuable Agents](jobs-and-agents.md) for the current contract.
+M9.25 adds conversation-owned, asynchronous, one-shot child rustX runtimes.
 The `subagent` native tool delegates a bounded task; the child is a real
 separate OS process running the same `ConversationRuntime`/Agent
 Loop/Context/Tool/Model stack headlessly, composed from the typed
@@ -1351,15 +1352,18 @@ authority at write time and revalidated at read time) and the unique
 `event_id` index in bounded time, never a journal scan — not merely against
 the repeated terminal payload.
 
-Capabilities are deny-by-construction: the child registry contains exactly its
-admitted resolved profile, with explicit child-scope and nesting limits. Runtime
-Client Agent controls, `AgentUpdated` events and `snapshot.agents` carry stable
-Agent identity, current activation and frozen definition/profile digests; the TUI
-renders the same projection.
+Capabilities are deny-by-construction: the child's registry is exactly the
+Builtin set its definition resolved to, and `subagent`/`ask_user` are
+structurally unregistrable there, so recursion and headless-only surfaces are
+impossible by construction. Runtime Client `subagent_status`,
+`subagent_cancel`, the `SubagentUpdated` event, and `snapshot.subagents`
+carry the `(agent, definition_digest)` identity; the TUI renders the same
+projection.
 
 Issue #144 replaced M9.25's hard-coded `SubagentProfile::Explore` with named
-resolved named profiles; #411 freezes that authority for the durable Agent
-across later activations. The historical hard-coded profile enum remains removed.
+attempt-scoped definitions; the paragraph above describes the current
+architecture, and the "profile" vocabulary is obsolete throughout the
+subagent plane.
 
 Exit criteria (met): deterministic registry tests over scripted staged
 children (capacity at commit, cancellation before and after the start-gate

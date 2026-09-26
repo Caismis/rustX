@@ -1,6 +1,0 @@
-.identity { display: block; overflow-wrap: anywhere; color: var(--dsw-alias-label-tertiary); }
-.controls { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
-.message { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
-.message > span { min-width: 140px; flex: 1; }
-.message > button { flex-shrink: 0; white-space: nowrap; }
-.transcript { max-height: 420px; overflow: auto; overscroll-behavior: contain; padding-inline: 8px; }

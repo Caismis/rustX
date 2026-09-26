@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
-import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v25';
+import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v23';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';

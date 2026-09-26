@@ -2055,18 +2055,10 @@ fn assert_cut_lineage(scenario: &str) {
         })
         .expect("source owns an execution");
     assert!(copied.contains(&execution));
-    assert!(copied.contains(&format!("job {execution} | bash | running")));
+    assert!(copied.contains(&format!("tool {execution} | bash | running")));
     let children = owned_subagents(&source);
     assert!(copied.contains(&children[0]));
-    let agent = source
-        .journal()
-        .into_iter()
-        .find_map(|entry| match entry.event {
-            RuntimeEvent::SubagentOwnershipCommitted { child_agent_id, .. } => Some(child_agent_id),
-            _ => None,
-        })
-        .expect("source owns a durable Agent");
-    assert!(copied.contains(agent.as_str()));
+    assert!(copied.contains(&format!("agent-{}", children[0])));
     assert!(copied.contains(&format!("conversations/{source_conversation}/")));
 
     // …and every one of those identities is inert. The destination Journal is
@@ -2286,7 +2278,7 @@ fn assert_publication_is_atomic(scenario: &str, boundary: &str, committed: bool)
 /// This is the row the seed makes dangerous rather than safe. The destination
 /// context genuinely contains `exec_1`, `conversation-1-subagent-1`,
 /// `agent-conversation-1-subagent-1`, the source's private tool-output path,
-/// and three Agent Status footers reading `job exec_1 | bash | running` — all
+/// and three Agent Status footers reading `tool exec_1 | bash | running` — all
 /// copied verbatim from a lineage whose execution is still owned elsewhere. A
 /// runtime that resolved ownership from history would find every one of them.
 ///
@@ -2632,7 +2624,7 @@ fn a_reopened_runtime_never_relaunches_a_dead_background_execution() {
 /// The trap this row closes is specific. Agent Status is a **canonical
 /// message**: the status admitted for the second turn was composed while a
 /// real detached execution was live, so it literally says
-/// `Background jobs: tool exec_1 | bash | …`, and it stays in the Ledger
+/// `Background executions: tool exec_1 | bash | …`, and it stays in the Ledger
 /// forever. A reopened runtime reads that message back as ordinary history.
 /// If ownership were ever reconstructed from what history *says* — instead of
 /// from the durable ownership facts and the process-local registry — the
@@ -2667,12 +2659,12 @@ fn historical_status_and_history_never_revive_background_ownership() {
     let before = status_texts(&durable.canonical());
     assert_eq!(before.len(), 2);
     assert!(
-        !before[0].contains("Background jobs:"),
+        !before[0].contains("Background executions:"),
         "the first turn's status predates the execution: {}",
         before[0]
     );
     assert!(
-        before[1].contains("Background jobs:"),
+        before[1].contains("Background executions:"),
         "the second turn's status was composed while the execution was live: {}",
         before[1]
     );

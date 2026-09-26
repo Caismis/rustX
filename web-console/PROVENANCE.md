@@ -935,23 +935,4 @@ These are behavioral references for whole-Turn ownership, control placement,
 counts and always-open stopped/failed disclosure. No additional upstream source
 was copied. The existing adapted TurnProcess presentation is unchanged. Native
 Journal projection and cursor-based Web composition are rustX-authored. Generated
-App Server v24 imports and their local hashes/import closures move together.
-
-## #411 Jobs and continuable Agents
-
-No new upstream source is copied and the presentation baseline is unchanged.
-Current source review used DeepSeek Harness commit
-`477b4f420553e8a52c2fbccc464d7561b239c443`:
-`packages/client/ui-subagent/src/client/sidebar-chat/index.tsx` and
-`packages/client/ui-jobs/src/client/JobListAction.tsx`. Stable child detail and
-separate finite Job output/control patterns inform rustX-authored ActivityCards.
-The old one-shot/continuable mode branch is deliberately not adopted.
-
-Reviewed local inventory changes update App Server imports to v25 and ToolCard's
-identity discriminator to finite `job`, including its `data-job-id` marker.
-Existing Tool dispatch, primitives, styling, licenses and pinned upstream hashes
-are retained. Inventory local hashes and import closure reflect those edits.
-
-Review corrections retain native Admitting state and typed creation/message/client/
-Workflow activation provenance. Current local hashes and import closures track
-App Server v25; the preceding #409 v24 record describes its historical audit.
+App Server v23 imports and their local hashes/import closures move together.

@@ -928,18 +928,6 @@ fn accept_subagent_terminal_through(
     store.accept_subagent_terminal(notice, draft, event)
 }
 
-fn commit_agent_activation_admission_through(
-    store: &(impl ConversationStore + ?Sized),
-    event: RuntimeEventEnvelope,
-) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-    if !matches!(event.event, RuntimeEvent::AgentActivationAdmission { .. }) {
-        return Err(ConversationStoreError::InvalidReference(
-            "Agent admission capability commits only exact staging facts".into(),
-        ));
-    }
-    store.append_event(event)
-}
-
 /// Commits the durable subagent-ownership fact of one child through a store
 /// handle, rejecting every other event payload.
 ///
@@ -949,7 +937,6 @@ fn commit_agent_activation_admission_through(
 fn commit_subagent_ownership_through(
     store: &(impl ConversationStore + ?Sized),
     event: RuntimeEventEnvelope,
-    authority: Option<&crate::runtime::subagent::DurableAgentAuthority>,
 ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
     if !matches!(
         event.event,
@@ -959,10 +946,7 @@ fn commit_subagent_ownership_through(
             "the subagent capability commits only a subagent ownership fact".to_owned(),
         ));
     }
-    match authority {
-        Some(authority) => store.append_agent_admission(event, authority),
-        None => store.append_event(event),
-    }
+    store.append_event(event)
 }
 
 /// Commits the durable terminal-settlement fact of a Workflow-owned child
@@ -1231,20 +1215,17 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
-    /// Commits only a durable precommit Agent activation staging fact.
-    /// Reservation precedes physical staging; rollback records containment.
-    fn commit_agent_activation_admission(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
-
-    /// Commits child ownership before delegation can begin semantic work.
-    /// The payload must be `SubagentOwnershipCommitted`; initial native
-    /// Agent admission also atomically captures private frozen authority.
+    /// Commits the durable subagent-ownership fact of one child runtime
+    /// (Issue #60).
+    ///
+    /// The commit happens strictly **before** the child receives its
+    /// delegation, so no child semantic side effect can begin without
+    /// durable evidence of the owning `SubagentId`. The payload must be a
+    /// [`RuntimeEvent::SubagentOwnershipCommitted`](crate::events::types::RuntimeEvent::SubagentOwnershipCommitted);
+    /// every other event is rejected.
     fn commit_subagent_ownership(
         &self,
         event: RuntimeEventEnvelope,
-        authority: Option<&crate::runtime::subagent::DurableAgentAuthority>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
     /// Commits the durable terminal-settlement fact of a Workflow-owned
@@ -1342,19 +1323,6 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 ///   been durably accepted the answer stays `true` forever.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationStore: Send + Sync + 'static {
-    /// Private executable Agent authority, never copied into public history or events.
-    fn load_agent_authority(
-        &self,
-        agent_id: &crate::runtime::identity::AgentId,
-    ) -> Result<crate::runtime::subagent::DurableAgentAuthority, ConversationStoreError>;
-
-    /// Atomically admit one private authority and its public ownership reference.
-    fn append_agent_admission(
-        &self,
-        event: RuntimeEventEnvelope,
-        authority: &crate::runtime::subagent::DurableAgentAuthority,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
-
     /// Current Goal state, independent of history and Event Journal.
     fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
         Err(ConversationStoreError::Storage(
@@ -2085,19 +2053,11 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         commit_background_ownership_through(self, event)
     }
 
-    fn commit_agent_activation_admission(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_agent_activation_admission_through(self, event)
-    }
-
     fn commit_subagent_ownership(
         &self,
         event: RuntimeEventEnvelope,
-        authority: Option<&crate::runtime::subagent::DurableAgentAuthority>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_subagent_ownership_through(self, event, authority)
+        commit_subagent_ownership_through(self, event)
     }
 
     fn commit_subagent_terminal(
@@ -2282,19 +2242,11 @@ impl ConversationInboundCapability for StoreInboundCapability {
         commit_background_ownership_through(self.store.as_ref(), event)
     }
 
-    fn commit_agent_activation_admission(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_agent_activation_admission_through(self.store.as_ref(), event)
-    }
-
     fn commit_subagent_ownership(
         &self,
         event: RuntimeEventEnvelope,
-        authority: Option<&crate::runtime::subagent::DurableAgentAuthority>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        commit_subagent_ownership_through(self.store.as_ref(), event, authority)
+        commit_subagent_ownership_through(self.store.as_ref(), event)
     }
 
     fn commit_subagent_terminal(
