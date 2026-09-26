@@ -1747,6 +1747,18 @@ async fn running_child_inspection_is_execution_independent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
+    Box::pin(hard_parent_death_recovery(false)).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hard_parent_and_child_death_without_native_proof_remains_unavailable() {
+    Box::pin(hard_parent_death_recovery(true)).await;
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)]
+async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
     use std::os::unix::process::ExitStatusExt;
@@ -1824,6 +1836,44 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     let child_conversation_id = admitted.child_conversation_id.clone();
     let activation_id = admitted.activation_id.clone();
     assert_eq!(admitted.current_activation.as_ref(), Some(&activation_id));
+
+    if kill_child_without_drain {
+        // Stop at the observed provider gate before killing the parent. A
+        // confirmed stopped process cannot race EOF into a quiescent receipt.
+        kill(
+            Pid::from_raw(i32::try_from(child_pids[0]).unwrap()),
+            Signal::SIGSTOP,
+        )
+        .unwrap();
+        tokio::time::timeout(LIVENESS, async {
+            while !matches!(process_state(child_pids[0]), Some('T' | 't')) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("child reaches the kernel stop gate");
+        // Freeze the parent's physical driver too. The child can now be
+        // killed before the parent without allowing a reap/terminal commit.
+        // This also avoids the kernel's orphaned-stopped-group SIGHUP racing
+        // a second signal after parent death.
+        kill(
+            Pid::from_raw(i32::try_from(parent_pid).unwrap()),
+            Signal::SIGSTOP,
+        )
+        .unwrap();
+        tokio::time::timeout(LIVENESS, async {
+            while !matches!(process_state(parent_pid), Some('T' | 't')) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("parent driver reaches the kernel stop gate");
+        kill(
+            Pid::from_raw(i32::try_from(child_pids[0]).unwrap()),
+            Signal::SIGKILL,
+        )
+        .unwrap();
+    }
 
     // This is an actual abrupt parent death: no Runtime Client Shutdown and
     // no graceful transport EOF are sent before SIGKILL.
@@ -1908,8 +1958,14 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     assert_eq!(agent.agent_id, agent_id);
     assert_eq!(agent.child_conversation_id, child_conversation_id);
     assert_eq!(agent.activation_id, activation_id);
-    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Stopping);
-    assert_eq!(agent.current_activation.as_ref(), Some(&activation_id));
+    let expected_state = if kill_child_without_drain {
+        rustx::runtime::subagent::AgentState::Unavailable
+    } else {
+        rustx::runtime::subagent::AgentState::Inactive
+    };
+    let expected_current = kill_child_without_drain.then_some(activation_id.clone());
+    assert_eq!(agent.state, expected_state);
+    assert_eq!(agent.current_activation, expected_current);
     assert_eq!(
         agent.activation_state,
         rustx::runtime::subagent::SubagentState::Interrupted
@@ -1938,39 +1994,44 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
             agent_id: agent_id.clone(),
         })
         .await;
-    assert!(
-        wait.error.is_some(),
-        "unproven activation cannot satisfy wait"
-    );
-    let send = recovered
-        .request(|id| RuntimeClientRequest::AgentSendMessage {
-            id: rustx::runtime_client::RequestId::new(id),
-            agent_id: agent_id.clone(),
-            message: "must not resume unproven physical ownership".into(),
-        })
-        .await;
-    assert!(
-        send.error.is_some(),
-        "recovery cannot grant new physical ownership"
-    );
-
+    if kill_child_without_drain {
+        assert!(
+            matches!(
+                wait.error,
+                Some(rustx::runtime_client::RuntimeClientError::AgentSettlement { .. })
+            ),
+            "{wait:?}"
+        );
+        let response = recovered
+            .request(|id| RuntimeClientRequest::AgentSendMessage {
+                id: rustx::runtime_client::RequestId::new(id),
+                agent_id: agent_id.clone(),
+                message: "cannot overlap unproven old ownership".into(),
+            })
+            .await;
+        assert!(
+            matches!(
+                response.error,
+                Some(rustx::runtime_client::RuntimeClientError::AgentSettlement { .. })
+            ),
+            "{response:?}"
+        );
+    } else {
+        assert!(
+            wait.error.is_none(),
+            "native orphan drain proof satisfies wait without inventing an answer: {wait:?}"
+        );
+    }
     let response = recovered
         .request(|id| RuntimeClientRequest::Shutdown {
             id: rustx::runtime_client::RequestId::new(id),
         })
         .await;
-    assert!(
-        matches!(
-            response.error,
-            Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { ref message })
-                if message.contains("physical settlement is unresolved")
-        ),
-        "unproven crash settlement must fail shutdown: {response:?}"
-    );
+    assert_recovered_shutdown(&response, kill_child_without_drain);
     let (status, stderr) = recovered.close_and_wait().await;
     assert!(
         status.success(),
-        "transport closes after reporting unresolved settlement: {stderr}"
+        "transport closes after proven settlement: {stderr}"
     );
 
     // A second restart must observe the absorbing terminal identity and must
@@ -2017,8 +2078,8 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     assert_eq!(agent.agent_id, agent_id);
     assert_eq!(agent.child_conversation_id, child_conversation_id);
     assert_eq!(agent.activation_id, activation_id);
-    assert_eq!(agent.state, rustx::runtime::subagent::AgentState::Stopping);
-    assert_eq!(agent.current_activation.as_ref(), Some(&activation_id));
+    assert_eq!(agent.state, expected_state);
+    assert_eq!(agent.current_activation, expected_current);
     assert_eq!(
         agent.activation_state,
         rustx::runtime::subagent::SubagentState::Interrupted
@@ -2029,19 +2090,30 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
             id: rustx::runtime_client::RequestId::new(id),
         })
         .await;
-    assert!(
-        matches!(
-            response.error,
-            Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { ref message })
-                if message.contains("physical settlement is unresolved")
-        ),
-        "unproven crash settlement must fail shutdown: {response:?}"
-    );
+    assert_recovered_shutdown(&response, kill_child_without_drain);
     let (status, stderr) = repeated.close_and_wait().await;
     assert!(
         status.success(),
-        "repeated transport closes after reporting unresolved settlement: {stderr}"
+        "repeated transport closes after proven settlement: {stderr}"
     );
+}
+
+#[cfg(unix)]
+fn assert_recovered_shutdown(response: &RuntimeClientResponse, unproven: bool) {
+    if unproven {
+        assert!(
+            matches!(&response.error, Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { message }) if message.contains("physical settlement is unresolved")),
+            "missing physical proof fails closed: {response:?}"
+        );
+    } else {
+        assert!(
+            matches!(
+                response.result,
+                Some(RuntimeClientResult::ShutdownCompleted)
+            ),
+            "reconciled physical containment permits graceful shutdown: {response:?}"
+        );
+    }
 }
 
 #[path = "continuation.rs"]

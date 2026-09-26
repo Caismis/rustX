@@ -304,7 +304,9 @@ fn count_conversation_store_open() {
 /// Version 46 stores complete executable Agent authority privately; ownership
 /// events contain only an opaque Agent identity reference.
 /// Older development stores are rejected; secrets never enter execution facts.
-pub const SQLITE_SCHEMA_VERSION: i64 = 46;
+/// Version 47 retains finite Workflow physical-settlement evidence independently
+/// of terminal publication. Older development stores lack the required proof.
+pub const SQLITE_SCHEMA_VERSION: i64 = 47;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -481,6 +483,7 @@ impl SqliteConversationStore {
             RuntimeEvent::AgentActivationAdmission { .. }
                 | RuntimeEvent::SubagentOwnershipCommitted { .. }
                 | RuntimeEvent::SubagentTerminalPublished { .. }
+                | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
                 | RuntimeEvent::SubagentTerminalSettled { .. }
                 | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
                 | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
@@ -1099,6 +1102,30 @@ impl SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("event transaction: {error}")))?;
+        // Recovery may retry after losing a commit acknowledgement. This
+        // monotonic resource proof has one canonical event identity; return the
+        // already committed receipt (including its original timestamp) rather
+        // than stranding an obligation behind the unique event index.
+        if matches!(
+            event.event,
+            RuntimeEvent::SubagentPhysicalSettlementProven { .. }
+                | RuntimeEvent::AgentActivationAdmission {
+                    phase: crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                        physical_settlement_proven: true
+                    },
+                    ..
+                }
+        ) && let Some(existing) = find_event_by_id(&transaction, &event.event_id)?
+        {
+            let mut retry = event;
+            retry.timestamp = existing.timestamp;
+            if !same_event_ignoring_sequence(&existing, &retry) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "physical settlement proof retry conflicts with its committed identity".into(),
+                ));
+            }
+            return Ok(existing);
+        }
         #[cfg(test)]
         if matches!(
             &event.event,
@@ -2535,6 +2562,7 @@ impl ConversationStore for SqliteConversationStore {
                 RuntimeEvent::SubagentTerminalSettled {
                     subagent_id: terminal_subagent,
                     state: crate::events::types::SubagentTerminalState::Succeeded,
+                    physical_settlement_proven: true,
                     ..
                 },
                 RuntimeEvent::WorkflowAgentOutputCommitted {
@@ -2545,7 +2573,7 @@ impl ConversationStore for SqliteConversationStore {
         );
         if !valid_pair {
             return Err(ConversationStoreError::InvalidReference(
-                "the Workflow terminal transaction requires one matching successful child terminal and output fact".to_owned(),
+                "the Workflow terminal transaction requires one matching physically settled successful child terminal and output fact".to_owned(),
             ));
         }
         if terminal.conversation_id != output.conversation_id
@@ -8671,6 +8699,61 @@ fn validate_event_reference(
             }
             validate_subagent_terminal_resource(subagent_id, &workspace, workspace_resource)?;
         }
+        RuntimeEvent::SubagentPhysicalSettlementProven {
+            subagent_id,
+            child_agent_id,
+        } => {
+            if envelope.event_id
+                != crate::runtime::subagent::physical_settlement_event_id(subagent_id)
+                || envelope.attempt_id.is_some()
+                || envelope.turn_id.is_some()
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid physical settlement proof identity".into(),
+                ));
+            }
+            let (owner, _, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
+            let terminal_id = match ownership {
+                crate::events::types::SubagentOwnershipKind::Normal => {
+                    crate::runtime::subagent::terminal_event_id(subagent_id)
+                }
+                crate::events::types::SubagentOwnershipKind::Workflow => {
+                    crate::runtime::subagent::terminal_settlement_event_id(subagent_id)
+                }
+            };
+            let terminal: Option<String> = transaction
+                .query_row(
+                    "SELECT event_json FROM events WHERE event_id=?1",
+                    [terminal_id.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| {
+                    storage(format!("physical settlement terminal lookup: {error}"))
+                })?;
+            let terminal = terminal.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "physical settlement without terminal publication".into(),
+                )
+            })?;
+            let terminal: RuntimeEventEnvelope = decode(&terminal, "physical settlement terminal")?;
+            if owner != *child_agent_id
+                || !matches!(
+                    terminal.event,
+                    RuntimeEvent::SubagentTerminalPublished {
+                        physical_settlement_proven: false,
+                        ..
+                    } | RuntimeEvent::SubagentTerminalSettled {
+                        physical_settlement_proven: false,
+                        ..
+                    }
+                )
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "physical settlement does not name an unresolved terminal".into(),
+                ));
+            }
+        }
         RuntimeEvent::SubagentTerminalSettled {
             subagent_id,
             child_agent_id,
@@ -9240,7 +9323,9 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
             format!("agent-admission:{activation_id}"),
             matches!(
                 phase,
-                crate::events::types::AgentActivationAdmissionPhase::RolledBack { .. }
+                crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                    physical_settlement_proven: true
+                }
             ),
         )];
     }
@@ -12910,6 +12995,7 @@ mod tests {
             &subagent_id,
             &child_agent_id,
             crate::events::types::SubagentTerminalState::Succeeded,
+            true,
             &crate::events::types::SubagentWorkspaceTerminalResource::None,
             timestamp,
         );
@@ -12922,6 +13008,23 @@ mod tests {
             serde_json::json!({"passed": true}),
             timestamp,
         );
+
+        let mut unproven = terminal.clone();
+        if let RuntimeEvent::SubagentTerminalSettled {
+            physical_settlement_proven,
+            ..
+        } = &mut unproven.event
+        {
+            *physical_settlement_proven = false;
+        }
+        assert!(
+            matches!(
+                store.commit_workflow_agent_terminal(unproven, output.clone()),
+                Err(ConversationStoreError::InvalidReference(_))
+            ),
+            "a valid value cannot commit Workflow success without physical proof"
+        );
+        assert_eq!(store.read_events(None, 10).unwrap().events.len(), 1);
 
         // A fault after both event rows are staged must roll the pair back;
         // the ownership fact is the only durable state left.
@@ -14204,7 +14307,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 46);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 47);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14273,7 +14376,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 46);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 47);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

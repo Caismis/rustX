@@ -52,7 +52,7 @@ Resume also requires proven physical containment of the prior activation. An
 explicit `interrupt_agent` settles as Cancelled after native physical settlement
 and leaves the Agent resumable. Crash reconciliation records Interrupted without
 proof that the old direct child and nested processes settled. It preserves the
-same inactive Agent/history projection but refuses another physical activation;
+same Agent identity and history, projects Unavailable, and refuses another physical activation;
 clean Git inspection or a shared workspace does not supply that missing proof.
 Disposed or unresolved workspace authority likewise cannot be reacquired by resume.
 
@@ -60,6 +60,29 @@ Resume preparation has its own durable `AgentActivationAdmission` obligation.
 Reserved commits before staging, under the same product ownership fence used by
 Session management. Committed activation ownership consumes that reservation;
 rollback closes it only with an explicit containment result. An unresolved or
-unproven rollback reconstructs Stopping with the exact reserved activation ID,
+unproven rollback reconstructs Unavailable with the exact reserved activation ID,
 blocks further admission, and prevents Session deletion from removing resources.
 A prior successful activation cannot settle this later physical obligation.
+
+`AgentRetained` is Agent-lifetime ownership, not an activation-level `Retained`
+handoff. Normal completion neither deletes nor disposes this workspace. Finite
+`subagent/disposeWorkspace` cannot delete it; a future Agent-deletion lifecycle
+would need its own explicit owner and is not introduced here.
+
+Publication and containment remain independent: a committed Interrupted terminal
+may later acquire durable physical proof without changing its unknown logical
+outcome. Only native process-incarnation evidence can discharge that obligation;
+workspace inspection alone cannot grant resume authority.
+
+Recovery retains exact incarnation lease/receipt evidence until Session deletion.
+The registry's bounded reconciliation owner commits
+`SubagentPhysicalSettlementProven` only after native Quiescent evidence and lease
+release exclude the old writer. This releases only the recovered physical
+exclusion; an independently poisoned workspace remains unavailable. Session
+deletion folds later proof before deciding whether containment is still unresolved.
+
+Recovery also retains a reserved generation that never committed activation
+ownership. Its exact native receipt can later commit proven RolledBack and release
+only that reservation's physical exclusion. An unproven rollback fact leaves this
+obligation open. Finite Workflow resource records retain their durable ownership
+and physical evidence; retained workspace metadata never supplies execution proof.

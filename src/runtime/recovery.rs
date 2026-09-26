@@ -2276,8 +2276,14 @@ impl RecoveryPlan {
             let workspace = crate::runtime::workspace::WorkspaceManager::inspect_recovered(
                 &class.evidence.workspace,
             );
-            let workspace_resource =
-                crate::runtime::subagent::terminal_workspace_resource(&workspace);
+            let workspace_resource = match class.evidence.ownership {
+                // The durable Agent still owns its workspace. An inspection
+                // handoff is evidence, never an activation disposal capability.
+                SubagentOwnershipKind::Normal if !workspace.is_unresolved() => {
+                    SubagentWorkspaceTerminalResource::None
+                }
+                _ => crate::runtime::subagent::terminal_workspace_resource(&workspace),
+            };
             let timestamp = clock.now();
             match class.evidence.ownership {
                 SubagentOwnershipKind::Normal => {
@@ -2309,6 +2315,7 @@ impl RecoveryPlan {
                         &class.evidence.subagent_id,
                         &class.evidence.child_agent_id,
                         SubagentTerminalState::Interrupted,
+                        false,
                         &workspace_resource,
                         timestamp,
                     );
@@ -2995,6 +3002,7 @@ mod tests {
                 subagent_id: subagent_id.clone(),
                 child_agent_id,
                 state: SubagentTerminalState::Succeeded,
+                physical_settlement_proven: true,
                 workspace_resource: SubagentWorkspaceTerminalResource::None,
             },
             None,

@@ -5454,8 +5454,11 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     #[derive(Default)]
     struct RecordingObserver(std::sync::Mutex<Vec<SubagentSnapshot>>);
     impl SubagentObserver for RecordingObserver {
-        fn observe_agent(&self, _snapshot: &rustx::runtime::subagent::AgentSnapshot) {}
-        fn on_snapshot(&self, snapshot: &SubagentSnapshot) {
+        fn on_snapshot(
+            &self,
+            _agent: Option<&rustx::runtime::subagent::AgentSnapshot>,
+            snapshot: &SubagentSnapshot,
+        ) {
             self.0
                 .lock()
                 .expect("recording lock")
@@ -5502,7 +5505,13 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     }
 
     // The Runtime Client view of the settled child is equally clean.
-    let view = crate::runtime_client::projection::subagent_view(&settled);
+    let view = crate::runtime_client::projection::agent_view(
+        &plane
+            .registry
+            .agent_snapshot(&settled.child_agent_id)
+            .expect("Agent owner"),
+        &settled,
+    );
     let serialized = serde_json::to_string(&view).expect("client view json");
     assert!(
         !serialized.contains(ANSWER),
@@ -5701,7 +5710,13 @@ async fn the_snapshot_projects_only_the_frozen_execution_profile() {
     // The Runtime Client view carries the same profile under the
     // `execution_profile` wire key; the obsolete bare `profile` key stays
     // retired.
-    let view = crate::runtime_client::projection::subagent_view(&snapshot);
+    let view = crate::runtime_client::projection::agent_view(
+        &plane
+            .registry
+            .agent_snapshot(&snapshot.child_agent_id)
+            .expect("Agent owner"),
+        &snapshot,
+    );
     assert_eq!(view.execution_profile, snapshot.profile);
     let wire = serde_json::to_value(&view).expect("view json");
     assert_eq!(wire["execution_profile"]["model"], "local/model");

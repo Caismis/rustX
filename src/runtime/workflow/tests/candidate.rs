@@ -564,7 +564,7 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     assert!(path.exists());
     assert!(!parent.join("candidate").exists());
     let settled = plane.registry.all_snapshots().pop().unwrap();
-    assert!(settled.settled);
+    assert!(settled.is_settled());
     assert!(settled.handoff.is_none());
     assert_eq!(
         settled.workspace_resource_state,

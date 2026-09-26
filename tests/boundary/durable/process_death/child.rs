@@ -461,7 +461,7 @@ impl Child {
         let runtime_root = root.join("private/sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001/incarnations/staged");
         std::fs::create_dir_all(&runtime_root).expect("staged child runtime root");
         self.runtime()
-            .subagents()
+            .subagent_registry()
             .expect("the composed runtime owns a subagent registry")
             .push_staged_override(crate::runtime::subagent::process::StagedChild::for_test(
                 process,

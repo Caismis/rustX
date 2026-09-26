@@ -1196,12 +1196,15 @@ fn native_result(
             outcome,
             agent: Box::new(agent),
         },
-        RuntimeClientResult::SubagentWorkspaceDisposed { subagent, outcome } => {
-            MethodResult::WorkspaceDisposed {
-                agent: Box::new(subagent),
-                outcome,
-            }
-        }
+        RuntimeClientResult::SubagentWorkspaceDisposed {
+            subagent_id,
+            workspace,
+            outcome,
+        } => MethodResult::WorkspaceDisposed {
+            subagent_id,
+            workspace,
+            outcome,
+        },
         RuntimeClientResult::Snapshot { snapshot, cursor } => MethodResult::Snapshot {
             snapshot: Box::new(snapshot),
             cursor,
@@ -1226,6 +1229,7 @@ fn native_result(
 fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
         RuntimeClientError::AgentStopping { agent_id } => ErrorData::AgentStopping { agent_id },
+        RuntimeClientError::AgentSettlement { agent_id } => ErrorData::AgentSettlement { agent_id },
         RuntimeClientError::UnknownAgent { agent_id } => ErrorData::UnknownAgent { agent_id },
         RuntimeClientError::ConfigurationAdoption { rejection } => {
             ErrorData::ConfigurationAdoption { rejection }
@@ -1278,6 +1282,9 @@ fn domain(data: ErrorData) -> RpcError {
     let message = match &data {
         ErrorData::AgentStopping { .. } => {
             "Agent is stopping or admitting an activation; retry after settlement"
+        }
+        ErrorData::AgentSettlement { .. } => {
+            "Agent is unavailable; physical settlement, publication, or workspace authority requires explicit repair"
         }
         ErrorData::UnknownAgent { .. } => "Unknown Agent in this conversation",
         _ => "Operation rejected",
@@ -1337,6 +1344,20 @@ fn source_settings_error(
 
 #[cfg(test)]
 mod capacity_tests {
+    #[test]
+    fn agent_settlement_wire_error_does_not_advise_retry() {
+        let error = super::client_error(
+            crate::runtime_client::types::RuntimeClientError::AgentSettlement {
+                agent_id: crate::runtime::identity::AgentId::new("agent-unavailable"),
+            },
+        );
+        assert!(
+            matches!(&error.data, Some(super::ErrorData::AgentSettlement { agent_id }) if agent_id.as_str() == "agent-unavailable")
+        );
+        assert!(error.message.contains("explicit repair"));
+        assert!(!error.message.contains("retry"));
+    }
+
     #[test]
     fn production_route_table_starts_with_32_attachment_slots() {
         let routes = super::RouteTable::default();

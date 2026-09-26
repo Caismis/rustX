@@ -5445,8 +5445,11 @@
         {
           "type": "object",
           "properties": {
-            "agent": {
-              "$ref": "#/$defs/RuntimeClientAgent"
+            "subagent_id": {
+              "$ref": "#/$defs/SubagentId"
+            },
+            "workspace": {
+              "$ref": "#/$defs/RuntimeClientAgentWorkspace"
             },
             "outcome": {
               "$ref": "#/$defs/RuntimeClientAgentWorkspaceDisposalOutcome"
@@ -5459,7 +5462,8 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "agent",
+            "subagent_id",
+            "workspace",
             "outcome"
           ]
         },
@@ -12621,12 +12625,21 @@
       ]
     },
     "AgentState": {
-      "type": "string",
-      "enum": [
-        "admitting",
-        "active",
-        "stopping",
-        "inactive"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "admitting",
+            "active",
+            "stopping",
+            "inactive"
+          ]
+        },
+        {
+          "description": "No autonomous activation transition can restore availability.",
+          "type": "string",
+          "const": "unavailable"
+        }
       ]
     },
     "SubagentState": {
@@ -18585,6 +18598,23 @@
             "kind": {
               "type": "string",
               "const": "agent_stopping"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "agent_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent_settlement"
             }
           },
           "additionalProperties": false,

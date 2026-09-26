@@ -213,7 +213,11 @@ async fn agent_listing_is_newest_admission_first_and_reports_more_than_sixty_fou
         listing
             .agents
             .into_iter()
-            .map(|a| a.agent_id)
+            .map(|(agent, activation)| {
+                assert_eq!(agent.latest_activation, activation.subagent_id);
+                assert_eq!(agent.agent_id, activation.child_agent_id);
+                agent.agent_id
+            })
             .collect::<Vec<_>>(),
         identities.into_iter().rev().take(64).collect::<Vec<_>>()
     );
@@ -394,15 +398,13 @@ async fn failed_resume_rollback_retains_stopping_generation_and_fails_controls_c
     drop(child);
     assert!(matches!(
         send.await.unwrap(),
-        Err(AgentControlError::Start(
-            SubagentStartError::Rollback { .. }
-        ))
+        Err(AgentControlError::Settlement)
     ));
     let snapshot = plane
         .registry
         .agent_snapshot(&first.child_agent_id)
         .unwrap();
-    assert_eq!(snapshot.state, AgentState::Stopping);
+    assert_eq!(snapshot.state, AgentState::Unavailable);
     assert_eq!(
         plane.registry.with_goal_idle(|| true),
         None,
@@ -427,6 +429,6 @@ async fn failed_resume_rollback_retains_stopping_generation_and_fails_controls_c
                 CancellationSignal::new()
             )
             .await,
-        Err(AgentControlError::Stopping)
+        Err(AgentControlError::Settlement)
     ));
 }

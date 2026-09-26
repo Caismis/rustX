@@ -2071,8 +2071,17 @@ through one durable owner reservation with fresh activation identity and the sam
 frozen child authority. The Admitting phase covers staging until activation control is installed.
 `send_message` additionally awaits `DelegateAccepted`, sent after durable child inbound commit, which
 proves delivery. A lost acknowledgement reports unknown delivery without replaying
-input. Unproven precommit rollback retains the exact reserved target as Stopping,
+input. Unproven precommit rollback retains the exact reserved target as Unavailable,
 including after recovery; it cannot grant a fresh physical activation.
+Only `AttemptTerminal::Completed` may seal and reopen one native activation.
+Workflow-owned, orphaned, Cancelled and Failed attempts (including TimedOut and
+LimitExceeded) finish at their first terminal. FIFO guidance that won parent
+admission is durably accepted before closure; pending guidance after failure
+belongs to the child inbox for a later explicit activation, not another turn of
+the failed activation. The pre-activation turn gate in
+`into_subagent_child_with_route()` closes turns before `activate()`; historical
+guidance cannot start a request before Delegate supplies this activation's input.
+
 See [Jobs and continuable Agents](jobs-and-agents.md) for exact boundaries.
 
 ## 10. Unsupported behavior (non-goals)
@@ -2126,3 +2135,11 @@ This is a deliberate deviation from pinned Harness TTFT (**step start → first
 token**). rustX keeps its stronger dispatch-origin metric because durable start,
 reconstruction and actual dispatch are separate native boundaries. See
 [the exact timing contract](trace.md#generation-clock-contract).
+
+### Parent death and physical containment
+
+Parent loss does not authorize another child turn or fabricate a human interaction
+outcome. Pending interaction waiters receive ControlLost before runtime shutdown
+cancels and settles the enclosing native owners. A Quiescent child may leave an
+exact incarnation receipt; recovery combines it with exclusive lease release and
+durably records physical proof. The logical Interrupted outcome remains unknown.

@@ -1122,6 +1122,13 @@ impl ConversationInboundMailbox {
         Ok(self.inbound.commit_subagent_terminal(event)?)
     }
 
+    pub(crate) fn commit_subagent_physical_settlement(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        Ok(self.inbound.commit_subagent_physical_settlement(event)?)
+    }
+
     /// Commits the post-terminal retained-workspace disposal intent. This is
     /// a resource-lifecycle fact and deliberately does not reopen or advance
     /// the subagent's logical terminal lifecycle.

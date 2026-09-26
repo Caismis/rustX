@@ -3,7 +3,7 @@ use super::input::decode;
 use super::registration::{NativeToolRegistration, input_schema};
 use super::support::{cancelled_result, failed_result, success_json};
 use crate::runtime::identity::{AgentId, ToolId};
-use crate::runtime::subagent::SubagentRegistry;
+use crate::runtime::subagent::{MAX_AGENT_LIST_LIMIT, SubagentRegistry};
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
@@ -36,9 +36,12 @@ struct MessageInput {
 }
 
 pub(super) fn definitions() -> Vec<ToolDefinition> {
+    let list_description = format!(
+        "List this conversation's durable child Agents, bounded to {MAX_AGENT_LIST_LIMIT} stable identities. Newest-created first, with matched/truncated counts. Active accepts messages; Admitting and Stopping reject new messages transiently; Inactive resumes through send_message. Unavailable requires explicit settlement repair."
+    );
     [
-        (NAMES[0], "List this conversation's durable child Agents, bounded to 64 stable identities. Newest-created first, with matched/truncated counts. Active accepts messages; Admitting and Stopping reject new messages transiently; Inactive resumes through send_message.", input_schema::<ListInput>()),
-        (NAMES[1], "Send input to a durable child Agent. The owner atomically admits it to the current activation or starts one activation of the same inactive child conversation. Admitting and Stopping reject new messages transiently. Success means the child durably accepted the input; do not choose steer versus resume.", input_schema::<MessageInput>()),
+        (NAMES[0], list_description.as_str(), input_schema::<ListInput>()),
+        (NAMES[1], "Send input to a durable child Agent. The owner atomically admits it to the current activation or starts one activation of the same inactive child conversation. Admitting and Stopping reject new messages transiently. Unavailable requires explicit settlement repair. Success means the child durably accepted the input; do not choose steer versus resume.", input_schema::<MessageInput>()),
         (NAMES[2], "Wait for the reserved or current activation captured by this operation to physically settle. A later resumed activation cannot extend this wait. Inactive returns immediately.", input_schema::<TargetInput>()),
         (NAMES[3], "Interrupt the exact reserved admission or current activation captured by this operation and wait for physical settlement. The durable Agent remains available for later send_message.", input_schema::<TargetInput>()),
     ].into_iter().map(|(name, description, input_schema)| ToolDefinition {
@@ -73,11 +76,11 @@ impl ToolExecutor for AgentExecutor {
                     if let Err(error) = decode::<ListInput>(NAMES[0], &invocation.arguments) {
                         return failed_result(error);
                     }
-                    let listing = self.0.list_agents(64);
+                    let listing = self.0.list_agents(MAX_AGENT_LIST_LIMIT);
                     return success_json(serde_json::json!({
                         "returned": listing.agents.len(), "matched": listing.matched,
-                        "truncated": listing.matched > listing.agents.len(), "limit":64,
-                        "agents": listing.agents,
+                        "truncated": listing.matched > listing.agents.len(), "limit":MAX_AGENT_LIST_LIMIT,
+                        "agents": listing.agents.iter().map(|(agent, _)| agent).collect::<Vec<_>>(),
                     }));
                 }
                 if invocation.tool_name == NAMES[1] {

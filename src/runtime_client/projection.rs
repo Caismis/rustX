@@ -805,42 +805,20 @@ impl RuntimeClientProjection {
                     progress,
                 }]
             }
-            ConversationObservation::Agent { snapshot } => {
-                if let Some(agent) = self
-                    .snapshot
-                    .agents
-                    .iter_mut()
-                    .find(|a| a.agent_id == snapshot.agent_id)
-                {
-                    if agent.activation_id != snapshot.latest_activation {
-                        return Vec::new();
-                    }
-                    // The domain owner publishes admission reservations explicitly;
-                    // clients never infer resume from a terminal activation.
-                    agent.state = snapshot.state;
-                    agent.current_activation = snapshot.current_activation;
-                    agent.parent_agent_id = snapshot.parent_agent_id;
-                    vec![RuntimeClientEvent::AgentUpdated {
-                        agent: Box::new(agent.clone()),
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
-            ConversationObservation::SubagentLifecycle(snapshot) => {
+            ConversationObservation::SubagentLifecycle { agent, snapshot } => {
+                let Some(agent) = agent else {
+                    return Vec::new();
+                };
                 if !matches!(
                     snapshot.ownership,
                     crate::events::types::SubagentOwnershipKind::Normal
                 ) {
                     return Vec::new();
                 }
-                // Both subagent delivery classes fold identically: the
-                // whole-view upsert is unconditional last-write-wins, and
-                // the queue's lane rules (a lifecycle push evicts queued
-                // activity of the same subagent) already guarantee no fold
-                // ever observes an activity snapshot older than the
-                // lifecycle snapshot it already folded.
-                let view = subagent_view(&snapshot);
+                // The registry owns both identities and lifecycle. One receipt
+                // installs this complete pair; disposable activity may only
+                // enrich this published owner state afterward.
+                let view = agent_view(&agent, &snapshot);
                 if !upsert_subagent(
                     &mut self.snapshot.agents,
                     &mut self.seen_activations,
@@ -883,7 +861,17 @@ impl RuntimeClientProjection {
                 // projection update. It must not repeat the terminal
                 // lifecycle branch or remove pending child interactions as a
                 // second logical terminal transition.
-                let view = subagent_view(&snapshot);
+                let Some(existing) = self.snapshot.agents.iter().find(|agent| {
+                    agent.agent_id == snapshot.child_agent_id
+                        && agent.activation_id == snapshot.subagent_id
+                }) else {
+                    return Vec::new();
+                };
+                let view = activation_view(
+                    &snapshot,
+                    existing.state,
+                    existing.current_activation.clone(),
+                );
                 if !upsert_subagent(
                     &mut self.snapshot.agents,
                     &mut self.seen_activations,
@@ -902,7 +890,17 @@ impl RuntimeClientProjection {
                 ) {
                     return Vec::new();
                 }
-                let view = subagent_view(&snapshot);
+                let Some(existing) = self.snapshot.agents.iter().find(|agent| {
+                    agent.agent_id == snapshot.child_agent_id
+                        && agent.activation_id == snapshot.subagent_id
+                }) else {
+                    return Vec::new();
+                };
+                let view = activation_view(
+                    &snapshot,
+                    existing.state,
+                    existing.current_activation.clone(),
+                );
                 if !upsert_subagent(
                     &mut self.snapshot.agents,
                     &mut self.seen_activations,
@@ -1363,6 +1361,7 @@ impl RuntimeClientProjection {
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
+            | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
             | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
             | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. } => Vec::new(),
             // The interaction requested/settled facts are durable audit
@@ -2204,15 +2203,14 @@ pub(crate) fn agent_view(
     agent: &crate::runtime::subagent::AgentSnapshot,
     activation: &crate::runtime::subagent::SubagentSnapshot,
 ) -> super::snapshot::RuntimeClientAgent {
-    let mut view = subagent_view(activation);
-    view.state = agent.state;
-    view.current_activation
-        .clone_from(&agent.current_activation);
-    view
+    activation_view(activation, agent.state, agent.current_activation.clone())
 }
 
-pub(crate) fn subagent_view(
+/// Activation data enriches a view only with explicitly supplied Agent authority.
+fn activation_view(
     snapshot: &crate::runtime::subagent::SubagentSnapshot,
+    state: crate::runtime::subagent::AgentState,
+    current_activation: Option<crate::runtime::identity::SubagentId>,
 ) -> super::snapshot::RuntimeClientAgent {
     super::snapshot::RuntimeClientAgent {
         parent_agent_id: snapshot.parent_agent_id.clone(),
@@ -2222,51 +2220,49 @@ pub(crate) fn subagent_view(
         agent: snapshot.agent.clone(),
         definition_digest: snapshot.definition_digest.clone(),
         profile_digest: snapshot.profile_digest.clone(),
-        state: match snapshot.state {
-            crate::runtime::subagent::SubagentState::Running => {
-                crate::runtime::subagent::AgentState::Active
-            }
-            state if state.is_terminal() => crate::runtime::subagent::AgentState::Inactive,
-            _ => crate::runtime::subagent::AgentState::Stopping,
-        },
-        current_activation: (!snapshot.state.is_terminal()).then(|| snapshot.subagent_id.clone()),
+        state,
+        current_activation,
         activation_state: snapshot.state,
         detail: snapshot.detail.clone(),
         observation: snapshot.observation.clone(),
         execution_profile: snapshot.profile.clone(),
         started_at: snapshot.started_at,
-        workspace: super::snapshot::RuntimeClientAgentWorkspace {
-            borrowed_from: snapshot.workspace.borrowed_from.clone(),
-            logical_workspace: snapshot.workspace.logical_workspace.clone(),
-            isolation: match &snapshot.workspace.isolation {
-                crate::runtime::workspace::WorkspaceIsolation::Shared => {
-                    super::snapshot::RuntimeClientWorkspaceIsolation::Shared
+        workspace: subagent_workspace_view(snapshot),
+    }
+}
+
+pub(crate) fn subagent_workspace_view(
+    snapshot: &crate::runtime::subagent::SubagentSnapshot,
+) -> super::snapshot::RuntimeClientAgentWorkspace {
+    super::snapshot::RuntimeClientAgentWorkspace {
+        borrowed_from: snapshot.workspace.borrowed_from.clone(),
+        logical_workspace: snapshot.workspace.logical_workspace.clone(),
+        isolation: match &snapshot.workspace.isolation {
+            crate::runtime::workspace::WorkspaceIsolation::Shared => {
+                super::snapshot::RuntimeClientWorkspaceIsolation::Shared
+            }
+            crate::runtime::workspace::WorkspaceIsolation::GitWorktree(worktree) => {
+                super::snapshot::RuntimeClientWorkspaceIsolation::GitWorktree {
+                    source_repository_root: worktree.source_repository_root.clone(),
+                    repository_relative_workspace: worktree.repository_relative_workspace.clone(),
+                    physical_worktree_root: worktree.physical_worktree_root.clone(),
+                    base_commit: worktree.base_commit.clone(),
+                    branch: worktree.branch.clone(),
+                    parent_had_uncommitted_changes: worktree.parent_had_uncommitted_changes,
                 }
-                crate::runtime::workspace::WorkspaceIsolation::GitWorktree(worktree) => {
-                    super::snapshot::RuntimeClientWorkspaceIsolation::GitWorktree {
-                        source_repository_root: worktree.source_repository_root.clone(),
-                        repository_relative_workspace: worktree
-                            .repository_relative_workspace
-                            .clone(),
-                        physical_worktree_root: worktree.physical_worktree_root.clone(),
-                        base_commit: worktree.base_commit.clone(),
-                        branch: worktree.branch.clone(),
-                        parent_had_uncommitted_changes: worktree.parent_had_uncommitted_changes,
-                    }
-                }
-            },
-            resource_state: snapshot.workspace_resource_state,
-            handoff: snapshot.handoff.as_ref().map(|handoff| {
-                super::snapshot::RuntimeClientWorkspaceHandoff {
-                    logical_workspace: handoff.logical_workspace.clone(),
-                    physical_worktree_root: handoff.physical_worktree_root.clone(),
-                    branch: handoff.branch.clone(),
-                    base_commit: handoff.base_commit.clone(),
-                    head_commit: handoff.head_commit.clone(),
-                    dirty: handoff.dirty,
-                }
-            }),
+            }
         },
+        resource_state: snapshot.workspace_resource_state,
+        handoff: snapshot.handoff.as_ref().map(|handoff| {
+            super::snapshot::RuntimeClientWorkspaceHandoff {
+                logical_workspace: handoff.logical_workspace.clone(),
+                physical_worktree_root: handoff.physical_worktree_root.clone(),
+                branch: handoff.branch.clone(),
+                base_commit: handoff.base_commit.clone(),
+                head_commit: handoff.head_commit.clone(),
+                dirty: handoff.dirty,
+            }
+        }),
     }
 }
 
@@ -5775,8 +5771,9 @@ mod tests {
             },
             ..SubagentObservation::default()
         };
-        projection.apply(ConversationObservation::SubagentLifecycle(
+        projection.apply(owner_observation(
             agent_activation_snapshot(observation.clone()),
+            crate::runtime::subagent::AgentState::Active,
         ));
         // The disposable activity lane folds identically (unconditional
         // last-write-wins whole-view upsert).
@@ -5821,6 +5818,79 @@ mod tests {
             subagent.execution_profile
         );
     }
+    fn committed_settlement() -> crate::runtime::subagent::SubagentSettlement {
+        crate::runtime::subagent::SubagentSettlement {
+            publication: crate::runtime::subagent::SubagentPublication::Committed,
+            physical: crate::runtime::subagent::SubagentPhysicalSettlement::Proven,
+        }
+    }
+
+    fn owner_snapshot(
+        activation: &crate::runtime::subagent::SubagentSnapshot,
+        state: crate::runtime::subagent::AgentState,
+    ) -> crate::runtime::subagent::AgentSnapshot {
+        crate::runtime::subagent::AgentSnapshot {
+            agent_id: activation.child_agent_id.clone(),
+            conversation_id: activation.child_conversation_id.clone(),
+            parent_agent_id: activation.parent_agent_id.clone(),
+            agent: activation.agent.clone(),
+            state,
+            current_activation: (state != crate::runtime::subagent::AgentState::Inactive)
+                .then(|| activation.subagent_id.clone()),
+            latest_activation: activation.subagent_id.clone(),
+            observation: activation.observation.clone(),
+        }
+    }
+
+    fn owner_observation(
+        snapshot: crate::runtime::subagent::SubagentSnapshot,
+        state: crate::runtime::subagent::AgentState,
+    ) -> ConversationObservation {
+        ConversationObservation::SubagentLifecycle {
+            agent: Some(Box::new(owner_snapshot(&snapshot, state))),
+            snapshot,
+        }
+    }
+
+    /// Folding exactly one owner observation is the publication cut. No client
+    /// lifecycle inference or second owner observation can repair this result.
+    #[test]
+    fn owner_transition_projects_starting_and_terminal_unproven_at_one_cut() {
+        use crate::runtime::subagent::{AgentState, SubagentPublication, SubagentState};
+        for (activation_state, owner_state) in [
+            (SubagentState::Stopping, AgentState::Admitting),
+            (SubagentState::Interrupted, AgentState::Unavailable),
+        ] {
+            let mut projection = projection();
+            let mut activation =
+                agent_activation_snapshot(crate::runtime::subagent::SubagentObservation::default());
+            activation.state = activation_state;
+            if activation_state.is_terminal() {
+                activation.settlement.publication = SubagentPublication::Committed;
+            }
+            let owner = owner_snapshot(&activation, owner_state);
+            let fresh = super::agent_view(&owner, &activation);
+            projection.apply(ConversationObservation::SubagentLifecycle {
+                agent: Some(Box::new(owner)),
+                snapshot: activation.clone(),
+            });
+            let (snapshot, _) = projection.snapshot().unwrap();
+            assert_eq!(snapshot.agents, vec![fresh.clone()]);
+            let events = collect(&mut projection, RuntimeClientCursor::new(0));
+            assert_eq!(events.len(), 1, "one complete owner transition");
+            assert!(
+                matches!(&events[0].event, RuntimeClientEvent::AgentUpdated { agent } if **agent == fresh)
+            );
+            // Disposable activation data can never replace owner lifecycle.
+            activation.observation.revision += 1;
+            projection.apply(ConversationObservation::SubagentActivity(activation));
+            assert_eq!(
+                projection.snapshot().unwrap().0.agents[0].state,
+                owner_state
+            );
+        }
+    }
+
     fn agent_activation_snapshot(
         observation: crate::runtime::subagent::SubagentObservation,
     ) -> crate::runtime::subagent::SubagentSnapshot {
@@ -5855,8 +5925,7 @@ mod tests {
                 reasoning_profile: None,
                 reasoning_enabled: false,
             }),
-            publication_abandoned: false,
-            settled: false,
+            settlement: crate::runtime::subagent::SubagentSettlement::default(),
             started_at: chrono::DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
                 .expect("timestamp")
                 .with_timezone(&chrono::Utc),
@@ -5868,33 +5937,39 @@ mod tests {
         let mut projection = projection();
         let first =
             agent_activation_snapshot(crate::runtime::subagent::SubagentObservation::default());
-        projection.apply(ConversationObservation::SubagentLifecycle(first.clone()));
+        projection.apply(owner_observation(first.clone(), AgentState::Active));
         let mut completed = first.clone();
         completed.state = SubagentState::Succeeded;
-        completed.settled = true;
-        projection.apply(ConversationObservation::SubagentLifecycle(completed));
+        completed.settlement = committed_settlement();
+        projection.apply(owner_observation(completed.clone(), AgentState::Inactive));
         let (inactive, _) = projection.snapshot().unwrap();
         assert_eq!(inactive.agents.len(), 1);
         assert_eq!(inactive.agents[0].state, AgentState::Inactive);
         assert_eq!(inactive.agents[0].current_activation, None);
-        projection.apply(ConversationObservation::Agent {
-            snapshot: Box::new(crate::runtime::subagent::AgentSnapshot {
+        projection.apply(ConversationObservation::SubagentLifecycle {
+            snapshot: completed,
+            agent: Some(Box::new(crate::runtime::subagent::AgentSnapshot {
                 agent_id: first.child_agent_id.clone(),
                 conversation_id: first.child_conversation_id.clone(),
                 parent_agent_id: first.parent_agent_id.clone(),
                 agent: first.agent.clone(),
-                state: AgentState::Stopping,
-                current_activation: None,
+                state: AgentState::Admitting,
+                current_activation: Some(crate::runtime::identity::SubagentId::new(
+                    "activation-next",
+                )),
                 latest_activation: first.subagent_id.clone(),
                 observation: first.observation.clone(),
-            }),
+            })),
         });
         let (reserving, _) = projection.snapshot().unwrap();
-        assert_eq!(reserving.agents[0].state, AgentState::Stopping);
-        assert_eq!(reserving.agents[0].current_activation, None);
+        assert_eq!(reserving.agents[0].state, AgentState::Admitting);
+        assert_eq!(
+            reserving.agents[0].current_activation,
+            Some(crate::runtime::identity::SubagentId::new("activation-next"))
+        );
         let mut resumed = first.clone();
         resumed.subagent_id = crate::runtime::identity::SubagentId::new("activation-next");
-        projection.apply(ConversationObservation::SubagentLifecycle(resumed.clone()));
+        projection.apply(owner_observation(resumed.clone(), AgentState::Active));
         let (_, resume_cursor) = projection.snapshot().unwrap();
         projection.apply(ConversationObservation::SubagentActivity(first.clone()));
         let (reconnected, cursor) = projection.snapshot().unwrap();
@@ -5924,7 +5999,7 @@ mod tests {
             vec![
                 (first.child_agent_id.clone(), AgentState::Active),
                 (first.child_agent_id.clone(), AgentState::Inactive),
-                (first.child_agent_id.clone(), AgentState::Stopping),
+                (first.child_agent_id.clone(), AgentState::Admitting),
                 (first.child_agent_id, AgentState::Active)
             ]
         );
@@ -5938,7 +6013,7 @@ mod tests {
             agent_activation_snapshot(crate::runtime::subagent::SubagentObservation::default());
         latest.subagent_id = crate::runtime::identity::SubagentId::new("activation-3");
         latest.state = SubagentState::Succeeded;
-        latest.settled = true;
+        latest.settlement = committed_settlement();
         let owner = AgentSnapshot {
             agent_id: latest.child_agent_id.clone(),
             conversation_id: latest.child_conversation_id.clone(),
@@ -5958,8 +6033,8 @@ mod tests {
         let mut next = latest.clone();
         next.subagent_id = crate::runtime::identity::SubagentId::new("activation-4");
         next.state = SubagentState::Running;
-        next.settled = false;
-        projection.apply(ConversationObservation::SubagentLifecycle(next.clone()));
+        next.settlement = crate::runtime::subagent::SubagentSettlement::default();
+        projection.apply(owner_observation(next.clone(), AgentState::Active));
         let (resumed, _) = projection.snapshot().unwrap();
         assert_eq!(resumed.agents.len(), 1);
         assert_eq!(resumed.agents[0].agent_id, latest.child_agent_id);
@@ -5972,7 +6047,10 @@ mod tests {
         let mut workflow =
             agent_activation_snapshot(crate::runtime::subagent::SubagentObservation::default());
         workflow.ownership = crate::events::types::SubagentOwnershipKind::Workflow;
-        projection.apply(ConversationObservation::SubagentLifecycle(workflow.clone()));
+        projection.apply(ConversationObservation::SubagentLifecycle {
+            agent: None,
+            snapshot: workflow.clone(),
+        });
         projection.apply(ConversationObservation::SubagentActivity(workflow));
         let (snapshot, cursor) = projection.snapshot().unwrap();
         assert!(snapshot.agents.is_empty());

@@ -241,7 +241,20 @@ pub async fn run_subagent_child() -> i32 {
         return 2;
     }
 
-    let code = match Box::pin(run_child(&mut dispatcher, &handle, spec)).await {
+    let physical_lease =
+        match crate::runtime::subagent::physical_recovery::ChildPhysicalLease::acquire(&spec) {
+            Ok(lease) => lease,
+            Err(error) => {
+                let _ = handle
+                    .send_reliable(ChildFrame::StartupError(DiagnosticFrame {
+                        message: format!("physical incarnation lease: {error}"),
+                    }))
+                    .await;
+                dispatcher.shutdown().await;
+                return 2;
+            }
+        };
+    let code = match Box::pin(run_child(&mut dispatcher, &handle, spec, &physical_lease)).await {
         Ok(()) => 0,
         // A startup failure was already reported through `StartupError`
         // by `run_child` when the channel allowed.
@@ -277,6 +290,7 @@ async fn run_child(
     dispatcher: &mut ChildControlDispatcher,
     handle: &ChildControlHandle,
     spec: SubagentChildSpec,
+    physical_lease: &crate::runtime::subagent::physical_recovery::ChildPhysicalLease,
 ) -> Result<(), ChildExit> {
     if let Err(error) = spec.workspace_snapshot.validate() {
         return Err(ChildExit::Startup(format!(
@@ -362,13 +376,21 @@ async fn run_child(
             dispatcher,
             handle,
             spec.parent_agent_id,
-            runtime,
+            runtime.clone(),
             observations,
             workflow_output,
         )
         .await
     }
     .await;
+    // Parent EOF is an execution outcome loss, not permission to abandon live
+    // process units. The same native runtime drain proves containment. A receipt
+    // never describes the answer and is emitted only after complete quiescence.
+    let settled = if handle.parent_lost() {
+        runtime.shutdown_after_parent_loss().await
+    } else {
+        runtime.shutdown().await
+    };
     // A read-only inspector is a client of this process, not a reason to
     // extend the child's semantic lifetime. Once the child reports its
     // bounded result (or loses its parent), close the endpoint and remove
@@ -378,6 +400,11 @@ async fn run_child(
     }
     drop(interactive);
     drop(live_lease);
+    if settled.is_ok() {
+        physical_lease.publish_quiescent().map_err(|error| {
+            ChildExit::Protocol(format!("publish physical settlement receipt: {error}"))
+        })?;
+    }
     result
 }
 
@@ -529,9 +556,9 @@ pub(crate) async fn serve_child_delegation(
     // registry, so `send_message` rejects it before any frame exists. No accepted
     // generic guidance can ever be pending in its conversation, and the
     // steering-specific seal must have **no semantic effect** on its
-    // lifecycle or terminal result. Its natural completion is therefore its
-    // terminal: the loop breaks on the first `Completed` without consulting
-    // the seal, so a seal durable-probe failure can never convert a valid
+    // lifecycle or terminal result. The first attempt terminal is final,
+    // regardless of outcome: the loop never consults the seal, so a seal
+    // durable-probe failure can never convert a valid
     // Workflow output settlement into a failure. The one committed
     // `workflow_output` value remains the exactly-once terminal settlement
     // through the ordinary Workflow output path below.
@@ -546,17 +573,18 @@ pub(crate) async fn serve_child_delegation(
         )
         .await?;
         observed_terminals = observed_terminals.saturating_add(1);
-        // A cancelled, failed, or orphaned child settles immediately: a
-        // cancellation intent supersedes every pending semantic input, and
-        // an orphaned child has no parent left to report to. A
-        // Workflow-owned child settles on its first natural completion too:
-        // it never participates in the generic parent-guidance terminal
-        // protocol (see above).
+        // Workflow-owned children settle on their first terminal. Orphans
+        // cannot close admission with a parent that no longer exists.
+        // Every other child first drains the parent's already-admitted FIFO
+        // guidance into its durable inbox. Only natural completion may reopen
+        // this activation: failure (including timeout/limits) and cancellation
+        // are final. Any accepted, unobserved guidance remains durable input
+        // owned by the Agent conversation for a later activation.
         if workflow_output.is_some() || matches!(terminal, AttemptTerminal::Orphaned) {
             break terminal;
         }
         close_parent_admission(dispatcher, handle, &runtime, &parent_agent_id).await?;
-        if matches!(terminal, AttemptTerminal::Cancelled) {
+        if !matches!(terminal, AttemptTerminal::Completed) {
             break terminal;
         }
         match runtime.seal_parent_guidance(observed_terminals).await {
@@ -631,13 +659,10 @@ pub(crate) async fn serve_child_delegation(
             diagnostic: Some(bound_diagnostic(diagnostic)),
         },
         AttemptTerminal::Orphaned => {
-            // The reliable parent control path is gone: drop the child
-            // runtime without ordinary semantic shutdown. Ordinary shutdown
-            // would synthesize `InteractionSettled(Cancelled)` for any other
-            // live child interaction, while process loss must leave only the
-            // historical requested facts and let the parent classify the
-            // physical child as interrupted. No waiter is reconstructed by
-            // recovery.
+            // The reliable parent control path is gone. Return to run_child's
+            // parent-loss drain: it abandons interaction waiters as ControlLost
+            // before native cancellation, preserving requested audit facts and
+            // proving physical containment without inventing a human outcome.
             return Ok(());
         }
     };
@@ -1976,6 +2001,9 @@ mod tests {
         runtime
             .install_observation_bridge(Arc::clone(&observations))
             .expect("observation bridge");
+        // Match production composition: historical pending guidance cannot
+        // admit a turn between activation and the Delegate handshake.
+        runtime.gate_child_turns();
         runtime.activate();
         let child_runtime = runtime.clone();
         let serve = tokio::spawn(async move {
@@ -2071,6 +2099,247 @@ mod tests {
         );
         fixture.serve.await.unwrap().unwrap();
         assert!(model.requests().is_empty());
+    }
+
+    /// Receiver-contract coverage for the typed terminal vocabulary: the
+    /// current Agent Loop emits Completed/Cancelled/Failed only. These typed
+    /// terminal facts are nevertheless part of the native observation contract
+    /// and must enter the same absorbing Failed branch exercised end to end by
+    /// `failed_activation_preserves_admitted_guidance_for_the_next_activation`.
+    #[tokio::test]
+    async fn time_and_turn_limit_terminal_observations_map_to_failed_activation() {
+        use crate::events::types::AttemptLimit;
+        use crate::runtime::identity::AttemptId;
+
+        let attempt_id = AttemptId::new("bounded-attempt");
+        let events = [
+            RuntimeEvent::AttemptTimedOut {
+                attempt_id: attempt_id.clone(),
+            },
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: attempt_id.clone(),
+                limit: AttemptLimit::MaxTurns,
+            },
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: attempt_id.clone(),
+                limit: AttemptLimit::MaxToolCalls,
+            },
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: attempt_id.clone(),
+                limit: AttemptLimit::MaxRuntimeSeconds,
+            },
+        ];
+        for event in events {
+            let dir = tempfile::tempdir().unwrap();
+            let model = Arc::new(FakeModel::new(Vec::new()));
+            let runtime =
+                child_test_runtime(&dir, None, None, ConversationId::generate(), model.clone())
+                    .await;
+            let (_parent, child) = tokio::net::UnixStream::pair().unwrap();
+            let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+            let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+            let handle = dispatcher.handle();
+            let observations = Arc::new(PendingObservations::new());
+            observations.push(ConversationObservation::Event {
+                attempt_id: attempt_id.clone(),
+                event,
+            });
+            let terminal = await_terminal(
+                &mut dispatcher,
+                &runtime,
+                &observations,
+                &handle,
+                &AgentId::new("agent-parent"),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(terminal, AttemptTerminal::Failed(_)));
+            assert_eq!(runtime.seal_probe_calls(), 0);
+            assert!(model.requests().is_empty());
+            dispatcher.shutdown().await;
+        }
+    }
+
+    /// The failed attempt has already committed when `SealRequested` arrives.
+    /// Guidance that won parent admission is then flushed on that same FIFO
+    /// lane before `SealGranted`. Its durable acknowledgement cannot reopen the
+    /// failed activation; the later activation owns the still-pending input.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // One failed activation and its durable continuation proof.
+    async fn failed_activation_preserves_admitted_guidance_for_the_next_activation() {
+        use crate::durable::ConversationStore;
+        use crate::model::event::ModelEvent;
+        use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
+
+        for (terminal, request_count) in [
+            (
+                ModelEvent::Failed {
+                    error: crate::model::ModelError {
+                        kind: crate::model::ModelErrorKind::InvalidRequest,
+                        message: "first failure is final".into(),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
+                        retry_after_ms: None,
+                        provider_code: None,
+                        context_overflow: None,
+                        malformed_tool_proposal: None,
+                        timeout_phase: None,
+                        generation: None,
+                    },
+                },
+                1,
+            ),
+            (
+                ModelEvent::Completed {
+                    finish_reason: crate::model::finish::ModelFinishReason::Length,
+                    usage: None,
+                },
+                2,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let id = ConversationId::generate();
+            let store =
+                Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+            // A length failure owns one bounded corrective generation inside
+            // its ordinary attempt. Exhaust it before testing activation reopen.
+            let mut scripts = vec![
+                vec![
+                    FakeStep::Emit(ModelEvent::Started),
+                    FakeStep::Emit(terminal)
+                ];
+                request_count
+            ];
+            scripts.push(answer("a failed activation must never consume this turn"));
+            let model = Arc::new(FakeModel::new(scripts));
+            let runtime = child_test_runtime_full(
+                &dir,
+                None,
+                None,
+                None,
+                None,
+                None,
+                id.clone(),
+                model.clone(),
+                Some(store.clone()),
+            )
+            .await;
+            let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+            let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+            let observations = Arc::new(PendingObservations::new());
+            runtime
+                .install_observation_bridge(observations.clone())
+                .unwrap();
+            runtime.gate_child_turns();
+            runtime.activate();
+            let serving_runtime = runtime.clone();
+            let serve = tokio::spawn(async move {
+                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                let handle = dispatcher.handle();
+                let result = serve_child_delegation(
+                    &mut dispatcher,
+                    &handle,
+                    AgentId::new("agent-parent"),
+                    serving_runtime,
+                    observations,
+                    None,
+                )
+                .await;
+                dispatcher.shutdown().await;
+                result
+            });
+            delegate(&mut parent, "failed delegated task").await;
+            assert!(matches!(
+                read_child_frame(&mut parent).await.unwrap(),
+                Some(ChildFrame::SealRequested)
+            ));
+            assert_eq!(model.requests().len(), request_count);
+
+            // The parent has closed its admission arbiter. These are the two
+            // messages that won admission before the close, delivered FIFO.
+            for (guidance_id, message) in [
+                (1, "first accepted guidance"),
+                (2, "second accepted guidance"),
+            ] {
+                write_parent_frame(
+                    &mut parent,
+                    &ParentFrame::Guidance(GuidanceFrame {
+                        guidance_id,
+                        message: message.into(),
+                    }),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    read_child_frame(&mut parent).await.unwrap(),
+                    Some(ChildFrame::GuidanceResult(GuidanceResultFrame {
+                        guidance_id,
+                        outcome: ChildGuidanceOutcome::Accepted,
+                    }))
+                );
+            }
+            write_parent_frame(&mut parent, &ParentFrame::SealGranted)
+                .await
+                .unwrap();
+            let failed = read_result(&mut parent).await;
+            assert_eq!(failed.status, ChildResultStatus::Failed);
+            assert!(failed.content.is_none());
+            assert!(failed.diagnostic.unwrap().contains("child attempt failed"));
+            assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+            serve.await.unwrap().unwrap();
+            assert_eq!(
+                model.requests().len(),
+                request_count,
+                "failure cannot spend another turn"
+            );
+            assert_eq!(
+                runtime.seal_probe_calls(),
+                0,
+                "failed attempts never inspect a reopen seal"
+            );
+            let pending = store.load_pending().unwrap();
+            assert_eq!(
+                pending.len(),
+                2,
+                "accepted guidance survives physical drain"
+            );
+            assert_eq!(adopted_guidance(&runtime), vec!["failed delegated task"]);
+
+            let resumed_model = Arc::new(FakeModel::new(vec![answer("later activation answer")]));
+            let resumed = child_test_runtime_full(
+                &dir,
+                None,
+                None,
+                None,
+                None,
+                None,
+                id,
+                resumed_model.clone(),
+                Some(store.clone()),
+            )
+            .await;
+            let mut fixture = serve_child(&resumed);
+            // This synchronous admission attempt has returned through the real
+            // pre-Delegate permit check. Absence of a request is not a timeout.
+            resumed.admit_now_for_test();
+            assert!(!resumed.has_current_attempt());
+            assert!(resumed_model.requests().is_empty());
+            assert_eq!(store.load_pending().unwrap(), pending);
+            delegate(&mut fixture.parent, "later activation task").await;
+            let later = read_result(&mut fixture.parent).await;
+            assert_eq!(later.status, ChildResultStatus::Succeeded);
+            fixture.serve.await.unwrap().unwrap();
+            assert_eq!(resumed_model.requests().len(), 1);
+            assert_eq!(
+                adopted_guidance(&resumed),
+                vec![
+                    "failed delegated task",
+                    "first accepted guidance",
+                    "second accepted guidance",
+                    "later activation task",
+                ]
+            );
+            assert!(store.load_pending().unwrap().is_empty());
+        }
     }
 
     /// Reads the child's one terminal result frame.

@@ -1012,6 +1012,8 @@ pub(crate) enum IdleBusyReason {
 enum DrainTrigger {
     /// Explicit runtime shutdown.
     RuntimeShutdown,
+    /// The parent transport died; interaction requests have no outcome owner.
+    ParentLost,
     /// An authoritative MCP physical-settlement failure.
     McpSettlementFailure(String),
 }
@@ -1513,6 +1515,7 @@ impl RuntimeInner {
     ) -> Result<Arc<DrainCompletion>, ShutdownError> {
         let mut first = false;
         let mcp_failure = matches!(&trigger, DrainTrigger::McpSettlementFailure(_));
+        let parent_lost = matches!(&trigger, DrainTrigger::ParentLost);
         // Runtime shutdown is only a cancellation contender. The active
         // attempt's AgentCancellation remains the one cause authority, so
         // every runtime-driven interaction settlement must use the winner it
@@ -1543,6 +1546,9 @@ impl RuntimeInner {
                     first = true;
                 }
                 ConversationLifecycleState::Running => {
+                    if parent_lost {
+                        self.interaction.abandon_after_parent_loss();
+                    }
                     if let Some(current) = &state.current_attempt {
                         // Take the same M9b model-turn start gate as user
                         // cancellation *before* publishing `Draining`. If a
@@ -1819,6 +1825,7 @@ impl RuntimeInner {
                 }
             }
             if let Some(subagents) = &self.subagents {
+                subagents.wait_recovery_reconciliation().await;
                 for activation_id in subagents.unproven_settlements() {
                     failures.insert(format!(
                         "subagent {activation_id}: physical settlement is unresolved"
@@ -5539,6 +5546,15 @@ impl ConversationRuntime {
         Ok(())
     }
 
+    /// Reuses the native shutdown owner after parent loss without fabricating
+    /// human interaction settlement. Physical proof is identical to shutdown.
+    pub(crate) async fn shutdown_after_parent_loss(&self) -> Result<(), ShutdownError> {
+        self.inner
+            .begin_drain_internal(DrainTrigger::ParentLost)?
+            .wait()
+            .await
+    }
+
     /// Returns a durable read handle for historical Request Snapshots.
     ///
     /// The returned value is a read-only handle over the durable request-fact
@@ -5719,19 +5735,7 @@ impl ConversationRuntime {
         RequestHistory::new(self.inner.store.clone()).reconstruct(identity)
     }
 
-    /// The conversation-owned subagent registry (tests only).
-    ///
-    /// The FND-06 process-death suite needs the registry the *real*
-    /// composition built so it can stage one child through
-    /// [`SubagentRegistry::push_staged_override`](crate::runtime::subagent::SubagentRegistry)
-    /// — the same seam the in-crate registry tests use — and then drive the
-    /// ownership commit through the real Agent Loop and the real `subagent`
-    /// intrinsic. It is never part of the published API.
-    #[cfg(test)]
-    pub(crate) fn subagents(&self) -> Option<&crate::runtime::subagent::SubagentRegistry> {
-        self.inner.subagents.as_ref()
-    }
-
+    /// The conversation-owned Agent and finite activation authority.
     pub(crate) fn subagent_registry(&self) -> Option<&crate::runtime::subagent::SubagentRegistry> {
         self.inner.subagents.as_ref()
     }
@@ -6519,32 +6523,29 @@ impl BackgroundObserver for RuntimeObserver {
 // publications are reliable; live-activity publications are disposable and
 // land in the coalescing latest-value lane.
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
-    fn observe_agent_committed(
+    fn on_committed(
         &self,
-        snapshot: &crate::runtime::subagent::AgentSnapshot,
+        agent: Option<&crate::runtime::subagent::AgentSnapshot>,
+        snapshot: &crate::runtime::subagent::SubagentSnapshot,
         sequence: u64,
     ) {
         self.push(ConversationObservation::Published {
             journal_sequence: sequence,
-            observation: Box::new(ConversationObservation::Agent {
-                snapshot: Box::new(snapshot.clone()),
+            observation: Box::new(ConversationObservation::SubagentLifecycle {
+                agent: agent.cloned().map(Box::new),
+                snapshot: snapshot.clone(),
             }),
         });
     }
-    fn observe_agent(&self, snapshot: &crate::runtime::subagent::AgentSnapshot) {
-        self.push(ConversationObservation::Agent {
-            snapshot: Box::new(snapshot.clone()),
+    fn on_snapshot(
+        &self,
+        agent: Option<&crate::runtime::subagent::AgentSnapshot>,
+        snapshot: &crate::runtime::subagent::SubagentSnapshot,
+    ) {
+        self.push(ConversationObservation::SubagentLifecycle {
+            agent: agent.cloned().map(Box::new),
+            snapshot: snapshot.clone(),
         });
-    }
-
-    fn on_committed(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot, sequence: u64) {
-        self.push(ConversationObservation::Published {
-            journal_sequence: sequence,
-            observation: Box::new(ConversationObservation::SubagentLifecycle(snapshot.clone())),
-        });
-    }
-    fn on_snapshot(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
-        self.push(ConversationObservation::SubagentLifecycle(snapshot.clone()));
     }
 
     fn on_workspace(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
@@ -11393,10 +11394,12 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            !subagents
+            subagents
                 .snapshot(&accepted.subagent_id)
                 .unwrap()
-                .publication_abandoned,
+                .settlement
+                .publication
+                != crate::runtime::subagent::SubagentPublication::Abandoned,
             "runtime health publication precedes registry settlement"
         );
         let settled = subagents.wait_until_settled(&accepted.subagent_id);
@@ -11411,7 +11414,10 @@ mod tests {
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
-        assert!(unresolved.publication_abandoned);
+        assert!(
+            unresolved.settlement.publication
+                == crate::runtime::subagent::SubagentPublication::Abandoned
+        );
         // Issue #178: the successful answer never rides the live read
         // model, not even while its publication is unresolved; the
         // candidate remains observable through the PublishingTerminal
@@ -11840,7 +11846,10 @@ mod tests {
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
-        assert!(unresolved.publication_abandoned);
+        assert!(
+            unresolved.settlement.publication
+                == crate::runtime::subagent::SubagentPublication::Abandoned
+        );
         // Issue #178: the successful answer never rides the live read
         // model; the unresolved candidate is observable through its
         // PublishingTerminal lifecycle state, unchanged.
@@ -15548,11 +15557,12 @@ mod tests {
             snapshot.state,
             crate::runtime::subagent::SubagentState::Cancelled
         );
-        assert!(snapshot.settled);
+        assert!(snapshot.is_settled());
     }
 
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
         use crate::runtime::subagent::ipc::{
             ChildFrame, ChildResultStatus, ParentFrame, ResultFrame, read_parent_frame,
@@ -15571,6 +15581,20 @@ mod tests {
         let (runtime, _, subagents) =
             headless_runtime_over_store_with_subagents(&dir, conversation.as_str(), store, None)
                 .await;
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("Runtime Client host");
+        let (attachment, initialized) = host
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("Runtime Client attachment");
+        let RuntimeClientResult::Initialized { cursor, .. } = initialized else {
+            panic!("expected initialization");
+        };
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("subscribe before the owner transition");
         runtime.activate();
         let (mut staged, mut peer) = stage_runtime_test_child(&dir.path().join("unproven-child"));
         staged.retain_for_test(
@@ -15625,8 +15649,51 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !terminal.settled,
+            !terminal.is_settled(),
             "semantic termination cannot prove containment"
+        );
+        // Observe the actual registry -> RuntimeObserver -> PendingObservations
+        // -> RuntimeClientHost publication path. This stream receipt is the
+        // synchronization boundary: no snapshot read flushes the transition
+        // before the subscriber has independently received it.
+        let streamed = loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent {
+                    event: RuntimeClientEvent::AgentUpdated { agent },
+                    ..
+                }) if agent.agent_id == admitted.child_agent_id
+                    && agent.activation_state.is_terminal() =>
+                {
+                    break agent;
+                }
+                EventDelivery::Event(_) => {}
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("terminal Agent stream ended: {delivery:?}"),
+            }
+        };
+        assert_eq!(
+            streamed.state,
+            crate::runtime::subagent::AgentState::Unavailable
+        );
+        let (owner, activation) = subagents
+            .agent_snapshot_with_activation(&admitted.child_agent_id)
+            .expect("fresh owner snapshot");
+        let expected = crate::runtime_client::projection::agent_view(&owner, &activation);
+        assert_eq!(*streamed, expected);
+        let status = attachment.handle_request(RuntimeClientRequest::AgentStatus {
+            id: RequestId::new(1),
+            agent_id: admitted.child_agent_id.clone(),
+        });
+        assert_eq!(status.error, None);
+        assert_eq!(
+            status.result,
+            Some(RuntimeClientResult::Agent {
+                agent: expected.clone()
+            })
+        );
+        assert_eq!(
+            host.snapshot().expect("fresh host snapshot").0.agents,
+            vec![expected]
         );
         let error = runtime
             .shutdown()
@@ -17770,4 +17837,6 @@ mod tests {
         );
         assert_eq!(new_attempt.conversation_ordinal(&conversation), Some(3));
     }
+    include!("conversation_runtime/resume_shutdown_tests.rs");
+    include!("conversation_runtime/workflow_recovery_tests.rs");
 }

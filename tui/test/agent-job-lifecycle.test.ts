@@ -103,7 +103,7 @@ for (const [command, method] of [["/job-status", "job/status"], ["/job-wait", "j
 
 
 test("Stopping rejection is transient and leaves resume admission to the owner", () => {
-  assert.match(describeRpcError({ code: -32000, message: "stopping", data: { kind: "agent_stopping", agent_id: "agent-child" } }), /retry after it becomes inactive/);
+  assert.match(describeRpcError({ code: -32000, message: "Agent is stopping or admitting an activation; retry after settlement", data: { kind: "agent_stopping", agent_id: "agent-child" } }), /retry after it becomes inactive/);
 });
 
 for (const outcome of ["cancelled", "succeeded"] as const) {
@@ -125,7 +125,7 @@ for (const outcome of ["cancelled", "succeeded"] as const) {
 
 for (const command of ["/wait-agent", "/interrupt-agent"] as const) {
   test(`${command} distinguishes a rolled-back admission from a committed activation`, async () => {
-    const agent = subagent("worker", "frozen", "admitting", { current_activation: "reserved-b" });
+    const agent = subagent("worker", "frozen", "admitting", { current_activation: "reserved-b", activation_state: "succeeded" });
     const h = await harness(snapshot({ agents: [agent] }));
     const controlling = h.dispatcher.submit(`${command} agent-child`);
     const request = await nextRequest(h, command === "/wait-agent" ? "agent/wait" : "agent/interrupt");
@@ -133,5 +133,21 @@ for (const command of ["/wait-agent", "/interrupt-agent"] as const) {
     assert.match(JSON.stringify(await controlling), /ended before an activation committed/);
     assert.deepEqual(h.session.state.agents, [agent]);
     h.client.close();
+  });
+}
+
+for (const [ownerState, activationState] of [["admitting", "stopping"], ["unavailable", "interrupted"]] as const) {
+  test(`live ${ownerState} Agent state agrees with a fresh snapshot despite ${activationState} activation`, () => {
+    const owner = subagent("worker", "frozen", ownerState, { activation_state: activationState });
+    const live = reduce(replaceFromSnapshot(snapshot(), runtimeCursor(0)), { cursor: runtimeCursor(1), event: { type: "agent_updated", agent: owner } });
+    const fresh = replaceFromSnapshot(snapshot({ agents: [owner] }), runtimeCursor(1));
+    assert.deepEqual(live.agents, fresh.agents);
+    assert.equal(live.agents[0]?.state, ownerState);
+    if (ownerState === "unavailable") {
+      assert.match(renderSubagentDetail(owner), /requires explicit repair/);
+      const message = describeRpcError({ code: -32000, message: "Agent is unavailable; physical settlement, publication, or workspace authority requires explicit repair", data: { kind: "agent_settlement", agent_id: owner.agent_id } });
+      assert.match(message, /requires explicit repair/);
+      assert.doesNotMatch(message, /retry/);
+    }
   });
 }

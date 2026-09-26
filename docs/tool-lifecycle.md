@@ -225,9 +225,14 @@ through a watch. Unknown IDs fail immediately. Terminal Jobs cannot resume.
 
 Native `subagent` creates a durable Agent and its first finite activation.
 `send_message` atomically chooses Active delivery or Inactive activation admission;
-Stopping rejects. `wait_agent` captures one activation and `interrupt_agent`
+Admitting/Stopping reject transiently while their owner can settle. Unavailable
+returns a non-retryable typed Agent settlement error. `wait_agent` captures one activation and `interrupt_agent`
 settles only that activation. The identity remains resumable. Workflow finite
-AgentRuns retain their Workflow-owned input/output contract. See
+AgentRuns retain their Workflow-owned input/output contract. Logical terminal,
+durable terminal/value publication and physical proof are separate; valid output
+with unproven containment fails closed with a physical-settlement diagnostic.
+Only normally Completed native attempts may reopen for accepted guidance; failure,
+cancellation, orphaning and Workflow first terminal are final. See
 [Jobs and continuable Agents](jobs-and-agents.md) for ownership and linearization.
 
 ## Recovery
@@ -301,3 +306,8 @@ Incompatible}`. Native ask_user is Independent: its ordinary Questionnaire wait
 never borrows or validates a candidate. Filesystem/Bash executors consume the
 provided workspace; fixed/external executors default to Incompatible. Workflow
 admission checks this shared executor policy, never a tool-name exception.
+
+A recovered child activation may retain Interrupted while a later
+`SubagentPhysicalSettlementProven` fact proves its native physical containment.
+The Agent registry owns bounded reconciliation of exact incarnation receipts and
+released leases; neither Tool retry nor a terminal label grants that proof.

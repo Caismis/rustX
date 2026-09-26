@@ -965,6 +965,29 @@ fn commit_subagent_ownership_through(
     }
 }
 
+/// Commits exact native recovery proof without creating another child terminal
+/// or canonical inbound message.
+fn commit_subagent_physical_settlement_through(
+    store: &(impl ConversationStore + ?Sized),
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    if !matches!(
+        event.event,
+        crate::events::types::RuntimeEvent::SubagentPhysicalSettlementProven { .. }
+            | crate::events::types::RuntimeEvent::AgentActivationAdmission {
+                phase: crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                    physical_settlement_proven: true
+                },
+                ..
+            }
+    ) {
+        return Err(ConversationStoreError::InvalidReference(
+            "expected physical settlement proof".into(),
+        ));
+    }
+    store.append_event(event)
+}
+
 /// Commits the durable terminal-settlement fact of a Workflow-owned child
 /// through a store handle. Unlike `SubagentTerminalPublished`, this fact has
 /// no inbound message: `WorkflowRuntime` consumes the child result directly and
@@ -1251,6 +1274,12 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// child without creating a parent inbound notification. The payload
     /// must be a [`RuntimeEvent::SubagentTerminalSettled`](crate::events::types::RuntimeEvent::SubagentTerminalSettled).
     fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits only a recovery owner's physical containment proof.
+    fn commit_subagent_physical_settlement(
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
@@ -2107,6 +2136,13 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         commit_subagent_terminal_through(self, event)
     }
 
+    fn commit_subagent_physical_settlement(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_physical_settlement_through(self, event)
+    }
+
     fn commit_subagent_workspace_disposal_intent(
         &self,
         event: RuntimeEventEnvelope,
@@ -2302,6 +2338,13 @@ impl ConversationInboundCapability for StoreInboundCapability {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         commit_subagent_terminal_through(self.store.as_ref(), event)
+    }
+
+    fn commit_subagent_physical_settlement(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_physical_settlement_through(self.store.as_ref(), event)
     }
 
     fn commit_subagent_workspace_disposal_intent(

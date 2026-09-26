@@ -67,14 +67,16 @@ export function AgentCard({ agent, ...controls }: { agent: RuntimeClientAgent } 
     return () => { observing = false; };
   }, [open, client, sessionId, agent.agent_id, agent.activation_id, agent.state, transcriptRefresh]);
   const activity = agent.observation.activity;
+  const unavailable = agent.state === 'unavailable';
+  const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   const readTranscript = (before?: string) => request.run(async (client, target, current) => {
     const result = await client.request({ method: 'agent/transcript', params: { target, agent_id: agent.agent_id, before, limit: 64 } }, 'transcript');
     if (current()) { setTranscript(previous => before && previous ? { ...result.page, entries: [...(result.page.entries ?? []), ...(previous.entries ?? [])] } : result.page); setOpen(true); }
   });
   return <section data-agent-id={agent.agent_id} data-agent-state={agent.state} data-activation-id={agent.current_activation ?? undefined} aria-label={`Agent ${agent.agent}`}>
-    <SettingsCard title={`Agent · ${agent.agent}`} meta={<Badge>{agent.state === 'active' ? 'Working' : agent.state === 'admitting' ? 'Admitting…' : agent.state === 'stopping' ? 'Stopping…' : 'Inactive'}</Badge>}>
+    <SettingsCard title={`Agent · ${agent.agent}`} meta={<Badge>{agent.state === 'active' ? 'Working' : agent.state === 'admitting' ? 'Admitting…' : agent.state === 'stopping' ? 'Stopping…' : unavailable ? 'Unavailable' : 'Inactive'}</Badge>}>
       <small className={css.identity}>Agent {agent.agent_id} · Parent {agent.parent_agent_id} · Conversation {agent.child_conversation_id}</small>
-      <p>{agent.state === 'inactive' ? `Last activation: ${label(agent.activation_state)}` : agent.state === 'admitting' ? 'Preparing activation' : activity.type === 'waiting' ? `Waiting for ${label(activity.on.type)}` : label(activity.type)}
+      <p>{unavailable ? 'Physical settlement, publication, or workspace authority requires explicit repair.' : agent.state === 'inactive' ? `Last activation: ${label(agent.activation_state)}` : agent.state === 'admitting' ? 'Preparing activation' : activity.type === 'waiting' ? `Waiting for ${label(activity.on.type)}` : label(activity.type)}
         {agent.state === 'active' && (activity.type === 'model' || activity.type === 'retrying_model') && activity.retry > 0 && <> · Retry {activity.retry}</>}
       </p>
       <small className={css.identity}>{agent.current_activation ? `Activation ${agent.current_activation}` : `Last activation ${agent.activation_id}`}</small>
@@ -82,12 +84,12 @@ export function AgentCard({ agent, ...controls }: { agent: RuntimeClientAgent } 
       {controls.client && <>
         <div className={css.controls}>
           <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => { setOpen(true); refreshTranscript(value => value + 1); }}>Transcript</Button>
-          <Button size="sm" variant="outline" disabled={waitRequest.disabled} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>Wait for activation</Button>
-          <Button size="sm" variant="outline" disabled={interruptRequest.disabled || agent.state === 'inactive'} onClick={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>Interrupt</Button>
+          <Button size="sm" variant="outline" disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>Wait for activation</Button>
+          <Button size="sm" variant="outline" disabled={interruptRequest.disabled || unavailable || agent.state === 'inactive'} onClick={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_wait'); if (current()) observeSettlement(result); })}>Interrupt</Button>
         </div>
-        <form className={css.message} onSubmit={event => { event.preventDefault(); if (!message.trim()) return; const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message'); if (current()) setMessage(value => value === submitted ? '' : value); }); }}>
-          <Input aria-label={`Message Agent ${agent.agent}`} placeholder={agent.state === 'inactive' ? 'Send a message to resume' : 'Message this Agent'} value={message} onChange={event => setMessage(event.target.value)} disabled={request.disabled || agent.state === 'stopping' || agent.state === 'admitting'}/>
-          <Button size="sm" type="submit" disabled={request.disabled || agent.state === 'stopping' || agent.state === 'admitting' || !message.trim()}>Send message</Button>
+        <form className={css.message} onSubmit={event => { event.preventDefault(); if (!acceptsMessage || !message.trim()) return; const submitted = message; void request.run(async (client, target, current) => { await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message: submitted } }, 'agent_message'); if (current()) setMessage(value => value === submitted ? '' : value); }); }}>
+          <Input aria-label={`Message Agent ${agent.agent}`} placeholder={agent.state === 'inactive' ? 'Send a message to resume' : 'Message this Agent'} value={message} onChange={event => setMessage(event.target.value)} disabled={request.disabled || !acceptsMessage}/>
+          <Button size="sm" type="submit" disabled={request.disabled || !acceptsMessage || !message.trim()}>Send message</Button>
         </form>
         {(request.pending || waitRequest.pending || interruptRequest.pending) && <small role="status">Waiting for runtime…</small>}
         {waitRequest.error && <p role="alert">{waitRequest.error}</p>}

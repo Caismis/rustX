@@ -70,7 +70,6 @@ import {
   type RuntimeClientCursor,
   type RuntimeClientSnapshot,
   type RuntimeClientAgent,
-  type RuntimeClientAgentWorkspaceDisposalOutcome,
   type RuntimeClientTranscriptCursor,
   type RuntimeClientTranscriptPage,
   type SessionModelConfig,
@@ -562,16 +561,13 @@ export class AppServerSession {
   }
 
   /** Disposes one retained subagent workspace through the runtime authority. */
-  async disposeSubagent(subagentId: SubagentId): Promise<{
-    agent: RuntimeClientAgent;
-    outcome: RuntimeClientAgentWorkspaceDisposalOutcome;
-  }> {
+  async disposeSubagent(subagentId: SubagentId) {
     const disposed = await this.#client.call(
       "subagent/disposeWorkspace",
       { target: this.#target, subagent_id: subagentId },
       "workspace_disposed",
     );
-    return { agent: disposed.agent, outcome: disposed.outcome };
+    return { subagent_id: disposed.subagent_id, workspace: disposed.workspace, outcome: disposed.outcome };
   }
 
   // -------------------------------------------------------------------------

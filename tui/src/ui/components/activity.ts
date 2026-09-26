@@ -258,6 +258,9 @@ export function renderSubagentDetail(subagent: RuntimeClientAgent): string {
     `- definition digest: \`${subagent.definition_digest}\``,
     `- profile digest: \`${subagent.profile_digest}\``,
   ];
+  if (subagent.state === "unavailable") {
+    lines.push("- unavailable: physical settlement, publication, or workspace authority requires explicit repair");
+  }
   if (subagent.detail != null) {
     lines.push(`- detail: ${subagent.detail}`);
   }
@@ -297,12 +300,17 @@ function renderSubagent(
   selected: boolean,
 ): string {
   const inactive = subagent.state === "inactive";
-  const glyph = inactive ? role.meta("●") : role.pending("◐");
-  const timing = inactive ? "" : ` ${role.chrome("·")} ${role.meta(formatElapsed(now, subagent.started_at))}`;
+  const unavailable = subagent.state === "unavailable";
+  const glyph = unavailable ? role.warning("!") : inactive ? role.meta("●") : role.pending("◐");
+  const timing = inactive || unavailable ? "" : ` ${role.chrome("·")} ${role.meta(formatElapsed(now, subagent.started_at))}`;
   const lines = [
-    `${selected ? role.accent("▸") : " "} ${glyph} ${role.toolTitle(style.bold(bounded(subagent.agent)))} ${role.chrome("·")} ${inactive ? role.meta(subagent.state) : role.pending(subagent.state)}${timing} ${role.chrome("·")} ${role.meta(bounded(subagent.agent_id))}`,
+    `${selected ? role.accent("▸") : " "} ${glyph} ${role.toolTitle(style.bold(bounded(subagent.agent)))} ${role.chrome("·")} ${unavailable ? role.warning(subagent.state) : inactive ? role.meta(subagent.state) : role.pending(subagent.state)}${timing} ${role.chrome("·")} ${role.meta(bounded(subagent.agent_id))}`,
   ];
   lines.push(`  ${role.meta(`conversation ${bounded(subagent.child_conversation_id)} · activation ${subagent.current_activation ?? "none"} · latest ${subagent.activation_id} (${subagent.activation_state})`)}`);
+  if (unavailable) {
+    lines.push(`  ${role.warning("Physical settlement, publication, or workspace authority requires explicit repair.")}`);
+    return lines.join("\n");
+  }
   if (inactive) {
     return lines.join("\n");
   }

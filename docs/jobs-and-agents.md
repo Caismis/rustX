@@ -8,7 +8,7 @@ physical settlement, bounded output, watches and Event Journal primitives.
 | Domain | Identity | Owner | Lifecycle | Model tools |
 | --- | --- | --- | --- | --- |
 | Job | `ToolExecutionId`, exposed as `job_id` | Conversation's `ConversationBackgroundRegistry` | Active → terminal, permanently | `job_list`, `job_status`, `job_wait`, `job_cancel` |
-| Agent | `AgentId`, exposed as `agent_id` | Parent Conversation's `SubagentRegistry` | Inactive → Admitting → Active → Stopping → Inactive | `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent` |
+| Agent | `AgentId`, exposed as `agent_id` | Parent Conversation's `SubagentRegistry` | Inactive → Admitting → Active → Stopping → Inactive; unresolved authority → Unavailable | `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent` |
 | Activation | Internal `SubagentId`, exposed as `activation_id` | One Agent and the shared finite child supervisor | Admission → running → stopping/settlement → terminal | Controlled through its owning Agent |
 
 An ordinary foreground Tool invocation is not a Job. One Job ID identifies one
@@ -53,11 +53,15 @@ operation under that mutex:
   it available at the next legal Agent Loop boundary.
 - **Admitting or Stopping:** reject transiently. No message is secretly retained to restart
   the Agent after settlement.
+- **Unavailable:** reject with typed `Settlement` / `agent_settlement`. Failed admission
+  reservations, abandoned publication, unproven terminal containment and poisoned
+  workspace authority require explicit reconciliation or repair; retrying input
+  cannot settle them.
 - **Inactive:** reserve exactly one next activation and its input, retaining the
   same AgentId and child ConversationId. Preparation is explicitly Admitting;
   another caller cannot reserve a competing activation. Failed preparation
   releases the reservation only after proven physical rollback and its durable
-  commit. Unproven rollback retains that target in Stopping without destroying
+  commit. Unproven rollback retains that target as Unavailable without destroying
   the Agent. The reservation carries
   its exact activation generation, so cleanup from an earlier activation cannot
   clear a later reservation. Preparation retains a counted runtime admission
@@ -73,8 +77,12 @@ settlement.
 The child must request `SealRequested` before closing its guidance inbox. Under
 the same registry lock, the parent changes Active to Stopping. The process driver
 routes all previously admitted FIFO messages before `SealGranted`. Only then may
-the child seal its durable inbox, after draining any accepted guidance through
-ordinary child processing. If accepted work remains, the child sends `SealOpen`;
+the child seal its durable inbox. Only a normally Completed attempt may reopen
+this activation to process already accepted guidance. Failed (including timeout
+and turn-limit failure), Cancelled, orphaned and Workflow-owned attempts are final.
+Their accepted pending guidance remains in the canonical child inbox for a later
+explicit activation; it is not erased or used to overwrite the first failure.
+For normal completion, if accepted work remains, the child sends `SealOpen`;
 the parent restores Active under the owner mutex and acknowledges
 `AdmissionReopened`. The child coordinator holds the next turn until that
 acknowledgement. If cancellation won, no reopening is granted. Thus an externally Active Agent cannot already have
@@ -96,7 +104,7 @@ with no execution outcome; failed rollback returns a settlement error. A lost
 client wait response must not be automatically retried, since a fresh operation
 could capture a different activation. Physical settlement or canonical-publication
 abandonment returns an explicit settlement error, never successful wait/interrupt
-completion while the Agent remains Stopping.
+completion while the Agent remains Unavailable.
 
 `send_message` succeeds only after the child accepts input through canonical
 inbound. Active guidance uses its existing acknowledgement; resumed input uses
@@ -110,8 +118,10 @@ activation ownership commits the Agent owns settlement. Cancelling the waiting
 Tool releases its waiter, not that owned activation or already accepted input.
 
 `list_agents` orders durable identities by their first ownership admission
-sequence, newest first, bounds output at 64, and reports returned/matched/limit/
-truncated. Repeated activation does not change an Agent's creation order.
+sequence, newest first, bounds output at the shared `MAX_AGENT_LIST_LIMIT` (64),
+and reports returned/matched/limit/truncated. It captures every returned
+`(AgentSnapshot, latest SubagentSnapshot)` pair under one registry lock; clients
+never reacquire status separately for each row. Repeated activation does not change an Agent's creation order.
 
 ## Authority, history and replay
 
@@ -138,19 +148,21 @@ before staging any physical child. Ownership must consume that same Agent,
 activation and origin. Conclusive rollback records `RolledBack` with an explicit
 physical-settlement proof. Recovery never treats the prior activation's terminal
 fact as proof about a later reserved generation: an unresolved reservation or
-unproven rollback keeps the Agent Stopping with the exact reserved target and its
+unproven rollback keeps the Agent Unavailable with the exact reserved target and its
 workspace unavailable. Wait reports a settlement error, and Session deletion
 cannot remove that Agent's resources. The sequence watermark includes reservations
 so a later process never reuses their IDs. These facts contain execution correlation, never message bodies or private authority. The
-owner publishes each reservation/rollback receipt with the Agent snapshot only
-after installing that transition under its mutex. This releases the observation
+owner publishes each receipt as one combined Agent-and-activation observation
+after installing that whole transition under its mutex. One journal receipt
+releases exactly that complete projection cut; two partial observations must not
+share and prematurely release the same receipt. This releases the observation
 journal frontier; later canonical reports cannot be stranded behind an unpublished
 admission fact.
 
 App Server v25 exposes separate `jobs` and `agents` snapshots and `job_updated`
 and `agent_updated` events. Agent rows carry `agent_id`, `parent_agent_id`, child
 ConversationId, `current_activation`, latest `activation_id`, `activation_state`
-and explicit Admitting/Active/Stopping/Inactive state. Replay folds activations into the
+and explicit Admitting/Active/Stopping/Inactive/Unavailable state. Replay folds activations into the
 same durable Agent identity; reconnect uses the same native projection.
 
 TUI and WebUI key Agent rows and child inspection by AgentId, not activation ID.
@@ -159,13 +171,18 @@ retain terminal state and output. Both clients route controls to the owner and
 render canonical final reports without inventing lifecycle decisions. Runtime
 Client bootstrap receives current Agent snapshots directly from the registry's
 atomic owner cut, never by interpreting activation-history iteration order.
+Every live lifecycle transition uses that same combined cut. Clients never infer
+AgentState from Starting, terminal naming, or an activation cleanup flag;
+Starting projects the owner's Admitting and terminal-unproven projects Unavailable.
 Wait and interrupt both return `agent_wait`: captured activation/outcome plus the
 latest Agent snapshot.
 
 Recovery uses durable `physical_settlement_proven`, not terminal naming. A live
 Interrupted outcome with proven containment remains resumable after reopen.
-Crash reconciliation records unproven settlement and fails closed; clean Git
-state does not supply missing physical proof.
+Crash reconciliation initially records unproven settlement and fails closed;
+clean Git state does not supply missing physical proof. Logical terminal outcome,
+terminal publication and physical containment are independent dimensions. Later
+physical proof does not rewrite Interrupted into success or replay the old input.
 
 ## Release gate audit
 
@@ -181,7 +198,7 @@ was not edited; release tracking should link #411 and this current contract.
 
 ### Private admitted authority
 
-SQLite schema 46 stores the whole executable `DurableAgentAuthority` and its
+SQLite schema 47 stores the whole executable `DurableAgentAuthority` and its
 credential capture in the parent Conversation's private `agent_authorities`
 table. Admission atomically commits that private row and a public AgentId
 reference. Event Journal ownership facts cannot serialize profiles, Tool
@@ -192,3 +209,49 @@ current configuration or environment. Missing private state fails closed.
 Repeated activations reuse the same record; lineage copies omit it, archive
 exports do not read it, and deleting the owning Session removes its database.
 Existing local-store filesystem permissions protect these values.
+
+## Agent workspace lifetime
+
+`AgentRetained` retains the workspace for the durable Agent lifetime across
+finite activations. It is not the finite Workflow `Retained` disposal handoff.
+`subagent/disposeWorkspace` cannot delete a still-existing Agent's workspace.
+An independent Agent-deletion lifecycle is a future owner, outside this repair;
+Session deletion retains its existing full ownership and containment checks.
+
+Workflow checks logical terminal, committed publication/value, and physical proof
+separately. A valid value with unproven containment fails as physical settlement
+uncertainty; committed publication is never described as an unpublished terminal.
+
+## Recovery physical settlement owner
+
+Before composing capabilities or accepting Delegate, each child holds a mandatory
+exclusive lease in its unique incarnation directory. Parent-control EOF first
+releases pending child interactions as ControlLost, then uses the ordinary native
+runtime shutdown to contain nested processes and all other owned execution. Only
+Quiescent permits an exact activation/conversation receipt. The recovering
+registry requires both that receipt and acquisition of the released exclusive
+lease. A free lease alone, PID absence, elapsed time or clean workspace is no proof.
+
+The registry retains unresolved activation and reservation IDs and their child namespaces as
+concrete reconciliation obligations. Startup performs a bounded pass and one
+watch-backed owner probes for up to 15 seconds; Goal idle performs a fresh pass,
+and shutdown joins that owner before classifying unresolved resources. The bound
+limits work, never establishes containment. Later reopen retries outstanding
+proof. Missing or invalid evidence remains fail-closed and requires explicit
+repair; repeating send_message is not a reconciliation protocol.
+
+Native proof commits `SubagentPhysicalSettlementProven` for a terminal activation.
+For a reserved generation it commits the exact original provenance with
+`RolledBack { physical_settlement_proven: true }`. An earlier unproven rollback
+is a separate resource fact and cannot close that obligation. The registry then
+releases recovery exclusion and publishes the complete owner projection under
+one mutex, waking the existing Goal idle coordinator without inventing input. Independent
+workspace poison is never cleared by physical proof. Logical Interrupted and its
+canonical parent notice remain unchanged; the dead activation is never reattached
+or replayed. Inert incarnation evidence remains until Session deletion, which
+folds the later proof instead of treating a historical false flag as permanent.
+
+Finite Workflow recovery preserves durable ownership and physical proof for shared
+as well as retained workspaces. Restored execution history grants no executable
+terminal protocol or resumed Workflow authority; physical reconciliation never
+replays a Workflow node.

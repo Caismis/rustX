@@ -222,20 +222,29 @@ async fn admission_receipts_release_observation_frontier_after_owner_installatio
     use crate::runtime::observation::{ConversationObservation, PendingObservations};
     struct AdmissionObserver(Arc<PendingObservations>);
     impl SubagentObserver for AdmissionObserver {
-        fn observe_agent(&self, snapshot: &AgentSnapshot) {
-            self.0.push(ConversationObservation::Agent {
-                snapshot: Box::new(snapshot.clone()),
+        fn on_snapshot(&self, agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot) {
+            self.0.push(ConversationObservation::SubagentLifecycle {
+                agent: agent.cloned().map(Box::new),
+                snapshot: snapshot.clone(),
             });
         }
-        fn observe_agent_committed(&self, snapshot: &AgentSnapshot, sequence: u64) {
+        fn on_committed(
+            &self,
+            agent: Option<&AgentSnapshot>,
+            snapshot: &SubagentSnapshot,
+            sequence: u64,
+        ) {
+            // The durable receipt is pending until the entire owner transition
+            // arrives. This drain is deliberately before the one publication.
+            assert!(self.0.drain().is_empty());
             self.0.push(ConversationObservation::Published {
                 journal_sequence: sequence,
-                observation: Box::new(ConversationObservation::Agent {
-                    snapshot: Box::new(snapshot.clone()),
+                observation: Box::new(ConversationObservation::SubagentLifecycle {
+                    agent: agent.cloned().map(Box::new),
+                    snapshot: snapshot.clone(),
                 }),
             });
         }
-        fn on_snapshot(&self, _snapshot: &SubagentSnapshot) {}
     }
     let plane = plane(4);
     let child = stage_exit0(&plane);
@@ -292,8 +301,13 @@ async fn admission_receipts_release_observation_frontier_after_owner_installatio
             observations
                 .iter()
                 .filter_map(|observation| match observation {
-                    ConversationObservation::Agent { snapshot } => {
-                        Some((snapshot.state, snapshot.current_activation.clone()))
+                    ConversationObservation::SubagentLifecycle {
+                        agent: Some(agent),
+                        snapshot,
+                    } => {
+                        assert_eq!(agent.latest_activation, snapshot.subagent_id);
+                        assert_eq!(agent.agent_id, snapshot.child_agent_id);
+                        Some((agent.state, agent.current_activation.clone()))
                     }
                     _ => None,
                 })
@@ -305,4 +319,126 @@ async fn admission_receipts_release_observation_frontier_after_owner_installatio
     )));
     assert!(states.contains(&(AgentState::Inactive, None)));
     assert!(queue.drain().is_empty());
+}
+
+/// The handoff gate parks after ownership commits but before the registry may
+/// install its driver handle and change Starting to Running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // Keep both gates and their one-cut assertions together.
+async fn starting_owner_publication_is_one_complete_admitting_cut() {
+    use crate::runtime::observation::{ConversationObservation, PendingObservations};
+    struct OwnerObserver(Arc<PendingObservations>);
+    impl SubagentObserver for OwnerObserver {
+        fn on_snapshot(&self, agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot) {
+            self.0.push(ConversationObservation::SubagentLifecycle {
+                agent: agent.cloned().map(Box::new),
+                snapshot: snapshot.clone(),
+            });
+        }
+        fn on_committed(
+            &self,
+            agent: Option<&AgentSnapshot>,
+            snapshot: &SubagentSnapshot,
+            sequence: u64,
+        ) {
+            if snapshot.state == SubagentState::Stopping
+                && agent.is_some_and(|agent| agent.state == AgentState::Admitting)
+            {
+                assert!(
+                    self.0.drain().is_empty(),
+                    "commit receipt blocks the frontier before owner installation"
+                );
+            }
+            self.0.push(ConversationObservation::Published {
+                journal_sequence: sequence,
+                observation: Box::new(ConversationObservation::SubagentLifecycle {
+                    agent: agent.cloned().map(Box::new),
+                    snapshot: snapshot.clone(),
+                }),
+            });
+        }
+    }
+    let plane = plane(4);
+    let queue = Arc::new(PendingObservations::new());
+    plane.store.observe_journal(queue.clone()).unwrap();
+    plane
+        .registry
+        .install_observer_and_agent_snapshots(Arc::new(OwnerObserver(queue.clone())));
+    let handoff = Arc::new(ControlHandoffHook::default());
+    plane.registry.install_control_handoff_hook(handoff.clone());
+    let child = stage_exit0(&plane);
+    let registry = plane.registry.clone();
+    let committing = tokio::spawn(async move {
+        let spec = start_spec("one owner cut");
+        let prepared = registry
+            .prepare(&spec, &CancellationSignal::new())
+            .await
+            .unwrap();
+        registry
+            .commit(prepared, &CancellationSignal::new())
+            .await
+            .unwrap()
+    });
+    handoff.wait_until_entered();
+    let activation_id = SubagentId::for_conversation(&plane.conversation_id, 1);
+    let activation = plane.registry.snapshot(&activation_id).unwrap();
+    let fresh = plane
+        .registry
+        .agent_snapshot_with_activation(&activation.child_agent_id)
+        .unwrap();
+    assert_eq!(fresh.0.state, AgentState::Admitting);
+    assert_eq!(
+        fresh.1.state,
+        SubagentState::Stopping,
+        "finite Starting does not duplicate Agent Admitting"
+    );
+    let batch = queue.drain();
+    let [
+        ConversationObservation::JournalBatch {
+            through: Some(through),
+            observations,
+        },
+    ] = batch.as_slice()
+    else {
+        panic!("one committed owner batch: {batch:?}")
+    };
+    assert_eq!(*through, plane.store.presentation_frontier().unwrap());
+    let [
+        ConversationObservation::SubagentLifecycle {
+            agent: Some(owner),
+            snapshot,
+        },
+    ] = observations.as_slice()
+    else {
+        panic!("one complete owner observation: {observations:?}")
+    };
+    assert_eq!(owner.as_ref(), &fresh.0);
+    assert_eq!(snapshot, &fresh.1);
+    assert!(
+        queue.drain().is_empty(),
+        "there is no trailing second owner publication"
+    );
+    // Listing materializes this exact owner cut; later activation progress
+    // cannot change the already captured pairs used by Runtime Client.
+    let listing = plane.registry.list_agents(MAX_AGENT_LIST_LIMIT);
+    assert_eq!(listing.agents, vec![fresh.clone()]);
+    handoff.release();
+    let SubagentStartOutcome::Accepted(accepted) = committing.await.unwrap() else {
+        panic!("owned activation");
+    };
+    child
+        .complete(ChildResultStatus::Succeeded, Some("done"))
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .unwrap();
+    assert_eq!(listing.agents[0], fresh);
+    assert_eq!(
+        plane.registry.list_agents(MAX_AGENT_LIST_LIMIT).agents[0]
+            .0
+            .state,
+        AgentState::Inactive
+    );
 }

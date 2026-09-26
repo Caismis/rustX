@@ -1168,7 +1168,11 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
         started.wait_for(|entered| *entered).await.unwrap();
         // Attribution: no foreground attempt and no subagent owns work; the
         // background registry alone owns the Busy lifecycle.
-        assert!(runtime.subagents().is_none_or(|s| !s.configuration_busy()));
+        assert!(
+            runtime
+                .subagent_registry()
+                .is_none_or(|s| !s.configuration_busy())
+        );
         assert!(runtime.tool_runtime().background().configuration_busy());
         assert_eq!(
             runtime.idle_epoch(),

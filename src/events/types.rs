@@ -687,6 +687,14 @@ pub enum RuntimeEvent {
         workspace_resource: SubagentWorkspaceTerminalResource,
     },
 
+    /// Recovery proved an old activation's physical incarnation quiescent.
+    /// This closes its resource obligation without changing its logical outcome
+    /// or publishing another terminal message.
+    SubagentPhysicalSettlementProven {
+        subagent_id: SubagentId,
+        child_agent_id: AgentId,
+    },
+
     /// A Workflow-owned subagent reached native terminal settlement without
     /// creating a parent inbound notification. This closes the durable
     /// subagent ownership lifecycle while preserving the invariant that a
@@ -698,6 +706,9 @@ pub enum RuntimeEvent {
         child_agent_id: AgentId,
         /// The terminal state reached by the native child.
         state: SubagentTerminalState,
+        /// Independent physical proof from the exact finite process owner.
+        /// Recovery interruptions remain false until native reconciliation proves it.
+        physical_settlement_proven: bool,
         /// The post-terminal workspace resource disposition.
         workspace_resource: SubagentWorkspaceTerminalResource,
     },

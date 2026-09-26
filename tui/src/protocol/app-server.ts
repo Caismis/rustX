@@ -474,6 +474,8 @@ export function describeRpcError(error: RpcError): string {
       return `the App Server reached ${data.kind.replaceAll("_", " ")}`;
     case "server_draining":
       return "the App Server is shutting down and no longer accepts work";
+    case "agent_settlement":
+      return `Agent ${data.agent_id} is unavailable; physical settlement, publication, or workspace authority requires explicit repair`;
     case "agent_stopping":
       return `Agent ${data.agent_id} is settling its activation; retry after it becomes inactive`;
     case "unknown_agent":

@@ -284,3 +284,12 @@ describe("subagent activity section", () => {
     assert.ok(!rendered.includes("x".repeat(200)));
   });
 });
+
+it("an unavailable Agent is not rendered as ongoing work or a retry prompt", () => {
+  const rendered = render([child({ type: "awaiting_activity" }, {
+    state: "unavailable", activation_state: "interrupted",
+  })]);
+  assert.match(rendered, /unavailable/);
+  assert.match(rendered, /requires explicit repair/);
+  assert.doesNotMatch(rendered, /◐|retry|awaiting activity/);
+});

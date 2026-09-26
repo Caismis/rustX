@@ -167,9 +167,11 @@ froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
 descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
-heads, and the Todo-specific durable progress sequence. Current schema 46
+heads, and the Todo-specific durable progress sequence. Schema 46
 replaces these with producer-scoped contribution receipts, generic logical-step
-progress, and typed accepted RequestSnapshot contributions; no old reader remains. Version 14 freezes
+progress, and typed accepted RequestSnapshot contributions; no old reader remains.
+Current schema 47 additionally requires finite Workflow terminal physical proof;
+older stores are rejected without migration. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool
 results. Version 15 adds the one-shot unresolved-output carryover pointer and
 the frozen request-only carryover/anchor fields in Request Snapshots. Version
@@ -2022,7 +2024,7 @@ The observation plane adds live activity visibility without creating a
 second authority:
 
 - **Lifecycle and activity are orthogonal dimensions.** The closed
-  `AgentState` (Admitting/Active/Stopping/Inactive) and finite activation `SubagentState`
+  `AgentState` (Admitting/Active/Stopping/Inactive/Unavailable) and finite activation `SubagentState`
   remain distinct authoritative facts. Activity never decides whether a child
   can accept input, resume, or settle. `SubagentActivity`
   (`awaiting_activity`, `model`, `retrying_model`, `tool`, `compacting`,
@@ -2124,7 +2126,8 @@ never a hidden queue that restarts the Agent after settlement.
 Inactive admission reserves one next activation; preparation is transient
 Admitting and cannot create two live activations. The reserved input and frozen
 Agent authority enter the same child conversation. A failed preparation releases
-the reservation. Later activation IDs are distinct from the Agent and all prior
+the reservation only after proven physical rollback and durable publication.
+Unproven rollback retains the exact generation as Unavailable. Later activation IDs are distinct from the Agent and all prior
 activations. Configuration reload or resource reconciliation cannot re-author an admitted Agent.
 
 Interrupt captures one current activation, commits cancellation through the
@@ -2142,6 +2145,30 @@ natural settlement cannot erase a committed acceptance. Explicit cancellation
 and physical loss retain their honest outcomes; acceptance does not promise a
 successful model turn after interruption. Workflow-owned finite AgentRuns remain
 outside native Agent messaging because WorkflowRuntime owns their input/output.
+
+Agent state is published only by `SubagentRegistry`, paired with the latest
+activation under one lock and one semantic journal-publication receipt. Runtime
+Client, App Server, TUI and WebUI install the pair atomically and never infer
+AgentState from a finite activation. Listing captures all returned pairs under
+one lock; live projection and a fresh status after that cut agree.
+
+Only natural Completed may reopen because already accepted guidance needs another
+turn. Failed, Cancelled, orphaned and Workflow-owned first terminals are final.
+Accepted guidance survives in canonical child storage for later activation.
+
+Logical outcome, terminal publication/value commit and physical containment are
+independent. Workflow success requires all required dimensions; diagnostics name
+the failed dimension. Interrupted plus later containment proof stays Interrupted.
+Missing containment proof blocks Goal idle, resume and successful shutdown until
+an explicit native reconciliation owner durably proves it. A historical boolean
+is not itself a cleanup owner.
+
+Admitting and Stopping are transient only while a concrete owner can settle.
+Failed reservation, abandoned publication, terminal-unproven containment or
+poisoned workspace yields Unavailable with a non-retryable typed settlement error.
+The resume owner holds `LifecycleAdmission` through staging, physical rollback,
+exact `RolledBack { physical_settlement_proven: true }` commit and publication;
+Draining cannot release that guard or relabel proven rollback as unproven.
 
 ## Named Agent admission
 
@@ -7328,3 +7355,22 @@ store through the shared transcript reader, never parent status/activity.
 Selection and page generations plus attachment epochs fence all TUI child reads;
 reconnect rereads authority and Esc mutates only presentation. Root-routed HITL
 and existing lifecycle/control surfaces remain the sole control owners.
+
+## Recovered activation containment proof
+
+A child acquires its mandatory incarnation lease before composition. Only native
+runtime Quiescent may produce its exact activation/conversation receipt. Recovery
+needs the receipt and exclusive lease acquisition; either alone is insufficient.
+The registry owns explicit unresolved activation IDs, a bounded startup probe,
+Goal-idle reconciliation and a shutdown-joined completion watch. Expiry leaves
+unavailability and later-open reconciliation, never invented settlement.
+`SubagentPhysicalSettlementProven` discharges the physical obligation without
+rewriting Interrupted, canonical content, activation provenance or accepted input.
+Receipt evidence is retained through the durable commit and until Session deletion.
+
+Recovered reserved generations participate in the same proof owner. Unproven
+rollback is an open resource obligation; only later exact native proof may commit
+proven RolledBack with the original Agent, activation and origin. Physical proof
+wakes the existing idle coordinator without enqueueing or replaying content.
+Finite Workflow terminal facts persist physical proof too; recovery must neither
+replace it with false nor infer it from terminal naming or workspace disposition.

@@ -348,6 +348,9 @@ pub enum ErrorData {
     AgentStopping {
         agent_id: crate::runtime::identity::AgentId,
     },
+    AgentSettlement {
+        agent_id: crate::runtime::identity::AgentId,
+    },
     UnknownAgent {
         agent_id: crate::runtime::identity::AgentId,
     },
@@ -509,7 +512,8 @@ pub enum MethodResult {
         agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
     },
     WorkspaceDisposed {
-        agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
+        subagent_id: crate::runtime::identity::SubagentId,
+        workspace: crate::runtime_client::snapshot::RuntimeClientAgentWorkspace,
         outcome: crate::runtime_client::types::RuntimeClientAgentWorkspaceDisposalOutcome,
     },
     Initialized {

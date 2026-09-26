@@ -3,7 +3,7 @@
 App Server v25 / Runtime Client v51 separate finite Jobs from durable Agents. `jobs`/`job_updated` carry
 `job_id` and terminal lifecycle; `agents`/`agent_updated` carry stable `agent_id`,
 parent lineage, child ConversationId, current/latest activation identity and explicit
-Admitting/Active/Stopping/Inactive state. Controls route directly to each domain owner. A
+Admitting/Active/Stopping/Inactive/Unavailable state. Controls route directly to each domain owner. A
 resumed activation updates the same Agent row. Only current v25 generated artifacts are retained, following repository policy;
 Older peers are rejected without a compatibility decoder. See
 [Jobs and continuable Agents](jobs-and-agents.md).
@@ -1244,7 +1244,10 @@ Job ID through physical settlement. No client poll loop discovers completion;
 
 `agent/sendMessage` accepts only stable AgentId and message. Active-vs-Inactive
 arbitration, resume reservation and guidance/seal ordering belong to the registry.
-Admitting and Stopping return deterministic transient rejection. `agent/wait` captures the
+Admitting and Stopping return deterministic transient `agent_stopping` rejection
+only while a live owner can settle. Unavailable returns typed `agent_settlement`
+without retry advice; it denotes failed admission/publication/physical settlement
+or poisoned workspace authority. `agent/wait` captures the
 current activation once; its result names that activation even if the Agent has
 since resumed. Inactive returns a null target. Clients must not automatically
 retry a lost Agent wait, since a new operation could capture a later activation.
@@ -1261,7 +1264,7 @@ fresh snapshot; they do not overwrite a newer projection with an unversioned rep
 `returned`, `matched`, `limit`, and `truncated` counts. `Admitting` exposes the
 reserved current activation; only the owner arbitrates wait, interrupt and message
 admission during that phase. A failed or unproven physical rollback retains the
-reserved target in Stopping, including after reconnect; wait and interrupt return
+reserved target as Unavailable, including after reconnect; wait and interrupt return
 a settlement error instead of reporting completion of the previous activation.
 
 Replay/reconnect reconstructs authoritative Job terminal states and captures
@@ -1271,3 +1274,17 @@ Agent; prior activations belong to Trace history. Clients render separate Job an
 Agent rows and preserve selection by AgentId. Child transcript reads span the same
 canonical conversation across activations; final reports are never reconstructed
 from diagnostic/activity snapshots.
+
+Agent lifecycle publication is one combined owner cut: AgentSnapshot and latest
+activation install before their single Event Journal receipt releases. A fresh
+`agent/status`, reconnect snapshot and live `agent_updated` after the same cut
+agree. Clients must not derive AgentState from finite activation state.
+`agent/list` captures all returned Agent/activation pairs in one registry lock.
+
+Permanent Agent unavailability is distinct from finite activation failure:
+`agent_settlement` identifies the Agent requiring reconciliation or repair, and
+clients do not suggest retry-after-settlement. A later native physical proof can
+update an Interrupted activation's Agent to Inactive without changing its logical
+outcome or replaying it. `subagent/disposeWorkspace` returns the finite resource
+projection `{subagent_id, workspace, outcome}`; it cannot manufacture Agent state
+or dispose a workspace still owned by a durable Agent.

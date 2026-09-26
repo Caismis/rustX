@@ -867,8 +867,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         detail: None,
         observation: rustx::runtime::subagent::SubagentObservation::default(),
         profile: None,
-        publication_abandoned: false,
-        settled: false,
+        settlement: rustx::runtime::subagent::SubagentSettlement::default(),
         started_at: chrono::Utc::now(),
     };
     let view = RuntimeClientAgent {

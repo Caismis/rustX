@@ -174,6 +174,42 @@ impl DeletionTargetSnapshot {
     }
 }
 
+fn apply_terminal_resource(
+    subagent_id: &crate::runtime::identity::SubagentId,
+    resource: SubagentWorkspaceTerminalResource,
+    activation_resources: &BTreeMap<crate::runtime::identity::SubagentId, String>,
+    durable_resources: &BTreeSet<String>,
+    blockers: &mut BTreeMap<String, (WorkspaceSnapshot, WorkspaceBlockerState)>,
+) -> std::io::Result<()> {
+    let key = activation_resources
+        .get(subagent_id)
+        .ok_or_else(|| invalid("terminal without ownership"))?;
+    match resource {
+        SubagentWorkspaceTerminalResource::None => {
+            if !durable_resources.contains(key) {
+                blockers.remove(key);
+            }
+        }
+        SubagentWorkspaceTerminalResource::Retained { handoff } => {
+            let (workspace, state) = blockers
+                .get_mut(key)
+                .ok_or_else(|| invalid("retained resource without ownership"))?;
+            validate_handoff(workspace, &handoff)?;
+            *state = WorkspaceBlockerState::Retained {
+                head_commit: handoff.head_commit,
+                dirty: handoff.dirty,
+            };
+        }
+        SubagentWorkspaceTerminalResource::PreservedUnresolved { reason, .. } => {
+            blockers
+                .get_mut(key)
+                .ok_or_else(|| invalid("unresolved resource without ownership"))?
+                .1 = WorkspaceBlockerState::Unresolved(reason);
+        }
+    }
+    Ok(())
+}
+
 fn invalid(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(error.to_string())
 }
@@ -203,6 +239,7 @@ fn read_facts_while(
     let mut borrowed_children = BTreeSet::new();
     let mut agents = BTreeMap::new();
     let mut pending_admissions = BTreeSet::new();
+    let mut unproven_activations = BTreeSet::new();
     let mut activation_resources = BTreeMap::new();
     let mut durable_resources = BTreeSet::new();
     let mut agent_owners = BTreeMap::new();
@@ -319,53 +356,30 @@ fn read_facts_while(
                     }
                 }
                 RuntimeEvent::SubagentTerminalPublished {
-                    physical_settlement_proven: false,
-                    ..
-                } => {
-                    return Err(invalid(
-                        "Agent activation terminal has no proven physical settlement",
-                    ));
-                }
-                RuntimeEvent::SubagentTerminalPublished {
                     subagent_id,
                     workspace_resource,
+                    physical_settlement_proven,
                     ..
                 }
                 | RuntimeEvent::SubagentTerminalSettled {
                     subagent_id,
                     workspace_resource,
+                    physical_settlement_proven,
                     ..
                 } => {
-                    let key = activation_resources
-                        .get(&subagent_id)
-                        .ok_or_else(|| invalid("terminal without ownership"))?;
-                    match workspace_resource {
-                        SubagentWorkspaceTerminalResource::None => {
-                            // Completion releases one activation's borrow. The
-                            // durable Agent still owns the exact workspace.
-                            if !durable_resources.contains(key) {
-                                blockers.remove(key);
-                            }
-                        }
-                        SubagentWorkspaceTerminalResource::Retained { handoff } => {
-                            let (workspace, state) = blockers
-                                .get_mut(key)
-                                .ok_or_else(|| invalid("retained resource without ownership"))?;
-                            validate_handoff(workspace, &handoff)?;
-                            *state = WorkspaceBlockerState::Retained {
-                                head_commit: handoff.head_commit,
-                                dirty: handoff.dirty,
-                            };
-                        }
-                        SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                            reason, ..
-                        } => {
-                            blockers
-                                .get_mut(key)
-                                .ok_or_else(|| invalid("unresolved resource without ownership"))?
-                                .1 = WorkspaceBlockerState::Unresolved(reason);
-                        }
+                    if !physical_settlement_proven {
+                        unproven_activations.insert(subagent_id.clone());
                     }
+                    apply_terminal_resource(
+                        &subagent_id,
+                        workspace_resource,
+                        &activation_resources,
+                        &durable_resources,
+                        &mut blockers,
+                    )?;
+                }
+                RuntimeEvent::SubagentPhysicalSettlementProven { subagent_id, .. } => {
+                    unproven_activations.remove(&subagent_id);
                 }
                 RuntimeEvent::SubagentWorkspaceDisposalSettled {
                     subagent_id,
@@ -482,6 +496,11 @@ fn read_facts_while(
                 _ => {}
             }
         }
+    }
+    if !unproven_activations.is_empty() {
+        return Err(invalid(
+            "Agent activation terminal has no proven physical settlement",
+        ));
     }
     if !pending_admissions.is_empty() {
         return Err(invalid(

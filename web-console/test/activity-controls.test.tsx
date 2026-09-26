@@ -112,7 +112,7 @@ it('selected child transcript refreshes canonical final content at settlement an
 it('native Stopping refusal preserves the draft and never falls back to a resume request', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
   const s = snapshot(); s.agents = [agentFixture()]; server.snapshots.set('A', s);
-  server.handlers.set('agent/sendMessage', () => { throw new RpcFailure({ code: -32000, message: 'Agent is stopping; retry after settlement.' }); });
+  server.handlers.set('agent/sendMessage', () => { throw new RpcFailure({ code: -32000, message: 'Agent is stopping or admitting an activation; retry after settlement', data: { kind: 'agent_stopping', agent_id: 'agent-worker' } }); });
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Keep this input' } });
@@ -129,7 +129,7 @@ it('native Stopping refusal preserves the draft and never falls back to a resume
 
 it('native admission remains waitable and interruptible while its send is pending', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
-  const s = snapshot(); const agent = { ...agentFixture(), state: 'inactive' as const, current_activation: null };
+  const s = snapshot(); const agent = { ...agentFixture(), state: 'inactive' as const, current_activation: null, activation_state: 'succeeded' as const };
   s.agents = [agent]; server.snapshots.set('A', s);
   server.held.add('agent/sendMessage'); server.held.add('agent/wait');
   server.handlers.set('agent/interrupt', () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'admission-b', outcome: null, agent }));
@@ -165,4 +165,34 @@ it('native seal reopening restores Active controls on the same Agent and activat
   expect(ui.getByText('Working')).toBeTruthy();
   expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(false);
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Keep draft across sealing');
+});
+
+it('owner Unavailable differs from terminal Inactive and disables impossible settlement controls', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const s = snapshot(); const agent = agentFixture(); s.agents = [agent]; server.snapshots.set('A', s);
+  server.handlers.set('agent/sendMessage', () => { throw new RpcFailure({ code: -32000, message: 'Agent is unavailable; physical settlement, publication, or workspace authority requires explicit repair', data: { kind: 'agent_settlement', agent_id: agent.agent_id } }); });
+  const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
+  await act(async () => {
+    fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Preserved draft' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 1);
+  });
+  expect(ui.getByRole('alert').textContent).toContain('requires explicit repair');
+  expect(ui.getByRole('alert').textContent).not.toContain('retry');
+  const unavailable = { ...agent, state: 'unavailable' as const, activation_state: 'interrupted' as const };
+  ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [unavailable] }} client={server.client} sessionId="A"/>);
+  expect(ui.getByText('Unavailable')).toBeTruthy();
+  expect(ui.queryByText('Inactive')).toBeNull();
+  for (const name of ['Send message', 'Wait for activation', 'Interrupt']) expect((ui.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+  expect((ui.getByRole('button', { name: 'Transcript' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Preserved draft');
+  expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
+});
+
+it('Starting activation uses authoritative Admitting owner state', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const s = snapshot(); s.agents = [{ ...agentFixture(), state: 'admitting', activation_state: 'stopping' }];
+  const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
+  expect(ui.getByText('Admitting…')).toBeTruthy();
+  expect(ui.queryByText('Stopping…')).toBeNull();
+  expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
 });

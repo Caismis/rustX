@@ -7,20 +7,27 @@ use super::{
     WorkspaceUnresolvedReason, deterministic_worktree_name,
 };
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AgentWorkspace {
     lease: Arc<AsyncMutex<Option<WorkspaceLease>>>,
     admitted: Arc<AtomicBool>,
-    poisoned: Arc<AtomicBool>,
+    availability: Arc<AtomicU8>,
     snapshot: WorkspaceSnapshot,
     recovery: Option<(
         WorkspaceManager,
         WorkspacePolicy,
         crate::runtime::identity::SubagentId,
     )>,
+}
+
+#[repr(u8)]
+enum WorkspaceAvailability {
+    Ready,
+    AwaitingPhysicalProof,
+    Poisoned,
 }
 
 #[derive(Debug)]
@@ -36,7 +43,7 @@ impl AgentWorkspace {
             recovery: None,
             lease: Arc::new(AsyncMutex::new(Some(lease))),
             admitted: Arc::new(AtomicBool::new(false)),
-            poisoned: Arc::new(AtomicBool::new(false)),
+            availability: Arc::new(AtomicU8::new(WorkspaceAvailability::Ready as u8)),
         }
     }
 
@@ -50,7 +57,11 @@ impl AgentWorkspace {
         Self {
             lease: Arc::new(AsyncMutex::new(None)),
             admitted: Arc::new(AtomicBool::new(true)),
-            poisoned: Arc::new(AtomicBool::new(poisoned)),
+            availability: Arc::new(AtomicU8::new(if poisoned {
+                WorkspaceAvailability::Poisoned as u8
+            } else {
+                WorkspaceAvailability::Ready as u8
+            })),
             snapshot,
             recovery: Some((manager, policy, owner)),
         }
@@ -62,11 +73,36 @@ impl AgentWorkspace {
 
     /// Recovery/disposal can only revoke this physical authority, never reset it.
     pub(crate) fn poison(&self) {
-        self.poisoned.store(true, Ordering::Release);
+        self.availability
+            .store(WorkspaceAvailability::Poisoned as u8, Ordering::Release);
+    }
+
+    pub(crate) fn is_poisoned(&self) -> bool {
+        self.availability.load(Ordering::Acquire) != WorkspaceAvailability::Ready as u8
+    }
+
+    pub(crate) fn await_recovered_physical_proof(&self) {
+        let _ = self.availability.compare_exchange(
+            WorkspaceAvailability::Ready as u8,
+            WorkspaceAvailability::AwaitingPhysicalProof as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// A native proof can release only the recovery exclusion. Independent
+    /// workspace poison remains absorbing.
+    pub(crate) fn prove_recovered_physical_settlement(&self) {
+        let _ = self.availability.compare_exchange(
+            WorkspaceAvailability::AwaitingPhysicalProof as u8,
+            WorkspaceAvailability::Ready as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 
     pub(crate) async fn acquire(&self) -> Result<AgentWorkspaceAccess, String> {
-        if self.poisoned.load(Ordering::Acquire) {
+        if self.is_poisoned() {
             return Err("Agent workspace physical settlement is unresolved".into());
         }
         let mut lease = Arc::clone(&self.lease)
@@ -74,7 +110,7 @@ impl AgentWorkspace {
             .map_err(|_| "Agent workspace already has an active physical user".to_owned())?;
         // Recheck after taking the lease: a settling user may have poisoned
         // it between the initial check and exclusive acquisition.
-        if self.poisoned.load(Ordering::Acquire) {
+        if self.is_poisoned() {
             return Err("Agent workspace physical settlement is unresolved".into());
         }
         if lease.is_none() {
@@ -149,7 +185,7 @@ impl AgentWorkspaceAccess {
     }
 
     pub(crate) fn unresolved(self, detail: String) -> WorkspaceSettlement {
-        self.scope.poisoned.store(true, Ordering::Release);
+        self.scope.poison();
         WorkspaceSettlement::unresolved_with_reason(
             self.scope.snapshot.clone(),
             WorkspaceUnresolvedReason::NestedContainment,

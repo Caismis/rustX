@@ -437,8 +437,9 @@ pub(crate) enum ChildGuidanceOutcome {
     /// Pending Inbound Inbox, ahead of that conversation's terminal seal.
     ///
     /// A **naturally completing** child therefore cannot publish a terminal
-    /// that predates it. A cancellation, or physical loss of the child, may
-    /// still end the conversation with the guidance unobserved.
+    /// that predates it. Failure, cancellation, or physical loss may end the
+    /// finite activation with guidance unobserved. Already accepted input
+    /// remains in the durable Agent conversation for its next legal activation.
     Accepted,
     /// The child conversation refused the guidance, with the bounded
     /// deterministic reason.

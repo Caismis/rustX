@@ -125,7 +125,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
-use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view, subagent_view};
+use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view};
 use super::snapshot::{
     RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage, transcript_page_view,
 };
@@ -1634,18 +1634,20 @@ impl ClientInner {
     }
 
     pub(crate) fn agent_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let listing = self.agent_registry()?.list_agents(64);
-        let agents = listing
+        let listing = self
+            .agent_registry()?
+            .list_agents(crate::runtime::subagent::MAX_AGENT_LIST_LIMIT);
+        let agents: Vec<_> = listing
             .agents
-            .into_iter()
-            .map(|a| self.agent_view(&a.agent_id))
-            .collect::<Result<Vec<_>, _>>()?;
+            .iter()
+            .map(|(agent, activation)| super::projection::agent_view(agent, activation))
+            .collect();
         let returned = agents.len();
         Ok(RuntimeClientResult::Agents {
             agents,
             returned,
             matched: listing.matched,
-            limit: 64,
+            limit: crate::runtime::subagent::MAX_AGENT_LIST_LIMIT,
             truncated: returned < listing.matched,
         })
     }
@@ -1765,7 +1767,8 @@ impl ClientInner {
             ),
         };
         Ok(RuntimeClientResult::SubagentWorkspaceDisposed {
-            subagent: subagent_view(&snapshot),
+            subagent_id: snapshot.subagent_id.clone(),
+            workspace: super::projection::subagent_workspace_view(&snapshot),
             outcome,
         })
     }
@@ -2713,6 +2716,11 @@ fn agent_control_error(
         crate::runtime::subagent::AgentControlError::Unknown(agent_id) => {
             RuntimeClientError::UnknownAgent { agent_id }
         }
+        crate::runtime::subagent::AgentControlError::Settlement => {
+            RuntimeClientError::AgentSettlement {
+                agent_id: id.clone(),
+            }
+        }
         error => RuntimeClientError::InvalidState {
             message: error.to_string(),
         },
@@ -2757,6 +2765,19 @@ fn read_transcript_page(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn permanent_agent_settlement_is_a_typed_non_retryable_error() {
+        let id = crate::runtime::identity::AgentId::new("agent-unavailable");
+        assert!(matches!(
+            super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::Settlement),
+            crate::runtime_client::types::RuntimeClientError::AgentSettlement { agent_id } if agent_id == id
+        ));
+        assert!(matches!(
+            super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::Stopping),
+            crate::runtime_client::types::RuntimeClientError::AgentStopping { agent_id } if agent_id == id
+        ));
+    }
+
     use crate::runtime::observation::ConversationObservation;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};

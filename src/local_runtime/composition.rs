@@ -2959,6 +2959,86 @@ chat_reasoning_replay = "omit"
         }
     }
 
+    /// The production child binding installs its existing turn permit gate
+    /// before activate's synchronous admission attempt. Historical guidance
+    /// is durable pending input, but no Delegate has released a turn permit.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn child_binding_gates_historical_guidance_before_activation() {
+        use crate::durable::ConversationStore;
+        use crate::message::{content::TextBlock, types::UserContentBlock};
+
+        let dir = lab();
+        let child_spec = spec(dir.path(), Vec::new(), Vec::new(), Vec::new());
+        let path = crate::runtime::subagent::child_conversation_store_path(
+            dir.path(),
+            &child_spec.session_id,
+            &child_spec.child_conversation_id,
+        );
+        let store = crate::durable::SqliteConversationStore::open(
+            child_spec.child_conversation_id.clone(),
+            &path,
+        )
+        .unwrap();
+        let accepted = crate::durable::ConversationInboundCapability::accept_inbound(
+            &store,
+            crate::durable::InboundDraft {
+                message_id: None,
+                source: crate::message::types::UserSource::Agent {
+                    agent_id: child_spec.parent_agent_id.clone(),
+                },
+                kind: crate::message::types::InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "historical guidance".into(),
+                })],
+                timestamp: chrono::Utc::now(),
+                correlation: None,
+            },
+        )
+        .unwrap();
+        let core = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .unwrap();
+        let (_parent, control) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation) = tokio::net::UnixStream::pair().unwrap();
+        let dispatcher =
+            crate::local_runtime::dispatcher::ChildControlDispatcher::start(control, observation);
+        let (child, _) = core
+            .into_subagent_child_with_route(Arc::new(
+                crate::local_runtime::subagent_child::ChildInteractionRoute::new(
+                    dispatcher.handle(),
+                ),
+            ))
+            .unwrap();
+        // activate already attempted admission synchronously. Exercise another
+        // wake synchronously too: neither boundary may pass without Delegate.
+        child.runtime().admit_now_for_test();
+        assert!(child.runtime().is_activated());
+        assert!(!child.runtime().has_current_attempt());
+        assert_eq!(
+            store.load_pending().unwrap()[0].message_id,
+            accepted.message_id
+        );
+        assert!(store.load_canonical().unwrap().is_empty());
+        assert!(
+            !store
+                .read_events(None, 128)
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| matches!(
+                    event.event,
+                    crate::events::types::RuntimeEvent::AttemptStarted { .. }
+                ))
+        );
+        child.runtime().shutdown().await.unwrap();
+        dispatcher.shutdown().await;
+        assert_eq!(store.load_pending().unwrap().len(), 1);
+    }
+
     /// Issue #259 regressions 7 and 8: a Todo-enabled child composes **its
     /// own** conversation's list, and two concurrently composed Todo-enabled
     /// children compose two.
@@ -4884,7 +4964,7 @@ compat = { chat_reasoning_replay = "omit" }
             fixture
                 .runtime
                 .runtime()
-                .subagents()
+                .subagent_registry()
                 .expect("parent subagent registry")
                 .all_snapshots()
                 .is_empty()

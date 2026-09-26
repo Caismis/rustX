@@ -8,12 +8,14 @@
 //! Active message admission and activation sealing use the same registry mutex.
 //! Child SealRequested closes admission before the driver grants local sealing;
 //! previously admitted envelopes drain in FIFO order. Inactive message admission
-//! reserves one next activation. Stopping rejects transiently.
+//! reserves one next activation. Stopping rejects transiently; unavailable
+//! settlement or workspace authority requires explicit proof or repair.
 //!
 //! Drivers alone own process handles, cancellation escalation, reap and nested
-//! containment. Activation completion or interruption leaves the Agent inactive
-//! and resumable. Workflow-owned finite children share supervision primitives
-//! without becoming native durable Agents.
+//! containment. Committed terminal publication with proven physical settlement
+//! leaves the Agent inactive and resumable. Recovery owns later durable proof
+//! without reopening the old activation. Workflow-owned finite children share
+//! supervision primitives without becoming native durable Agents.
 //!
 //! Canonical child history owns content. Each final report enters parent canonical
 //! inbound exactly once for its activation, adjacent to runtime-authored Agent
@@ -36,6 +38,7 @@ pub mod resolver;
 pub(crate) mod anchors;
 
 pub(crate) mod ipc;
+pub(crate) mod physical_recovery;
 pub(crate) mod process;
 
 use std::path::{Path, PathBuf};
@@ -130,18 +133,19 @@ pub use invocation::{
     MAX_OVERRIDE_SKILLS, MAX_OVERRIDE_TOOLS, SubagentInvocationOverride, SubagentOverrideError,
 };
 pub use process::SubagentSpawnPlan;
-#[cfg(test)]
-pub(crate) use registry::CommitBoundaryHook;
 pub(crate) use registry::InteractionPublicationAuthority;
 pub use registry::{
     ActivationAdmission, AgentActivationOrigin, AgentControlError, AgentMessageAccepted,
-    AgentSnapshot, AgentState, AgentWaitResult, DurableAgentAuthority, PreparedSubagent,
-    SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing, SubagentObserver,
-    SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,
+    AgentSnapshot, AgentState, AgentWaitResult, DurableAgentAuthority, MAX_AGENT_LIST_LIMIT,
+    PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing,
+    SubagentObserver, SubagentPhysicalSettlement, SubagentPublication, SubagentRegistry,
+    SubagentRegistryConfig, SubagentSettlement, SubagentSnapshot, SubagentStartError,
     SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentSteerError,
     SubagentTerminalMode, SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError,
     SubagentWorkspaceResourceState,
 };
+#[cfg(test)]
+pub(crate) use registry::{CommitBoundaryHook, ResumeTestGates};
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool,
     SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION, SubagentExecutionProfileDigest, SubagentResolution,
@@ -826,7 +830,12 @@ pub(crate) fn admission_event_id(
 ) -> EventId {
     let phase = match phase {
         crate::events::types::AgentActivationAdmissionPhase::Reserved => "reserved",
-        crate::events::types::AgentActivationAdmissionPhase::RolledBack { .. } => "rolled-back",
+        crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+            physical_settlement_proven: false,
+        } => "rollback-unproven",
+        crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+            physical_settlement_proven: true,
+        } => "rolled-back",
     };
     EventId::new(format!("agent-admission:{activation_id}:{phase}"))
 }
@@ -859,6 +868,31 @@ pub(crate) fn admission_event(
 /// The deterministic event identity of a committed Workflow Agent value.
 /// This fact is committed in the same transaction as the corresponding
 /// `SubagentTerminalSettled` lifecycle fact.
+pub(crate) fn physical_settlement_event_id(subagent_id: &SubagentId) -> EventId {
+    EventId::new(format!("subagent-physical-settlement:{subagent_id}"))
+}
+
+pub(crate) fn physical_settlement_event(
+    conversation_id: &ConversationId,
+    subagent_id: &SubagentId,
+    child_agent_id: &AgentId,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: physical_settlement_event_id(subagent_id),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event: RuntimeEvent::SubagentPhysicalSettlementProven {
+            subagent_id: subagent_id.clone(),
+            child_agent_id: child_agent_id.clone(),
+        },
+    }
+}
+
 pub(crate) fn workflow_output_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("workflow-agent-output-event:{subagent_id}"))
 }
@@ -872,6 +906,7 @@ pub(crate) fn terminal_settlement(
     subagent_id: &SubagentId,
     child_agent_id: &AgentId,
     state: SubagentTerminalState,
+    physical_settlement_proven: bool,
     workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
@@ -887,6 +922,7 @@ pub(crate) fn terminal_settlement(
             subagent_id: subagent_id.clone(),
             child_agent_id: child_agent_id.clone(),
             state,
+            physical_settlement_proven,
             workspace_resource: workspace_resource.clone(),
         },
     }

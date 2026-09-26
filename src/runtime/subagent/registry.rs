@@ -75,9 +75,10 @@ use crate::runtime::workspace::{
 };
 
 mod agents;
+mod recovery_settlement;
 pub use agents::{
     AgentControlError, AgentMessageAccepted, AgentSnapshot, AgentState, AgentWaitResult,
-    DurableAgentAuthority,
+    DurableAgentAuthority, MAX_AGENT_LIST_LIMIT,
 };
 
 /// The highest lifecycle state of one subagent child.
@@ -273,7 +274,10 @@ struct SubagentRecord {
     /// recovery-projected record restores exactly the committed value and
     /// never recomputes it from the current catalog.
     profile_digest: SubagentExecutionProfileDigest,
-    terminal: SubagentTerminalMode,
+    /// Immutable domain identity, including for non-executable historical records.
+    ownership: SubagentOwnershipKind,
+    /// Frozen live terminal protocol; never reconstructed for historical activations.
+    terminal: Option<SubagentTerminalMode>,
     workspace: WorkspaceSnapshot,
     handoff: Option<WorkspaceHandoff>,
     /// The post-terminal physical-resource state. This never changes the
@@ -421,10 +425,7 @@ impl SubagentRecord {
             SubagentLifecycle::Interrupted => SubagentState::Interrupted,
         };
         SubagentSnapshot {
-            ownership: match self.terminal {
-                SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
-                SubagentTerminalMode::WorkflowOutput { .. } => SubagentOwnershipKind::Workflow,
-            },
+            ownership: self.ownership,
             parent_agent_id: self.parent_agent_id.clone(),
             subagent_id: self.subagent_id.clone(),
             child_agent_id: self.child_agent_id.clone(),
@@ -448,10 +449,20 @@ impl SubagentRecord {
             detail: self.detail.clone(),
             observation: self.observation.clone(),
             profile: self.profile.clone(),
-            publication_abandoned: self.publication_abandoned,
-            settled: self.lifecycle.is_terminal()
-                && self.physical_settlement_proven
-                && !self.publication_abandoned,
+            settlement: SubagentSettlement {
+                publication: if self.publication_abandoned {
+                    SubagentPublication::Abandoned
+                } else if self.lifecycle.is_terminal() {
+                    SubagentPublication::Committed
+                } else {
+                    SubagentPublication::Pending
+                },
+                physical: if self.physical_settlement_proven {
+                    SubagentPhysicalSettlement::Proven
+                } else {
+                    SubagentPhysicalSettlement::Unproven
+                },
+            },
             started_at: self.started_at,
         }
     }
@@ -476,6 +487,8 @@ struct RegistryState {
     /// sequence, or a lifecycle fact.
     next_guidance_id: u64,
     agents: BTreeMap<AgentId, agents::AgentRecord>,
+    /// Recovered generations whose exact native incarnation still owes proof.
+    recovery_pending: std::collections::BTreeSet<SubagentId>,
     records: Vec<SubagentRecord>,
     index: HashMap<SubagentId, usize>,
     /// Live routed interactions owned by child coordinators. This is a root
@@ -534,6 +547,8 @@ struct RegistryState {
     allocation_failure: Option<super::process::SpawnError>,
     #[cfg(test)]
     allocation_attempts: usize,
+    #[cfg(test)]
+    resume_test_gates: Option<ResumeTestGates>,
 }
 
 #[cfg(test)]
@@ -774,14 +789,49 @@ pub struct SubagentSnapshot {
     /// The redacted execution profile frozen at child start (Issue #178);
     /// `None` for recovery-projected records.
     pub profile: Option<SubagentExecutionProfile>,
-    /// Whether a terminal publication could not reach the durable
-    /// authority and was abandoned.
-    pub publication_abandoned: bool,
-    /// Whether terminal publication and required physical settlement are both
-    /// proven. Logical terminal outcomes can remain physically unresolved.
-    pub settled: bool,
+    /// Terminal durability and physical containment are independent of the
+    /// logical outcome in `state`. A committed terminal may remain physically
+    /// unresolved; proven containment does not invent a logical outcome.
+    pub settlement: SubagentSettlement,
     /// When the ownership committed.
     pub started_at: DateTime<Utc>,
+}
+
+/// Durable publication of an activation terminal and its required result value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentPublication {
+    #[default]
+    Pending,
+    Committed,
+    /// The bounded publication owner exhausted durability retries.
+    Abandoned,
+}
+
+/// Evidence that the activation's physical incarnation no longer owns effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentPhysicalSettlement {
+    #[default]
+    Unproven,
+    Proven,
+}
+
+/// The two independent settlement dimensions; logical lifecycle is `state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+pub struct SubagentSettlement {
+    pub publication: SubagentPublication,
+    pub physical: SubagentPhysicalSettlement,
+}
+
+impl SubagentSnapshot {
+    /// Full publication and containment proof, independent of the logical outcome.
+    #[must_use]
+    pub fn is_settled(&self) -> bool {
+        self.state.is_terminal()
+            && self.settlement.publication == SubagentPublication::Committed
+            && self.settlement.physical == SubagentPhysicalSettlement::Proven
+    }
 }
 
 /// The subagent domain's own bounded discovery read model (Issue #180).
@@ -1188,18 +1238,17 @@ impl std::error::Error for SubagentStartError {}
 /// [`on_activity`](Self::on_activity) is the **disposable** latest-value
 /// activity publication, which the consumer may coalesce or drop.
 pub trait SubagentObserver: Send + Sync {
-    /// Durable Agent state, including admission transitions between activations.
-    fn observe_agent(&self, snapshot: &AgentSnapshot);
-    /// Publishes an installed admission transition with its exact journal receipt.
-    fn observe_agent_committed(&self, snapshot: &AgentSnapshot, _sequence: u64) {
-        self.observe_agent(snapshot);
-    }
-    /// Called under the registry lock with each new consistency snapshot;
-    /// the implementation must be cheap and nonblocking.
-    fn on_snapshot(&self, snapshot: &SubagentSnapshot);
-    /// Publishes installed native state together with its exact durable receipt.
-    fn on_committed(&self, snapshot: &SubagentSnapshot, _sequence: u64) {
-        self.on_snapshot(snapshot);
+    /// One complete owner transition, captured under the registry lock.
+    /// Workflow activations have no durable Agent owner.
+    fn on_snapshot(&self, agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot);
+    /// One durable receipt releases the complete Agent and activation transition.
+    fn on_committed(
+        &self,
+        agent: Option<&AgentSnapshot>,
+        snapshot: &SubagentSnapshot,
+        _sequence: u64,
+    ) {
+        self.on_snapshot(agent, snapshot);
     }
 
     /// Called under the registry lock for a retained-workspace resource
@@ -1208,7 +1257,7 @@ pub trait SubagentObserver: Send + Sync {
     /// to the lifecycle callback for observers that do not distinguish the
     /// projections.
     fn on_workspace(&self, snapshot: &SubagentSnapshot) {
-        self.on_snapshot(snapshot);
+        self.on_snapshot(None, snapshot);
     }
 
     /// Called under the registry lock with each new live-activity snapshot
@@ -1220,7 +1269,7 @@ pub trait SubagentObserver: Send + Sync {
     /// to [`on_snapshot`](Self::on_snapshot), so an observer that does not
     /// distinguish the two classes keeps capturing everything.
     fn on_activity(&self, snapshot: &SubagentSnapshot) {
-        self.on_snapshot(snapshot);
+        self.on_snapshot(None, snapshot);
     }
 
     /// Called under the registry lock when a child coordinator publishes a
@@ -1376,6 +1425,7 @@ pub struct SubagentRegistryConfig {
 /// Cheaply cloneable: every clone shares the one registry state, the same
 /// contract as the background registry.
 pub struct SubagentRegistry {
+    recovery_reconciliation: tokio::sync::watch::Sender<bool>,
     config: SubagentRegistryConfig,
     identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
     state: Arc<Mutex<RegistryState>>,
@@ -1454,6 +1504,7 @@ impl SubagentRegistry {
     pub fn new(config: SubagentRegistryConfig) -> Self {
         let max_active = config.max_active;
         Self {
+            recovery_reconciliation: tokio::sync::watch::Sender::new(true),
             config,
             identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             state: Arc::new(Mutex::new(RegistryState {
@@ -1469,6 +1520,7 @@ impl SubagentRegistry {
                 next_response_id: 1,
                 next_guidance_id: 1,
                 agents: BTreeMap::new(),
+                recovery_pending: std::collections::BTreeSet::new(),
                 records: Vec::new(),
                 index: HashMap::new(),
                 routed_interactions: HashMap::new(),
@@ -1499,6 +1551,8 @@ impl SubagentRegistry {
                 allocation_failure: None,
                 #[cfg(test)]
                 allocation_attempts: 0,
+                #[cfg(test)]
+                resume_test_gates: None,
             })),
             state_version: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
@@ -1647,7 +1701,8 @@ impl SubagentRegistry {
                 recovered.evidence.definition_digest.clone(),
             ))
             .expect("durable subagent digest is validated before recovery"),
-            terminal: SubagentTerminalMode::Normal,
+            ownership: recovered.evidence.ownership,
+            terminal: None,
             workspace: recovered.evidence.workspace.clone(),
             handoff: Some(recovered.handoff.clone()),
             workspace_resource_state: SubagentWorkspaceResourceState::Retained,
@@ -1743,7 +1798,8 @@ impl SubagentRegistry {
                 recovered.evidence.definition_digest.clone(),
             ))
             .expect("durable subagent digest is validated before recovery"),
-            terminal: SubagentTerminalMode::Normal,
+            ownership: recovered.evidence.ownership,
+            terminal: None,
             workspace: recovered.evidence.workspace.clone(),
             handoff: None,
             workspace_resource_state: SubagentWorkspaceResourceState::PreservedUnresolved,
@@ -1855,7 +1911,8 @@ impl SubagentRegistry {
                 recovered.evidence.definition_digest.clone(),
             ))
             .expect("durable subagent digest is validated before recovery"),
-            terminal: SubagentTerminalMode::Normal,
+            ownership: recovered.evidence.ownership,
+            terminal: None,
             workspace: recovered.evidence.workspace.clone(),
             handoff: None,
             workspace_resource_state,
@@ -1900,12 +1957,11 @@ impl SubagentRegistry {
             })
             .collect();
         for (agent, activation) in &snapshots {
-            observer.on_snapshot(activation);
-            observer.observe_agent(agent);
+            observer.on_snapshot(Some(agent), activation);
         }
         for record in &state.records {
-            if matches!(record.terminal, SubagentTerminalMode::WorkflowOutput { .. }) {
-                observer.on_snapshot(&record.snapshot());
+            if record.ownership == SubagentOwnershipKind::Workflow {
+                observer.on_snapshot(None, &record.snapshot());
             }
         }
         for interaction in state.routed_interactions.values() {
@@ -2749,7 +2805,13 @@ impl SubagentRegistry {
                             agent: agent.clone(),
                             definition_digest: definition_digest.clone(),
                             profile_digest: profile_digest.clone(),
-                            terminal: terminal.clone(),
+                            ownership: match terminal {
+                                SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
+                                SubagentTerminalMode::WorkflowOutput { .. } => {
+                                    SubagentOwnershipKind::Workflow
+                                }
+                            },
+                            terminal: Some(terminal.clone()),
                             workspace: workspace.clone(),
                             handoff: None,
                             workspace_resource_state: SubagentWorkspaceResourceState::None,
@@ -3004,6 +3066,7 @@ impl SubagentRegistry {
 
     fn clone_for_task(&self) -> Self {
         Self {
+            recovery_reconciliation: self.recovery_reconciliation.clone(),
             config: self.config.clone(),
             identities: Arc::clone(&self.identities),
             state: Arc::clone(&self.state),
@@ -3262,7 +3325,7 @@ impl SubagentRegistry {
         if record.lifecycle != SubagentLifecycle::Succeeded {
             return None;
         }
-        if !matches!(&record.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == instance)
+        if !matches!(&record.terminal, Some(SubagentTerminalMode::WorkflowOutput { node_id, .. }) if node_id.as_ref() == instance)
         {
             return None;
         }
@@ -3334,6 +3397,7 @@ impl SubagentRegistry {
     /// A Goal cannot pass an already-owned child at its durable frontier.
     /// The caller holds the background lock first; this nests only lifecycle/store.
     pub(crate) fn with_goal_idle<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
+        self.reconcile_recovered_settlements();
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.agents.values().any(|agent| agent.resuming.is_some())
             || state.records.iter().any(|record| {
@@ -3350,6 +3414,7 @@ impl SubagentRegistry {
     /// Exact generations with unresolved physical ownership after terminal or
     /// failed staging. Draining reports these instead of retrying a finished driver.
     pub(crate) fn unproven_settlements(&self) -> Vec<SubagentId> {
+        self.reconcile_recovered_settlements();
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let mut targets: Vec<_> = state
             .records
@@ -3607,11 +3672,11 @@ impl SubagentRegistry {
             // at all. The refusal is structural and therefore checked before
             // anything else about this child's state, and provably before
             // any Guidance frame exists.
-            if let SubagentTerminalMode::WorkflowOutput {
+            if let Some(SubagentTerminalMode::WorkflowOutput {
                 workflow_id,
                 node_id,
                 ..
-            } = &record.terminal
+            }) = &record.terminal
             {
                 return Err(SubagentSteerError::WorkflowOwned {
                     workflow_id: workflow_id.clone(),
@@ -3759,6 +3824,14 @@ impl SubagentRegistry {
                 return Err(SubagentWorkspaceDisposalError::NotTerminal {
                     state: record.snapshot().state,
                 });
+            }
+            // The durable Agent, rather than any finite activation, owns
+            // this workspace until a future Agent-deletion lifecycle. A
+            // recovered inspection handoff cannot transfer that authority.
+            if state.agents.contains_key(&record.child_agent_id) {
+                return Ok(SubagentWorkspaceDisposal::NoRetainedWorkspace(
+                    record.snapshot(),
+                ));
             }
             match record.workspace_resource_state {
                 SubagentWorkspaceResourceState::Disposed => {
@@ -4017,13 +4090,15 @@ impl SubagentRegistry {
     }
 
     /// Waits for the exact activation's terminal decision or abandoned publication.
-    /// A returned snapshot with `settled == false` reports failed physical proof
-    /// or publication, never a successful physical-settlement acknowledgement.
+    /// Inspect the snapshot's separate publication and physical settlement facts;
+    /// returning a terminal decision is not a physical-settlement acknowledgement.
     pub async fn wait_until_settled(&self, subagent_id: &SubagentId) -> Option<SubagentSnapshot> {
         let mut rx = self.state_version.subscribe();
         loop {
             let snapshot = self.snapshot(subagent_id)?;
-            if snapshot.state.is_terminal() || snapshot.publication_abandoned {
+            if snapshot.state.is_terminal()
+                || snapshot.settlement.publication == SubagentPublication::Abandoned
+            {
                 return Some(snapshot);
             }
             if rx.changed().await.is_err() {
@@ -4190,10 +4265,7 @@ impl SubagentRegistry {
             // record of what the child did.
             record.observation.settle_neutral();
             let cancelling = matches!(record.lifecycle, SubagentLifecycle::Cancelling);
-            let workflow_output = matches!(
-                &record.terminal,
-                SubagentTerminalMode::WorkflowOutput { .. }
-            );
+            let workflow_output = record.ownership == SubagentOwnershipKind::Workflow;
             // The publication timestamp freezes at canonicalization: every
             // later bounded retry rebuilds the byte-identical draft, so an
             // ambiguous commit resolves as the idempotent correlation
@@ -4361,7 +4433,13 @@ impl SubagentRegistry {
                     ..candidate
                 },
             };
-            let mut candidate = validate_workflow_candidate(&record.terminal, candidate);
+            let mut candidate = validate_workflow_candidate(
+                record
+                    .terminal
+                    .as_ref()
+                    .expect("a live driver owns its frozen terminal protocol"),
+                candidate,
+            );
             candidate.physical_settlement_proven = !physical_settlement_unproven;
             record.physical_settlement_proven = candidate.physical_settlement_proven;
             record.pending_terminal = Some(candidate.clone());
@@ -4458,15 +4536,13 @@ impl SubagentRegistry {
             // WorkflowRuntime handoff: publication below commits the
             // registry lifecycle and wakes waiters, but deliberately does
             // not create a normal ToolResult/inbound message.
-            if matches!(
-                &record.terminal,
-                SubagentTerminalMode::WorkflowOutput { .. }
-            ) {
+            if record.ownership == SubagentOwnershipKind::Workflow {
                 let event = terminal_settlement(
                     &self.config.conversation_id,
                     subagent_id,
                     &record.child_agent_id,
                     candidate_state(candidate),
+                    candidate.physical_settlement_proven,
                     &record.terminal_workspace_resource(),
                     candidate.timestamp,
                 );
@@ -4474,12 +4550,12 @@ impl SubagentRegistry {
                     match (candidate.workflow_value.clone(), &record.terminal) {
                         (
                             Some(value),
-                            SubagentTerminalMode::WorkflowOutput {
+                            Some(SubagentTerminalMode::WorkflowOutput {
                                 workflow_id,
                                 run_id,
                                 node_id,
                                 ..
-                            },
+                            }),
                         ) => self
                             .config
                             .mailbox
@@ -4650,15 +4726,13 @@ impl SubagentRegistry {
             return Ok(true);
         };
         let record = &state.records[index];
-        let result = if matches!(
-            &record.terminal,
-            SubagentTerminalMode::WorkflowOutput { .. }
-        ) {
+        let result = if record.ownership == SubagentOwnershipKind::Workflow {
             let event = terminal_settlement(
                 &self.config.conversation_id,
                 subagent_id,
                 &record.child_agent_id,
                 candidate_state(&candidate),
+                candidate.physical_settlement_proven,
                 &record.terminal_workspace_resource(),
                 candidate.timestamp,
             );
@@ -4666,12 +4740,12 @@ impl SubagentRegistry {
                 match (candidate.workflow_value.clone(), &record.terminal) {
                     (
                         Some(value),
-                        SubagentTerminalMode::WorkflowOutput {
+                        Some(SubagentTerminalMode::WorkflowOutput {
                             workflow_id,
                             run_id,
                             node_id,
                             ..
-                        },
+                        }),
                     ) => self
                         .config
                         .mailbox
@@ -4733,10 +4807,7 @@ impl SubagentRegistry {
                 record.physical_settlement_proven = candidate.physical_settlement_proven;
                 record.pending_terminal = None;
                 record.publication_abandoned = false;
-                record.notification = if matches!(
-                    &record.terminal,
-                    SubagentTerminalMode::WorkflowOutput { .. }
-                ) {
+                record.notification = if record.ownership == SubagentOwnershipKind::Workflow {
                     NotificationState::None
                 } else {
                     NotificationState::Delivered
@@ -5091,7 +5162,9 @@ fn publish_committed_snapshot(
     sequence: u64,
 ) {
     if let Some(observer) = &state.observer {
-        observer.on_committed(&state.records[index].snapshot(), sequence);
+        let snapshot = state.records[index].snapshot();
+        let agent = SubagentRegistry::agent_snapshot_locked(state, &snapshot.child_agent_id);
+        observer.on_committed(agent.as_ref(), &snapshot, sequence);
     }
     version.send_modify(|v| *v += 1);
 }
@@ -5103,12 +5176,8 @@ fn publish_snapshot(
 ) {
     let snapshot = state.records[index].snapshot();
     if let Some(observer) = &state.observer {
-        observer.on_snapshot(&snapshot);
-        if let Some(agent) =
-            SubagentRegistry::agent_snapshot_locked(state, &snapshot.child_agent_id)
-        {
-            observer.observe_agent(&agent);
-        }
+        let agent = SubagentRegistry::agent_snapshot_locked(state, &snapshot.child_agent_id);
+        observer.on_snapshot(agent.as_ref(), &snapshot);
     }
     version.send_modify(|v| *v += 1);
 }
@@ -5142,6 +5211,22 @@ fn publish_activity_snapshot(
         observer.on_activity(&snapshot);
     }
     version.send_modify(|v| *v += 1);
+}
+
+/// One-shot barriers at the real resume staging and publication boundaries.
+#[cfg(test)]
+pub(crate) struct ResumeTestGates {
+    pub staged: tokio::sync::oneshot::Sender<()>,
+    pub release_staged: tokio::sync::oneshot::Receiver<()>,
+    pub published: tokio::sync::oneshot::Sender<()>,
+    pub release_published: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+impl SubagentRegistry {
+    pub(crate) fn install_resume_test_gates(&self, gates: ResumeTestGates) {
+        self.state.lock().unwrap().resume_test_gates = Some(gates);
+    }
 }
 
 /// A test-only pause inside the ownership-commit critical section
@@ -5894,8 +5979,7 @@ mod tests {
     struct RecordingObserver(std::sync::Mutex<Vec<SubagentSnapshot>>);
 
     impl SubagentObserver for RecordingObserver {
-        fn observe_agent(&self, _snapshot: &AgentSnapshot) {}
-        fn on_snapshot(&self, snapshot: &SubagentSnapshot) {
+        fn on_snapshot(&self, _agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot) {
             self.0
                 .lock()
                 .expect("recording observer lock")
@@ -6201,6 +6285,9 @@ mod tests {
         for disposal in plan.settled_subagent_disposals() {
             registry.restore_recovered_disposal(disposal);
         }
+        registry
+            .restore_agents(plane.store.as_ref())
+            .expect("the complete durable owner cut");
         (registry, plan)
     }
 
@@ -6445,10 +6532,9 @@ mod tests {
         let handoff = settled.handoff.clone().expect("handoff");
         assert!(handoff.dirty);
         assert_eq!(handoff.base_commit, handoff.head_commit);
-        let view = crate::runtime_client::projection::subagent_view(&settled);
+        let view = crate::runtime_client::projection::subagent_workspace_view(&settled);
         assert_eq!(
-            view.workspace
-                .handoff
+            view.handoff
                 .as_ref()
                 .map(|item| &item.physical_worktree_root),
             Some(&handoff.physical_worktree_root)
@@ -6465,6 +6551,28 @@ mod tests {
                 ..
             } if *subagent_id == accepted.subagent_id && actual == &handoff
         )));
+
+        let (recovered, _) = recovered_registry(&plane);
+        let restored = recovered.snapshot(&accepted.subagent_id).unwrap();
+        assert_eq!(restored.ownership, SubagentOwnershipKind::Workflow);
+        assert_eq!(restored.handoff, settled.handoff);
+        assert!(
+            restored.is_settled(),
+            "the durable terminal supplies the physical proof omitted from a resource-only placeholder"
+        );
+        assert_eq!(recovered.with_goal_idle(|| true), Some(true));
+        assert!(
+            recovered
+                .list_agents(MAX_AGENT_LIST_LIMIT)
+                .agents
+                .is_empty()
+        );
+        assert!(
+            recovered.state.lock().unwrap().records[0]
+                .terminal
+                .is_none(),
+            "a historical finite result never reconstructs executable Workflow schema authority"
+        );
 
         let disposed = plane
             .registry
@@ -6600,6 +6708,10 @@ mod tests {
             SubagentWorkspaceResourceState::WorktreeRemoved
         );
         assert!(recovered_snapshot.handoff.is_none());
+        assert!(
+            recovered_snapshot.is_settled(),
+            "resource disposal does not erase committed activation containment proof"
+        );
 
         let completed = recovered
             .dispose_retained_workspace(&accepted.subagent_id)
@@ -6718,6 +6830,10 @@ mod tests {
             SubagentWorkspaceResourceState::DisposalInProgress
         );
         assert!(pending.handoff.is_none());
+        assert!(
+            pending.is_settled(),
+            "resource disposal does not erase committed activation containment proof"
+        );
         assert!(physical.exists());
         assert!(ref_exists(&plane.dir.path().join("workspace"), &branch));
 
@@ -6778,6 +6894,10 @@ mod tests {
             SubagentWorkspaceResourceState::DisposalInProgress
         );
         assert!(pending.handoff.is_none());
+        assert!(
+            pending.is_settled(),
+            "resource disposal does not erase committed activation containment proof"
+        );
 
         let result = recovered
             .dispose_retained_workspace(&accepted.subagent_id)
@@ -7021,17 +7141,17 @@ mod tests {
                 ..
             } if *subagent_id == accepted.subagent_id
         )));
-        let view = crate::runtime_client::projection::subagent_view(&settled);
+        let view = crate::runtime_client::projection::subagent_workspace_view(&settled);
         assert_eq!(
-            view.activation_state,
+            settled.state,
             crate::runtime::subagent::SubagentState::Failed
         );
         assert_eq!(
-            view.workspace.resource_state,
+            view.resource_state,
             SubagentWorkspaceResourceState::PreservedUnresolved
         );
-        assert!(view.workspace.handoff.is_none());
-        assert_eq!(view.detail.as_deref(), Some(detail));
+        assert!(view.handoff.is_none());
+        assert_eq!(settled.detail.as_deref(), Some(detail));
 
         let disposal = plane
             .registry
@@ -7168,14 +7288,17 @@ mod tests {
             &accepted.subagent_id,
         );
 
-        let error = recovered
+        let result = recovered
             .dispose_retained_workspace(&accepted.subagent_id)
             .await
-            .expect_err("nested containment uncertainty is not Git-only authority");
+            .expect("finite disposal cannot claim an Agent-owned workspace");
         assert!(matches!(
-            error,
-            SubagentWorkspaceDisposalError::OwnershipMismatch { detail }
-                if detail.contains("nested process containment")
+            result,
+            SubagentWorkspaceDisposal::NoRetainedWorkspace(_)
+        ));
+        assert!(matches!(
+            recovered.wait_agent(&accepted.child_agent_id).await,
+            Err(AgentControlError::Settlement)
         ));
         let after = recovered
             .snapshot(&accepted.subagent_id)
@@ -8718,7 +8841,7 @@ mod tests {
             .await
             .expect("settled");
         assert_eq!(settled.state, SubagentState::Cancelled);
-        assert!(!settled.publication_abandoned);
+        assert!(settled.settlement.publication != SubagentPublication::Abandoned);
         #[cfg(unix)]
         assert!(
             matches!(
@@ -8966,7 +9089,7 @@ mod tests {
             .wait_until_settled(&accepted.subagent_id)
             .await
             .expect("abandoned resolves the wait");
-        assert!(settled.publication_abandoned);
+        assert!(settled.settlement.publication == SubagentPublication::Abandoned);
         assert_eq!(settled.state, SubagentState::PublishingTerminal);
         assert!(matches!(
             plane.registry.wait_agent(&accepted.child_agent_id).await,
@@ -8985,7 +9108,7 @@ mod tests {
                 .agent_snapshot(&accepted.child_agent_id)
                 .unwrap()
                 .state,
-            AgentState::Stopping
+            AgentState::Unavailable
         );
 
         // Nothing reached the durable authority.
@@ -9023,7 +9146,7 @@ mod tests {
             .await
             .expect("publication abandoned");
         assert_eq!(abandoned.state, SubagentState::PublishingTerminal);
-        assert!(abandoned.publication_abandoned);
+        assert!(abandoned.settlement.publication == SubagentPublication::Abandoned);
         let diagnostic = abandoned.detail.clone().expect("stable diagnostic");
         assert!(diagnostic.contains("physical settlement was not proven"));
         assert!(!diagnostic.contains("success must stay private"));
@@ -9039,7 +9162,7 @@ mod tests {
             .snapshot(&accepted.subagent_id)
             .expect("settled snapshot");
         assert_eq!(settled.state, SubagentState::Failed);
-        assert!(!settled.publication_abandoned);
+        assert!(settled.settlement.publication != SubagentPublication::Abandoned);
         assert_eq!(settled.detail.as_deref(), Some(diagnostic.as_str()));
         assert_eq!(
             events(&plane)
@@ -9076,7 +9199,7 @@ mod tests {
             .await
             .expect("abandoned publication is observable");
         assert_eq!(unresolved.state, SubagentState::PublishingTerminal);
-        assert!(unresolved.publication_abandoned);
+        assert!(unresolved.settlement.publication == SubagentPublication::Abandoned);
 
         let _second_child = stage_exit0(&plane);
         let second_prepared = plane
@@ -9105,7 +9228,7 @@ mod tests {
             .snapshot(&first.subagent_id)
             .expect("first snapshot");
         assert_eq!(settled.state, SubagentState::Succeeded);
-        assert!(settled.settled);
+        assert!(settled.is_settled());
     }
 
     #[tokio::test]
@@ -9663,7 +9786,14 @@ mod tests {
             current.current_activation,
             Some(resumed.activation_id.clone())
         );
-        assert_eq!(plane.registry.list_agents(64).agents.len(), 1);
+        assert_eq!(
+            plane
+                .registry
+                .list_agents(MAX_AGENT_LIST_LIMIT)
+                .agents
+                .len(),
+            1
+        );
         // Resume occurs before the original waiter is polled again. It must
         // complete from its captured activation even while the next is active.
         let result = futures_util::poll!(&mut waiting);
@@ -10266,7 +10396,8 @@ mod tests {
                 "sha256:{}",
                 "1".repeat(64)
             )),
-            terminal: SubagentTerminalMode::Normal,
+            ownership: SubagentOwnershipKind::Normal,
+            terminal: Some(SubagentTerminalMode::Normal),
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/workspace")),
             handoff: None,
             workspace_resource_state: SubagentWorkspaceResourceState::None,

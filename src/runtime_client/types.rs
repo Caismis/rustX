@@ -1198,8 +1198,9 @@ pub enum RuntimeClientResult {
     /// `subagent_workspace_dispose` completed its resource transition or its
     /// deterministic idempotent/no-resource outcome.
     SubagentWorkspaceDisposed {
-        /// The authoritative terminal subagent projection after the request.
-        subagent: RuntimeClientAgent,
+        /// Finite activation identity and its authoritative resource projection.
+        subagent_id: crate::runtime::identity::SubagentId,
+        workspace: super::snapshot::RuntimeClientAgentWorkspace,
         /// The physical-resource result, independent of logical lifecycle.
         outcome: RuntimeClientAgentWorkspaceDisposalOutcome,
     },
@@ -1282,6 +1283,10 @@ pub enum RuntimeClientError {
     /// conversation registry (Issue #60).
     /// Message admission is closed during settlement or activation reservation.
     AgentStopping {
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    /// No autonomous transition can make this Agent available; explicit repair is required.
+    AgentSettlement {
         agent_id: crate::runtime::identity::AgentId,
     },
     UnknownAgent {

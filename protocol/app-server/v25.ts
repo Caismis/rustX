@@ -1025,7 +1025,8 @@ export type MethodResult =
       type: 'agent_wait';
     }
   | {
-      agent: RuntimeClientAgent;
+      subagent_id: SubagentId;
+      workspace: RuntimeClientAgentWorkspace1;
       outcome: RuntimeClientAgentWorkspaceDisposalOutcome;
       type: 'workspace_disposed';
     }
@@ -2538,6 +2539,10 @@ export type ErrorData =
   | {
       agent_id: AgentId;
       kind: 'agent_stopping';
+    }
+  | {
+      agent_id: AgentId;
+      kind: 'agent_settlement';
     }
   | {
       agent_id: AgentId;
@@ -6836,7 +6841,7 @@ export interface RuntimeClientAgent {
   /**
    * The authoritative lifecycle state.
    */
-  state: 'admitting' | 'active' | 'stopping' | 'inactive';
+  state: ('admitting' | 'active' | 'stopping' | 'inactive') | 'unavailable';
   current_activation?: SubagentId | null;
   activation_state: SubagentState;
   /**
@@ -7081,6 +7086,70 @@ export interface RuntimeClientWorkspaceHandoff {
    * `head_commit` and `base_commit`.
    */
   dirty: boolean;
+}
+/**
+ * User-recoverable facts about the project workspace authority of one
+ * subagent. Acquisition and settlement policy remain native runtime
+ * responsibilities; this is only a read-model projection.
+ */
+export interface RuntimeClientAgentWorkspace1 {
+  /**
+   * Present when the Workflow run, rather than this child, owns the lease.
+   */
+  borrowed_from?: WorkflowRunId | null;
+  /**
+   * The authoritative logical project workspace used by the child.
+   */
+  logical_workspace: string;
+  /**
+   * The closed shared/isolated execution facts.
+   */
+  isolation:
+    | {
+        type: 'shared';
+      }
+    | {
+        /**
+         * The canonical source repository root.
+         */
+        source_repository_root: string;
+        /**
+         * The logical project scope relative to the source repository root.
+         */
+        repository_relative_workspace: string;
+        /**
+         * The runtime-owned physical worktree root.
+         */
+        physical_worktree_root: string;
+        /**
+         * The exact committed source snapshot selected before ownership.
+         */
+        base_commit: string;
+        /**
+         * The runtime-created branch/ref.
+         */
+        branch: string;
+        /**
+         * Whether the parent had uncommitted changes at selection time.
+         */
+        parent_had_uncommitted_changes: boolean;
+        type: 'git_worktree';
+      };
+  /**
+   * The post-terminal physical-resource lifecycle, independent of the
+   * child's absorbing logical terminal state.
+   */
+  resource_state:
+    | 'none'
+    | 'retained'
+    | 'preserved_unresolved'
+    | 'disposal_in_progress'
+    | 'worktree_removed'
+    | 'disposed';
+  /**
+   * Retained child work-product facts, if the worktree was handed off.
+   */
+  handoff?: RuntimeClientWorkspaceHandoff | null;
 }
 export interface ServerCapabilities {
   multi_session: boolean;
@@ -9803,7 +9872,7 @@ export interface RuntimeClientAgent1 {
   /**
    * The authoritative lifecycle state.
    */
-  state: 'admitting' | 'active' | 'stopping' | 'inactive';
+  state: ('admitting' | 'active' | 'stopping' | 'inactive') | 'unavailable';
   current_activation?: SubagentId | null;
   activation_state: SubagentState;
   /**

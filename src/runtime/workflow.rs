@@ -2860,13 +2860,29 @@ impl WorkflowRuntime {
         output_schema: &Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<expressions::CommittedValue, WorkflowRunError> {
+        use crate::runtime::subagent::{SubagentPhysicalSettlement, SubagentPublication};
         use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
-        if !snapshot.settled {
-            return Err(WorkflowRunError::ChildOutcome {
+        let settlement_failure = match snapshot.settlement.publication {
+            SubagentPublication::Pending => {
+                Some(WorkflowChildSettlementFailure::PublicationPending)
+            }
+            SubagentPublication::Abandoned => {
+                Some(WorkflowChildSettlementFailure::PublicationAbandoned)
+            }
+            SubagentPublication::Committed if !snapshot.state.is_terminal() => {
+                Some(WorkflowChildSettlementFailure::LogicalTerminalMissing)
+            }
+            SubagentPublication::Committed
+                if snapshot.settlement.physical == SubagentPhysicalSettlement::Unproven =>
+            {
+                Some(WorkflowChildSettlementFailure::PhysicalContainmentUnproven)
+            }
+            SubagentPublication::Committed => None,
+        };
+        if let Some(failure) = settlement_failure {
+            return Err(WorkflowRunError::ChildSettlement {
                 node: node_id.to_string(),
-                status: Status::OutcomeUnknown {
-                    detail: "native child terminal publication did not settle".into(),
-                },
+                failure,
             });
         }
         match snapshot.state {
@@ -2951,6 +2967,30 @@ impl WorkflowRuntime {
     }
 }
 
+/// Which independent native child settlement obligation is unproven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowChildSettlementFailure {
+    LogicalTerminalMissing,
+    PublicationPending,
+    PublicationAbandoned,
+    PhysicalContainmentUnproven,
+}
+
+impl fmt::Display for WorkflowChildSettlementFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::LogicalTerminalMissing => "native child logical terminal did not commit",
+            Self::PublicationPending => "native child terminal publication has not committed",
+            Self::PublicationAbandoned => {
+                "native child terminal publication was abandoned after durability failure"
+            }
+            Self::PhysicalContainmentUnproven => {
+                "native child terminal publication committed but physical containment is unproven"
+            }
+        })
+    }
+}
+
 /// A workflow execution error. Execution failures remain failures; they are
 /// never converted into workflow-local values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2963,6 +3003,10 @@ pub enum WorkflowRunError {
     ChildOutcome {
         node: String,
         status: crate::tools::types::ToolExecutionStatus,
+    },
+    ChildSettlement {
+        node: String,
+        failure: WorkflowChildSettlementFailure,
     },
     WorkspaceSettlement {
         candidate: Option<crate::runtime::workspace::CandidateReference>,
@@ -3040,6 +3084,9 @@ impl WorkflowRunError {
                 }
             }
             Self::ToolFailed { status, .. } | Self::ChildOutcome { status, .. } => status.clone(),
+            Self::ChildSettlement { failure, .. } => Status::OutcomeUnknown {
+                detail: failure.to_string(),
+            },
             Self::Deadline(_) => Status::TimedOut,
             Self::Cancelled(reason) => Status::Cancelled {
                 reason: *reason,
@@ -3091,6 +3138,9 @@ impl fmt::Display for WorkflowRunError {
             }
             Self::ChildOutcome { node, status } => {
                 write!(formatter, "Workflow Agent {node:?}: {status:?}")
+            }
+            Self::ChildSettlement { node, failure } => {
+                write!(formatter, "Workflow Agent {node:?}: {failure}")
             }
             Self::ToolFailed { node, status } => {
                 write!(formatter, "Workflow Tool {node:?}: {status:?}")
@@ -3708,6 +3758,142 @@ chat_reasoning_replay = "omit"
         )
     }
 
+    /// Delegate is the gate: ownership has committed, while the physical
+    /// driver cannot settle until this test sends its result. Inject the exact
+    /// cleanup or durable-commit failure on that side of the gate, then consume
+    /// the real Workflow result and the registry's actual settlement snapshot.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // Two real settlement dimensions share the same gated Workflow fixture.
+    async fn workflow_distinguishes_committed_physical_failure_from_abandoned_publication() {
+        use crate::runtime::subagent::{SubagentPhysicalSettlement, SubagentPublication};
+
+        for abandon_publication in [false, true] {
+            let plane = workflow_test_plane(1);
+            let mut child = stage_workflow_child(&plane);
+            let runtime = workflow_runtime(&plane);
+            let context = workflow_test_context(&plane);
+            let output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
+            let program = Arc::new(
+                compile_test(base_definition(
+                    "work",
+                    BTreeMap::from([
+                        ("work".into(), agent(output.clone())),
+                        (
+                            "done".into(),
+                            WorkflowNodeDefinition::Return {
+                                output: reference("work"),
+                            },
+                        ),
+                    ]),
+                    vec![edge("work", "done")],
+                    output,
+                ))
+                .unwrap(),
+            );
+            let (_, cancellation) = workflow_cancellation();
+            let task = tokio::spawn(async move {
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("settlement-dimensions"),
+                        context,
+                        json!({"task": "produce valid output"}),
+                        cancellation,
+                    )
+                    .await
+            });
+            child.expect_delegate().await;
+            let running = plane.registry.all_snapshots().pop().unwrap();
+            assert!(!running.state.is_terminal());
+            assert_eq!(running.settlement.publication, SubagentPublication::Pending);
+            assert_eq!(
+                running.settlement.physical,
+                SubagentPhysicalSettlement::Unproven
+            );
+            if abandon_publication {
+                // This store fault occurs inside the atomic terminal/output
+                // transaction. Cover all bounded retries; observability writes
+                // cannot use up the failure budget before terminal publication.
+                plane.store.arm_fail_event_times(100);
+            } else {
+                // Replace the exact disposable incarnation root with a file.
+                // The native driver's remove_dir_all must fail, after reap;
+                // the valid child result alone cannot prove physical cleanup.
+                std::fs::remove_dir_all(&child.root).unwrap();
+                std::fs::write(&child.root, b"cleanup proof unavailable").unwrap();
+            }
+            child
+                .send_result(
+                    crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                    Some(r#"{"summary":"valid output"}"#),
+                )
+                .await;
+            let error = task.await.unwrap().unwrap_err();
+            let expected = if abandon_publication {
+                WorkflowChildSettlementFailure::PublicationAbandoned
+            } else {
+                WorkflowChildSettlementFailure::PhysicalContainmentUnproven
+            };
+            assert!(
+                matches!(&error, WorkflowRunError::ChildSettlement { failure, .. } if *failure == expected)
+            );
+            assert!(matches!(
+                error.execution_status(),
+                crate::tools::types::ToolExecutionStatus::OutcomeUnknown { .. }
+            ));
+            let snapshot = plane.registry.all_snapshots().pop().unwrap();
+            assert!(!snapshot.is_settled());
+            let events = plane.store.read_events(None, 128).unwrap().events;
+            let committed_terminal = events
+                .iter()
+                .any(|event| matches!(event.event, RuntimeEvent::SubagentTerminalSettled { .. }));
+            if abandon_publication {
+                assert_eq!(
+                    snapshot.settlement.publication,
+                    SubagentPublication::Abandoned
+                );
+                assert_eq!(
+                    snapshot.settlement.physical,
+                    SubagentPhysicalSettlement::Proven
+                );
+                assert!(!snapshot.state.is_terminal());
+                assert!(!committed_terminal);
+                assert!(!child.root.exists());
+                assert!(
+                    error
+                        .to_string()
+                        .contains("abandoned after durability failure")
+                );
+            } else {
+                assert_eq!(
+                    snapshot.settlement.publication,
+                    SubagentPublication::Committed
+                );
+                assert_eq!(
+                    snapshot.settlement.physical,
+                    SubagentPhysicalSettlement::Unproven
+                );
+                assert!(snapshot.state.is_terminal());
+                assert!(committed_terminal);
+                assert!(
+                    error
+                        .to_string()
+                        .contains("publication committed but physical containment is unproven")
+                );
+                assert!(!error.to_string().contains("publication did not settle"));
+                std::fs::remove_file(&child.root).unwrap();
+            }
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::WorkflowAgentOutputCommitted { .. }
+                )),
+                "neither unresolved boundary publishes a usable Workflow success"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn parallel_runtime_keys_results_by_definition_when_completion_is_reversed() {
@@ -4004,7 +4190,8 @@ chat_reasoning_replay = "omit"
         let snapshots = plane.registry.all_snapshots();
         assert_eq!(snapshots.len(), 2);
         assert!(snapshots.iter().all(|snapshot| {
-            snapshot.state == crate::runtime::subagent::SubagentState::Cancelled && snapshot.settled
+            snapshot.state == crate::runtime::subagent::SubagentState::Cancelled
+                && snapshot.is_settled()
         }));
         assert!(plane.registry.unsettled_snapshot().is_empty());
         assert!(!alpha.root.exists());
