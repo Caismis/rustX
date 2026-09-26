@@ -1,6 +1,7 @@
+import { localeController } from '../src/locale/controller';
 // jsdom has no layout engine. Geometry is exercised in real Chromium.
 import { beforeEach, vi } from 'vitest';
-beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
+beforeEach(() => { localeController.setLocale('en'); vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
 // Without layout every element measures as an empty rect at the origin, which
 // Floating UI's `hide` reads as a reference out of layout: every Menu would
 // close as it opens. Whether an anchor is rendered is a layout fact, proven in

@@ -11,7 +11,7 @@ it('local bootstrap is the only local material source; no remembered remote fall
   fetcher.mockRejectedValueOnce(Error('offline'));
   await owner.reconnect();
   expect(owner.getSnapshot().mode).toBe('local'); expect(server.sockets).toHaveLength(2);
-  expect(owner.getSnapshot().error).toContain('No local managed');
+  expect(owner.getSnapshot().error).toEqual({ key: 'settings:connection.local-unavailable', params: undefined });
 });
 it('selecting Remote only opens material entry; ownership commits after exactly one close', async () => {
   const server = new Server(), fetcher = vi.fn(bootstrap), owner = new ConnectionController(server.client, fetcher);

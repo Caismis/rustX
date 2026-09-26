@@ -1,5 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/trajectory-search-index.ts; see PROVENANCE.md. */
-import type { InspectableDisplayItem, TrajectoryProjection } from './layout';
+import { recordLabel, systemPresentation, type InspectableDisplayItem, type TrajectoryProjection } from './layout';
+import { translator } from '../../locale/translation';
+
+// Search accepts both built-in vocabularies regardless of the active locale.
+// Display labels and fallback previews must never change result membership.
+const vocabulary = [translator('en'), translator('zh')];
 
 /** Cell keys are the only search results. Structural context comes from the
  * shared projection; native owners never expand a match into sibling cells. */
@@ -9,7 +14,12 @@ export function searchItems(projection: TrajectoryProjection, query: string): Re
   const matches = new Set<string>();
   const match = (item: InspectableDisplayItem, structure: readonly string[]) => {
     const record = item.record;
-    const text = [...structure, item.label, item.preview, record.id, record.state,
+    const labels = item.type === 'ContextRow' ? [item.context.context_kind.replaceAll('_', ' ')]
+      : vocabulary.map(tx => item.type === 'SystemPromptCell' ? systemPresentation(tx, record)?.label : recordLabel(tx, record));
+    const preview = item.type === 'ContextRow' ? item.context.preview?.text
+      : item.type === 'SystemPromptCell' ? record.request?.system_prompt.preview?.text
+        : record.preview?.text;
+    const text = [...structure, ...labels, preview, record.id, record.state,
       record.location.attempt_id, record.location.step_id, record.request?.request_id,
       ...(item.type === 'RequestBoundary' ? [record.request?.model, record.request?.failure_kind] : []),
       record.tool?.name, record.tool?.tool_id, record.tool?.call_id, record.tool?.detail?.text,
@@ -24,8 +34,14 @@ export function searchItems(projection: TrajectoryProjection, query: string): Re
     if (section.kind === 'outside') {
       for (const cell of section.cells) match(cell, []);
     } else {
+      let step = 0;
       for (const group of section.groups) {
-        for (const cell of group.cells) match(cell, [`Turn ${section.displayOrdinal}`, group.label]);
+        if (group.kind === 'step') step++;
+        const structure = vocabulary.flatMap(tx => [
+          tx('trajectory:copy.turn-value', { p0: section.displayOrdinal }),
+          group.kind === 'step' ? tx('trajectory:group.step', { n: step }) : tx('trajectory:group.message'),
+        ]);
+        for (const cell of group.cells) match(cell, structure);
       }
     }
   }

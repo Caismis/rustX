@@ -37,7 +37,7 @@ describe('one narrow browser command grammar', () => {
     expect(matchCommands('')).toBe(commands);
     expect(matchCommands('mdl').map(item => item.id)).toEqual(['model']);
     expect(matchCommands('权限')).toEqual([]);
-    const tied = [{ id: 'fork', label: 'same', aliases: [], availability: 'attached' }, { id: 'branch', label: 'same', aliases: [], availability: 'attached' }] as const;
+    const tied = [{ id: 'fork', labelKey: 'commands:command.fork', aliases: ['same'], availability: 'attached' }, { id: 'branch', labelKey: 'commands:command.fork', aliases: ['same'], availability: 'attached' }] as const;
     expect(matchCommands('same', tied)).toEqual(tied);
     expect(matchCommands('permission')).toEqual([]);
     expect(matchCommands('impossible-command')).toEqual([]);

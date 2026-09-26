@@ -1,3 +1,4 @@
+import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/timeline.ts; see PROVENANCE.md. */
 /**
  * Timing projections for the Trajectory overview.
@@ -95,14 +96,14 @@ function isError(record: TraceRecord): boolean {
  * ordinal belongs in the inspector's native disclosure, where it is named
  * for what it is; `request_id` is the stable disambiguator here.
  */
-function label(record: TraceRecord): string {
+function label(tx: Translate, record: TraceRecord): string {
   if (record.kind === 'request' && record.request) {
-    return `Request · ${record.request.model} · ${record.request.request_id}`;
+    return tx('trajectory:timeline.request', { model: record.request.model, id: record.request.request_id });
   }
   if (record.kind === 'tool' && record.tool) {
-    return `Tool · ${record.tool.name ?? record.tool.tool_id} · ${record.tool.call_id}`;
+    return tx('trajectory:timeline.tool', { name: record.tool.name ?? record.tool.tool_id, id: record.tool.call_id });
   }
-  return `${record.kind} · ${record.id}`;
+  return `${tx(`trajectory:kind.${record.kind}`).toLowerCase()} · ${record.id}`;
 }
 
 function millis(value: string | null | undefined): number | undefined {
@@ -140,7 +141,7 @@ function timingOf(record: TraceRecord) {
  * Request provider endpoint. A record with no usable start is
  * omitted from the timed projection rather than placed at an invented point.
  */
-export function trajectoryTimeline(
+export function trajectoryTimeline(tx: Translate,
   projection: TrajectoryProjection,
   mode: TrajectoryTimelineMode,
 ): TrajectoryTimelineModel | null {
@@ -158,7 +159,7 @@ export function trajectoryTimeline(
         return start === undefined ? [] : [start];
       });
       return positions.length ? [{ nativeAttemptId: section.nativeAttemptId,
-        label: `Turn ${section.displayOrdinal}`, at: Math.min(...positions) }] : [];
+        label: tx('trajectory:copy.turn-value', { p0: section.displayOrdinal }), at: Math.min(...positions) }] : [];
     });
   };
   if (mode === 'sequence') {
@@ -169,7 +170,7 @@ export function trajectoryTimeline(
         id: record.id,
         kind: record.kind,
         lane: laneOf(record.kind),
-        label: label(record),
+        label: label(tx, record),
         error: isError(record),
         start: spans.length,
         end: spans.length + 1,
@@ -190,7 +191,7 @@ export function trajectoryTimeline(
       id: record.id,
       kind: record.kind,
       lane: laneOf(record.kind),
-      label: label(record),
+      label: label(tx, record),
       error: isError(record),
       start: timing.startedAt,
       // Endpoints must belong to the rendered domain. Even a Journal-terminal
@@ -264,17 +265,17 @@ export function timelineFocus(
 }
 
 /** Format a duration the way the Harness overview labels one. */
-export function formatDuration(milliseconds: number | null | undefined): string {
-  if (milliseconds == null || !Number.isFinite(milliseconds)) return 'Unavailable';
-  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
-  return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 2 : 1)} s`;
+export function formatDuration(tx: Translate, milliseconds: number | null | undefined): string {
+  if (milliseconds == null || !Number.isFinite(milliseconds)) return tx('trajectory:trajectory-inspector.unavailable');
+  if (milliseconds < 1000) return tx('trajectory:copy.value-ms', { p0: Math.round(milliseconds) });
+  return tx('trajectory:copy.value-s', { p0: (milliseconds / 1000).toFixed(milliseconds < 10_000 ? 2 : 1) });
 }
 
 /** Format an exact recorded instant, or say it is unavailable. */
-export function formatInstant(value: string | null | undefined): string {
+export function formatInstant(tx: Translate, value: string | null | undefined): string {
   const parsed = millis(value);
-  if (parsed === undefined) return 'Unavailable';
-  return new Date(parsed).toLocaleTimeString(undefined, {
+  if (parsed === undefined) return tx('trajectory:trajectory-inspector.unavailable');
+  return new Date(parsed).toLocaleTimeString(tx.language, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',

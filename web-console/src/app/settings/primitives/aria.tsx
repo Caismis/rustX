@@ -1,3 +1,4 @@
+import { useTranslation } from '../../../locale/react';
 import { useRef, useState, type Key, type ReactNode, type RefObject } from 'react';
 import { DialogSurface, useDialogPortal } from '../../../presentation/primitives/DialogSurface';
 import clsx from 'clsx';
@@ -73,11 +74,12 @@ export interface RowAction { readonly id: string; readonly label: string; readon
  * React Aria owns arrow-key navigation, typeahead and the Enter/Space action,
  * so opening a detail from the keyboard is the same navigation decision as
  * clicking it, and both reach the one navigation owner. */
-export function ResourceList({ label, rows, selected, onOpen, empty = 'No matching definitions in this native projection.' }: {
+export function ResourceList({ label, rows, selected, onOpen, empty }: {
   label: string; rows: readonly ResourceRow[]; selected?: string;
   onOpen: (id: string) => void; empty?: ReactNode;
 }) {
-  if (!rows.length) return <p className={css.empty}>{empty}</p>;
+  const tx = useTranslation();
+  if (!rows.length) return <p className={css.empty}>{empty ?? tx('settings:copy.no-matching-definitions-in-this-native-projection')}</p>;
   return <GridList className={css.list} aria-label={label} selectionMode="single"
     selectedKeys={selected ? [selected] : []} onAction={key => onOpen(String(key))}>
     {rows.map(row => <GridListItem key={row.id} id={row.id} className={css.row} textValue={row.name} aria-label={row.name}>
@@ -85,7 +87,7 @@ export function ResourceList({ label, rows, selected, onOpen, empty = 'No matchi
           native facts follow as secondary badges, then any detail. */}
       <div className={css.rowTop}>
         <span className={css.rowName}>{row.name}</span>
-        {!!row.actions?.length && <RowActions label={`Actions for ${row.name}`} actions={row.actions} />}
+        {!!row.actions?.length && <RowActions label={tx('settings:aria.actions-for-value', { p0: row.name })} actions={row.actions} />}
       </div>
       <span className={css.rowFacts}>{row.facts}</span>
       {row.detail}
@@ -156,6 +158,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
   settle: RefObject<HTMLElement | null>;
   disabled?: boolean;
 }) {
+  const tx = useTranslation();
   const trigger = useRef<HTMLButtonElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -185,7 +188,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
       <h2>{title}</h2>
       {description}
       <div className={css.confirmActions}>
-        <button type="button" ref={cancel} className={`${buttonCss.button} ${buttonCss.outline} ${buttonCss.md}`} onClick={() => setOpen(false)}>Cancel</button>
+        <button type="button" ref={cancel} className={`${buttonCss.button} ${buttonCss.outline} ${buttonCss.md}`} onClick={() => setOpen(false)}>{tx('settings:aria.cancel')}</button>
         <button type="button" className={`${buttonCss.button} ${buttonCss.primary} ${buttonCss.md} ${destructive ? css.destructive : ''}`}
           onClick={() => { closing.current = 'confirmed'; setOpen(false); onConfirm(); }}>{confirm}</button>
       </div>

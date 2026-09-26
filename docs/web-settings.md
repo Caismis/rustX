@@ -20,7 +20,7 @@ Settings is organized by product task into exactly six primary pages:
 
 | Page | What it holds |
 | --- | --- |
-| **General** | Client-owned preferences: Appearance (theme). Global Settings opens here. |
+| **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Global Settings opens here. |
 | **Models** | The default model for new Sessions, then Provider list → Provider detail (endpoint, credential, its Models) → Model detail (the complete typed Model, reasoning profiles and protocol compatibility under progressive disclosure). |
 | **Agent** | Root identity, description, instructions and project guidance. |
 | **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
@@ -404,3 +404,37 @@ Presentation changed; semantics did not: no banner when native confirms nothing
 is pending, unavailable is never "up to date", Adopt sends the exact candidate
 and expected binding and native revalidates it, and nothing cancels work,
 queues adoption, or adopts on reconnect, attach, reopen or reload.
+
+## Browser-owned language
+
+General owns Language alongside Appearance; Workspace Settings has neither.
+The page-level controller in `web-console/src/locale/controller.ts` is the sole
+locale owner. React consumers subscribe to its immutable, revisioned snapshot
+with `useSyncExternalStore`. Switching between `en` and `zh` updates the resident
+UI immediately and sets `<html lang>` to `en` or `zh-CN`, respectively.
+
+The versioned browser key `rustx-locale-v1` accepts only `en` or `zh`. A valid
+stored preference wins; otherwise the first available browser language selects
+Chinese for `zh` or `zh-*`, and English for everything else. Unavailable storage
+and browser APIs fail safely to English. Explicit choices persist in browser
+storage only. No native configuration, Session, Workspace or runtime mutation
+is involved. Date/time/number formatting follows the selected rustX language.
+
+Feature-owned, statically paired English/Chinese dictionaries live in
+`web-console/src/locale/dictionaries`. A single typed translation path supports
+small named placeholders. Deferred presentation messages retain their typed key
+until rendering so existing notices also switch language. Native errors, raw
+Inspector values, protocol/Tool/model/resource identities, paths, and user-,
+model- or Tool-authored content remain opaque. Navigation and native operations
+continue to use stable semantic IDs independently of translated labels. Command
+and Trajectory search accept both built-in vocabularies regardless of the active
+locale, so switching language cannot change search membership. Session
+rename editors start from the native authored name, never the localized fallback
+shown for an unnamed Session.
+
+Run `pnpm --dir web-console check:i18n` to check authored JSX text and common
+copy/accessibility props using the TypeScript AST. Intentional raw literals need
+a narrow adjacent `i18n-raw` explanation; translation dictionaries own product
+copy. The compiler checks exact built-in dictionary key sets. Browser E2E starts
+with an explicit English preference; dedicated Chinese tests cover live switching,
+persistence, composer commands and approval behavior.

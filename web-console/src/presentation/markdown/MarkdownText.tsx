@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 /**
  * Untrusted assistant-Markdown renderer over the direct mdast pipeline:
@@ -26,7 +27,6 @@ import css from './MarkdownText.module.css'
 
 export type { MarkdownCodeLabels, MarkdownLabels } from './render.tsx'
 
-const DEFAULT_LABELS: MarkdownLabels = { code: { copyLabel: 'Copy code', copiedLabel: 'Copied' }, footnotes: 'Footnotes' }
 
 /** One settled full render: parse with math, resolve references, append the footnote section. */
 function renderSettled(
@@ -151,12 +151,15 @@ class StreamingRenderer {
  * identity discards the streaming render cache mid-message.
  * Raw HTML stays literal, links are protocol-allowlisted, and images render alt text.
  */
-export const MarkdownText = memo(function MarkdownText({ text, streaming = false, labels = DEFAULT_LABELS, variant = 'normal' }: {
+export const MarkdownText = memo(function MarkdownText({ text, streaming = false, labels: suppliedLabels, variant = 'normal' }: {
   text: string
   variant?: 'normal' | 'compact'
   streaming?: boolean
   labels?: MarkdownLabels
 }) {
+  const tx = useTranslation();
+  const defaults = useMemo<MarkdownLabels>(() => ({ code: { copyLabel: tx('common:markdown.copy-code'), copiedLabel: tx('common:markdown.copied') }, footnotes: tx('common:markdown.footnotes') }), [tx]);
+  const labels = suppliedLabels ?? defaults;
   const streamRef = useRef<StreamingRenderer | null>(null)
   const streamLabelsRef = useRef<MarkdownLabels>(labels)
   const children = useMemo(() => {

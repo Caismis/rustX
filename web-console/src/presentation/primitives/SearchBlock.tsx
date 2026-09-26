@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness; see PROVENANCE.md. */
 import { useCallback, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
@@ -284,14 +285,15 @@ export function SearchBlock(props: SearchBlockProps) {
 /** The native result is opaque text, not Harness's structured search metadata.
  * Preserve it verbatim; never infer paths, matches, counts or file coordinates. */
 export function SearchTextBlock({ text, label, truncated }: { text: string; label: string; truncated: boolean }) {
+  const tx = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const { copied, onCopy } = useCopyFeedback(text);
   const lines = text.split('\n');
   const { hidden, capped, headLines, tailLines } = headTailCap(lines.length, 8, expanded);
   return <div className={css.block} data-search="opaque">
-    <div className={css.header}><span className={css.summary}>{label}{truncated ? ' · bounded output' : ''}</span><button type="button" className={css.copyButton} onClick={onCopy}>{copied ? 'Copied' : 'Copy'}</button></div>
+    <div className={css.header}><span className={css.summary}>{label}{truncated ? tx('common:search-block.bounded-output') : ''}</span><button type="button" className={css.copyButton} onClick={onCopy}>{copied ? tx('common:search-block.copied') : tx('common:search-block.copy')}</button></div>
     <div className={css.body}>{(capped ? lines.slice(0, headLines) : lines).map((line, index) => <div className={css.path} key={index}>{line}</div>)}
-      {hidden > 0 && <button type="button" className={css.expand} aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? 'Collapse' : `Show ${hidden} more lines`}</button>}
+      {hidden > 0 && <button type="button" className={css.expand} aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? tx('common:search-block.collapse') : tx('common:search-block.show-value-more-lines', { p0: hidden })}</button>}
       {capped && lines.slice(-tailLines).map((line, index) => <div className={css.path} key={`tail:${index}`}>{line}</div>)}
     </div>
   </div>;

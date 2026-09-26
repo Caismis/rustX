@@ -1,3 +1,5 @@
+import { message } from '../../locale/translation';
+import { useTranslation, useNotice } from '../../locale/react';
 import type { ToolExecutionResult } from '../../../../protocol/app-server/v23';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
@@ -6,17 +8,18 @@ import { Button } from '../../presentation/primitives/Button';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
 export function Artifact({ id, name = id, image = false, mimeType }: { id: string; name?: string; image?: boolean; mimeType?: string }) {
+  const tx = useTranslation();
   const resources = useContext(ArtifactContext);
   const preview = useContext(PreviewContext);
   const [attempt, setAttempt] = useState(0);
   const [url, setUrl] = useState<string>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useNotice();
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     if (!resources || !attempt) return;
     let live = true;
     let owned: string | undefined;
-    setLoading(true); setError(undefined); setUrl(undefined);
+    setLoading(true); setError(''); setUrl(undefined);
     void resources.read(id, mimeType).then(value => {
       if (!live) { resources.release(value); return; }
       owned = value; setUrl(value);
@@ -25,7 +28,7 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
   }, [resources, id, mimeType, attempt]);
   return <div><AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
     onLoad={resources ? () => setAttempt(value => value + 1) : undefined}
-    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError('Image could not be decoded'); }} />{preview && resources && <Button size="sm" onClick={() => preview({ id, name, image, mimeType })}>Preview {name}</Button>}</div>;
+    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />{preview && resources && <Button size="sm" onClick={() => preview({ id, name, image, mimeType })}>{tx('artifacts:artifact.preview')}{' '}{name}</Button>}</div>;
 }
 
 /** Only typed artifact/image/file facts; arbitrary tool JSON is never interpreted. */

@@ -1,10 +1,12 @@
+import { useTranslation } from '../../locale/react';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v23';
 import { toolCard } from '../../bindings/tools';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { ToolArtifacts } from '../components/Artifact';
 import { GoalActivity, goalActivityLabel } from './GoalActivity';
 export function Tool({ tool }: { tool: ForegroundToolExecution }) {
-  const goal = goalActivityLabel(tool);
+  const tx = useTranslation();
+  const goal = goalActivityLabel(tx, tool);
   if (goal !== undefined) return <GoalActivity tool={tool} label={goal}/>;
   return <ToolCard tool={{ ...toolCard(tool), artifacts: tool.state.type === 'settled' ? <ToolArtifacts result={tool.state.result}/> : undefined }}/>;
 }

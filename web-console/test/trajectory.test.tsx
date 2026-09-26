@@ -1,3 +1,4 @@
+import { translator } from '../src/locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted interaction contracts; see PROVENANCE.md. */
 import { timelineFocus, timelineProjectionRevision, trajectoryTimeline } from '../src/app/trajectory/timeline';
 import { useCallback, useState } from 'react';
@@ -18,7 +19,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
-const trajectoryItems = (records: readonly TraceRecord[]) => flattenTrajectory(projectTrajectory(records));
+const trajectoryItems = (records: readonly TraceRecord[]) => flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records));
 const cacheOf = (records: TraceRecord[]) => replaceTrace({ records, next_cursor: null });
 function show(cache: TraceCache, load = vi.fn(), older = vi.fn()) {
   return render(<Trajectory cache={cache} loadEarlier={older} latest={noop} onSelect={noop} onLoadDetail={load} />);
@@ -79,7 +80,7 @@ it.each(inputMatrix)('T1-01 preserves native %s + %s without classification read
   const record = richRequest();
   record.request!.system_prompt = { state: prompt, preview: { text: 'Identical bounded preview', truncated: true } };
   record.request!.tool_catalog = tools;
-  expect(systemPresentation(record)).toEqual(label ? { label, facet } : undefined);
+  expect(systemPresentation(translator('en'), record)).toEqual(label ? { label, facet } : undefined);
   const cells = trajectoryItems([record]).filter(item => item.type === 'SystemPromptCell');
   expect(cells).toHaveLength(label ? 1 : 0);
   const load = vi.fn();
@@ -381,7 +382,7 @@ it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page
   const unrelated = [execution(2, { location: { attempt_id: 'other', step_id: '1' } }), execution(3, { location: { attempt_id: 'attempt-a', step_id: '2' } }), execution(4, { tool: { ...execution(4).tool!, tool_id: 'tool-b' } }), execution(5, { location: {} })];
   expect(matchingCalls([assistant, execution(1), ...unrelated]).get(assistant.id)?.map(r => r.id)).toEqual(['trace:1']);
   const records = [assistant, execution(1), ...unrelated];
-  const visible = visibleItems(trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
+  const visible = visibleItems(translator('en'), trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
   const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
   expect(summary.preview).toContain('2 proposed · 1 loaded matching executions');
   expect(visible.filter(item => item.type === 'RecordRow').map(item => item.record.id)).toEqual(['trace:0', 'trace:4', 'trace:3', 'trace:2', 'trace:5']);
@@ -395,7 +396,7 @@ it('T1-08 Calls summary exposes warnings and leaves native domains independent',
   const executions = ['failed', 'denied', 'waiting', 'outcome_unknown'].map((state, n) => execution(n + 1, { state: state as TraceRecord['state'] }));
   const domains = ['background', 'subagent', 'workflow'].map((kind, n) => traceRecord(n + 10, { kind: kind as TraceRecord['kind'], request: null, originating_tool_call_id: 'same' }));
   const records = [assistant, ...executions, ...domains, traceRecord(20, { kind: 'compaction', request: null, state: 'running' })];
-  const visible = visibleItems(trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
+  const visible = visibleItems(translator('en'), trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
   const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
   for (const state of ['failed', 'denied', 'waiting', 'outcome_unknown']) expect(summary.preview).toContain(`1 ${state}`);
   for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(true);
@@ -414,8 +415,8 @@ it('T1-09 search reveals both collapsed kinds without any detail/history reads',
   fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'ls -la' } });
   expect(row('RecordRow', 'trace:1')).not.toBeNull(); expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
   const items = trajectoryItems([richRequest()]);
-  expect(searchItems(projectTrajectory([richRequest()]), 'Preview context-a')?.size).toBe(1);
-  expect(searchItems(projectTrajectory([richRequest()]), 'Frozen prompt')?.size).toBe(1);
+  expect(searchItems(projectTrajectory(translator('en'), [richRequest()]), 'Preview context-a')?.size).toBe(1);
+  expect(searchItems(projectTrajectory(translator('en'), [richRequest()]), 'Frozen prompt')?.size).toBe(1);
   expect(preferredItem(items, 'trace:0')?.type).toBe('RequestBoundary');
 });
 
@@ -497,12 +498,12 @@ it('T1-09 structural search and Attempt collapse never borrow child facts or ano
   const child = traceRecord(10, { preview: { text: 'unique child preview', truncated: false } });
   const other = traceTool(11, { location: { attempt_id: 'attempt-b', step_id: '1' } });
   const items = trajectoryItems([child, other]);
-  const matches = searchItems(projectTrajectory([child, other]), 'unique child preview')!;
+  const matches = searchItems(projectTrajectory(translator('en'), [child, other]), 'unique child preview')!;
   expect(items.filter(item => matches.has(item.display_key)).every(item => item.type !== 'GroupHeader' && item.type !== 'TurnHeader')).toBe(true);
   const structural = items.find(item => item.type === 'GroupHeader')!;
-  expect(searchItems(projectTrajectory([child, other]), 'Step 1')).toEqual(new Set(items.filter(isInspectable).map(item => item.display_key)));
+  expect(searchItems(projectTrajectory(translator('en'), [child, other]), 'Step 1')).toEqual(new Set(items.filter(isInspectable).map(item => item.display_key)));
   expect(preferredStructure(trajectoryItems([{ ...child, location: { attempt_id: 'attempt-b', step_id: '1' } }]), structural)).toBeUndefined();
-  const visible = visibleItems(items, [child, other], new Set(['attempt-a']), new Set(), null);
+  const visible = visibleItems(translator('en'), items, [child, other], new Set(['attempt-a']), new Set(), null);
   expect(visible.filter(item => item.type === 'RequestBoundary')).toHaveLength(0);
   expect(visible.filter(item => item.type === 'RecordRow').map(item => item.owner_record_id)).toEqual([other.id]);
   expect(visible.filter(item => item.type === 'GroupHeader').map(item => item.attempt_id)).toEqual(['attempt-b']);
@@ -647,7 +648,7 @@ it('407: exact Attempt and Step identity own one Turn/group across interleaved r
     traceRecord(4, { location: { attempt_id: 'attempt-a', step_id: 'opaque-step' }, state: 'failed' }),
     traceRecord(5, { location: { attempt_id: 'attempt-a', step_id: 'next-step' } }),
   ];
-  const projection = projectTrajectory(records);
+  const projection = projectTrajectory(translator('en'), records);
   expect(projection.sections.map(section => section.kind)).toEqual(['outside', 'turn', 'turn']);
   const turn = projection.sections[1]!;
   expect(turn.kind).toBe('turn');
@@ -656,12 +657,12 @@ it('407: exact Attempt and Step identity own one Turn/group across interleaved r
     ['message', undefined, 'Message'], ['step', 'opaque-step', 'Step 1'], ['step', 'next-step', 'Step 2'],
   ]);
   expect(turn.groups[1]!.cells.map(cell => cell.owner_record_id)).toEqual(['trace:2', 'trace:4']);
-  const items = flattenTrajectory(projection);
+  const items = flattenTrajectory(translator('en'), projection);
   expect(items.filter(item => item.type === 'TurnHeader').map(item => item.label)).toEqual(['Turn 1', 'Turn 2']);
   expect(items.filter(item => item.type === 'GroupHeader').map(item => item.label)).toEqual(['Message', 'Step 1', 'Step 2', 'Step 1']);
-  const folded = visibleItems(items, records, new Set(['attempt-a', 'attempt-b']), new Set(), null);
+  const folded = visibleItems(translator('en'), items, records, new Set(['attempt-a', 'attempt-b']), new Set(), null);
   expect(folded.filter(isInspectable).map(item => item.owner_record_id)).toEqual(['trace:0']);
-  expect(trajectoryTimeline(projection, 'sequence')!.boundaries.map(boundary => [boundary.nativeAttemptId, boundary.label])).toEqual(
+  expect(trajectoryTimeline(translator('en'), projection, 'sequence')!.boundaries.map(boundary => [boundary.nativeAttemptId, boundary.label])).toEqual(
     items.filter(item => item.type === 'TurnHeader').map(item => [item.attempt_id, item.label]),
   );
   show(cacheOf(records));
@@ -738,15 +739,15 @@ it.each([
   ['Message', 'GroupHeader', 'Message', 'attempt-a', ['trace:2']],
 ] as const)('structural search %s shares exact ledger/timeline membership without reads or collapse mutation', (query, type, label, attempt, ids) => {
   const records = structuralSearchRecords();
-  const items = flattenTrajectory(projectTrajectory(records), 'older');
+  const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records), 'older');
   const collapsed = new Set(['attempt-a', 'attempt-b']);
-  const before = visibleItems(items, records, collapsed, new Set(), null);
-  const matches = searchItems(projectTrajectory(records), query);
+  const before = visibleItems(translator('en'), items, records, collapsed, new Set(), null);
+  const matches = searchItems(projectTrajectory(translator('en'), records), query);
   expect(matchedRecordIds(items, matches)).toEqual(new Set(ids));
-  const exposed = visibleItems(items, records, collapsed, new Set(), matches);
+  const exposed = visibleItems(translator('en'), items, records, collapsed, new Set(), matches);
   expect(exposed.filter(isInspectable).map(item => item.owner_record_id)).toEqual([...ids]);
   expect(exposed).toContainEqual(expect.objectContaining({ type, label, attempt_id: attempt }));
-  expect(visibleItems(items, records, collapsed, new Set(), null)).toEqual(before);
+  expect(visibleItems(translator('en'), items, records, collapsed, new Set(), null)).toEqual(before);
   expect([...collapsed]).toEqual(['attempt-a', 'attempt-b']);
 
   const load = vi.fn(); const older = vi.fn();
@@ -774,8 +775,8 @@ it.each([
 it('search conversion covers every inspectable cell, deduplicates owners and excludes history boundaries', () => {
   const assistant = traceRecord(1, { kind: 'assistant', request: null, message_id: 'assistant', calls: [{ call_id: 'call-2', tool_id: 'tool-bash', name: 'bash' }] });
   const records = [richRequest(), assistant, traceTool(2)];
-  const items = flattenTrajectory(projectTrajectory(records), 'older');
-  const folded = visibleItems(items, records, new Set(), new Set([assistant.id]), null);
+  const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records), 'older');
+  const folded = visibleItems(translator('en'), items, records, new Set(), new Set([assistant.id]), null);
   const universe = [...items, ...folded];
   expect(new Set(universe.filter(isInspectable).map(item => item.type))).toEqual(new Set(['SystemPromptCell', 'ContextRow', 'RequestBoundary', 'RecordRow', 'CollapsedCallSummary']));
   for (const item of universe.filter(isInspectable)) {
@@ -796,7 +797,7 @@ it.each([
   const request = richRequest(); request.request!.model = 'unique-model';
   const records = [request, execution(1)];
   const items = trajectoryItems(records);
-  const matches = searchItems(projectTrajectory(records), query)!;
+  const matches = searchItems(projectTrajectory(translator('en'), records), query)!;
   const expected = items.filter(item => isInspectable(item) && matches.has(item.display_key));
   expect(expected).toHaveLength(1);
   expect(expected[0]).toMatchObject({ type, owner_record_id: owner });
@@ -1005,8 +1006,8 @@ it.each(['sequence', 'duration', 'actual'] as const)('407: in-flight %s drag can
   const { initial, next } = mode === 'sequence'
     ? { initial: initialSequence, next: prependTrace(initialSequence, { records: epochRecords(9), next_cursor: null }) }
     : timingRevision();
-  const p1 = trajectoryTimeline(projectTrajectory(initial.page.records), mode)!;
-  const p2 = trajectoryTimeline(projectTrajectory(next.page.records), mode)!;
+  const p1 = trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), initial.page.records), mode)!;
+  const p2 = trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), next.page.records), mode)!;
   expect(next.epoch).toBe(initial.epoch);
   expect(timelineProjectionRevision(p2, mode)).not.toBe(timelineProjectionRevision(p1, mode));
   if (mode === 'actual') expect([p2.start, p2.end]).toEqual([p1.start, p1.end]);
@@ -1092,8 +1093,8 @@ it('407: equivalent coordinate projections preserve a gesture through status ref
   fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 30 });
   fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 45 });
   const next = refreshTrace(initial, { records: [{ ...initial.page.records[1]!, state: 'failed' }], next_cursor: null });
-  expect(timelineProjectionRevision(trajectoryTimeline(projectTrajectory(initial.page.records), 'sequence'), 'sequence'))
-    .toBe(timelineProjectionRevision(trajectoryTimeline(projectTrajectory(next.page.records), 'sequence'), 'sequence'));
+  expect(timelineProjectionRevision(trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), initial.page.records), 'sequence'), 'sequence'))
+    .toBe(timelineProjectionRevision(trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), next.page.records), 'sequence'), 'sequence'));
   view.rerender(<Trajectory cache={next} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   expect(timelineCanvas()).toBe(canvas);
   fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 45 });
@@ -1112,4 +1113,19 @@ it('407: committed native focus survives a timing revision with an identical out
   view.rerender(<Trajectory cache={next} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   expect(timelineFocusOf()).toEqual(before);
   expect(focusOverlay()!.style.width).not.toBe(width);
+});
+
+
+it('locale changes preserve Trajectory search membership for both vocabularies and native facts', () => {
+  const records = [...structuralSearchRecords(), richRequest()];
+  const english = projectTrajectory(translator('en'), records);
+  const chinese = projectTrajectory(translator('zh'), records);
+  for (const query of ['Step 2', 'Turn 2', 'Message', 'beta', 'Frozen prompt', 'Preview context-a',
+    translator('zh')('trajectory:group.step', { n: 2 }),
+    translator('zh')('trajectory:copy.turn-value', { p0: 2 }),
+    translator('zh')('trajectory:layout.initial-system-prompt')]) {
+    const expected = searchItems(english, query);
+    expect(expected?.size, query).toBeGreaterThan(0);
+    expect(searchItems(chinese, query), query).toEqual(expected);
+  }
 });

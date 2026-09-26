@@ -1,3 +1,4 @@
+import { message, type DisplayText } from '../../../locale/translation';
 import { assign, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
@@ -15,13 +16,6 @@ import {
  * unchanged underneath — only what the browser groups them into is new. */
 export type SettingsPage = 'general' | 'models' | 'agent' | 'tools' | 'extensions' | 'advanced';
 const globalSettingsPages: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
-export function settingsPageLabel(page: SettingsPage): string {
-  return page === 'general' ? 'General'
-    : page === 'models' ? 'Models'
-      : page === 'agent' ? 'Agent'
-        : page === 'tools' ? 'Tools & Permissions'
-          : page === 'extensions' ? 'Extensions' : 'Advanced';
-}
 
 /** The secondary focus of each primary page, by page.
  *
@@ -129,7 +123,7 @@ export interface SettingsNavigationContext {
   focus: FocusMap;
   /** The owner an opened Settings instance is permanently bound to. */
   target: SettingsTarget;
-  error: string;
+  error: DisplayText;
 }
 
 export type SettingsNavigationEvent =
@@ -251,7 +245,7 @@ export const settingsNavigationMachine = setup({
     reportOwnerLookup: assign({
       error: ({ context, event }) => {
         const output = (event as unknown as { output: OwnerResolution }).output;
-        return output.kind === 'unregistered' ? `The owning Workspace ${output.directory} is not registered by this Product Host.`
+        return output.kind === 'unregistered' ? message('settings:navigation.unregistered', { directory: output.directory })
           : output.kind === 'failed' ? output.message : context.error;
       },
     }),

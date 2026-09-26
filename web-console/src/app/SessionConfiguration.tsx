@@ -1,3 +1,4 @@
+import { useTranslation } from '../locale/react';
 import { useSelector } from '@xstate/react';
 import type { SourceTarget } from '../../../protocol/app-server/v23';
 import type { AppServerClient, SessionView, ConnectionState } from '../client/app-server';
@@ -27,6 +28,7 @@ export function SessionConfiguration({ client, view, openOwningSettings }: { cli
   return actor ? <ConfigurationObservation actor={actor} connection={transport.connection} openOwningSettings={openOwningSettings}/> : null;
 }
 function ConfigurationObservation({ actor, connection, openOwningSettings }: { actor: SessionConfigurationActor; connection: ConnectionState; openOwningSettings?: (owner: SourceTarget) => void }) {
+  const tx = useTranslation();
   // The current connected span's observation, or — while no span has observed
   // since the last one ended — that span's observation as explicitly stale
   // presentation data. `known` is what says which of the two this is; the
@@ -48,22 +50,22 @@ function ConfigurationObservation({ actor, connection, openOwningSettings }: { a
   // Presentation only: which line of the banner each native fact is. Nothing
   // here decides eligibility, adoption, ownership or residency.
   const owners = openOwningSettings ? applicationOwners(application) : [];
-  return <section aria-label="Session configuration" className={css.banner}>
-    {!known && <Line state="unavailable" text="Configuration status unavailable. Retaining the last observation." />}
-    {preparing.length > 0 && <Line state="preparing" text="Preparing configuration…"
-      detail={preparing.map(row => `${observedUnitLabel(row.unit)}: preparing`)} />}
-    {candidate && <Line state={eligibility === 'eligible' ? 'ready' : 'blocked'} text="Prepared configuration is waiting for this Session."
-      reason={eligibility === 'busy' ? 'Session work must settle before adoption.'
-        : eligibility === 'unavailable' ? 'Session configuration is unavailable for adoption.' : undefined}
+  return <section aria-label={tx('common:session-configuration.session-configuration')} className={css.banner}>
+    {!known && <Line state="unavailable" text={tx('common:copy.configuration-status-unavailable-retaining-the-last-observation')} />}
+    {preparing.length > 0 && <Line state="preparing" text={tx('common:copy.preparing-configuration')}
+      detail={preparing.map(row => tx('common:copy.value-preparing', { p0: observedUnitLabel(tx, row.unit) }))} />}
+    {candidate && <Line state={eligibility === 'eligible' ? 'ready' : 'blocked'} text={tx('common:copy.prepared-configuration-is-waiting-for-this-session')}
+      reason={eligibility === 'busy' ? tx('common:copy.session-work-must-settle-before-adoption')
+        : eligibility === 'unavailable' ? tx('common:copy.session-configuration-is-unavailable-for-adoption') : undefined}
       actions={<Button size="sm" variant="primary" disabled={!known || busy || connection !== 'connected' || eligibility !== 'eligible'}
-        onClick={() => actor.send({ type: 'ADOPT', candidate })}>Adopt configuration</Button>} />}
-    {failed.length > 0 && <Line state="failed" text="Some configuration preparation failed. Review the owning authored source in Settings and rescan."
-      detail={failed.map(row => `${observedUnitLabel(row.unit)}: failed — ${row.result.state === 'failed' ? row.result.diagnostic : ''}`)}
+        onClick={() => actor.send({ type: 'ADOPT', candidate })}>{tx('common:session-configuration.adopt-configuration')}</Button>} />}
+    {failed.length > 0 && <Line state="failed" text={tx('common:copy.some-configuration-preparation-failed-review-the-owning-authored-source-in-settings-and-re')}
+      detail={failed.map(row => tx('common:copy.value-failed-value', { p0: observedUnitLabel(tx, row.unit), p1: row.result.state === 'failed' ? row.result.diagnostic : '' }))}
       // Native names the authored owners of this application; `scope` is the
       // Session identity and is never one of them. Each owner is offered
       // explicitly, so no ownership is parsed, guessed or defaulted here.
       actions={owners.length > 0 && owners.map(owner =>
-        <Button size="sm" variant="outline" key={sourceTargetKey(owner)} onClick={() => openOwningSettings!(owner)}>{openOwnerLabel(owner)}</Button>)} />}
+        <Button size="sm" variant="outline" key={sourceTargetKey(owner)} onClick={() => openOwningSettings!(owner)}>{openOwnerLabel(tx, owner)}</Button>)} />}
     {/* Read failure and adoption failure are separate facts, reported
         separately; neither one clears or hides the other. */}
     {readError && <p role="alert" className={css.alert}>{readError}</p>}
@@ -72,7 +74,7 @@ function ConfigurationObservation({ actor, connection, openOwningSettings }: { a
 }
 
 type LineState = 'unavailable' | 'preparing' | 'ready' | 'blocked' | 'failed';
-const dots: Record<LineState, StateDotState> = { unavailable: 'idle', preparing: 'ongoing', ready: 'done', blocked: 'warning', failed: 'error' };
+const dots: Record<LineState, StateDotState> = { unavailable: 'idle', preparing: 'ongoing', ready: 'done', blocked: 'warning', failed: /* i18n-raw: internal severity identity */ 'error' };
 
 /** One native fact of the banner, on one compact horizontal line: its state,
  * its text, the native reason or per-unit detail, and the action that belongs

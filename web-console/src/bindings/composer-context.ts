@@ -1,3 +1,4 @@
+import type { Translate } from '../locale/translation';
 import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask, UserContentBlock, UserInputBlock } from '../../../protocol/app-server/v23';
 
 /** Current composer-context docks read only the replaceable authoritative
@@ -32,19 +33,19 @@ export const queueRows = (snapshot?: RuntimeClientSnapshot): readonly InboundRow
 /** Presentation-only one-line summary of submitted content. Native inbound rows
  * carry canonical `UserContentBlock`s; an accepted submission carries the
  * `UserInputBlock`s this client authored. Both name text the same way. */
-export function contentPreview(content: readonly (UserContentBlock | UserInputBlock)[]): string {
+export function contentPreview(tx: Translate, content: readonly (UserContentBlock | UserInputBlock)[]): string {
   const text = content.flatMap(block => block.type === 'text' ? [block.text] : []).join(' ').replace(/\s+/g, ' ').trim();
   const other = content.length - content.filter(block => block.type === 'text').length;
-  return [text, other ? `${other} attachment${other === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') || 'Empty content';
+  return [text, other ? tx(other === 1 ? 'agent:attachments.one' : 'agent:attachments.other', { n: other }) : ''].filter(Boolean).join(' · ') || tx('agent:copy.empty-content');
 }
 
 /** Non-Human inbound provenance label; Human input carries none. */
-export function inboundOrigin(message: InboundRow['message']): string | undefined {
-  if (message.kind && typeof message.kind === 'object' && 'goal_continuation' in message.kind) return 'Goal continuation';
+export function inboundOrigin(tx: Translate, message: InboundRow['message']): string | undefined {
+  if (message.kind && typeof message.kind === 'object' && 'goal_continuation' in message.kind) return tx('agent:copy.goal-continuation');
   const source = message.source;
   if (source === 'human') return undefined;
-  if (typeof source === 'string') return source.replace('_', ' ');
-  if ('agent' in source) return `Agent ${source.agent.agent_id}`;
+  if (typeof source === 'string') return tx(`agent:source.${source}`);
+  if ('agent' in source) return tx('agent:copy.agent-value', { p0: source.agent.agent_id });
   if ('extension' in source) return source.extension.contributor;
   return undefined;
 }

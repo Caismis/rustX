@@ -1,3 +1,5 @@
+import type { Translate } from '../../locale/translation';
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
 import type {
   TraceArtifact,
@@ -11,11 +13,11 @@ import type { InspectableDisplayItem } from './layout';
 import css from './Trajectory.module.css';
 
 /** Display choices only. Native kind, location, lifecycle and identity stay on the record. */
-export const cellLabel: Record<TraceKind, string> = {
-  user: 'User', assistant: 'Assistant', tool: 'Tool', compaction: 'Compaction',
-  attempt: 'Attempt', step: 'Step', request: 'Request',
-  background: 'Background', subagent: 'Subagent', workflow: 'Workflow', interaction: 'Interaction',
-};
+export function cellLabel(tx: Translate): Record<TraceKind, string> { return {
+  user: tx('trajectory:copy.user'), assistant: tx('trajectory:copy.assistant'), tool: tx('trajectory:trajectory-inspector.tool'), compaction: tx('trajectory:copy.compaction'),
+  attempt: tx('trajectory:trajectory-inspector.attempt'), step: tx('trajectory:copy.step'), request: tx('trajectory:copy.request'),
+  background: tx('trajectory:copy.background'), subagent: tx('trajectory:copy.subagent'), workflow: tx('trajectory:trajectory-inspector.workflow'), interaction: tx('trajectory:copy.interaction'),
+}; }
 
 /**
  * Compact labels for the kinds that share the generic fallback glyph.
@@ -25,19 +27,19 @@ export const cellLabel: Record<TraceKind, string> = {
  * widths the icon alone cannot tell them apart. They keep a short visible
  * word instead of relying on a hover Tooltip that a touch reader never gets.
  */
-export const cellNarrowLabel: Partial<Record<TraceKind, string>> = {
-  background: 'BG',
-  subagent: 'SUBAGENT',
-  workflow: 'WORKFLOW',
-  interaction: 'INTERACT',
-};
+export function cellNarrowLabel(tx: Translate): Partial<Record<TraceKind, string>> { return {
+  background: tx('trajectory:short.background'),
+  subagent: tx('trajectory:short.subagent'),
+  workflow: tx('trajectory:short.workflow'),
+  interaction: tx('trajectory:short.interaction'),
+}; }
 
-export function previewOf(record: TraceRecord): string {
+export function previewOf(tx: Translate, record: TraceRecord): string {
   if (record.preview?.text) return record.preview.text;
-  if (record.kind === 'assistant' && record.calls.length) return `Tool calls · ${record.calls.map(call => call.name).join(', ')}`;
+  if (record.kind === 'assistant' && record.calls.length) return tx('trajectory:copy.tool-calls-value', { p0: record.calls.map(call => call.name).join(', ') });
   if (record.request) return record.request.model;
-  if (record.attachments.length) return `${record.attachments.length} attachment${record.attachments.length === 1 ? '' : 's'}`;
-  return record.kind === 'attempt' || record.kind === 'step' ? '' : 'No preview recorded';
+  if (record.attachments.length) return tx(record.attachments.length === 1 ? 'trajectory:attachments.one' : 'trajectory:attachments.other', { n: record.attachments.length });
+  return record.kind === 'attempt' || record.kind === 'step' ? '' : tx('trajectory:copy.no-preview-recorded');
 }
 
 /** Same role glyphs as Harness; no Tool-name inference. */
@@ -58,8 +60,8 @@ export function CellIcon({ kind }: { kind: TraceKind }) {
  * what it is: the artifact id is a machine identity and belongs in the
  * inspector, not in the primary label of an ordinary row.
  */
-export function artifactLabel(artifact: TraceArtifact): string {
-  return artifact.name?.trim() || (artifact.image ? 'Image' : 'File');
+export function artifactLabel(tx: Translate, artifact: TraceArtifact): string {
+  return artifact.name?.trim() || (artifact.image ? tx('trajectory:copy.image') : tx('trajectory:copy.file'));
 }
 
 /**
@@ -71,6 +73,7 @@ export function artifactLabel(artifact: TraceArtifact): string {
  * inspector's Artifacts section.
  */
 export function CellArtifacts({ artifacts }: { artifacts: readonly TraceArtifact[] }) {
+  const tx = useTranslation();
   const [first, ...rest] = artifacts;
   if (first === undefined) return null;
   return (
@@ -79,8 +82,8 @@ export function CellArtifacts({ artifacts }: { artifacts: readonly TraceArtifact
       data-image={first.image || undefined}
       title={
         rest.length === 0
-          ? artifactLabel(first)
-          : [first, ...rest].map(artifactLabel).join(' · ')
+          ? artifactLabel(tx, first)
+          : [first, ...rest].map(artifact => artifactLabel(tx, artifact)).join(' · ')
       }
     >
       <span className={css.attachmentIcon} aria-hidden="true">
@@ -95,7 +98,7 @@ export function CellArtifacts({ artifacts }: { artifacts: readonly TraceArtifact
           </svg>
         )}
       </span>
-      <span className={css.attachmentName}>{artifactLabel(first)}</span>
+      <span className={css.attachmentName}>{artifactLabel(tx, first)}</span>
       {rest.length > 0 && <span className={css.attachmentMore}>+{rest.length}</span>}
     </span>
   );
@@ -108,10 +111,10 @@ export function CellArtifacts({ artifacts }: { artifacts: readonly TraceArtifact
  * and `previous_unavailable` get no row marker: a row says something when
  * this request introduced or replaced the prompt, and stays quiet otherwise.
  */
-const systemPromptLabel: Partial<Record<TraceSystemPromptState, string>> = {
-  initial: 'System prompt',
-  changed: 'System prompt changed',
-};
+function systemPromptLabel(tx: Translate): Partial<Record<TraceSystemPromptState, string>> { return {
+  initial: tx('trajectory:trajectory-inspector.system-prompt'),
+  changed: tx('trajectory:copy.system-prompt-changed'),
+}; }
 
 /**
  * Server-resolved relationships shown beside a request row.
@@ -120,9 +123,10 @@ const systemPromptLabel: Partial<Record<TraceSystemPromptState, string>> = {
  * meaning when the related record is outside the loaded window.
  */
 export function CellRelations({ record }: { record: TraceRecord }) {
+  const tx = useTranslation();
   const request = record.request;
   if (!request) return null;
-  const system = systemPromptLabel[request.system_prompt.state];
+  const system = systemPromptLabel(tx)[request.system_prompt.state];
   const context = request.context_additions.length;
   if (system === undefined && context === 0) return null;
   return (
@@ -135,7 +139,7 @@ export function CellRelations({ record }: { record: TraceRecord }) {
       {context > 0 && (
         <span>
           {system === undefined ? '' : '· '}
-          {context} context fact{context === 1 ? '' : 's'}
+          {tx(context === 1 ? 'trajectory:context.facts.one' : 'trajectory:context.facts.other', { n: context })}
           {request.context_truncated ? '+' : ''}
         </span>
       )}
@@ -144,7 +148,8 @@ export function CellRelations({ record }: { record: TraceRecord }) {
 }
 
 export function CellContent({ record }: { record: TraceRecord }) {
-  const preview = previewOf(record);
+  const tx = useTranslation();
+  const preview = previewOf(tx, record);
   const result = record.tool?.detail?.text || (record.tool?.outcome === 'success' ? undefined : record.tool?.outcome);
   return <>
     {record.tool && <strong className={css.toolName}>{record.tool.name ?? record.tool.tool_id}</strong>}
@@ -161,7 +166,8 @@ export function CellContent({ record }: { record: TraceRecord }) {
 
 /** Dedicated prompt cell: its request identity and native classification survive paging. */
 export function SystemPromptCell({ cell }: { cell: Extract<InspectableDisplayItem, { type: 'SystemPromptCell' }> }) {
+  const tx = useTranslation();
   return <span className={css.preview} data-system-prompt-state={cell.record.request?.system_prompt.state} data-tool-catalog-state={cell.record.request?.tool_catalog}>
-    <strong>{cell.label}</strong> · {cell.preview || 'Empty'}
+    <strong>{cell.label}</strong> · {cell.preview || tx('trajectory:trajectory-inspector.empty')}
   </span>;
 }

@@ -1,3 +1,4 @@
+import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Extracted from DeepSeek Harness Questionnaire: recommendation labels,
 // mirror-growing answer field, option rows, page navigation, local drafts.
@@ -7,7 +8,7 @@ import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import clsx from 'clsx';
 import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v23';
-import { emptyDraft, submission, type QuestionDraft } from '../../bindings/questionnaire';
+import { emptyDraft, submission, QuestionnaireValidationError, type QuestionDraft } from '../../bindings/questionnaire';
 import { Button } from '../../presentation/primitives/Button';
 import { IconCheckOutline14, IconChevronLeftOutline14, IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 import css from '../../presentation/agent/Question.module.css';
@@ -19,8 +20,9 @@ export function parseRecommendedLabel(label: string) {
 function AnswerField({ value, disabled, onChange, label }: {
   value: string; disabled: boolean; onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void; label: string;
 }) {
+  const tx = useTranslation();
   return <div className={clsx(css.field, css.customBlock)}>
-    <div aria-hidden className={css.fieldMirror}>{`${value}\n`}</div>
+    <div aria-hidden className={css.fieldMirror}>{tx('interactions:questionnaire.value', { p0: value })}</div>
     <textarea className={css.fieldInput} value={value} disabled={disabled} rows={1} aria-label={label} placeholder={label} onChange={onChange} />
   </div>;
 }
@@ -28,11 +30,12 @@ export function Questionnaire({ questions, disabled, status, onSubmit, onDecline
   questions: QuestionSpecification[]; disabled: boolean; status: string;
   onSubmit: (value: QuestionnaireSubmission) => void; onDecline: () => void;
 }) {
+  const tx = useTranslation();
   const [index, setIndex] = useState(0);
   const [drafts, setDrafts] = useState<QuestionDraft[]>(() => questions.map(emptyDraft));
-  const [error, setError] = useState('');
+  const [error, setError] = useNotice();
   const question = questions[index];
-  if (!question) return <p>Invalid empty Questionnaire from server.</p>;
+  if (!question) return <p>{tx('interactions:questionnaire.invalid-empty-questionnaire-from-server')}</p>;
   const draft = drafts[index];
   const shape = question.answer;
   const hasOptions = shape.type === 'single_choice' || shape.type === 'multi_choice';
@@ -46,9 +49,9 @@ export function Questionnaire({ questions, disabled, status, onSubmit, onDecline
     update({ selected, text: '' });
   };
   const submit = () => {
-    try { onSubmit(submission(questions, drafts)); } catch (cause) { setError(String(cause)); }
+    try { onSubmit(submission(tx, questions, drafts)); } catch (cause) { setError(cause instanceof QuestionnaireValidationError ? cause.notice : String(cause)); }
   };
-  return <section className={css.frame} aria-label="Questionnaire"><div className={css.card}>
+  return <section className={css.frame} aria-label={tx('interactions:questionnaire.questionnaire')}><div className={css.card}>
     <header className={css.header}><div className={css.headingBlock}>
       <div className={css.eyebrow}>{question.header} · {status}</div><h2 className={css.title}>{question.question}</h2>
     </div></header>
@@ -64,7 +67,7 @@ export function Questionnaire({ questions, disabled, status, onSubmit, onDecline
               {shape.type === 'multi_choice' ? <span className={clsx(css.checkbox, selected && css.checkboxChecked)} aria-hidden>{selected && <IconCheckOutline14 size={12} />}</span>
                 : <span className={css.number}>{optionIndex + 1}</span>}
               <span className={css.optionCopy}><span className={css.optionLine}>
-                <span className={css.optionLabel}>{display.label}</span>{display.recommended && <span className={css.badge}>Recommended</span>}
+                <span className={css.optionLabel}>{display.label}</span>{display.recommended && <span className={css.badge}>{tx('interactions:questionnaire.recommended')}</span>}
                 <span className={css.description}>{option.description}</span>
               </span></span>
             </button>
@@ -72,25 +75,25 @@ export function Questionnaire({ questions, disabled, status, onSubmit, onDecline
           </div>;
         })}
         {shape.type === 'boolean' ? <div className="row">
-          <Button variant={draft.boolean === true ? 'primary' : 'outline'} disabled={disabled} onClick={() => update({ boolean: true })}>True</Button>
-          <Button variant={draft.boolean === false ? 'primary' : 'outline'} disabled={disabled} onClick={() => update({ boolean: false })}>False</Button>
+          <Button variant={draft.boolean === true ? 'primary' : 'outline'} disabled={disabled} onClick={() => update({ boolean: true })}>{tx('interactions:questionnaire.true')}</Button>
+          <Button variant={draft.boolean === false ? 'primary' : 'outline'} disabled={disabled} onClick={() => update({ boolean: false })}>{tx('interactions:questionnaire.false')}</Button>
         </div> : (!hasOptions || shape.allow_custom) && <AnswerField value={draft.text} disabled={disabled}
-          label={hasOptions ? 'Custom answer' : `Answer (${shape.type})`} onChange={event => update({ text: event.target.value, selected: [] })} />}
-        <small className="muted">{hasOptions ? shape.type === 'multi_choice' ? `Choose ${shape.min_selected}–${shape.max_selected}; custom replaces the selection when allowed.` : 'Choose one option.' : JSON.stringify(shape)}</small>
+          label={hasOptions ? tx('interactions:questionnaire.custom-answer') : tx('interactions:questionnaire.answer-value', { p0: shape.type })} onChange={event => update({ text: event.target.value, selected: [] })} />}
+        <small className="muted">{hasOptions ? shape.type === 'multi_choice' ? tx('interactions:questionnaire.choose-value-value-custom-replaces-the-selection-when-allowed', { p0: shape.min_selected, p1: shape.max_selected }) : tx('interactions:questionnaire.choose-one-option') : JSON.stringify(shape)}</small>
       </div>
     </div>
     <footer className={css.footer}>
       <div className={css.pager}>
-        <button type="button" className={css.iconButton} aria-label="Previous question" disabled={index === 0} onClick={() => setIndex(index - 1)}><IconChevronLeftOutline14 /></button>
+        <button type="button" className={css.iconButton} aria-label={tx('interactions:questionnaire.previous-question')} disabled={index === 0} onClick={() => setIndex(index - 1)}><IconChevronLeftOutline14 /></button>
         <span className={css.progress}>{index + 1} / {questions.length}</span>
-        <button type="button" className={css.iconButton} aria-label="Next question" disabled={index === questions.length - 1} onClick={() => setIndex(index + 1)}><IconChevronRightOutline14 /></button>
+        <button type="button" className={css.iconButton} aria-label={tx('interactions:questionnaire.next-question')} disabled={index === questions.length - 1} onClick={() => setIndex(index + 1)}><IconChevronRightOutline14 /></button>
       </div>
       <div className={css.feedback} role="status">{error}</div>
       <div className={css.footerActions}>
-        <Button variant="outline" disabled={disabled} onClick={onDecline}>Decline</Button>
-        <Button variant="primary" disabled={disabled} onClick={submit}>Submit answers</Button>
+        <Button variant="outline" disabled={disabled} onClick={onDecline}>{tx('interactions:questionnaire.decline')}</Button>
+        <Button variant="primary" disabled={disabled} onClick={submit}>{tx('interactions:questionnaire.submit-answers')}</Button>
       </div>
     </footer>
-    <p className="muted inset">Unanswered questions are omitted. The server validates and settles the response.</p>
+    <p className="muted inset">{tx('interactions:questionnaire.unanswered-questions-are-omitted-the-server-validates-and-settle')}</p>
   </div></section>;
 }

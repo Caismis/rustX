@@ -24,7 +24,7 @@ export function matchCommands(raw: string, catalog: readonly CommandDefinition[]
   const query = raw.toLowerCase();
   if (!query) return catalog;
   return catalog.map((command, index) => {
-    const keys = [command.id, command.label, ...command.aliases].map(key => key.toLowerCase());
+    const keys = [command.id, ...command.aliases].map(key => key.toLowerCase());
     return { command, index, prefix: keys.some(key => key.startsWith(query)), score: Math.max(...keys.map(key => score(key, query))) };
   }).filter(item => item.score !== -Infinity).sort((a, b) => Number(b.prefix) - Number(a.prefix) || b.score - a.score || a.index - b.index).map(item => item.command);
 }
