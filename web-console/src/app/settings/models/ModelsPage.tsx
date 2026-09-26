@@ -1,4 +1,4 @@
-import type { Translate } from '../../../locale/translation';
+import type { Translate, TranslationKey } from '../../../locale/translation';
 import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted model request controls and settings cards; see PROVENANCE.md. */
 import { useRef, useState } from 'react';
@@ -320,23 +320,28 @@ export function ModelSelection({ value, change, models }: { value: ModelLayer; c
       options={[['', tx('settings:copy.follow-selected-model')], ...identities(summary?.mode === 'explicit' ? summary.model : undefined).map(id => [id, id] as const)]}
       onChange={model => change({ ...value, summary_model: model ? { ...(summary?.mode === 'explicit' ? summary : {}), mode: 'explicit', model } : { mode: 'session' } })} />
     {summary?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-summary-model-settings')}</legend>
-      <ModelRequestFields value={summary} suffix=" (Summary)" change={summary_model => change({ ...value, summary_model })} />
+      <ModelRequestFields value={summary} variant="summary" change={summary_model => change({ ...value, summary_model })} />
     </fieldset>}
   </>;
 }
 type RequestFields = Pick<ModelLayer, 'reasoning_profile' | 'max_output_tokens' | 'request_params'>;
-/** The labels are suffixed rather than prefixed so that no control's name is a
- * suffix of another's: the Summary model's fields and the outer model's fields
- * stay unambiguously distinguishable, for a reader and for a test alike. */
-function ModelRequestFields<T extends RequestFields>({ value, change, suffix = '' }: { value: T; change: (next: T) => void; suffix?: string }) {
+/** Each variant owns complete, distinct labels so the Summary model's fields
+ * and the outer model's fields stay unambiguously distinguishable, for a reader
+ * and for a test alike, in every locale. */
+const REQUEST_FIELD_LABELS = {
+  default: { reasoning: 'settings:models-page.reasoning-profile', identity: 'settings:models-page.profile-identity', limit: 'settings:models-page.output-limit' },
+  summary: { reasoning: 'settings:models-page.reasoning-profile-summary', identity: 'settings:models-page.profile-identity-summary', limit: 'settings:models-page.output-limit-summary' },
+} as const satisfies Record<string, Record<string, TranslationKey>>;
+function ModelRequestFields<T extends RequestFields>({ value, change, variant = 'default' }: { value: T; change: (next: T) => void; variant?: keyof typeof REQUEST_FIELD_LABELS }) {
   const tx = useTranslation();
+  const labels = REQUEST_FIELD_LABELS[variant];
   return <>
-    <Choice label={tx('settings:models-page.reasoning-profilevalue', { p0: suffix })} value={value.reasoning_profile?.mode ?? ''}
+    <Choice label={tx(labels.reasoning)} value={value.reasoning_profile?.mode ?? ''}
       options={[['', tx('settings:copy.domain-default')], ['catalog_default', tx('settings:copy.catalog-default')], ['profile', tx('settings:copy.named-profile')]]}
       onChange={mode => change({ ...value, reasoning_profile: mode === 'profile' ? { mode: 'profile', name: '' } : mode === 'catalog_default' ? { mode: 'catalog_default' } : null })} />
-    {value.reasoning_profile?.mode === 'profile' && <TextField label={tx('settings:models-page.profile-identityvalue', { p0: suffix })} required value={value.reasoning_profile.name}
+    {value.reasoning_profile?.mode === 'profile' && <TextField label={tx(labels.identity)} required value={value.reasoning_profile.name}
       change={name => change({ ...value, reasoning_profile: { mode: 'profile', name } })} />}
-    <label>{tx('settings:models-page.output-limit')}{suffix}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
+    <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
       onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
     <RequestParameterRows value={value.request_params ?? {}} change={request_params => change({ ...value, request_params })} />
   </>;

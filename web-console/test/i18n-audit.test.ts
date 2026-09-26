@@ -64,3 +64,15 @@ it('accepts native option identities, translated labels, exact tokens and one na
   ]} />`;
   expect(findCopy('example.tsx', source).map(row => row.text)).toEqual(['Translate this']);
 });
+
+it('treats label affix props as presentation copy while semantic variants and opaque affixes stay native', () => {
+  const source = `<>
+    <ModelRequestFields value={summary} suffix=" (Summary)" change={change} />
+    <Field prefix={busy ? 'Pending: ' : ''} />
+    <Row labels={{ suffix: 'Summary' }} />
+    <ModelRequestFields value={summary} variant="summary" change={change} />
+    <Field suffix={tx('settings:models-page.output-limit-summary')} prefix=" · " />
+  </>;
+  function Fields({ suffix = ' (Summary)' }) { return null; }`;
+  expect(findCopy('example.tsx', source).map(row => [row.line, row.text])).toEqual([[2, '(Summary)'], [3, 'Pending:'], [4, 'Summary'], [8, '(Summary)']]);
+});

@@ -8,6 +8,9 @@ import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail'
 import { cfg3Effective, cfg3Source } from './cfg3-data';
 import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v23';
 import { chooseOption, confirmAction, renderEditor } from './settings-harness';
+import { act } from '@testing-library/react';
+import { localeController } from '../src/locale/controller';
+import { translator } from '../src/locale/translation';
 afterEach(cleanup);
 
 const noop = () => {};
@@ -203,6 +206,52 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   expect(screen.queryByRole('group', { name: 'Explicit Summary Model settings' })).toBeNull();
   await chooseOption('Summary model', 'summary-a');
   await commit({ ...model, summary_model: { mode: 'explicit', model: 'summary-a' } });
+});
+
+it('the explicit Summary Model variant owns complete labels in each locale without changing native payloads', async () => {
+  const summary = { mode: 'explicit' as const, model: 'summary-a', reasoning_profile: { mode: 'profile' as const, name: 'deep' }, max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+  const model = { model: 'main', reasoning_profile: { mode: 'profile' as const, name: 'main-profile' }, max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
+  const source = catalogSource('workspace', { agent: { model } });
+  const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} onFocus={noop} />, { source, context: source });
+  fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
+  const labels = (locale: 'en' | 'zh') => {
+    const tx = translator(locale);
+    const group = screen.getByRole('group', { name: tx('settings:models-page.explicit-summary-model-settings') });
+    const nested = within(group);
+    return {
+      group,
+      reasoning: nested.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.reasoning-profile-summary')) }),
+      identity: nested.getByLabelText(tx('settings:models-page.profile-identity-summary')) as HTMLInputElement,
+      limit: nested.getByLabelText(tx('settings:models-page.output-limit-summary')) as HTMLInputElement,
+      outer: screen.getByLabelText(tx('settings:models-page.profile-identity')) as HTMLInputElement,
+    };
+  };
+  const english = labels('en');
+  expect([english.identity.value, english.limit.value, english.outer.value]).toEqual(['deep', '2048', 'main-profile']);
+  expect(screen.getByLabelText('Profile identity (Summary)')).toBe(english.identity);
+  expect(screen.getByLabelText('Output limit (Summary)')).toBe(english.limit);
+  const snapshot = context();
+
+  act(() => localeController.setLocale('zh'));
+  const chinese = labels('zh');
+  expect([chinese.identity, chinese.limit, chinese.outer]).toEqual([english.identity, english.limit, english.outer]);
+  expect(screen.getByLabelText('配置标识（摘要）')).toBe(english.identity);
+  expect(screen.getByLabelText('输出上限（摘要）')).toBe(english.limit);
+  expect(within(chinese.group).getByRole('button', { name: /推理配置（摘要）$/ })).toBe(chinese.reasoning);
+  expect(within(chinese.group).queryAllByRole('button', { name: /Summary/ })).toEqual([]);
+  expect(chinese.group.textContent).not.toMatch(/Summary|Reasoning|Profile identity|Output limit/);
+  expect(write).not.toHaveBeenCalled();
+  expect(context()).toBe(snapshot);
+
+  fireEvent.change(chinese.identity, { target: { value: 'quick' } });
+  fireEvent.change(chinese.limit, { target: { value: '1024' } });
+  const zh = translator('zh');
+  const form = screen.getByRole('form', { name: zh('settings:models-page.default-model') });
+  fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${zh('settings:models-page.default-model')}` }));
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+  expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'root_model', authored: {
+    ...model, summary_model: { ...summary, reasoning_profile: { mode: 'profile', name: 'quick' }, max_output_tokens: { mode: 'limit', tokens: 1024 } },
+  } } }, 'r1']);
 });
 
 it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an Agent with optional profile text omitted: %j', async authored => {

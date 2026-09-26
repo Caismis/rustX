@@ -402,7 +402,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "866622e1e3b06f390a0fd648c1a65008d5ba6337f38cff9fc47fa3705e543078"
+      "local_sha256": "f408176eeb8c599b9b7972f4020f6fb0c833559f264c98edc42bfa7921825816"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -618,7 +618,7 @@
           "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "96d31c8636d3e942695f60109efdad2e61edac2fddf55f45650bdbc3750033d5"
+      "local_sha256": "a8776cfaf835b6f01ebb2804c1a3a3e00b8c02bee8dfa5794aa9fdfefe556fb5"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -627,6 +627,7 @@
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v23",
+        "../../bindings/status-labels",
         "../../locale/react",
         "../../locale/translation",
         "../../presentation/markdown/CodeBlock",
@@ -671,7 +672,7 @@
           "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "80fbda20e5cecc82d4d215753fa8c9d7263d73fe0c5c7b83c6059cafc2c55c62"
+      "local_sha256": "8e5d721e4da54d5d71ff693508757d4b145c4c4f58a8ef51492317f6fe92feef"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -2476,6 +2477,7 @@
         "../src/app/trajectory/timeline",
         "../src/bindings/status-labels",
         "../src/client/trace",
+        "../src/locale/controller",
         "../src/locale/translation",
         "./trace-fixture",
         "@testing-library/react",
@@ -2499,7 +2501,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "606edcb20d7a3853e545b41a61834514ca6887012f9041009ae6638d98357485"
+      "local_sha256": "240e5d820d0ba0df5c8089b3fb15344f99f06cccab44e98dc5fa422dfcc370fe"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3213,7 +3215,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "48142c21de492537af14e6c2a7cbac448dedbb9f76f464f65e9f371e910580ab"
+      "local_sha256": "092781bb206892f8fac8d01a668447eb45f8375a471789e0715dc4348cc388d8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

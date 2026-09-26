@@ -242,7 +242,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                   <span className={css.kindTag} data-kind={row.type === 'GroupHeader' ? 'step' : 'attempt'}>{row.label}</span>
                 </span>
                 <div role="cell" className={css.content}>
-                  {row.type === 'TurnHeader' && collapsedTurns.has(row.attempt_id) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === row.attempt_id && r.state !== 'completed').map(r => r.state).join(' · ')}</span>}
+                  {row.type === 'TurnHeader' && collapsedTurns.has(row.attempt_id) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === row.attempt_id && r.state !== 'completed').map(r => traceStateLabel(tx, r.state)).join(' · ')}</span>}
                   {row.type === 'TurnHeader' && row.native_record && row.native_record.state !== 'completed' && <span className={css.state}>{traceStateLabel(tx, row.native_record.state)}</span>}
                 </div>
               </div>;

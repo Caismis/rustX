@@ -2,7 +2,9 @@ import ts from 'typescript';
 
 /** A bounded syntax check of presentation positions. It parses TSX, including
  * multiline expressions, but deliberately does not infer arbitrary data flow. */
-const copyProps = /^(?:alt|aria-label|aria-description|aria-valuetext|title|label|placeholder|description|hint|tooltip|emptyLabel|confirm|confirmLabel|confirmText|cancelLabel|subtitle|emptyText|triggerLabel|closeLabel|copy|copied|collapse|collapseAria|expandAria|noOutput|noExitCode|running|failed|done|copyLabel|copiedLabel|footnotes|note|copyValue|copyJson|copyPath|copyPretty|copyCompact|collapseNode|expandNode)$/;
+// `prefix`/`suffix` are affixes a component splices into its visible label,
+// so a literal there is product copy exactly like `label` itself.
+const copyProps = /^(?:prefix|suffix|alt|aria-label|aria-description|aria-valuetext|title|label|placeholder|description|hint|tooltip|emptyLabel|confirm|confirmLabel|confirmText|cancelLabel|subtitle|emptyText|triggerLabel|closeLabel|copy|copied|collapse|collapseAria|expandAria|noOutput|noExitCode|running|failed|done|copyLabel|copiedLabel|footnotes|note|copyValue|copyJson|copyPath|copyPretty|copyCompact|collapseNode|expandNode)$/;
 export interface CopyLiteral { start: number; end: number; text: string; line: number; kind: 'text' | 'attribute' | 'expression' | 'identity' }
 // Exact language-independent tokens; never wildcard files or English phrases.
 const tokens = new Set(['rustX', 'rX', 'JSON', 'JSON-RPC', 'HTTP', 'HTTPS', 'URL', 'ID', 'API', 'UTF-8', 'UTF-16', 'TOML', 'MCP', 'PNG', 'SVG', 'HTML', 'PDF', 'English', '中文', 'true', 'false', 'null', 'undefined', 'Symbol', 'Function', 'function()']);

@@ -42,6 +42,7 @@ import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
 import { previewOf, cellLabel } from './TrajectoryCell';
+import { traceStateLabel } from '../../bindings/status-labels';
 
 function JSON_LABELS(tx: Translate): JsonTreeLabels { return {
   copyValue: tx('trajectory:copy.copy-value'),
@@ -512,7 +513,7 @@ export function TrajectoryInspector({
             <Truncated of={tool.result.blocks_truncated} />
           </section>}
           <dl className={css.facts}>
-            <dt>{tx('trajectory:trajectory-inspector.status')}</dt><dd>{record.state}</dd>
+            <dt>{tx('trajectory:trajectory-inspector.status')}</dt><dd>{traceStateLabel(tx, record.state)}</dd>
             {record.request && <>
               <dt>{tx('trajectory:trajectory-inspector.model')}</dt><dd>{record.request.model}</dd>
               <dt>{tx('trajectory:trajectory-inspector.retry-recovery-ordinal')}</dt><dd>{record.request.retry_number}</dd>

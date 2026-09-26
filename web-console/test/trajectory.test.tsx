@@ -1,4 +1,5 @@
 import { traceStateLabel } from '../src/bindings/status-labels';
+import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted interaction contracts; see PROVENANCE.md. */
 import { timelineFocus, timelineProjectionRevision, trajectoryTimeline } from '../src/app/trajectory/timeline';
@@ -1133,4 +1134,39 @@ it('locale changes preserve Trajectory search membership for both vocabularies a
     expect(expected?.size, query).toBeGreaterThan(0);
     expect(searchItems(chinese, query), query).toEqual(expected);
   }
+});
+
+it('folded Turn preview and summary Status localize native lifecycle states without changing membership, native state or reads', () => {
+  const states = ['running', 'completed', 'failed', 'waiting', 'outcome_unknown'] as const;
+  const records = [
+    ...states.map((state, n) => traceRecord(n, { location: { attempt_id: 'attempt-a', step_id: '1' }, state })),
+    traceTool(9, { location: { attempt_id: 'attempt-b', step_id: '1' }, state: 'denied' }),
+  ];
+  const load = vi.fn(); const older = vi.fn(); const select = vi.fn(); const latest = vi.fn();
+  render(<Trajectory cache={cacheOf(records)} loadEarlier={older} latest={latest} onSelect={select} onLoadDetail={load} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
+  fireEvent.click(row('RecordRow', 'trace:9'));
+  const folded = document.querySelector<HTMLElement>('[data-display-type="TurnHeader"][data-attempt="attempt-a"]')!;
+  const preview = () => folded.querySelectorAll('[role="cell"]')[1]!.textContent;
+  const owners = () => [...document.querySelectorAll<HTMLElement>('[data-owner]')].map(element => element.dataset.owner);
+  const status = () => within(screen.getByRole('complementary', { name: translator(localeController.getSnapshot().active)('trajectory:trajectory-inspector.trace-record-inspector') }))
+    .getByText(translator(localeController.getSnapshot().active)('trajectory:trajectory-inspector.status'), { selector: 'dt' }).nextElementSibling?.textContent;
+  expect(preview()).toBe('running · failed · waiting · outcome unknown');
+  expect(status()).toBe('denied');
+  const visible = owners();
+  expect(visible).toEqual(['trace:9']);
+  const calls = [load, older, select, latest].map(fn => fn.mock.calls.length);
+
+  act(() => localeController.setLocale('zh'));
+  expect(preview()).toBe('运行中 · 失败 · 等待中 · 结果未知');
+  expect(preview()).not.toMatch(/[a-z_]/);
+  expect(status()).toBe('已拒绝');
+  expect(owners()).toEqual(visible);
+  expect(records.map(record => record.state)).toEqual([...states, 'denied']);
+  expect([load, older, select, latest].map(fn => fn.mock.calls.length)).toEqual(calls);
+
+  act(() => localeController.setLocale('en'));
+  expect(preview()).toBe('running · failed · waiting · outcome unknown');
+  expect(owners()).toEqual(visible);
+  expect([load, older, select, latest].map(fn => fn.mock.calls.length)).toEqual(calls);
 });
