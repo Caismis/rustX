@@ -85,9 +85,9 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   // page of its own.
   fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
   const form = within(screen.getByRole('form', { name: 'bash policy' }));
-  await chooseOption('execution', 'model_selectable', form);
-  await chooseOption('concurrency', 'parallel', form);
-  await chooseOption('approval', 'always', form);
+  await chooseOption('execution', 'Model selectable', form);
+  await chooseOption('concurrency', 'Parallel', form);
+  await chooseOption('approval', 'Always', form);
   fireEvent.click(form.getByRole('button', { name: 'Save bash policy' }));
   await waitFor(() => expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'native_policy', id: 'bash', authored: { execution: 'model_selectable', concurrency: 'parallel', approval: 'always' } } }, 'p1']));
   fireEvent.change(screen.getByLabelText('MCP policy identity'), { target: { value: 'search' } });

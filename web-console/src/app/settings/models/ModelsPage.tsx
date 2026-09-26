@@ -235,7 +235,7 @@ function ModelFields({ form }: { form: TypedForm<Model> }) {
       <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required />
       <Text form={form} name="provider" label={tx('settings:models-page.provider-identity')} required />
       <Enum form={form} name="protocol" label={tx('settings:models-page.protocol')}
-        options={[['openai_chat_completions', 'openai_chat_completions'], ['openai_responses', 'openai_responses'], ['anthropic_messages', 'anthropic_messages']]} />
+        options={[['openai_chat_completions', /* i18n-raw: exact protocol or wire-field identifier */ 'openai_chat_completions'], ['openai_responses', /* i18n-raw: exact protocol or wire-field identifier */ 'openai_responses'], ['anthropic_messages', /* i18n-raw: exact protocol or wire-field identifier */ 'anthropic_messages']]} />
       <NumericText form={form} name="context_window" label={tx('settings:models-page.context-window')} />
       <Numeric form={form} name="max_output_tokens" label={tx('settings:models-page.maximum-output-tokens')} />
     </div>
@@ -249,26 +249,27 @@ function ModelFields({ form }: { form: TypedForm<Model> }) {
     <Advanced title={tx('settings:models-page.request-defaults-and-protocol-compatibility')}>
       <RequestParameters form={form} name="request_params" />
       <Enum form={form} name="compat.chat_reasoning_replay" label={tx('settings:models-page.chat-reasoning-replay')} empty={tx('settings:copy.unspecified')}
-        options={[['omit', 'omit'], ['reasoning_content', 'reasoning_content'], ['reasoning', 'reasoning']]} />
+        options={[['omit', tx('settings:model-option.omit')], ['reasoning_content', /* i18n-raw: exact protocol or wire-field identifier */ 'reasoning_content'], ['reasoning', /* i18n-raw: exact protocol or wire-field identifier */ 'reasoning']]} />
       <Enum form={form} name="compat.chat_max_tokens_field" label={tx('settings:models-page.chat-output-field')} empty={tx('settings:copy.unspecified')}
-        options={[['max_tokens', 'max_tokens'], ['max_completion_tokens', 'max_completion_tokens']]} />
+        options={[['max_tokens', /* i18n-raw: exact protocol or wire-field identifier */ 'max_tokens'], ['max_completion_tokens', /* i18n-raw: exact protocol or wire-field identifier */ 'max_completion_tokens']]} />
       <Enum form={form} name="compat.chat_stream_usage" label={tx('settings:models-page.chat-stream-usage')} empty={tx('settings:copy.unspecified')}
-        options={[['supported', 'supported'], ['unsupported', 'unsupported']]} />
+        options={[['supported', tx('settings:model-option.supported')], ['unsupported', tx('settings:model-option.unsupported')]]} />
       <Enum form={form} name="compat.chat_tool_protocol" label={tx('settings:models-page.chat-tool-protocol')} empty={tx('settings:copy.unspecified')}
-        options={[['native', 'native'], ['qwen_xml', 'qwen_xml']]} />
+        options={[['native', tx('settings:model-option.native')], ['qwen_xml', /* i18n-raw: exact protocol or wire-field identifier */ 'qwen_xml']]} />
       <Enum form={form} name="compat.responses_storage" label={tx('settings:models-page.responses-storage')} empty={tx('settings:copy.unspecified')}
-        options={[['stateless', 'stateless'], ['stored', 'stored']]} />
+        options={[['stateless', tx('settings:model-option.stateless')], ['stored', tx('settings:model-option.stored')]]} />
     </Advanced>
   </>;
 }
 
 function ModalitySet({ form, name, label }: { form: TypedForm<Model>; name: 'capabilities.input_modalities' | 'capabilities.output_modalities'; label: string }) {
+  const tx = useTranslation();
   const Field = form.Field as unknown as (props: { name: string; children: (field: { state: { value: unknown }; handleChange: (value: never) => void }) => React.ReactNode }) => React.ReactNode;
   return <Field name={name}>{field => {
     const value = (field.state.value as Modality[] | undefined) ?? [];
     return <div>{label}{modalities.map(modality => <label key={modality}>
       <input type="checkbox" checked={value.includes(modality)}
-        onChange={event => field.handleChange((event.target.checked ? [...value, modality] : value.filter(item => item !== modality)) as never)} />{modality}
+        onChange={event => field.handleChange((event.target.checked ? [...value, modality] : value.filter(item => item !== modality)) as never)} />{tx(`settings:model-option.${modality}`)}
     </label>)}</div>;
   }}</Field>;
 }

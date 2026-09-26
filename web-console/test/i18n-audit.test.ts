@@ -43,3 +43,24 @@ it('requires stable option values so localized labels cannot become filter ident
   const source = `<select><option>{tx('inspector:inspector.request')}</option><option value="response">{tx('inspector:inspector.response')}</option></select>`;
   expect(findCopy('example.tsx', source).map(row => row.kind)).toEqual(['identity']);
 });
+
+
+it('checks only the visible second position in inline Choice/Enum options, including spreads and const tuples', () => {
+  const source = `<><Choice options={[
+    ['foreground_only', 'Foreground only'],
+    ['background_only', tx('settings:policy.background_only')],
+    ...(enabled ? [['parallel', 'Parallel'] as const] : []),
+  ]} /><Enum options={([['never', 'Never']] as const)} /></>`;
+  expect(findCopy('example.tsx', source).map(row => row.text)).toEqual(['Foreground only', 'Parallel', 'Never']);
+});
+
+it('accepts native option identities, translated labels, exact tokens and one narrowly exempt opaque label', () => {
+  const source = `<Choice options={[
+    ['English native identity', tx('settings:policy.always')],
+    ['mcp', 'MCP'],
+    ['wire_id', /* i18n-raw: exact wire-field identifier */ 'wire_id'],
+    ['another_id', 'Translate this'],
+    ...nativeIds.map(id => [id, id] as const),
+  ]} />`;
+  expect(findCopy('example.tsx', source).map(row => row.text)).toEqual(['Translate this']);
+});

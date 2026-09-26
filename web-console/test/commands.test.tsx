@@ -1,8 +1,10 @@
+import { localeController } from '../src/locale/controller';
+import { translator } from '../src/locale/translation';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { commands, discoveryQuery, parseCommand, available } from '../src/app/commands/registry';
 import { activeAttempt, executionIdle, lineageSwitchSafe } from '../src/bindings/projection';
 import { matchCommands } from '../src/app/commands/matching';
@@ -563,3 +565,67 @@ function expectTailSwitching(disabled: boolean) {
   expect(screen.getByRole('button', { name: 'Fork to new Session' })).toHaveProperty('disabled', false);
 
 }
+
+
+it('model/profile selector membership and native selection are invariant across live locale switches', async () => {
+  const sequences: Request[][] = [];
+  for (const locale of ['en', 'zh'] as const) {
+    server = new Server(); nativeFixture();
+    server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [
+      { model: 'fixture/first' }, { model: 'native/模型.Model', reasoningProfiles: [{ id: 'profile-原样', enabled: true }] },
+    ] } } as Extract<MethodResult, { type: 'models' }>));
+    await server.attached('A');
+    act(() => localeController.setLocale(locale));
+    const close = vi.fn();
+    render(<CommandPanel request={{ id: 'model' }} client={server.client} sessionId="A" current={() => true} close={close} succeeded={() => {}} opened={() => {}} />);
+    await screen.findAllByRole('option');
+    const rowIds = () => screen.queryAllByRole('option').map(row => row.getAttribute('data-choice-id'));
+    const reads = [...server.requests];
+    for (const [query, expected] of [
+      ['reasoning', ['native/模型.Model:profile-原样']], ['推理配置', ['native/模型.Model:profile-原样']],
+      ['native/模型.Model', ['native/模型.Model', 'native/模型.Model:profile-原样']], ['profile-原样', ['native/模型.Model:profile-原样']],
+    ] as const) {
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: query } });
+      for (const active of ['en', 'zh'] as const) {
+        act(() => localeController.setLocale(active));
+        expect(rowIds(), `${active}: ${query}`).toEqual(expected);
+        expect(server.requests).toEqual(reads);
+      }
+    }
+    act(() => localeController.setLocale(locale));
+    expect(screen.getByRole('textbox', { name: translator(locale)('commands:command-panel.filter-options') })).toBeTruthy();
+    const before = server.requests.length;
+    await act(async () => fireEvent.click(screen.getByRole('option')));
+    await waitFor(() => expect(close).toHaveBeenCalledExactlyOnceWith());
+    sequences.push(server.requests.slice(before).map(row => row.request));
+    cleanup(); server.client.disconnect();
+  }
+  expect(sequences[0].map(request => request.method)).toEqual(['session/setModel', 'session/snapshot', 'session/model', 'session/models']);
+  expect(sequences[0][0]).toMatchObject({ method: 'session/setModel', params: { config: { model: 'native/模型.Model', reasoningProfile: 'profile-原样' } } });
+  expect(sequences[1]).toEqual(sequences[0]);
+});
+
+
+it('lineage origin labels stay deferred and bilingual without changing node IDs or reads', async () => {
+  const fixture = nativeFixture();
+  fixture.nodes.push(
+    { id: 'clone-A', conversation_id: 'native-clone-conversation', ordinal: '2', origin: { type: 'clone', source_session: 'A', source_node: 'node-A', source_surface_revision: '1' } },
+    { id: 'fork-A', conversation_id: 'native-fork-conversation', ordinal: '3', origin: { type: 'fork', source_session: 'A', source_node: 'node-A', source_surface_revision: '1', source_message: 'native-message', side: 'before' } },
+  );
+  await server.attached('A');
+  render(<CommandPanel request={{ id: 'tree' }} client={server.client} sessionId="A" current={() => true} close={() => {}} succeeded={() => {}} opened={() => {}} />);
+  await screen.findAllByRole('option');
+  const before = [...server.requests];
+  for (const [origin, id] of [['new', 'node-A'], ['clone', 'clone-A'], ['fork', 'fork-A']] as const) {
+    for (const language of ['en', 'zh'] as const) {
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: translator(language)(`commands:tree.origin.${origin}`) } });
+      for (const active of ['en', 'zh'] as const) {
+        act(() => localeController.setLocale(active));
+        const row = screen.getByRole('option');
+        expect(row.getAttribute('data-choice-id')).toBe(id);
+        expect(row.textContent).toContain(translator(active)(`commands:tree.origin.${origin}`));
+        expect(server.requests).toEqual(before);
+      }
+    }
+  }
+});

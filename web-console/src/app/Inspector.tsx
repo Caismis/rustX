@@ -84,7 +84,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
         <Button size="sm" variant="outline" onClick={() => protocolLog.clear()}>{tx('inspector:inspector.clear-log')}</Button>
         <Button size="sm" variant="outline" onClick={() => {
           if (!navigator.clipboard) { setCopyState(message('inspector:copy.copy-failed-clipboard-unavailable')); return; }
-          void navigator.clipboard.writeText(json(entries)).then(() => setCopyState(tx('inspector:copy.copied-json')), () => setCopyState(tx('inspector:copy.copy-failed-clipboard-unavailable')));
+          void navigator.clipboard.writeText(json(entries)).then(() => setCopyState(message('inspector:copy.copied-json')), () => setCopyState(message('inspector:copy.copy-failed-clipboard-unavailable')));
         }}>{tx('inspector:inspector.copy-json')}</Button>
       </div>
     </div>

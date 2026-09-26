@@ -1009,3 +1009,8 @@ and Sidebar inline translator are removed. All authored chrome uses one typed
 translation path; native/user/model/Tool text remains opaque. The locale layer
 imports only itself and React, and the presentation dependency boundary permits
 only its React and translation entry points.
+
+PR #418 review corrections (invariant command search, deferred clipboard notices,
+option-label checking and typed status presentation) are independent rustX work.
+No additional Harness material was copied or adapted. Existing source records
+retain their upstream revisions; local hashes and import closures are refreshed.

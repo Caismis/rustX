@@ -39,7 +39,23 @@ export function findCopy(file: string, source: string): CopyLiteral[] {
       }
     }
   }
+  // Choice and its Enum form wrapper own [semantic value, visible label] tuples.
+  // Follow only inline syntax (including spreads/const assertions), not data flow.
+  function optionLabels(node: ts.Node) {
+    if (ts.isArrayLiteralExpression(node)) {
+      for (const option of node.elements) {
+        let tuple: ts.Node = option;
+        while (ts.isAsExpression(tuple) || ts.isSatisfiesExpression(tuple) || ts.isParenthesizedExpression(tuple)) tuple = tuple.expression;
+        if (ts.isArrayLiteralExpression(tuple) && tuple.elements[1]) expression(tuple.elements[1]);
+        else if (ts.isSpreadElement(tuple)) optionLabels(tuple.expression);
+      }
+    } else if (ts.isConditionalExpression(node)) { optionLabels(node.whenTrue); optionLabels(node.whenFalse); }
+    else if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node)) optionLabels(node.expression);
+  }
   function visit(node: ts.Node) {
+    if (ts.isJsxAttribute(node) && node.name.getText(ast) === 'options'
+      && node.initializer && ts.isJsxExpression(node.initializer) && node.initializer.expression
+      && ['Choice', 'Enum'].includes(node.parent.parent.tagName.getText(ast))) optionLabels(node.initializer.expression);
     if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === 'option'
       && !node.openingElement.attributes.properties.some(prop => ts.isJsxAttribute(prop) && prop.name.getText(ast) === 'value')) {
       report(node.openingElement, 'Option needs an explicit stable value independent of its translated label', 'identity');

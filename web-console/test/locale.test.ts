@@ -1,7 +1,7 @@
 import { compactTokens } from '../src/app/agent/TurnTail';
 import { describe, expect, it, vi } from 'vitest';
 import { LocaleController, documentLanguage, LOCALE_STORAGE_KEY, type LocaleEnvironment, type LocaleId } from '../src/locale/controller';
-import { displayText, interpolate, message, translator } from '../src/locale/translation';
+import { displayText, interpolate, message, searchVocabulary, translator } from '../src/locale/translation';
 function environment(stored: string | null, languages: string[] = []): LocaleEnvironment {
   return { read: () => stored, write: vi.fn(), languages: () => languages, documentLanguage: vi.fn() };
 }
@@ -54,4 +54,13 @@ describe('one browser locale owner', () => {
 it('presentation formatting uses the selected rustX locale', () => {
   expect(compactTokens(translator('en'), 12000)).toBe('12K');
   expect(compactTokens(translator('zh'), 12000)).toBe('1.2万');
+});
+
+
+it('invariant search vocabulary preserves opaque strings and renders nested messages in both built-ins', () => {
+  const raw = 'native.ID /路径 {name}';
+  expect(searchVocabulary(raw)).toBe(raw);
+  const nested = message('commands:tree.node-detail', { conversation: raw, origin: 'fork', parent: message('commands:copy.parent-value', { p0: 'node-原样' }) });
+  expect(searchVocabulary(nested)).toBe(`${displayText(translator('en'), nested)} ${displayText(translator('zh'), nested)}`);
+  expect(searchVocabulary(nested)).toContain('node-原样');
 });

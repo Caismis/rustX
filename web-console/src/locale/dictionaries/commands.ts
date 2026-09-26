@@ -1,4 +1,7 @@
 export const en = {
+  "tree.origin.new": "new",
+  "tree.origin.clone": "clone",
+  "tree.origin.fork": "fork",
   "command-menu.commands": "Commands",
   "command-menu.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prom": "Unsupported command. Edit the draft; it will not be sent as a prompt.",
   "command-panel.replay-the-original-input-once": "Replay the original input once",
@@ -44,6 +47,9 @@ export const en = {
 } as const;
 export type CommandsKey = keyof typeof en;
 export const zh = {
+  "tree.origin.new": "新建",
+  "tree.origin.clone": "克隆",
+  "tree.origin.fork": "分叉",
   "command-menu.commands": "命令",
   "command-menu.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prom": "不支持此命令。请编辑草稿；不会将其作为提示发送。",
   "command-panel.replay-the-original-input-once": "重放原始输入一次",

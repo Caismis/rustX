@@ -1,14 +1,15 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { localeController } from '../src/locale/controller';
 import { translator, type TranslationKey } from '../src/locale/translation';
 import { Interactions } from '../src/app/agent/Interactions';
 import { ToolCard } from '../src/presentation/agent/ToolCard';
 import { Server, interaction } from './fixture';
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
 let server: Server | undefined;
-afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); });
+afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard); else Reflect.deleteProperty(navigator, 'clipboard'); });
 const text = (key: TranslationKey) => translator(localeController.getSnapshot().active)(key);
 
 it('switches the complete active shell and General through Language, preserving the composer and making zero server requests', async () => {
@@ -145,4 +146,44 @@ it('Inspector filters retain semantic wire kinds across a live locale switch', a
   expect([...select.options].map(option => option.value)).toEqual(['', 'request', 'response', 'notification', 'invalid']);
   expect([...document.querySelectorAll('.protocol-log pre')].map(node => node.textContent)).toEqual(before);
   expect(server.requests).toEqual(requests);
+});
+
+
+it.each([true, false])('retained Inspector clipboard completion (%s) live-switches without repeating any operation', async success => {
+  const { LiveInspector } = await import('../src/app/Inspector');
+  server = new Server(); await server.connect();
+  const writeText = vi.fn(() => success ? Promise.resolve() : Promise.reject(new Error('Clipboard denied')));
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  render(<LiveInspector client={server.client}/>);
+  const before = [...server.requests];
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Copy JSON' })));
+  const key = success ? 'inspector:copy.copied-json' : 'inspector:copy.copy-failed-clipboard-unavailable';
+  const notice = screen.getByRole('status');
+  expect(notice.textContent).toContain(translator('en')(key));
+  act(() => localeController.setLocale('zh'));
+  expect(screen.getByRole('status')).toBe(notice);
+  expect(notice.textContent).toContain(translator('zh')(key));
+  expect(notice.textContent).not.toContain(translator('en')(key));
+  expect(writeText).toHaveBeenCalledTimes(1);
+  expect(server.requests).toEqual(before);
+});
+
+
+it.each(['en', 'zh'] as const)('policy display choices preserve exact native values in %s', async locale => {
+  const { PolicyFields } = await import('../src/app/settings/tools/ToolsPage');
+  act(() => localeController.setLocale(locale));
+  const change = vi.fn(), tx = translator(locale);
+  render(<PolicyFields value={{}} change={change}/>);
+  for (const [field, label, values] of [
+    ['execution', 'settings:tools-page.execution', ['foreground_only', 'background_only', 'model_selectable']],
+    ['concurrency', 'settings:tools-page.concurrency', ['sequential', 'parallel']],
+    ['approval', 'settings:tools-page.approval-2', ['never', 'always']],
+  ] as const) {
+    for (const value of values) {
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`${tx(label)}$`) }));
+      fireEvent.click(screen.getByRole('option', { name: tx(`settings:policy.${value}`) }));
+      expect(change).toHaveBeenLastCalledWith({ [field]: value });
+    }
+  }
+  expect(change).toHaveBeenCalledTimes(7);
 });

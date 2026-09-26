@@ -1,4 +1,4 @@
-import { message, displayText, type DisplayText } from '../../locale/translation';
+import { message, displayText, searchVocabulary, type DisplayText } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -56,7 +56,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   const loadTree = async (offset: number) => {
     setRows([]);
     const tree = await scope.tree(offset); if (!valid()) return;
-    setRows(tree.nodes.map(node => ({ id: node.id, label: node.id, detail: message('commands:tree.node-detail', { conversation: node.conversation_id, origin: node.origin.type, parent: node.parent ? message('commands:copy.parent-value', { p0: node.parent }) : '' }), choice: { kind: 'node', nodeId: node.id, conversationId: node.conversation_id } })));
+    setRows(tree.nodes.map(node => ({ id: node.id, label: node.id, detail: message('commands:tree.node-detail', { conversation: node.conversation_id, origin: message(`commands:tree.origin.${node.origin.type}`), parent: node.parent ? message('commands:copy.parent-value', { p0: node.parent }) : '' }), choice: { kind: 'node', nodeId: node.id, conversationId: node.conversation_id } })));
     setNext(tree.next_offset); setActive(0);
   };
   useEffect(() => {
@@ -108,7 +108,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     } catch (cause) { if (valid()) { setError(message('commands:copy.value-close-and-reread-authoritative-state-before-another-mutation', { p0: String(cause) })); setStopped(true); } }
     finally { selecting.current = false; if (valid()) setBusy(false); }
   };
-  const filtered = rows.filter(row => `${displayText(tx, row.label)} ${displayText(tx, row.detail ?? '')}`.toLowerCase().includes(query.toLowerCase()));
+  const filtered = rows.filter(row => `${searchVocabulary(row.label)} ${searchVocabulary(row.detail ?? '')}`.toLowerCase().includes(query.toLowerCase()));
   useEffect(() => { options.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active, query]);
   const stale = !scope.current();
   return <Modal closeLabel={tx('commands:command-panel.close-dialog')} open title={request.id === 'tree' ? tx('commands:command-panel.session-tree') : request.id === 'retry' ? tx('commands:command-panel.retry-regenerate') : tx('commands:command-panel.value', { p0: request.id })} onClose={close}>
@@ -125,7 +125,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && filtered.length) { event.preventDefault(); setActive(index => (index + (event.key === 'ArrowDown' ? 1 : filtered.length - 1)) % filtered.length); }
         if (event.key === 'Enter' && filtered[active] && !event.nativeEvent.isComposing) { event.preventDefault(); void choose(filtered[active].choice); }
       }} />
-      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? tx('commands:command-panel.historical-boundaries') : tx('commands:command-panel.native-choices')}>{filtered.map((row, index) => <button type="button" role="option" id={`choice-${index}`} aria-selected={active === index} disabled={busy || stopped || stale || blocked} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
+      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? tx('commands:command-panel.historical-boundaries') : tx('commands:command-panel.native-choices')}>{filtered.map((row, index) => <button type="button" role="option" data-choice-id={row.id} id={`choice-${index}`} aria-selected={active === index} disabled={busy || stopped || stale || blocked} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
         <span>{displayText(tx, row.label)}</span><small>{displayText(tx, row.detail ?? '')}</small>
       </button>)}</div></>}
     {(historical || request.id === 'tree') && next != null && !request.messageId && <Button disabled={busy} onClick={() => { setBusy(true); void (request.id === 'tree' ? loadTree(next) : loadBoundaries(next)).catch(cause => { if (valid()) setError(String(cause)); }).finally(() => { if (valid()) setBusy(false); }); }}>{tx('commands:command-panel.more')}{' '}{historical ? tx('commands:command-panel.boundaries') : tx('commands:command-panel.nodes')}</Button>}

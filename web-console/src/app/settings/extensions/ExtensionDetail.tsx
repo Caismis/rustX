@@ -127,7 +127,7 @@ function McpFields({ form }: { form: import('../forms/bridge').TypedUnitForm<Mcp
     form.setFieldValue('retained_headers' as never, [] as never);
   };
   return <Subscribe selector={state => mcpTransport(state.values.definition)}>{transport => <>
-    <Choice label={tx('settings:extension-detail.transport')} value={transport} options={[['stdio', 'stdio'], ['http', 'HTTP']]}
+    <Choice label={tx('settings:extension-detail.transport')} value={transport} options={[['stdio', /* i18n-raw: standard transport identifier */ 'stdio'], ['http', 'HTTP']]}
       onChange={next => { if (next !== transport) setTransport(next); }} />
     {transport === 'http'
       ? <Text form={form} name="definition.url" label={tx('settings:extension-detail.mcp-url')} required url />

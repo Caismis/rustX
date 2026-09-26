@@ -1,3 +1,4 @@
+import { traceStateLabel } from '../../bindings/status-labels';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -242,14 +243,14 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                 </span>
                 <div role="cell" className={css.content}>
                   {row.type === 'TurnHeader' && collapsedTurns.has(row.attempt_id) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === row.attempt_id && r.state !== 'completed').map(r => r.state).join(' · ')}</span>}
-                  {row.type === 'TurnHeader' && row.native_record && row.native_record.state !== 'completed' && <span className={css.state}>{row.native_record.state}</span>}
+                  {row.type === 'TurnHeader' && row.native_record && row.native_record.state !== 'completed' && <span className={css.state}>{traceStateLabel(tx, row.native_record.state)}</span>}
                 </div>
               </div>;
               const record = row.record;
               const warning = record.state !== 'completed' && (row.type === 'RecordRow' || row.type === 'RequestBoundary');
               const truncated = row.type === 'ContextRow' ? row.context.truncated || row.context.preview?.truncated : row.type === 'SystemPromptCell' ? record.request?.system_prompt.preview?.truncated : record.truncated || record.preview?.truncated;
               return <div key={row.display_key} data-display-key={row.display_key} data-owner={row.owner_record_id} data-trace-id={record.id} data-display-type={row.type} data-kind={record.kind} data-state={record.state} data-selected={activeKey === row.display_key || undefined} data-timeline-focus={focusedIds ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
-                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={tx('trajectory:trajectory.value-value-2', { p0: row.label, p1: row.preview || record.state })} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown}>
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={tx('trajectory:trajectory.value-value-2', { p0: row.label, p1: row.preview || traceStateLabel(tx, record.state) })} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown}>
                 <span role="cell" className={css.event}>
                   <span className={css.kindTag} data-kind={row.type === 'SystemPromptCell' ? 'system' : row.type === 'ContextRow' ? 'context' : record.kind}>
                     {row.type === 'RecordRow' && <span className={css.kindIcon}><CellIcon kind={record.kind} /></span>}
@@ -261,7 +262,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                   {row.type === 'RequestBoundary' && (record.request?.retry_number ?? 0) > 0 && <span className={css.relation}>{tx('trajectory:trajectory.retry-recovery')} {record.request?.retry_number}</span>}
                   {row.type === 'CollapsedCallSummary' && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>{tx('trajectory:trajectory.expand-calls')}</button>}
                   {row.type === 'RecordRow' && record.calls.length > 0 && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>{calls.has(record.id) ? tx('trajectory:trajectory.expand') : tx('trajectory:trajectory.collapse')} {tx('trajectory:trajectory.calls')}</button>}
-                  {warning && <span className={css.state}>{record.state}</span>}
+                  {warning && <span className={css.state}>{traceStateLabel(tx, record.state)}</span>}
                   {truncated && <span className={css.state}>{tx('trajectory:trajectory.truncated')}</span>}
                   {row.type === 'RequestBoundary' && record.request?.context_truncated && <span className={css.state}>{tx('trajectory:trajectory.context-history-truncated')}</span>}
                 </div>

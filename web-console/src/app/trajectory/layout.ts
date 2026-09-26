@@ -1,3 +1,4 @@
+import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
 import type { TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v23';
@@ -74,7 +75,7 @@ export function systemPresentation(tx: Translate, record: TraceRecord): { label:
 }
 
 export function recordLabel(tx: Translate, record: TraceRecord): string {
-  if (record.kind === 'compaction') return record.state === 'completed' ? tx('trajectory:compacted') : record.state === 'running' ? tx('trajectory:copy.compacting') : tx('trajectory:copy.compaction-value', { p0: record.state });
+  if (record.kind === 'compaction') return record.state === 'completed' ? tx('trajectory:compacted') : record.state === 'running' ? tx('trajectory:copy.compacting') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, record.state) });
   return tx(`trajectory:kind.${record.kind}`);
 }
 
@@ -206,12 +207,12 @@ export function matchingCalls(records: readonly TraceRecord[]): Map<string, Trac
 }
 
 export function callsSummary(tx: Translate, owner: TraceRecord, executions: readonly TraceRecord[]): string {
-  const states = new Map<string, number>();
+  const states = new Map<TraceRecord['state'], number>();
   for (const execution of executions) {
     const state = execution.state;
     states.set(state, (states.get(state) ?? 0) + 1);
   }
-  return tx('trajectory:copy.value-proposed-value-loaded-matching-executionsvalue-value-started', { p0: owner.calls.length, p1: executions.length, p2: [...states].map(([state, count]) => ` · ${count} ${state === 'completed' ? tx('common:state.settled') : state}`).join(''), p3: executions.filter(record => record.tool?.started).length });
+  return tx('trajectory:copy.value-proposed-value-loaded-matching-executionsvalue-value-started', { p0: owner.calls.length, p1: executions.length, p2: [...states].map(([state, count]) => ` · ${count} ${traceStateLabel(tx, state)}`).join(''), p3: executions.filter(record => record.tool?.started).length });
 }
 
 /** Search visibility and timeline dimming share the projection's exact membership.

@@ -128,7 +128,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "5bda8a90f336382822310af06980579e8dd1014234b9030d54d1e2b9f75eba70"
+      "local_sha256": "d05832fb9f26b7e138f3cd574a322a4f78c6bc0de917f190a21b2580c95609f1"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -402,7 +402,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1f2de63770be7087d44447f388a2f7fd18845c256a827591139034d773585e35"
+      "local_sha256": "866622e1e3b06f390a0fd648c1a65008d5ba6337f38cff9fc47fa3705e543078"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -467,7 +467,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "09ba628713e3749538121d49709c6b158a4cc3ce2398b538b70f41a20848adc4"
+      "local_sha256": "83c4378ddd2b07ecbc44d7027eb08d95e5608ee05f571ea458b004660a5bf213"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -557,6 +557,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
+        "../../bindings/status-labels",
         "../../client/trace",
         "../../locale/react",
         "../../presentation/primitives/Button",
@@ -617,7 +618,7 @@
           "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "0dfb548e434c1044f689ca43accf88983d1dfb0f848c50b5ed613ec53569e050"
+      "local_sha256": "96d31c8636d3e942695f60109efdad2e61edac2fddf55f45650bdbc3750033d5"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -724,6 +725,7 @@
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
         "../../../../protocol/app-server/v23",
+        "../../bindings/status-labels",
         "../../locale/translation"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -736,7 +738,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "958bcaf97a0bd6b810669e6d2207678f1476deff9abcd7da1c0a6ca8c0e46ac6",
+      "local_sha256": "e23906de7646ea78a4c371f9ee051f3c67616242feb412232938130812a244e9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -2472,6 +2474,7 @@
         "../src/app/trajectory/layout",
         "../src/app/trajectory/search",
         "../src/app/trajectory/timeline",
+        "../src/bindings/status-labels",
         "../src/client/trace",
         "../src/locale/translation",
         "./trace-fixture",
@@ -2496,7 +2499,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "1926b79f33ff4dc7ddb70d62bbdd21624721dc7fbbe9623c2c3a3ddb4b11adb4"
+      "local_sha256": "606edcb20d7a3853e545b41a61834514ca6887012f9041009ae6638d98357485"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3104,7 +3107,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "ab3473c1cbee48053e648e5f0e3e124d95fcf16682a95f64363ec24400f47482"
+      "local_sha256": "5e0b6569fdb8d4c7f0ce1deec86656757fadb76c41c3979acad927dab656aff5"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3210,7 +3213,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "65f9ce4725518087b5bec3facc518a3e49af513d595f78f8eea0627869a0e8b2"
+      "local_sha256": "48142c21de492537af14e6c2a7cbac448dedbb9f76f464f65e9f371e910580ab"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

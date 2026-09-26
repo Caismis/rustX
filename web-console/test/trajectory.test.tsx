@@ -1,3 +1,4 @@
+import { traceStateLabel } from '../src/bindings/status-labels';
 import { translator } from '../src/locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted interaction contracts; see PROVENANCE.md. */
 import { timelineFocus, timelineProjectionRevision, trajectoryTimeline } from '../src/app/trajectory/timeline';
@@ -391,19 +392,23 @@ it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page
   expect(matchingCalls([assistant, { ...assistant, id: 'other-proposer' }, execution(1)]).size).toBe(0);
 });
 
-it('T1-08 Calls summary exposes warnings and leaves native domains independent', () => {
+it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes warnings in %s and leaves native domains independent', locale => {
+  const tx = translator(locale);
   const assistant = proposal();
-  const executions = ['failed', 'denied', 'waiting', 'outcome_unknown'].map((state, n) => execution(n + 1, { state: state as TraceRecord['state'] }));
+  const states = ['completed', 'failed', 'denied', 'waiting', 'outcome_unknown'] as const;
+  const executions = states.map((state, n) => execution(n + 1, { state }));
   const domains = ['background', 'subagent', 'workflow'].map((kind, n) => traceRecord(n + 10, { kind: kind as TraceRecord['kind'], request: null, originating_tool_call_id: 'same' }));
   const records = [assistant, ...executions, ...domains, traceRecord(20, { kind: 'compaction', request: null, state: 'running' })];
-  const visible = visibleItems(translator('en'), trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
+  const visible = visibleItems(tx, flattenTrajectory(tx, projectTrajectory(tx, records)), records, new Set(), new Set([assistant.id]), null);
   const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
-  for (const state of ['failed', 'denied', 'waiting', 'outcome_unknown']) expect(summary.preview).toContain(`1 ${state}`);
+  const labels = locale === 'en' ? ['settled', 'failed', 'denied', 'waiting', 'outcome unknown'] : ['已结束', '失败', '已拒绝', '等待中', '结果未知'];
+  for (const label of labels) expect(summary.preview).toContain(`1 ${label}`);
+  expect(executions.map(record => record.state)).toEqual(states);
   for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(true);
-  expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe('Compacting…');
+  expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
-    const item = trajectoryItems([traceRecord(21, { kind: 'compaction', request: null, state })]).find(item => item.type === 'RecordRow')!;
-    expect(item.label).toBe(state === 'completed' ? 'COMPACTED' : `Compaction · ${state}`);
+    const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
+    expect(item.label).toBe(state === 'completed' ? tx('trajectory:compacted') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, state) }));
   }
 });
 

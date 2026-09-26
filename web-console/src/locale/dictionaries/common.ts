@@ -1,5 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "state.incomplete": "incomplete",
+  "state.settling": "settling",
+  "state.limited": "limited",
   "app.artifact-preview": "Artifact preview",
   "app.developer-inspector": "Developer inspector",
   "app.connection-recovery": "Connection recovery",
@@ -157,6 +160,9 @@ export const en = {
 } as const;
 export type CommonKey = keyof typeof en;
 export const zh = {
+  "state.incomplete": "未完成",
+  "state.settling": "正在结算",
+  "state.limited": "已达限制",
   "app.artifact-preview": "制品预览",
   "app.developer-inspector": "开发者检查器",
   "app.connection-recovery": "连接恢复",

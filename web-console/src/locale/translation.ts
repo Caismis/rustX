@@ -40,3 +40,9 @@ export function displayText(tx: Translate, value: DisplayText): string {
   if (typeof value === 'string') return value;
   return tx(value.key, Object.fromEntries(Object.entries(value.params ?? {}).map(([key, part]) => [key, typeof part === 'object' ? displayText(tx, part) : part])));
 }
+
+/** Search membership uses both built-ins, never the active presentation locale.
+ * Opaque values and nested message parameters retain their original text. */
+export function searchVocabulary(value: DisplayText): string {
+  return typeof value === 'string' ? value : `${displayText(builtins.en, value)} ${displayText(builtins.zh, value)}`;
+}
