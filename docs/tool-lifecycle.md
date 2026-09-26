@@ -218,14 +218,17 @@ policy is intentionally absent. The same status meanings apply, including
 `Denied`, `TimedOut`, and `OutcomeUnknown`. A durable terminal candidate is
 retained during publication failure; repeated finish/cancel cannot replace it.
 Terminal publication precedes the observable terminal state. Its deterministic
-correlation prevents duplicate inbound messages. The model-facing `execution`
-tool only routes observations/control to this authority.
+correlation prevents duplicate inbound messages. The separate `job_list`,
+`job_status`, `job_wait` and `job_cancel` tools route to this finite Job owner.
+Status never waits; wait binds the exact Job ID and awaits physical settlement
+through a watch. Unknown IDs fail immediately. Terminal Jobs cannot resume.
 
-Subagent creation similarly returns a creation result; the child registry owns
-the child's later lifecycle. Workflow foreground execution retains its existing
-Workflow and child authorities. `execution(steer)` uses the shared cooperative
-handle while keeping the subagent registry's exact guidance admission frontier
-and ticket cleanup. Cancelling a steer never invents child cancellation.
+Native `subagent` creates a durable Agent and its first finite activation.
+`send_message` atomically chooses Active delivery or Inactive activation admission;
+Stopping rejects. `wait_agent` captures one activation and `interrupt_agent`
+settles only that activation. The identity remains resumable. Workflow finite
+AgentRuns retain their Workflow-owned input/output contract. See
+[Jobs and continuable Agents](jobs-and-agents.md) for ownership and linearization.
 
 ## Recovery
 

@@ -1,5 +1,5 @@
 import { useSelector } from '@xstate/react';
-import type { SourceTarget } from '../../../protocol/app-server/v23';
+import type { SourceTarget } from '../../../protocol/app-server/v25';
 import type { AppServerClient, SessionView, ConnectionState } from '../client/app-server';
 import type { ReactNode } from 'react';
 import { Button } from '../presentation/primitives/Button';

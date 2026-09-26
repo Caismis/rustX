@@ -217,7 +217,7 @@ impl Fixture {
             .unwrap()
             .insert("local/b".into(), alternate);
         catalog["agent"].as_table_mut().unwrap().insert("tools".into(),
-            toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "ask_user", "execution"]})).unwrap());
+            toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "ask_user", "job_status"]})).unwrap());
         documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
         let paths = launch::analyze(&LaunchRequest::default(), &host)

@@ -383,6 +383,10 @@ pub struct TraceRecord {
     pub calls: Vec<TraceToolCall>,
     /// Exact native detached execution / Subagent / Workflow / interaction ID.
     pub native_id: Option<String>,
+    pub agent_id: Option<crate::runtime::identity::AgentId>,
+    pub activation_id: Option<crate::runtime::identity::SubagentId>,
+    /// Frozen admission source; client controls never invent a model Tool call.
+    pub activation_origin: Option<crate::runtime::subagent::AgentActivationOrigin>,
     /// The exact outer `ToolCall` this Tool-owned domain record belongs to,
     /// copied from the native start fact. It is presentation and navigation
     /// correlation only: it confers no lifecycle, ownership, settlement or

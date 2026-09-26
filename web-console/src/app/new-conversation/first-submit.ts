@@ -1,7 +1,7 @@
 import { assign, fromPromise, setup } from 'xstate';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { WorkspaceHostError } from '../../workspaces/host';
-import type { SessionModelConfig, UploadReceipt } from '../../../../protocol/app-server/v23';
+import type { SessionModelConfig, UploadReceipt } from '../../../../protocol/app-server/v25';
 
 /** Only draft values and acknowledged native facts. No provisional identity. */
 export interface FirstDraft { workspaceId: string; text: string; files: readonly File[]; model?: SessionModelConfig }

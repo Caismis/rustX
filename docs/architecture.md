@@ -55,7 +55,7 @@ and lock contract in [Goal extension](goal-extension.md).
 Canonical `ProductRoot` is the sole authority for rustX-owned product storage
 paths. Session, Conversation and child allocations are derived from that identity
 before any private path is authored. Equivalent root aliases converge; symlinks
-below the product root remain invalid private identities. Subagent IPC v22 carries
+below the product root remain invalid private identities. Subagent IPC v28 carries
 canonical product identity plus child Conversation identity and an incarnation
 name, never a second absolute private runtime root. Inspection uses the same
 identity-derived allocation. Embedded workspace managers may remain independent;
@@ -66,7 +66,7 @@ native workspace managers derive storage from their composed Conversation access
 `SessionArchiveProducer` in the native library reads catalog/lineage, immutable
 SQLite history and ArtifactStore bytes. It owns one finite cut and one versioned
 inspection archive, without loading runtimes or depending on transport/Trace.
-App Server v23 prepares a scoped streaming-download capability; Web consumes it
+App Server v25 prepares a scoped streaming-download capability; Web consumes it
 through the browser download manager and TUI writes bytes to a client-local file.
 Neither client composes the archive. Execution coordination ends before history
 serialization, compression or transport backpressure. See the exact authority,
@@ -1365,8 +1365,8 @@ tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            dispatch ownership commit, cancel-vs-complete
                            linearization, terminal inbound publication,
                            bounded progress snapshots)
-runtime/subagent/          SubagentRegistry (conversation-owned one-shot
-                           child runtimes: two-stage prepare/commit, driver
+runtime/subagent/          SubagentRegistry (durable child Agent identities
+                           and finite activations: two-stage prepare/commit, driver
                            task as sole process owner, cancel/escalation,
                            exactly-once terminal publication), the bounded
                            framed control IPC, and process supervision
@@ -2381,7 +2381,7 @@ implements `execution_mode` handling of its own.
 The registry is a correctness boundary: duplicate `ToolId`s, duplicate
 model-facing names, empty identities, invalid or non-root JSON Schema,
 reserved `__rustx_*` collisions, invalid policy combinations, and
-background-capable `execution` registrations are rejected; a
+background-capable control Tool registrations are rejected; a
 canonical call whose id and name disagree is a contract violation. Tool
 definitions reach the model in deterministic registration order, and the
 context engine accounts the exact compiled definitions.
@@ -2413,50 +2413,19 @@ state machine (`Starting -> Running -> Cancelling -> terminal`), a
 two-stage dispatch with an explicit ownership commit linearization
 point, a cancel-vs-completion linearization rule, bounded latest progress
 snapshots, and exactly-once terminal inbound mailbox publication
-(`background-exec_N-terminal`). The `execution` intrinsic
-(foreground-only, sequential) is the **single model-facing observation,
-steering, and cancellation control plane** for conversation-owned
-asynchronous executions (Issue #162, steering from Issue #193): every
-creation result returns a typed execution handle (`kind` + `id`), and
-`execution(status|cancel|steer)` routes an explicit `kind = tool` target
-only to `ConversationBackgroundRegistry` and a `kind = subagent` target
-only to `SubagentRegistry`. There is exactly one model-facing handle type
-and exactly one model-facing control tool; steering adds an action, never a
-second handle and never a second tool. The intrinsic owns no lifecycle
-state — the domain registries remain the sole authorities for lifecycle,
-cancellation, durability, settlement, and terminal publication — and it
-never infers a kind from an id string or falls through from one domain to
-another. `steer` is subagent-only, and `kind = tool` + `action = steer` is
-refused as an unsupported kind/action combination before either authority
-is consulted.
+(`background-exec_N-terminal`). `job_list`, `job_status`, `job_wait` and
+`job_cancel` are finite Job controls. Status is immediate; wait targets one
+immutable Job's physical settlement through a watch. A terminal Job is final.
 
-`execution(steer)` is a **control acknowledgement plane, never a child
-result channel**. It owns the model-facing schema, the explicit action
-dispatch, the target-kind validation, and the minimal acknowledgement
-projection (`execution`, `state`, `accepted`); every semantic decision —
-whether this child may still accept guidance, how accepted guidance is
-ordered, how acceptance linearizes against cancellation intent and
-terminal authority, and how the message reaches the child's Agent Loop —
-belongs to `SubagentRegistry::steer` and, below it, to the child
-conversation's own coordinator — including the ownership refusal of a
-Workflow-owned `AgentRun`, whose semantic input is authored by the compiled
-Workflow program through the `WorkflowRuntime` and never by this control
-plane. A child's final report continues to arrive exactly once through the
-canonical parent inbound publication.
-
-As a foreground `ToolCall`, `execution(steer)` participates honestly in
-the generic Issue #204 cancellation/settlement lifecycle through the shared
-`ToolExecutionHandle::settled_by_operation` ownership mechanism. There is no
-private steer operation slot or second lifecycle owner. The steer domain's
-`SteerToolEnd` classifies its **effect frontier**: before admission, typed
-`Cancelled` yields confirmed no-effect settlement; after admission with the
-child undecided, typed `OutcomeUnknown` maps through the shared handle to
-`Unconfirmed`; a known child decision yields a confirmed typed steer result.
-The child registry owns guidance acceptance; the generic Tool lifecycle owns
-canonical ToolResult selection and commit.
-Cancelling the steer ToolCall is deliberately not subagent cancellation:
-it never invokes `SubagentRegistry::cancel`, and the child subagent keeps
-running under its own lifecycle.
+`SubagentRegistry` separately owns durable AgentId, child ConversationId, parent
+lineage, frozen profile/resources/workspace and zero or one current activation.
+`subagent` creates the identity; `send_message` atomically admits to Active or
+reserves a fresh activation of Inactive; Stopping rejects transiently. The child
+must request admission closure before sealing its guidance inbox. The same owner
+mutex decides send versus closure, and already-admitted FIFO input precedes seal
+grant. `wait_agent` captures one activation and `interrupt_agent` ends only that
+activation. The Agent remains resumable. See [Jobs and Agents](jobs-and-agents.md)
+for linearization, canonical history, Event Journal and replay contracts.
 
 The bundle also owns the conversation's `ConversationTodoList` — when the
 frozen composition includes the **Todo Agent Extension** (Issue #259). That is
@@ -2574,8 +2543,7 @@ ordinary registrations under the concrete bounded `NativeToolPolicies`
 configuration: each ordinary native tool independently selects its
 execution and concurrency policy (foreground-only sequential by default,
 with `BackgroundOnly` and `ModelSelectable` as legal per-tool choices).
-The only intentionally fixed policy remains the runtime intrinsic
-`execution`.
+Job and Agent control Tools retain fixed foreground-only sequential policy.
 
 One native capability owns one module boundary. A native tool module owns
 its name, description, typed input contract, generated schema, executor,
@@ -2664,146 +2632,12 @@ full line. These tool-owned projections remain below the global 64KB runtime
 safety boundary; the global limiter is not changed and remains the last
 resort for Bash, MCP, and other result types.
 
-`execution` is a runtime intrinsic that happens to participate in the
-common tool execution plane. It is not an ordinary native tool: it is the
-single model-facing observation, discovery, and cancellation control plane
-for conversation-owned asynchronous executions (Issues #162 and #180). Its
-contract and runtime semantics are outside the ordinary-native-tool contract
-alignment, and it is never moved, renamed, or re-schema'd to make
-`tools/native/` look uniform. The closed role of the control plane is:
-
-```text
-creation APIs      -> return an ExecutionHandle { kind, id }
-execution(status)  -> inspect one execution through its owning domain
-execution(cancel)  -> request cancellation through its owning domain
-execution(list)    -> discover bounded conversation-owned execution handles
-terminal results   -> remain on their existing domain result channels
-```
-
-It owns only routing: every request is dispatched by explicit `kind` to the
-owning domain registry (`ConversationBackgroundRegistry` for `kind = tool`,
-`SubagentRegistry` for `kind = subagent`), which returns its authoritative
-snapshot or its own authoritative bounded listing; the intrinsic projects
-those into a bounded tagged model-facing representation. The tool status
-projection carries the `BackgroundExecutionSnapshot`; the subagent status
-projection is the minimal control contract of Issue #192 (typed handle,
-named agent, lifecycle state, `publication_abandoned`, the committed
-cancellation reason when one exists, and the semantic
-`isolated_changes_retained` fact when settlement retained changed isolated
-work) and deliberately excludes everything else the authoritative
-`SubagentSnapshot` carries — the registry's internal `detail` (diagnostics-only
-since Issue #178, when the successful child answer stopped entering it),
-the observation-plane `observation`/`execution_profile` fields, the child
-agent/conversation correlation, the delegating tool call, the definition
-digest, and every physical workspace fact — so the canonical inbound
-child-agent message remains the **only**
-child-result delivery channel, `execution` never becomes a result channel,
-and observing a child never enlarges parent model context. The intrinsic
-never guesses a kind from an id, never tries one registry and falls through
-to another, and never owns lifecycle state, a registry, a cache,
-cancellation implementation, durability, or result publication.
-
-The model-facing input contract is action-tagged, so the action determines
-which fields exist rather than leaving a target optional:
-
-```json
-{"action": "status", "target": {"kind": "tool | subagent", "id": "..."}}
-{"action": "cancel", "target": {"kind": "tool | subagent", "id": "..."}}
-{"action": "list",   "filter": {"kind": "tool | subagent", "active_only": true}}
-```
-
-A `target` on `list`, a missing `target` on `status`/`cancel`, a `filter`
-outside `list`, and any unknown field are all input-contract violations
-under the existing strict-schema policy; there is no compatibility spelling
-for the pre-#180 shape. The filter vocabulary is deliberately the smallest
-useful one — an optional `kind` and an optional `active_only`, where
-omission is the only spelling of "do not filter on this axis". There is no
-query language, sort key, cursor, label selector, or conversation selector,
-and no `wait`, `output`, `logs`, `poll_result`, `transcript`, `restart`, or
-`delete` action.
-
-Read-model ownership runs one way only. Each domain authority owns its own
-bounded discovery read model, and the model-facing control plane consumes
-them; no domain depends on the control plane that consumes it:
-
-```text
-ConversationBackgroundRegistry::listing(active_only, limit)
-    -> BackgroundExecutionListing   (owned by the background domain)
-
-SubagentRegistry::listing(active_only, limit)
-    -> SubagentListing              (owned by the subagent domain)
-
-execution(list)
-    -> requests a bounded read model from each selected domain
-    -> converts, merges, and projects them
-    -> applies the one global MAX_LISTED_EXECUTIONS response bound
-    -> returns ExecutionListingResponse
-```
-
-The split of authority is the point. A registry owns which executions
-exist, their lifecycle classification, its own authoritative intra-domain
-order, the matching count, and finite snapshot construction from an
-explicit `limit` its caller supplies. The intrinsic owns filter routing
-between domains, the cross-domain merge policy, the global response limit,
-the truncation metadata, and the model-facing projection. `tools/execution`
-retains only the shared model-facing identity envelope — `ExecutionKind`,
-`ExecutionHandle`, and the `MAX_LISTED_EXECUTIONS` response bound — and no
-read model at all: `MAX_LISTED_EXECUTIONS` is a property of the
-`execution(list)` *response*, never a domain invariant, and a registry
-bounds only how much it materializes.
-
-`execution(list)` semantics:
-
-- **Scope.** Discovery is conversation-scoped *by construction*, not by
-  filtering: the intrinsic holds the registries this conversation owns, so
-  another conversation's execution is unreachable rather than hidden, and
-  remains indistinguishable from absence — even when the two conversations
-  allocated structurally identical ids.
-- **Kind isolation.** The kind filter selects which domain authority is
-  consulted at all, so it can never fall through into the other domain.
-- **Lifecycle filter.** `active_only` uses each owning domain's own
-  classification (`BackgroundLifecycle::is_active`,
-  `SubagentState::is_active`), under which `PublishingTerminal` is
-  non-terminal. Omitting the field — the default — lists active and
-  terminal executions alike.
-- **Ordering.** Each domain returns its matching records most recently
-  allocated first, in its own authoritative allocation order. The intrinsic
-  merges the two by strict alternation starting with the tool domain
-  (tool, subagent, tool, subagent, ...); when one domain runs out the
-  remainder of the other follows in order. The two domains allocate from
-  independent sequences and share no ordinal or clock, so alternation — not
-  concatenation — is what keeps one domain's overflow from starving the
-  other out of a single global bound. Ordering never depends on timestamps.
-  The merged result is therefore deterministic but deliberately **not**
-  globally most-recent-first: newest-first holds *within each domain*, and
-  no cross-domain chronological claim is made — nor could one be, since the
-  domains share no ordinal or clock. The model-facing tool description says
-  exactly this and claims no global recency.
-- **Bound and truncation.** The response is truncated to the single global
-  `MAX_LISTED_EXECUTIONS` constant; there are no per-domain quotas, so the
-  externally visible bound is exactly one number. Every response carries
-  `returned`, `matched` (how many matched the filter before the bound),
-  `truncated`, and `limit`, so the shape does not change with the data.
-  Truncation keeps the deterministic prefix of the order, and repeating an
-  identical request against unchanged registries returns identical entries
-  and identical metadata.
-- **Observation only.** Listing takes each registry's ordinary read path and
-  mutates nothing: no lifecycle, no cancellation, no settlement, no terminal
-  notification, no capacity accounting, no ordering, and — for subagents —
-  no observation-plane revision or latest value.
-- **No result retrieval.** A listing entry carries the typed handle, the
-  owning domain's own lifecycle state, and the few identity facts that make
-  it recognizable (`tool_name`; `agent`, `started_at`,
-  `publication_abandoned`). It carries no detached tool `result` or
-  `progress`, no subagent `detail`, no answer content, and no child
-  history. Full child history belongs to the child's own conversation.
-- **Lifecycle vs. activity.** The `state` of an entry is the owning
-  domain's authoritative lifecycle vocabulary, so `list` and `status`
-  project the same lifecycle facts for the same execution. Issue #178's
-  live activity projection is deliberately *not* part of either: it is an
-  observational read model that enters no model context, `execution(status)`
-  already drops it, and a listing that carried it would make one action of
-  the same intrinsic expose what another withholds.
+Job and Agent controls are thin domain-specific Tool adapters with ordinary
+foreground invocation settlement. They own no registries or lifecycle decisions.
+There is no shared model-facing identity envelope or action-tagged control Tool.
+Both listings are bounded and conversation-scoped; Agent discovery is topology
+and current state, not a filtered Job list or execution-history dump. Child
+reports remain canonical inbound content, never control-result history.
 
 Native tool input schemas are generated from tool-owned Rust input types,
 so the typed contract is the single source of truth for the model-facing
@@ -4641,7 +4475,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v23](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v25](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4666,7 +4500,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v23
+       App Server protocol v25
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4683,13 +4517,13 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v23, and
+which after #290 has no external client: `rustx-tui` speaks App Server v25, and
 `src/runtime_client` is an internal projection foundation the App Server reuses.
 App Server clients never negotiate or nest it. Its local version is
 `RUNTIME_CLIENT_PROTOCOL_VERSION`.
 
-Runtime Client protocol 34 removes the obsolete global `SessionSummaryView.active`
-field. Strict initialization rejects v33 clients; Session route changes report
+Runtime Client protocol 34 removed the obsolete global `SessionSummaryView.active`
+field. Current version 51 rejects all older peers; Session route changes report
 reattachment requirements against the installed single-runtime attachment.
 
 Version 24 added the typed question
@@ -4811,14 +4645,14 @@ routed interaction projection for the root human surface. Version 11
 added the
 subagent live-activity projection; version 10 added subagent workspace facts
 and preserved-worktree handoff metadata; and version 9 added `interrupted` to the
-closed `SubagentState` vocabulary: `RuntimeClientSubagent` now carries the
+closed `SubagentState` vocabulary: `RuntimeClientAgent` now carries the
 child's latest-value `observation` (revision, activity, timestamp,
 counters), the redacted `execution_profile` (wire key `execution_profile`;
 the bare `profile` key stays retired), and `started_at`. Rust snapshots and
 the maintained TUI mirror agree that an unexpected child process/control-plane
 loss has an unknown outcome, and that the activity projection is
-diagnostics-only — the closed `SubagentState` lifecycle remains the only
-authority on whether a child is alive, settling, or settled. Superseded
+diagnostics-only. Runtime Client v48 separates durable `AgentState` from finite
+activation `SubagentState`; neither lifecycle is inferred from activity. Superseded
 Runtime Client versions are rejected explicitly;
 there is no compatibility decoder.
 
@@ -5761,7 +5595,7 @@ not stdio as a transport choice. The following describes the current #38 adapter
 
 #### Runtime Client configuration projection
 
-App Server v23 projects authored sources, effective configuration and composable
+App Server v25 projects authored sources, effective configuration and composable
 per-unit application state. Save transfers work to native reconciliation; clients
 render native cache impact and submit explicit adoption intent. Scope/version
 notifications and authoritative rereads repair reconnect without mutation replay.
@@ -5798,7 +5632,7 @@ as future authority.
 
 ### Layer 9: TUI and Web
 
-Both are thin App Server v23 clients. TUI `/settings` authors User/Workspace
+Both are thin App Server v25 clients. TUI `/settings` authors User/Workspace
 sources, `/session settings` inspects Session state, `/session adopt` submits the
 inspected candidate, and `/model` changes Session intent. Web Settings separates
 source authoring from Session adoption. Save automatically transfers work to the
@@ -6947,7 +6781,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v23](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v25](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership
@@ -7007,11 +6841,11 @@ validate exact occurrence relationships and cannot retain only one side of a pai
 
 ### Native Subagent transcript inspection
 
-The parent's addressed runtime resolves an exact SubagentId through its native
+The parent's addressed runtime resolves an exact AgentId through its native
 registry to the owned child Conversation. Existing allocation access and an
 identity-validated read-only store feed the shared Runtime Client durable
 transcript projector and completed-response decorator. App Server
-`subagent/transcript` translates this bounded read only; it never reconstructs
+`agent/transcript` translates this bounded read only; it never reconstructs
 messages, creates child Sessions or grants a child controller. The child Ledger,
 Surface and Journal remain the sole canonical authorities. Terminal lifecycle
 and retained workspace facts do not manufacture transcript completion facts.
@@ -7019,4 +6853,4 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-subagent-conversations-v23).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v25).

@@ -26,14 +26,40 @@ execution/approval policies or create a persistent configuration layer.
 The profile digest covers effective execution semantics. Canonical Tool identity,
 model binding, Skill version and closed Plugin behavior are frozen before process
 staging. Equivalent resolved profiles have the same digest; routing prose and
-unselected definitions do not create execution authority. A steering message is
+unselected definitions do not create execution authority. A `send_message` input is
 ordinary inbound task content, never a way to change that admitted profile.
 
 ## Durable ownership
 
 Each child owns a typed UUIDv7 Conversation identity and a Conversation-local
-SQLite store under its owning Session. Subagent ordinal identity retains its
-real parent-scoped ordering semantics and is not the Conversation locator.
+SQLite store under its owning Session. `AgentId` is the durable child identity. Internal `SubagentId` names one finite
+activation and retains parent-scoped ordinal ordering; it is not the Conversation
+locator and is never reused for a later activation.
 Tool outputs belong to that Conversation allocation. Parent/child ownership
 commits, execution settlement, process supervision and retained-worktree disposal
 remain native runtime responsibilities. See [Session deletion ownership](session-deletion-ownership.md).
+
+## Durable Agent authority across activations
+
+The resolved contract freezes at Agent creation, not each resume. The durable
+Agent owns the same child ConversationId and workspace authority across multiple
+finite activation IDs. `send_message` to an inactive Agent reuses that admitted
+profile, model, Tools, Skills, resources and policies; it does not consult current
+settings or reread a named definition. Parent resource/configuration reload cannot
+mutate existing Agent authority. See [Jobs and continuable Agents](jobs-and-agents.md).
+
+Resume also requires proven physical containment of the prior activation. An
+explicit `interrupt_agent` settles as Cancelled after native physical settlement
+and leaves the Agent resumable. Crash reconciliation records Interrupted without
+proof that the old direct child and nested processes settled. It preserves the
+same inactive Agent/history projection but refuses another physical activation;
+clean Git inspection or a shared workspace does not supply that missing proof.
+Disposed or unresolved workspace authority likewise cannot be reacquired by resume.
+
+Resume preparation has its own durable `AgentActivationAdmission` obligation.
+Reserved commits before staging, under the same product ownership fence used by
+Session management. Committed activation ownership consumes that reservation;
+rollback closes it only with an explicit containment result. An unresolved or
+unproven rollback reconstructs Stopping with the exact reserved activation ID,
+blocks further admission, and prevents Session deletion from removing resources.
+A prior successful activation cannot settle this later physical obligation.

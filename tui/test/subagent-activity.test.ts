@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { RuntimeClientSubagent } from "../src/protocol/app-server.ts";
+import type { RuntimeClientAgent } from "../src/protocol/app-server.ts";
 import { renderSubagentSection } from "../src/ui/components/activity.ts";
 import {
   prefs,
@@ -23,24 +23,24 @@ import { subagent, subagentObservation } from "./support/fixtures.ts";
 const NOW = new Date("2026-09-02T10:03:00Z");
 
 function render(
-  children: RuntimeClientSubagent[],
-  selectedSubagentId?: string,
+  children: RuntimeClientAgent[],
+  selectedAgentId?: string,
 ): string {
   return plain(
     renderSubagentSection(
-      stateOf({ subagents: children }),
+      stateOf({ agents: children }),
       prefs(),
       NOW,
-      selectedSubagentId,
+      selectedAgentId,
     ),
   );
 }
 
 function child(
-  activity: RuntimeClientSubagent["observation"]["activity"],
-  overrides: Partial<RuntimeClientSubagent> = {},
-): RuntimeClientSubagent {
-  return subagent("explore", "sha256:d1", "running", {
+  activity: RuntimeClientAgent["observation"]["activity"],
+  overrides: Partial<RuntimeClientAgent> = {},
+): RuntimeClientAgent {
+  return subagent("explore", "sha256:d1", "active", {
     observation: subagentObservation(activity, {
       revision: "1",
       last_activity_at: "2026-09-02T10:02:55Z",
@@ -50,36 +50,36 @@ function child(
 }
 
 describe("subagent activity section", () => {
-  it("renders nothing when the runtime knows of no subagents", () => {
+  it("renders nothing when the runtime knows of no agents", () => {
     assert.equal(render([]), "");
   });
 
   it("keeps terminal children as durable conversation navigation targets", () => {
     const rendered = render([
-      subagent("explore", "sha256:d1", "succeeded"),
+      subagent("explore", "sha256:d1", "inactive"),
     ]);
-    assert.match(rendered, /Subagents · 0 active of 1 known/);
-    assert.match(rendered, /explore · succeeded · conv_57d68983-5497-771e-baaa-5f1356061697/);
+    assert.match(rendered, /Agents · 0 active of 1 known/);
+    assert.match(rendered, /explore · inactive · agent-child/);
     assert.doesNotMatch(rendered, /awaiting activity/);
   });
 
   it("shows the header count and the lifecycle of active children only", () => {
     const rendered = render([
       child({ type: "awaiting_activity" }),
-      subagent("worker", "sha256:d2", "succeeded", {
-        subagent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
+      subagent("worker", "sha256:d2", "inactive", {
+        agent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
         child_conversation_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
       }),
     ]);
-    assert.match(rendered, /Subagents · 1 active of 2 known/);
-    assert.match(rendered, /explore · running/);
+    assert.match(rendered, /Agents · 1 active of 2 known/);
+    assert.match(rendered, /explore · active/);
     assert.match(rendered, /worker/);
     assert.match(rendered, /conv_7563d0be-1638-75d5-8d79-6768bd57808c/);
   });
 
   it("advertises disposal for retained and unresolved physical resources", () => {
     const rendered = render([
-      subagent("worker", "sha256:d1", "succeeded", {
+      subagent("worker", "sha256:d1", "inactive", {
         workspace: {
           logical_workspace: "/runtime/worktrees/one",
           isolation: {
@@ -108,7 +108,7 @@ describe("subagent activity section", () => {
 
   it("does not hide an unresolved physical resource", () => {
     const rendered = render([
-      subagent("worker", "sha256:d1", "failed", {
+      subagent("worker", "sha256:d1", "inactive", {
         workspace: {
           logical_workspace: "/runtime/worktrees/one",
           isolation: {
@@ -130,19 +130,19 @@ describe("subagent activity section", () => {
   it("marks only the selected row without changing the observation payload", () => {
     const rendered = render([
       child({ type: "awaiting_activity" }),
-      subagent("worker", "sha256:d2", "failed", {
-        subagent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
+      subagent("worker", "sha256:d2", "inactive", {
+        agent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
         child_conversation_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
       }),
     ], "conv_7563d0be-1638-75d5-8d79-6768bd57808c");
-    assert.match(rendered, /▸ .*worker · failed · conv_7563d0be-1638-75d5-8d79-6768bd57808c/);
-    assert.match(rendered, /Enter conversation · i details · Esc Main/);
+    assert.match(rendered, /▸ .*worker · inactive · conv_7563d0be-1638-75d5-8d79-6768bd57808c/);
+    assert.match(rendered, /Enter conversation · i details .*Esc Main/);
   });
 
   it("derives elapsed time from started_at at render time", () => {
     const rendered = render([child({ type: "awaiting_activity" })]);
     // started_at 10:00:00Z, rendered at 10:03:00Z.
-    assert.match(rendered, /running · 3m/);
+    assert.match(rendered, /active · 3m/);
   });
 
   it("shows the time since the last projected activity", () => {
@@ -153,7 +153,7 @@ describe("subagent activity section", () => {
 
   it("omits the last-activity line before the child reports any", () => {
     const rendered = render([
-      subagent("explore", "sha256:d1", "running", {
+      subagent("explore", "sha256:d1", "active", {
         observation: subagentObservation({ type: "awaiting_activity" }),
       }),
     ]);
@@ -216,8 +216,8 @@ describe("subagent activity section", () => {
         tool_id: "tool-grep",
         progress: { message: huge },
       }),
-      subagent(`agent-${"y".repeat(50_000)}`, "sha256:d1", "running", {
-        subagent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
+      subagent(`agent-${"y".repeat(50_000)}`, "sha256:d1", "active", {
+        agent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",
         observation: subagentObservation({ type: "awaiting_activity" }),
       }),
     ]);

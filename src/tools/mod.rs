@@ -17,7 +17,6 @@ pub mod artifacts;
 pub mod background;
 pub mod deadline;
 pub mod environment;
-pub mod execution;
 pub mod executor;
 pub mod invocation;
 pub mod limits;
@@ -45,11 +44,10 @@ pub use deadline::{
     ToolExecutionDeadlinePolicy, ToolProgressCapability, ToolSettlementCertainty,
 };
 pub use environment::{ToolEnvironment, ToolEnvironmentError};
-pub use execution::{ExecutionHandle, ExecutionKind};
 pub use executor::{
-    ASK_USER_TOOL_NAME, EXECUTION_TOOL_NAME, PreflightOutcome, PreparedInvocation,
-    ProgressReporter, ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolPreflightError,
-    ToolRegistry, ToolRegistryError, ToolSettlement,
+    ASK_USER_TOOL_NAME, PreflightOutcome, PreparedInvocation, ProgressReporter,
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolPreflightError, ToolRegistry,
+    ToolRegistryError, ToolSettlement,
 };
 pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};

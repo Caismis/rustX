@@ -226,6 +226,7 @@ impl WorkspaceManager {
                 facts.phase,
                 true,
                 Some(content_proof),
+                false,
             )
             .await?;
         if facts.disposed {

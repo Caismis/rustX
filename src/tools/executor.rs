@@ -843,8 +843,6 @@ impl ToolRegistration {
     }
 }
 
-/// The name of the runtime intrinsic execution-control tool.
-pub const EXECUTION_TOOL_NAME: &str = "execution";
 /// The native human-questionnaire tool.
 pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 /// The model-facing name reserved for Workflow Agent terminalization.
@@ -968,14 +966,14 @@ impl ToolRegistry {
                 name: definition.name.clone(),
                 reason: error.to_string(),
             })?;
-        if definition.name == EXECUTION_TOOL_NAME
+        if crate::tools::native::is_domain_control(&definition.name)
             && (definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
                 || definition.concurrency_policy != ToolConcurrencyPolicy::Sequential)
         {
             return Err(ToolRegistryError::InvalidPolicy(format!(
-                "the runtime intrinsic {EXECUTION_TOOL_NAME} is fixed to \
-                 foreground-only sequential execution and may never be background-dispatchable"
+                "the runtime intrinsic {} is fixed to foreground-only sequential execution",
+                definition.name
             )));
         }
         if definition.name == ASK_USER_TOOL_NAME
@@ -1255,7 +1253,7 @@ fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value
 #[cfg(test)]
 mod tests {
     use super::{
-        EXECUTION_TOOL_NAME, PreflightOutcome, ToolPreflightError, ToolRegistry, ToolRegistryError,
+        PreflightOutcome, ToolPreflightError, ToolRegistry, ToolRegistryError,
         WORKFLOW_OUTPUT_TOOL_NAME,
     };
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
@@ -1504,15 +1502,15 @@ mod tests {
         }
     }
 
-    /// The runtime intrinsic `execution` cannot be background-capable.
+    /// Domain controls cannot background their own synchronization.
     #[test]
-    fn execution_cannot_be_background_capable() {
+    fn domain_controls_cannot_be_background_capable() {
         let mut registry = ToolRegistry::new();
         let error = register(
             &mut registry,
             definition(
-                EXECUTION_TOOL_NAME,
-                EXECUTION_TOOL_NAME,
+                crate::tools::native::jobs::NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::BackgroundOnly,
                 ToolConcurrencyPolicy::Sequential,
                 object_schema(),
@@ -1523,8 +1521,8 @@ mod tests {
         let error = register(
             &mut registry,
             definition(
-                EXECUTION_TOOL_NAME,
-                EXECUTION_TOOL_NAME,
+                crate::tools::native::jobs::NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolConcurrencyPolicy::Parallel,
                 object_schema(),
@@ -1535,8 +1533,8 @@ mod tests {
         register(
             &mut registry,
             definition(
-                EXECUTION_TOOL_NAME,
-                EXECUTION_TOOL_NAME,
+                crate::tools::native::jobs::NAMES[0],
+                crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolConcurrencyPolicy::Sequential,
                 object_schema(),

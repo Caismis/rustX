@@ -162,7 +162,7 @@ iterations and historical accepted candidate references. Separate identity
 tests reject old runs, blocks, iterations and visits; a coordinator projection
 test rejects a queued old Review against a settled native row.
 
-Rust and TypeScript share `tests/fixtures/runtime-client/workflow-v22.json`.
+Rust and TypeScript share `tests/fixtures/runtime-client/workflow-v24.json`.
 The TUI projection tests prove replacement/snapshot convergence, pure rendering,
 concurrent waits, nested layout, orphan visibility after truncation, historical
 acceptance and honest cancellation/exhaustion text. One real stdio integration

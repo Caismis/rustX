@@ -138,14 +138,14 @@ pub async fn representative_scenario(
     assert_eq!(snapshot_b.effective_approval_mode, ApprovalMode::Policy);
 
     // Every carrier validates exact parent authority before native child lookup.
-    let child_id = rustx::runtime::identity::SubagentId::new(a.conversation_id.as_str());
+    let child_id = rustx::runtime::identity::AgentId::new(a.conversation_id.as_str());
     let response = driver
         .request(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(374),
-            call: Method::SubagentTranscript {
+            call: Method::AgentTranscript {
                 target: a.clone(),
-                subagent_id: child_id.clone(),
+                agent_id: child_id.clone(),
                 before: None,
                 limit: 32,
             },
@@ -156,9 +156,7 @@ pub async fn representative_scenario(
     };
     assert_eq!(
         failure.error.data,
-        Some(ErrorData::UnknownSubagent {
-            subagent_id: child_id
-        })
+        Some(ErrorData::UnknownAgent { agent_id: child_id })
     );
 
     // Reconciliation is native, scope identified and does not fabricate a

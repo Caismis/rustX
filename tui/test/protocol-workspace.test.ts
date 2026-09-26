@@ -3,14 +3,14 @@
  *
  * The fixtures under `tests/fixtures/runtime-client/` are the shared
  * contract between the Rust projection and this TypeScript mirror: a Rust
- * wire-contract test serializes `RuntimeClientSubagentWorkspace` and asserts
+ * wire-contract test serializes `RuntimeClientAgentWorkspace` and asserts
  * byte equality with each fixture, while this suite parses the same bytes and
  * asserts deep equality with values typed as the mirror declarations. If the
  * Rust projection drifted back to the pre-#187 flat `workspace`/`isolated`
  * schema, or this mirror did, one side fails — the typecheck pins the
  * declaration, the deep equality pins the runtime bytes. The Issue #187
  * workspace authority shape is carried into v15 with the explicit
- * post-terminal resource lifecycle and unchanged into v21; the Issue #202
+ * post-terminal resource lifecycle and unchanged into v24; the Issue #202
  * renumbering (tool outcome certainty) must not drop a field from it.
  */
 
@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import type { RuntimeClientSubagentWorkspace } from "../src/protocol/app-server.ts";
+import type { RuntimeClientAgentWorkspace } from "../src/protocol/app-server.ts";
 
 function fixture(name: string): unknown {
   return JSON.parse(
@@ -31,7 +31,7 @@ function fixture(name: string): unknown {
 
 describe("Runtime Client v15 workspace wire contract", () => {
   it("shared isolation matches the Rust fixture", () => {
-    const expected: RuntimeClientSubagentWorkspace = {
+    const expected: RuntimeClientAgentWorkspace = {
       logical_workspace: "/repo",
       isolation: { type: "shared" },
       resource_state: "none",
@@ -40,7 +40,7 @@ describe("Runtime Client v15 workspace wire contract", () => {
   });
 
   it("isolated subdirectory with retained handoff matches the Rust fixture", () => {
-    const expected: RuntimeClientSubagentWorkspace = {
+    const expected: RuntimeClientAgentWorkspace = {
       logical_workspace: "/runtime-root/worktrees/subagent-1/backend",
       isolation: {
         type: "git_worktree",
@@ -65,7 +65,7 @@ describe("Runtime Client v15 workspace wire contract", () => {
   });
 
   it("isolated subdirectory with unresolved physical ownership has no fabricated handoff", () => {
-    const expected: RuntimeClientSubagentWorkspace = {
+    const expected: RuntimeClientAgentWorkspace = {
       logical_workspace: "/runtime-root/worktrees/subagent-1/backend",
       isolation: {
         type: "git_worktree",

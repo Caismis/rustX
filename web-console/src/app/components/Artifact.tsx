@@ -1,4 +1,4 @@
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v23';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v25';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';

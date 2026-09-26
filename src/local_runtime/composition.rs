@@ -1919,6 +1919,7 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Observation {
                 detail: error.to_string(),
             })?;
+        runtime.runtime().gate_child_turns();
         runtime.activate();
         Ok((runtime, observations))
     }
@@ -2041,8 +2042,9 @@ impl LocalSessionClient {
             let result = match catalog.recover_delete(&id) {
                 Ok(work) => {
                     // No catalog borrow or global ownership guard spans removal.
-                    let cleanup = work.run();
-                    catalog.finish_delete(&work.record, cleanup)
+                    let record = work.record.clone();
+                    let cleanup = work.settle().await;
+                    catalog.finish_delete(&record, cleanup)
                 }
                 Err(result) => result,
             };
@@ -4424,13 +4426,16 @@ mod conversation_inspection_tests {
         )
         .unwrap();
         let child = ConversationId::generate();
-        store
-            .append_event(crate::runtime::subagent::ownership_event(
+        let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
+            crate::runtime::subagent::ownership_event(
+                &crate::runtime::identity::AgentId::new("agent-parent"),
                 &parent.conversation_id,
                 &crate::runtime::identity::SubagentId::for_conversation(&parent.conversation_id, 1),
                 &crate::runtime::identity::AgentId::new("child"),
                 &child,
-                &crate::runtime::identity::ToolCallId::new("delegation"),
+                &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("delegation"),
+                },
                 &crate::runtime::subagent::SubagentName::parse("worker").unwrap(),
                 &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
                 &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
@@ -4438,8 +4443,9 @@ mod conversation_inspection_tests {
                 crate::events::types::SubagentOwnershipKind::Normal,
                 &crate::runtime::workspace::WorkspaceSnapshot::shared(workspace.to_path_buf()),
                 chrono::Utc::now(),
-            ))
-            .unwrap();
+            ),
+        );
+        store.append_agent_admission(event, &authority).unwrap();
         let database = catalog.database_path(&session, &child);
         std::fs::create_dir_all(database.parent().unwrap()).unwrap();
         (session, child, database)

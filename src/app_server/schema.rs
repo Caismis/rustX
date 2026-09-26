@@ -234,9 +234,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 revision: EXACT,
             },
         },
-        Method::SubagentTranscript {
+        Method::AgentTranscript {
             target: target.clone(),
-            subagent_id: crate::runtime::identity::SubagentId::new("subagent-fixture"),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
             before: Some(
                 crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT),
             ),
@@ -355,11 +355,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
     }));
     for data in [
-        super::protocol::ErrorData::UnknownSubagent {
-            subagent_id: crate::runtime::identity::SubagentId::new("subagent-fixture"),
+        super::protocol::ErrorData::UnknownAgent {
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
         },
-        super::protocol::ErrorData::SubagentHistoryUnavailable {
-            subagent_id: crate::runtime::identity::SubagentId::new("subagent-fixture"),
+        super::protocol::ErrorData::AgentHistoryUnavailable {
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
         },
         super::protocol::ErrorData::ResidencyCapacity,
         super::protocol::ErrorData::AttachmentCapacity,
@@ -442,7 +442,7 @@ mod tests {
             .into_iter()
             .find_map(|fixture| match fixture {
                 super::ProtocolMessage::Request(request)
-                    if matches!(request.call, super::Method::SubagentTranscript { .. }) =>
+                    if matches!(request.call, super::Method::AgentTranscript { .. }) =>
                 {
                     Some(*request)
                 }
@@ -613,9 +613,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v23.schema.json", "v23.ts"]);
+        assert_eq!(generations, ["v25.schema.json", "v25.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v23.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v25.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v23. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v25. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -160,7 +160,7 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v23)
+  -> initialize (App Server protocol v25)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -195,18 +195,28 @@ a request, preserving the parent's draft, cursor and presentation. It shares the
 normal transcript renderer, including canonical Tool occurrence correlation and
 completed-response metadata. It holds one bounded page (32 entries): PageUp
 replaces it with the explicit older page, Home reads newest again. Newest polling
-runs every 1.5 seconds and reads transcript authority even after termination;
+runs every 1.5 seconds and reads transcript authority even while the Agent is inactive;
 older browsing pauses polling. Missing/unreadable child history displays an
 explicit error, never an empty successful conversation.
 
 Selection/read generations and parent attachment epochs reject stale responses.
-Resync and reconnect keep only the selected native SubagentId and reread it
+Resync and reconnect keep only the selected durable AgentId and reread it
 through the current parent's authority. Parent switching closes the view.
 No child Session, control attachment, process, model setting or interaction owner
 is created. Routed child HITL remains on the existing root human-facing surface.
 The selection helpers in `ui/subagent-navigation.ts` continue to own only row
 selection; `app-server/subagent-transcript.ts` owns the disposable single-page
 read projection, never canonical history.
+
+Agent rows are keyed by `agent_id`, independently of `activation_id`. The native
+`active → stopping → inactive → active` projection updates one row and preserves
+selection across resume. Details expose the current and latest activation,
+child conversation and frozen profile digests. The final report remains canonical
+conversation content; the activity panel does not maintain a result history.
+Jobs use their own `job_id` and irreversible active-to-terminal projection.
+Reconnect replaces both collections from the server snapshot, then follows
+`agent_updated` and `job_updated` events. No client-side lifecycle arbitration,
+terminal inference, or activation generation is performed.
 
 ## Owners
 
@@ -343,14 +353,24 @@ does not implement a parallel Session system.
 
 ### Control and presentation
 
-- `/cancel [execution-id]` — request cancellation of the current attempt, or
-  a background execution by id.
+- `/cancel` — request cancellation of the current primary attempt.
+- `/agents` — list durable Agent identities, state and current activation.
+- `/send-message <agent-id> <message>` — use one owner operation for both active
+  delivery and inactive resume. The client never checks status to choose a path.
+- `/wait-agent <agent-id>` — wait for the activation captured by the runtime;
+  a later resumed activation does not extend the wait.
+- `/interrupt-agent <agent-id>` — interrupt the current activation. The same
+  Agent identity and canonical child conversation remain available for resume.
+- `/jobs`, `/job-status <job-id>`, `/job-wait <job-id>`, `/job-cancel <job-id>` —
+  inspect and synchronize with finite detached Tool executions. Status is a
+  non-blocking snapshot; wait targets exact terminal physical settlement.
+  Completion arrives proactively in native projections and canonical inbound.
 - `/compact` — ask the runtime to compact the canonical context while idle;
   progress and completion remain authoritative App Server facts.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/show-reasoning [on|off]` — change the display preference for model reasoning;
   it does not change runtime model configuration.
-- `/expand [latest|all|none|<tool-call-id>|background <execution-id>|interaction <conversation-id>::<interaction-id>]` —
+- `/expand [latest|all|none|<tool-call-id>|job <job-id>|interaction <conversation-id>::<interaction-id>]` —
   expand or collapse display detail without re-executing or re-fetching.
 
 ### Lifecycle and help
@@ -374,8 +394,8 @@ by native configuration application. The TUI never
 edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
 or keeps a local outcome.
 
-`/show-reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|background
-<exec-id>|interaction <conversation-id>::<interaction-id>]` are the two commands that touch
+`/show-reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|job
+<job-id>|interaction <conversation-id>::<interaction-id>]` are the two commands that touch
 nothing but the screen. They send no request, and they are also bound to keys:
 
 | Key | Effect |
@@ -872,7 +892,7 @@ resumes the operation it already holds.
 
 ```text
 ToolCallId       a logical model-issued tool call    foreground cards
-ToolExecutionId  a detached background execution     background cards
+ToolExecutionId  one finite background Job          Job cards
 InteractionId    one runtime-owned pending approval  interaction cards
 ```
 
@@ -888,7 +908,7 @@ on anywhere — a wire spelling is not a type.
                                       interaction card
 /expand none                          collapse all three domains
 /expand <tool-call-id>                toggle one foreground card
-/expand background <exec-id>          toggle one background card
+/expand job <job-id>                   toggle one Job card
 /expand interaction <conversation-id>::<interaction-id>  toggle one pending interaction card
 ```
 
@@ -951,6 +971,12 @@ projection facts directly and assert on normalized strings — `transcript.test.
 `tool-correlation.test.ts`, `tool-card.test.ts`, `model-selector.test.ts`,
 `status.test.ts`, `identity-domains.test.ts`, and `reconstruction.test.ts`,
 which rebuilds the whole visible UI from one fresh snapshot.
+`agent-job-lifecycle.test.ts` scripts Agent Active → Stopping → Inactive → resumed
+updates and reconnect while retaining one selection and child ConversationId.
+It also checks Job terminal reconstruction, sends without status preflight,
+activation-specific wait results and interruption without optimistic state mutation.
+Agent waits are not automatically retried after response loss: another wait
+could capture a later activation. Job waits retain the immutable Job ID.
 
 `test/integration.test.ts` drives the **real** `rustx` binary over the real
 stdio/JSONL and WebSocket transports against the shared local provider emulator

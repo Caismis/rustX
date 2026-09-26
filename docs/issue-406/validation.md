@@ -2,7 +2,7 @@
 
 PR #409 terminal-process follow-up: [current ownership contract](terminal-process-ownership.md).
 The earlier terminal-marker representation described below is superseded by
-native `TurnProcessView` in App Server v23 / Runtime Client v49. Follow-up
+native `TurnProcessView` in App Server v24 / Runtime Client v49. Follow-up
 validation is recorded in the PR report.
 
 
