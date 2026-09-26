@@ -650,7 +650,7 @@
           "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "b16e00ebebd20cad6c7c808e6cb44228816a44933b0122c26c90a318b0c3102d"
+      "local_sha256": "12c7bd2fc308c436055f8dbca6f261cce221d8583b3022dba8a0907ccb531693"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -714,7 +714,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "b1126f4d1d89baa6670096c8385eeee87fc68cece421514c4ce68768fd67ce7d",
+      "local_sha256": "380deb8de468524a03cbd3fef636cf225076e41523226de80cb7f1658375e0cb",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -2476,7 +2476,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "a0e13e300e6fae3ba0e78ad77f1fc922a68b62fd59647d872abec250b84bd050"
+      "local_sha256": "ddfacd3c98b36861da414262abab72fb2b3175af2c76ead2e75619fd57d1f848"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2600,7 +2600,7 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "additional_sources": [],
-      "local_sha256": "bf3b6fade1f2ad67c8bde418abd00b0d2173512d01cea5091aeb983009d47fd3"
+      "local_sha256": "5673bf9c2e435d553ddbf70ab48aa0e9150e97412f36b030fd176b76f7335b3d"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

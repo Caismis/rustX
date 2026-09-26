@@ -399,3 +399,28 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('complementary')).toHaveCount(0);
   });
 }
+
+for (const dimension of ['prompt', 'tools']) {
+  test(`independent ${dimension} change survives unavailable other predecessor`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?mixed=${dimension}`);
+    await expect(page).toHaveTitle('Trajectory presentation contracts');
+    const cell = page.locator('[data-display-type="SystemPromptCell"]');
+    await expect(cell).toContainText(dimension === 'prompt' ? 'System Prompt Updated' : 'Tools Updated');
+    await expect(cell).toContainText(dimension === 'prompt' ? 'Previous Tool catalog unavailable' : 'Previous System Prompt unavailable');
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await cell.click();
+    await expect(page.getByRole('tab', { name: dimension === 'prompt' ? 'Diff' : 'Tools', exact: true })).toHaveAttribute('aria-selected', 'true');
+    if (dimension === 'prompt') {
+      await expect(page.getByLabel('System prompt diff')).toContainText('Previous prompt.');
+    } else {
+      await expect(page.getByRole('tab', { name: 'Diff', exact: true })).toHaveCount(0);
+    }
+    await page.getByRole('tab', { name: 'Tools', exact: true }).click();
+    await expect(page.getByRole('tabpanel')).toContainText('Run one command.');
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+    expect(errors).toEqual([]);
+  });
+}

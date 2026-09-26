@@ -47,17 +47,29 @@ function origin(record: TraceRecord, tag: string, label: string, preview = '', f
   return { record, owner_record_id: record.id, display_key: displayKey(tag, ...parts), facet, label, preview };
 }
 
-/** Relationships have already been classified against complete frozen snapshots. */
-export function systemLabel(record: TraceRecord): { label: string; facet: TrajectoryFacet } | undefined {
+/** Project each native dimension independently. Previews and neighboring requests
+ * cannot establish a relationship or erase a fact from the other dimension. */
+export function systemPresentation(record: TraceRecord): { label: string; facet: TrajectoryFacet } | undefined {
   const request = record.request;
   if (!request) return;
   const prompt = request.system_prompt.state;
   const tools = request.tool_catalog;
-  if (prompt === 'previous_unavailable' || tools === 'previous_unavailable') return { label: 'Previous input unavailable', facet: 'Summary' };
-  if (prompt === 'initial') return { label: 'Initial System Prompt', facet: 'System Prompt' };
-  if (prompt === 'changed' && tools === 'changed') return { label: 'System Prompt and Tools Updated', facet: 'Diff' };
-  if (prompt === 'changed') return { label: 'System Prompt Updated', facet: 'Diff' };
-  if (tools === 'changed') return { label: 'Tools Updated', facet: 'Tools' };
+  const promptLabel = {
+    initial: 'Initial System Prompt', changed: 'System Prompt Updated',
+    unchanged: '', previous_unavailable: 'Previous System Prompt unavailable',
+  }[prompt];
+  const toolsLabel = {
+    initial: 'Initial Tools', changed: 'Tools Updated',
+    unchanged: '', previous_unavailable: 'Previous Tool catalog unavailable',
+  }[tools];
+  // These compact names retain the established presentation for complete facts.
+  const label = prompt === 'initial' && tools === 'initial' ? 'Initial System Prompt'
+    : prompt === 'changed' && tools === 'changed' ? 'System Prompt and Tools Updated'
+    : [promptLabel, toolsLabel].filter(Boolean).join(' · ');
+  if (!label) return;
+  const facet = prompt === 'changed' ? 'Diff' : prompt === 'initial' ? 'System Prompt'
+    : tools === 'changed' || tools === 'initial' ? 'Tools' : 'Summary';
+  return { label, facet };
 }
 
 export function recordLabel(record: TraceRecord): string {
@@ -92,8 +104,8 @@ function cellsOf(record: TraceRecord): InspectableDisplayItem[] {
   if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(record), record.preview?.text ?? '', 'Summary', record.id), type: 'RecordRow' }];
   const request = record.request;
   const cells: InspectableDisplayItem[] = [];
-  const change = systemLabel(record);
-  if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? 'Frozen Tool catalog changed' : 'Prompt preview unavailable'), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
+  const change = systemPresentation(record);
+  if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? (request.tool_catalog === 'changed' ? 'Frozen Tool catalog changed' : 'Initial frozen Tool catalog') : 'Prompt preview unavailable'), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
   for (const context of request.context_additions) {
     cells.push({ ...origin(record, 'context', context.context_kind.replaceAll('_', ' '), context.preview?.text ?? 'Content unavailable', 'Context', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
   }

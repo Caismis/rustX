@@ -161,7 +161,7 @@ export function CellContent({ record }: { record: TraceRecord }) {
 
 /** Dedicated prompt cell: its request identity and native classification survive paging. */
 export function SystemPromptCell({ cell }: { cell: Extract<InspectableDisplayItem, { type: 'SystemPromptCell' }> }) {
-  return <span className={css.preview} data-system-prompt-state={cell.record.request?.system_prompt.state}>
+  return <span className={css.preview} data-system-prompt-state={cell.record.request?.system_prompt.state} data-tool-catalog-state={cell.record.request?.tool_catalog}>
     <strong>{cell.label}</strong> · {cell.preview || 'Empty'}
   </span>;
 }

@@ -3,12 +3,12 @@ import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord } from '../../../protocol/app-server/v23';
+import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v23';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 const text = (text: string) => ({ text, truncated: false });
-function request(n: number, prompt: 'initial' | 'changed' | 'unchanged', tools: 'initial' | 'changed' | 'unchanged', state: TraceRecord['state'] = 'completed') {
+function request(n: number, prompt: TraceSystemPromptState, tools: TraceToolCatalogState, state: TraceRecord['state'] = 'completed') {
   const record = traceRecord(n, { state });
   record.request!.model = 'deepseek-chat';
   record.request!.system_prompt = { state: prompt, preview: prompt === 'unchanged' ? null : text('You are the historical agent. Preserve exact native authority.') };
@@ -39,7 +39,9 @@ const params = new URLSearchParams(location.search);
 const long = params.has('long'); const threshold = params.has('threshold');
 const renumber = params.has('renumber');
 const structure = params.has('structure'); const toolFirst = params.has('tool');
-const snapshot = { records: long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records, next_cursor: 'older' };
+const mixed = params.get('mixed');
+const mixedRecords = mixed ? [request(0, mixed === 'prompt' ? 'changed' : 'previous_unavailable', mixed === 'prompt' ? 'previous_unavailable' : 'changed')] : undefined;
+const snapshot = { records: mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
 function Fixture() {
   const [cache, setCache] = useState(() => replaceTrace(snapshot));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
@@ -59,6 +61,7 @@ function Fixture() {
           const detail = record.kind === 'tool' ? toolDetail(n) : record.kind === 'request' ? requestDetail(n) : requestDetail(n, { kind: record.kind, request: null, messages: [] });
           if (detail.request) {
             detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => ({ role: 'user' as const, message_id: context.message_id, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false })));
+            if (record.request?.system_prompt.state === 'previous_unavailable') { detail.request.predecessor = { availability: 'unavailable', request_id: 'previous-request' }; detail.request.previous_system_prompt = null; }
             if (n === 3) { detail.request.predecessor = { availability: 'not_applicable' }; detail.request.previous_system_prompt = null; }
             if (n === 11) { detail.request.effective_system_prompt.truncated = true; detail.request.previous_system_prompt!.truncated = true; }
           }

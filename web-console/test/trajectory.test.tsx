@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
+import { matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v23';
@@ -54,20 +54,79 @@ function dragTimeline(from: number, to: number) {
 const timelineFocusOf = () => Object.fromEntries([...document.querySelectorAll<HTMLElement>('[data-owner]')].map(el => [el.dataset.owner, el.dataset.timelineFocus]));
 const focusOverlay = () => document.querySelector<HTMLElement>('[data-focus-range]');
 
-it('T1-01 maps every native prompt/tool combination without reading details', () => {
-  for (const [prompt, tools, label, facet] of [
-    ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],
-    ['changed', 'unchanged', 'System Prompt Updated', 'Diff'],
-    ['unchanged', 'changed', 'Tools Updated', 'Tools'],
-    ['changed', 'changed', 'System Prompt and Tools Updated', 'Diff'],
-    ['unchanged', 'unchanged', undefined, undefined],
-    ['previous_unavailable', 'previous_unavailable', 'Previous input unavailable', 'Summary'],
-  ] as const) {
-    const record = richRequest(); record.request!.system_prompt.state = prompt; record.request!.tool_catalog = tools;
-    expect(systemLabel(record)).toEqual(label ? { label, facet } : undefined);
-    const items = trajectoryItems([record]);
-    expect(items.filter(item => item.type === 'SystemPromptCell')).toHaveLength(label ? 1 : 0);
+// v23 exposes two independent enums: cover their full Cartesian product,
+// including combinations today's all-or-nothing snapshot producer cannot emit.
+const inputMatrix = [
+  ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],
+  ['initial', 'changed', 'Initial System Prompt · Tools Updated', 'System Prompt'],
+  ['initial', 'unchanged', 'Initial System Prompt', 'System Prompt'],
+  ['initial', 'previous_unavailable', 'Initial System Prompt · Previous Tool catalog unavailable', 'System Prompt'],
+  ['changed', 'initial', 'System Prompt Updated · Initial Tools', 'Diff'],
+  ['changed', 'changed', 'System Prompt and Tools Updated', 'Diff'],
+  ['changed', 'unchanged', 'System Prompt Updated', 'Diff'],
+  ['changed', 'previous_unavailable', 'System Prompt Updated · Previous Tool catalog unavailable', 'Diff'],
+  ['unchanged', 'initial', 'Initial Tools', 'Tools'],
+  ['unchanged', 'changed', 'Tools Updated', 'Tools'],
+  ['unchanged', 'unchanged', undefined, 'Summary'],
+  ['unchanged', 'previous_unavailable', 'Previous Tool catalog unavailable', 'Summary'],
+  ['previous_unavailable', 'initial', 'Previous System Prompt unavailable · Initial Tools', 'Tools'],
+  ['previous_unavailable', 'changed', 'Previous System Prompt unavailable · Tools Updated', 'Tools'],
+  ['previous_unavailable', 'unchanged', 'Previous System Prompt unavailable', 'Summary'],
+  ['previous_unavailable', 'previous_unavailable', 'Previous System Prompt unavailable · Previous Tool catalog unavailable', 'Summary'],
+] as const;
+
+it.each(inputMatrix)('T1-01 preserves native %s + %s without classification reads', (prompt, tools, label, facet) => {
+  const record = richRequest();
+  record.request!.system_prompt = { state: prompt, preview: { text: 'Identical bounded preview', truncated: true } };
+  record.request!.tool_catalog = tools;
+  expect(systemPresentation(record)).toEqual(label ? { label, facet } : undefined);
+  const cells = trajectoryItems([record]).filter(item => item.type === 'SystemPromptCell');
+  expect(cells).toHaveLength(label ? 1 : 0);
+  const load = vi.fn();
+  show(cacheOf([record]), load);
+  expect(load).not.toHaveBeenCalled();
+  if (label) {
+    expect(row('SystemPromptCell').textContent).toContain(label);
+    expect(row('SystemPromptCell').querySelector('[data-system-prompt-state]')?.getAttribute('data-system-prompt-state')).toBe(prompt);
+    expect(row('SystemPromptCell').querySelector('[data-tool-catalog-state]')?.getAttribute('data-tool-catalog-state')).toBe(tools);
   }
+  fireEvent.click(row(label ? 'SystemPromptCell' : 'RequestBoundary'));
+  expect(screen.getByRole('tab', { name: facet }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.queryByRole('tab', { name: 'Diff' }) !== null).toBe(prompt === 'changed');
+  expect(screen.getByRole('tab', { name: 'Tools' })).toBeDefined();
+  expect(load.mock.calls).toEqual([[record.id]]); // only the selected immutable owner
+  fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain(tools.replaceAll('_', ' '));
+  fireEvent.click(row('RequestBoundary'));
+  expect(screen.queryByRole('tab', { name: 'Diff' }) !== null).toBe(prompt === 'changed');
+});
+
+it.each([
+  ['changed', 'previous_unavailable', 'Diff'],
+  ['previous_unavailable', 'changed', 'Tools'],
+] as const)('mixed %s + %s retains exact detail and independent facets', (prompt, tools, facet) => {
+  const record = richRequest();
+  record.request!.system_prompt.state = prompt;
+  record.request!.tool_catalog = tools;
+  const detail = requestDetail(0);
+  if (prompt === 'previous_unavailable') {
+    detail.request!.previous_system_prompt = null;
+    detail.request!.predecessor = { availability: 'unavailable', request_id: 'previous-request' };
+  }
+  const load = vi.fn();
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail), load);
+  fireEvent.click(row('SystemPromptCell'));
+  expect(screen.getByRole('tab', { name: facet }).getAttribute('aria-selected')).toBe('true');
+  if (prompt === 'changed') {
+    expect(screen.getByLabelText('System prompt diff').textContent).toContain('Previous prompt.');
+    expect(screen.getByLabelText('System prompt diff').textContent).toContain('You are the historical agent.');
+  } else {
+    expect(screen.queryByRole('tab', { name: 'Diff' })).toBeNull();
+    expect(screen.queryByLabelText('System prompt diff')).toBeNull();
+  }
+  fireEvent.click(screen.getByRole('tab', { name: 'Tools' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain('Run one command.');
+  expect(load).not.toHaveBeenCalled();
 });
 
 it('T1-04 preserves frozen Context order and exact owner/display/facet identities', () => {
@@ -665,8 +724,9 @@ it('407: System Prompt cells expose semantic tabs and preserve unknown historica
   detail.request!.predecessor = { availability: 'unavailable', request_id: 'historical-predecessor' };
   view.rerender(<Trajectory cache={completeTraceDetail(cacheOf([unknown]), unknown.id, 1, detail)} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   fireEvent.click(row('SystemPromptCell'));
-  fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
-  expect(screen.getByRole('tabpanel').textContent).toContain('Previous prompt unavailable');
+  expect(screen.queryByRole('tab', { name: 'Diff' })).toBeNull();
+  fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain('previous unavailable');
   expect(screen.getByRole('tabpanel').textContent).not.toMatch(/unchanged|No changes/);
 });
 

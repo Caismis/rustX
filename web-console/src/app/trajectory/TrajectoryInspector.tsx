@@ -375,7 +375,7 @@ function ContextAdditions({
 /** The sections available for one record, given what the server projected. */
 function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined, selection: TrajectorySelection): TrajectoryFacet[] {
   if (record.kind === 'request') {
-    const diff: TrajectoryFacet[] = record.request?.system_prompt.state === 'changed' || record.request?.system_prompt.state === 'previous_unavailable' ? ['Diff'] : [];
+    const diff: TrajectoryFacet[] = record.request?.system_prompt.state === 'changed' ? ['Diff'] : [];
     if (selection.cell_type === 'SystemPromptCell') return [...diff, 'System Prompt', 'Tools', 'Summary', 'Native'];
     if (selection.cell_type === 'ContextRow') return ['Context', 'Summary', 'Native'];
     return ['Summary', 'System Prompt', ...diff, 'Context', 'Tools', 'Options', 'Usage', 'Timing', 'Native'];
