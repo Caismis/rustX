@@ -208,10 +208,9 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       {offTail && <Button size="sm" onClick={() => { followsTail.current = true; setOffTail(false); latest(); if (virtualized) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' }); else if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight; }}>Jump to latest</Button>}
     </div>
     {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
-    {/* The Trace epoch owns the Timeline coordinate domain: a rebase remounts it,
-        discarding any drag, pan, draft, viewport or hover expressed in old
-        coordinates, so a gesture begun in one epoch cannot commit into the next. */}
-    <TrajectoryTimeline key={cache.epoch} projection={projection} mode={mode} range={range} selectedId={selection?.owner_record_id ?? null} searchMatches={matchingOwners} onRangeChange={setRange}
+    {/* Epoch retires read-domain ownership; the Timeline separately fences
+        coordinate interactions by its semantic projection revision. */}
+    <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range} selectedId={selection?.owner_record_id ?? null} searchMatches={matchingOwners} onRangeChange={setRange}
       hasEarlierRecords={Boolean(cache.page.next_cursor)} canLoadEarlier={canLoadEarlier} loadingEarlier={cache.loading === true} onLoadEarlier={requestOlder}
       onSelect={id => { const item = preferredItem(allItems, id); if (!item) return; setCollapsedTurns(current => { const next = new Set(current); if (item.record.location.attempt_id) next.delete(item.record.location.attempt_id); return next; }); setCalls(current => { const matching = matchingCalls(records); return new Set([...current].filter(owner => !matching.get(owner)?.some(record => record.id === item.owner_record_id))); }); if (matches && !matches.has(item.display_key)) setQuery(''); followsTail.current = false; pendingFocus.current = item.display_key; select(item); }} />
     <Group className={css.split} orientation={narrow ? 'vertical' : 'horizontal'}>

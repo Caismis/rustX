@@ -598,12 +598,24 @@ refresh only relocates its visible coordinates. It is owned by the Trace cache
 epoch that created it: any `replaceTrace` rebase (Jump to latest, resynchronizing,
 a disjoint or over-bound refresh) retires it, even when the new domain reuses those
 record IDs, so no stale focus can dim rows without a visible interval. A drag
-that covers no span sets no focus. The Timeline component is keyed by the same
-epoch, so its coordinate-local state (in-flight drag or pan, draft interval,
-zoom/pan viewport, hover) is discarded atomically by a rebase: a gesture begun in
-one epoch can never commit focus or selection into the next, even when both
-epochs project an identical numeric domain or reuse record IDs. Same-epoch
-prepend and refresh keep the same Timeline instance. Timing lanes are Input / Model / Tools. Request generation is counted once,
+that covers no span sets no focus.
+
+Trace epoch owns read-domain lifetime and committed native-ID focus validity.
+Timeline coordinate revision separately owns in-flight coordinate-local
+interactions. Pointer-down binds a drag, pan or span press to the currently
+committed projection. It may commit only while that projection still owns the
+interaction; publishing a different projection retires the old interaction
+atomically, before it can release into the new projection. This applies to
+same-epoch prepend, overlapping refresh and timing updates, including changes
+with identical numeric domain endpoints. Record-to-coordinate assignments,
+lanes, phase geometry, native Turn boundary positions and mode determine
+coordinate meaning; display ordinals, labels and status alone do not.
+
+Retirement discards the draft, viewport and hover along with the press/drag/pan.
+New gestures use the new projection. Committed focus stays on native IDs across
+same-epoch revisions and is relocated using the current model. An epoch rebase
+retires both ownership layers, even with recurring IDs or identical geometry.
+Timing lanes are Input / Model / Tools. Request generation is counted once,
 never again for canonical Assistant acceptance; Attempt/Step/SYSTEM acquire no
 durations. Parallel domain evidence retains overlap. Mode contracts:
 

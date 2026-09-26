@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted interaction contracts; see PROVENANCE.md. */
-import { trajectoryTimeline } from '../src/app/trajectory/timeline';
+import { timelineFocus, timelineProjectionRevision, trajectoryTimeline } from '../src/app/trajectory/timeline';
 import { useCallback, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -395,7 +395,7 @@ it('T1-12 sequence keeps equal glyph widths even when native duration is missing
   expect(glyph.hasAttribute('data-marker')).toBe(false);
   expect(glyph.style.width).toBe('50%');
   fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
-  expect(glyph.getAttribute('data-marker')).toBe('true');
+  expect(document.querySelector('[data-record-id="trace:0"]')!.getAttribute('data-marker')).toBe('true');
 });
 
 it('T1-12 Journal duration remains visible in Inspector when Model timing lacks a bridge', () => {
@@ -798,14 +798,15 @@ it('407: Timeline focus keeps native identity across prepend and lifecycle refre
   expect(timelineFocusOf()).toEqual({ 'trace:9': 'outside', 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
   expect(screen.getByRole('row', { name: 'Turn 3' }).getAttribute('data-attempt')).toBe('attempt-1');
   expect(focusOverlay()!.style.left).not.toBe(before);
-  // The same epoch keeps the same Timeline instance: no coordinate state is reset.
-  expect(timelineCanvas()).toBe(canvas);
+  // Projection changes retire coordinates while committed native focus survives.
+  expect(timelineCanvas()).not.toBe(canvas);
+  const prependedCanvas = timelineCanvas();
   const refreshed = refreshTrace(prepended, { records: [{ ...prepended.page.records[4]!, state: 'failed' }], next_cursor: null });
   expect(refreshed.epoch).toBe(initial.epoch);
   view.rerender(<Trajectory cache={refreshed} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   expect(timelineFocusOf()).toEqual({ 'trace:9': 'outside', 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
   expect(focusOverlay()).not.toBeNull();
-  expect(timelineCanvas()).toBe(canvas);
+  expect(timelineCanvas()).toBe(prependedCanvas);
 });
 
 it('407: a Trace epoch rebase retires Timeline focus even when record identities recur', () => {
@@ -926,4 +927,129 @@ it('407: Timeline zoom, pan and hover belong to the Trace epoch even across an i
   expect(domainOf()).toEqual(full);
   expect(hint()).toBe('');
   expect(focusOverlay()).toBeNull();
+});
+
+/** Native timing refresh grows an inner span without moving the outer domain. */
+function timingRevision() {
+  const records = [0, 1, 2].map(n => traceTool(n, {
+    timing: { started_at: `2026-09-15T00:00:0${n * 2}Z`, ended_at: `2026-09-15T00:00:0${n * 2 + 1}Z`, duration_ms: '1000' },
+  }));
+  const initial = cacheOf(records);
+  const next = refreshTrace(initial, { records: [{ ...records[1]!, state: 'failed',
+    timing: { ...records[1]!.timing, ended_at: '2026-09-15T00:00:04Z', duration_ms: '2000' } }], next_cursor: null });
+  return { initial, next };
+}
+
+it.each(['sequence', 'duration', 'actual'] as const)('407: in-flight %s drag cannot cross a same-epoch projection revision', mode => {
+  const initialSequence = cacheOf(epochRecords(0, 1, 2, 3));
+  const { initial, next } = mode === 'sequence'
+    ? { initial: initialSequence, next: prependTrace(initialSequence, { records: epochRecords(9), next_cursor: null }) }
+    : timingRevision();
+  const p1 = trajectoryTimeline(projectTrajectory(initial.page.records), mode)!;
+  const p2 = trajectoryTimeline(projectTrajectory(next.page.records), mode)!;
+  expect(next.epoch).toBe(initial.epoch);
+  expect(timelineProjectionRevision(p2, mode)).not.toBe(timelineProjectionRevision(p1, mode));
+  if (mode === 'actual') expect([p2.start, p2.end]).toEqual([p1.start, p1.end]);
+  const oldRange = mode === 'sequence' ? { start: 1.2, end: 1.8 }
+    : { start: p1.start + 3100, end: p1.start + 3200 };
+  expect(timelineFocus(p1, oldRange)).not.toEqual(timelineFocus(p2, oldRange));
+  const select = vi.fn(); const load = vi.fn();
+  const ui = (cache: TraceCache) => <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={select} onLoadDetail={load} />;
+  const view = render(ui(initial));
+  if (mode !== 'sequence') fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
+  if (mode === 'actual') fireEvent.click(screen.getByRole('button', { name: 'Actual time' }));
+  const stale = timelineCanvas();
+  fireEvent.pointerDown(stale, { button: 0, pointerId: 1, clientX: 30 });
+  fireEvent.pointerMove(stale, { pointerId: 1, clientX: 45 });
+  expect(focusOverlay()).not.toBeNull();
+  view.rerender(ui(next));
+  expect(timelineCanvas()).not.toBe(stale);
+  expect(focusOverlay()).toBeNull();
+  fireEvent.pointerUp(stale, { pointerId: 1, clientX: 45 });
+  fireEvent.pointerUp(timelineCanvas(), { pointerId: 1, clientX: 45 });
+  expect(document.querySelectorAll('[data-timeline-focus]')).toHaveLength(0);
+  expect(document.querySelectorAll('[aria-selected="true"]')).toHaveLength(0);
+  expect(screen.queryByRole('complementary')).toBeNull();
+  expect(select).not.toHaveBeenCalled(); expect(load).not.toHaveBeenCalled();
+  const from = mode === 'sequence' ? 45 : mode === 'duration' ? 30 : 45;
+  const to = mode === 'sequence' ? 55 : mode === 'duration' ? 40 : 55;
+  dragTimeline(from, to);
+  expect(Object.entries(timelineFocusOf()).filter(([, focus]) => focus === 'inside').map(([id]) => id)).toEqual(['trace:1']);
+  expect(select).not.toHaveBeenCalled();
+});
+
+it('407: obsolete same-epoch span press and synthesized pointer click cannot open Inspector', () => {
+  const initial = cacheOf(epochRecords(0, 1, 2, 3));
+  const select = vi.fn(); const load = vi.fn();
+  const ui = (cache: TraceCache) => <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={select} onLoadDetail={load} />;
+  const view = render(ui(initial));
+  const staleCanvas = timelineCanvas();
+  const staleSpan = document.querySelector('[data-record-id="trace:1"]')!;
+  fireEvent.pointerDown(staleSpan, { button: 0, pointerId: 1, clientX: 30 });
+  const next = prependTrace(initial, { records: epochRecords(9), next_cursor: null });
+  view.rerender(ui(next));
+  fireEvent.pointerUp(staleCanvas, { pointerId: 1, clientX: 30 });
+  fireEvent.pointerUp(timelineCanvas(), { pointerId: 1, clientX: 30 });
+  fireEvent.click(staleSpan, { detail: 1 });
+  const freshSpan = document.querySelector('[data-record-id="trace:1"]')!;
+  fireEvent.click(freshSpan, { detail: 1 });
+  expect(select).not.toHaveBeenCalled(); expect(load).not.toHaveBeenCalled();
+  expect(screen.queryByRole('complementary')).toBeNull();
+  fireEvent.pointerDown(freshSpan, { button: 0, pointerId: 2, clientX: 50 });
+  fireEvent.pointerUp(timelineCanvas(), { pointerId: 2, clientX: 50 });
+  expect(select).toHaveBeenCalledWith('trace:1');
+  expect(screen.getByRole('complementary')).toBeTruthy();
+});
+
+it('407: an obsolete pan cannot mutate a newly zoomed same-epoch viewport', () => {
+  const initial = cacheOf(epochRecords(0, 1, 2, 3, 4, 5, 6, 7));
+  const ui = (cache: TraceCache) => <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />;
+  const view = render(ui(initial));
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom timeline in' }));
+  const stale = timelineCanvas();
+  fireEvent.pointerDown(stale, { button: 2, pointerId: 1, clientX: 50 });
+  fireEvent.pointerMove(stale, { pointerId: 1, clientX: 40 });
+  const next = prependTrace(initial, { records: epochRecords(9), next_cursor: null });
+  view.rerender(ui(next));
+  expect(domainOf()).toEqual(['0', '9']);
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom timeline in' }));
+  const fresh = timelineCanvas();
+  const domain = domainOf();
+  fireEvent.pointerMove(stale, { pointerId: 1, clientX: 20 });
+  fireEvent.pointerMove(fresh, { pointerId: 1, clientX: 20 });
+  fireEvent.pointerUp(fresh, { pointerId: 1, clientX: 20 });
+  expect(domainOf()).toEqual(domain);
+  fireEvent.pointerDown(fresh, { button: 2, pointerId: 2, clientX: 50 });
+  fireEvent.pointerMove(fresh, { pointerId: 2, clientX: 40 });
+  fireEvent.pointerUp(fresh, { pointerId: 2, clientX: 40 });
+  expect(domainOf()).not.toEqual(domain);
+});
+
+it('407: equivalent coordinate projections preserve a gesture through status refresh', () => {
+  const initial = cacheOf(epochRecords(0, 1, 2, 3));
+  const view = show(initial);
+  const canvas = timelineCanvas();
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 30 });
+  fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 45 });
+  const next = refreshTrace(initial, { records: [{ ...initial.page.records[1]!, state: 'failed' }], next_cursor: null });
+  expect(timelineProjectionRevision(trajectoryTimeline(projectTrajectory(initial.page.records), 'sequence'), 'sequence'))
+    .toBe(timelineProjectionRevision(trajectoryTimeline(projectTrajectory(next.page.records), 'sequence'), 'sequence'));
+  view.rerender(<Trajectory cache={next} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(timelineCanvas()).toBe(canvas);
+  fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 45 });
+  expect(timelineFocusOf()).toEqual({ 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
+});
+
+it('407: committed native focus survives a timing revision with an identical outer domain', () => {
+  const { initial, next } = timingRevision();
+  const view = show(initial);
+  fireEvent.click(screen.getByRole('button', { name: 'Duration' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Actual time' }));
+  dragTimeline(45, 55);
+  const before = timelineFocusOf();
+  expect(before).toEqual({ 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside' });
+  const width = focusOverlay()!.style.width;
+  view.rerender(<Trajectory cache={next} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(timelineFocusOf()).toEqual(before);
+  expect(focusOverlay()!.style.width).not.toBe(width);
 });

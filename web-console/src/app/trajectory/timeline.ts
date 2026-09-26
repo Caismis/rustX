@@ -52,6 +52,20 @@ export interface TrajectoryTimelineModel extends TrajectoryTimeRange {
   boundaries: readonly TrajectoryBoundary[];
 }
 
+/**
+ * Collision-free identity of coordinate meaning, independent of object identity,
+ * display ordinals, labels and lifecycle status. A changed identity retires the
+ * interaction generation, even when the outer numeric domain is unchanged.
+ */
+export function timelineProjectionRevision(model: TrajectoryTimelineModel | null, mode: TrajectoryTimelineMode): string {
+  return JSON.stringify([mode, model === null ? null : [
+    model.start, model.end,
+    model.spans.map(span => [span.id, span.lane, span.start, span.end,
+      span.dispatchAt, span.firstOutputAt, span.lastOutputAt, span.providerTerminalAt]),
+    model.boundaries.map(boundary => [boundary.nativeAttemptId, boundary.at]),
+  ]]);
+}
+
 /** Lanes group related activity, exactly as the Harness overview does. */
 function laneOf(kind: TraceKind): number {
   if (kind === 'tool' || kind === 'background' || kind === 'subagent' || kind === 'workflow') return 2;

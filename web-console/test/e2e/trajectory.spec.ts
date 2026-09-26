@@ -366,3 +366,36 @@ for (const width of [1440, 390]) {
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
   });
 }
+
+for (const width of [1440, 390]) {
+  test(`407: a real held drag cannot cross same-epoch prepend at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?renumber');
+    const canvas = page.getByLabel('Timeline navigation: arrow keys pan, Escape clears focus');
+    const box = (await canvas.boundingBox())!;
+    const epoch = await page.locator('[data-trace-epoch]').getAttribute('data-trace-epoch');
+    const end = await canvas.getAttribute('data-domain-end');
+    await page.mouse.move(box.x + box.width * .30, box.y + 30);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * .45, box.y + 30);
+    await expect(page.locator('[data-focus-range]')).toHaveCount(1);
+    // Synchronous fixture action while the actual browser pointer is held.
+    await page.getByRole('button', { name: 'Load earlier records into the overview' }).evaluate((button: HTMLButtonElement) => button.click());
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+    await expect(page.locator('[data-trace-epoch]')).toHaveAttribute('data-trace-epoch', epoch!);
+    await expect(canvas).not.toHaveAttribute('data-domain-end', end!);
+    await expect(page.locator('[data-focus-range]')).toHaveCount(0);
+    await page.mouse.up();
+    await expect(page.locator('[data-timeline-focus]')).toHaveCount(0);
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    const current = (await canvas.boundingBox())!;
+    await page.mouse.move(current.x + current.width * .30, current.y + 30);
+    await page.mouse.down();
+    await page.mouse.move(current.x + current.width * .45, current.y + 30);
+    await page.mouse.up();
+    await expect(page.locator('[data-focus-range]')).toHaveCount(1);
+    await expect(page.locator('[data-timeline-focus="inside"]').first()).toBeAttached();
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+  });
+}

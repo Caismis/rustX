@@ -265,7 +265,10 @@ New or rewritten deterministic regressions (no sleeps):
 | `cargo clippy --all-targets --all-features -- -D warnings` | Passed; no native edits. |
 | `git diff --check` | Passed. |
 
-## PR #414 review repair: Timeline coordinate state per epoch (2026-09-26)
+## PR #414 earlier repair: Timeline coordinate state per epoch (2026-09-26)
+
+Historical result; the same-epoch interaction assumption below is superseded by
+the projection ownership repair in the next section.
 
 Starting head `f09fa6ca65abe99576e715b67f15171d7c75e527`; `origin/main`
 `f268175bb8d31010706e7070aae80d2b46b7aced` had not moved.
@@ -311,3 +314,109 @@ Regressions (no sleeps). Each new one fails when the key is removed:
 | `pnpm check:provenance` | 135 source records and 131 notices verified after structural rehash. |
 | `cargo fmt --all -- --check` / `cargo clippy --all-targets --all-features -- -D warnings` | Passed; no native edits. |
 | `git diff --check` | Passed. |
+
+## PR #414 blocking repair: separate Timeline projection ownership (2026-09-26)
+
+Starting HEAD: `b50589b2d36bb480c16a32fcf7c9f95b6d5ca8bd`.
+Fetched PR #414 still targeted `main` at
+`f268175bb8d31010706e7070aae80d2b46b7aced`; the clean implementation worktree
+`/home/caismis/Documents/codes/rustX-issue-407` was five commits ahead, zero
+behind. The main checkout's unrelated untracked `.playwright-mcp/` was untouched.
+All seven starting GitHub CI checks passed. PR remained open, non-draft, with
+no auto-merge request.
+
+### Root cause and final ownership
+
+Trace epoch identifies a replaceable read domain, not a fixed coordinate map.
+The epoch key correctly retired state across `replaceTrace`, but same-epoch
+prepend and overlapping refresh retained the pointer-down refs. Resetting only
+the viewport from `start:end` neither retired gestures nor detected inner span
+geometry changes with unchanged endpoints.
+
+Committed focus remains `{ epoch, ids }` in `Trajectory`. A same-epoch projection
+revision relocates those native IDs; an epoch rebase invalidates them even if IDs
+recur. `Trajectory` now supplies its one Timeline model to both rendering and the
+focus resolver; the child no longer builds a second copy.
+
+`timelineProjectionRevision` serializes coordinate meaning: mode, domain, ordered
+native span IDs/lanes/endpoints/phase positions and native Turn boundary positions.
+It excludes display ordinals, labels, status and model object identity. Thus
+ordinary renders and status-only refresh do not remount the interaction owner.
+A changed semantic revision keys a new `TimelineInteraction` instance. The outer
+Trace epoch key independently retires every instance on a read-domain rebase.
+
+Pointer-down linearizes gesture ownership against the currently committed
+projection instance. Publishing new geometry and retiring its predecessor's
+refs/DOM happen in the same React commit, not a deferred reset effect. A later
+pointer-up on the new canvas has no originating drag/pan/press; the detached old
+canvas cannot dispatch a React interaction into the new model. Returning later
+to an earlier geometry still creates a new instance, not its discarded refs.
+Pointer-generated `click` is no longer an independent selection authority;
+pointer-up selects only from a matching press. Keyboard/AT click activation is
+still supported. Draft, viewport and hover are local to the same owner.
+
+No native protocol/runtime or product/native vocabulary changes. No compatibility
+paths, duplicate models, dependency changes or screenshot reference updates.
+The obsolete same-epoch-instance assertion and numeric-domain reset effect were
+removed. Provenance hashes/import closure and ownership notes were updated.
+
+### Deterministic reproduction and evidence
+
+- Sequence P1: `trace:0..3`, domain `[0,4]`. Pointer-down at 30%, move to 45%
+  stores `[1.2,1.8]`, selecting `trace:1`. Same-epoch prepend inserts `trace:9`;
+  P2 has domain `[0,5]`, where that old range instead selects `trace:0`.
+  The test proves this changed mapping, rerenders P2, releases on both canvases,
+  and asserts no focus, selection, detail read or Inspector. A fresh P2 drag
+  selects exactly `trace:1`.
+- Duration and Actual modes use real overlapping `refreshTrace`. An inner Tool
+  span grows from one to two seconds. Actual mode keeps exactly the same outer
+  start/end while coordinate meaning changes. Both old gestures retire; fresh
+  gestures focus exactly `trace:1`.
+- A pressed span followed by prepend and release (including pointer-generated
+  clicks against detached/current spans) selects nothing. A new press selects
+  the correct native record and opens Inspector.
+- A pan begins before prepend. After rerender, the test zooms P2, delivers the
+  old movement/release and proves its viewport remains unchanged. A fresh pan
+  moves it normally.
+- Committed focus survives prepend, shifted Turn ordinal/coordinates and status
+  refresh. A further test preserves exact native-ID focus across the timed
+  revision while its overlay width changes.
+- Equivalent-geometry status refresh retains both the canvas and an in-flight
+  gesture, proving the boundary is semantic rather than every render/lifecycle.
+- Existing epoch rebase tests still cover unrelated/recurring IDs, identical
+  domains, old drag/press retirement, viewport/hover reset and Jump to latest.
+- Browser tests hold an actual mouse button across synchronous fixture prepend
+  at 1440px and 390px, verify unchanged epoch and changed domain, then release
+  without stale focus/Inspector and complete a fresh drag. No sleeps or race
+  timeouts; the fixture action and DOM assertions establish the interleaving.
+
+Red/green check: temporarily restoring both original production components made
+all five new stale-gesture cases fail (three drag modes, span press/click, pan).
+Restoring the correction made them pass. No temporary source changes remained.
+An initial typecheck caught unsupported Testing Library `exact` options in four
+new assertions; those were removed before the complete validation below.
+
+### Validation
+
+| Command | Result |
+| --- | --- |
+| `pnpm typecheck` | Passed. |
+| `pnpm build` | Passed, including artifact provenance; existing large-chunk warning only. |
+| `pnpm test` | 55 files / 1,003 tests passed. |
+| `pnpm exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts` | 2 files / 78 tests passed. |
+| `pnpm check:provenance` | Passed: 135 source records and 131 package notices. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `git diff --check` | Passed. |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` | 27 passed in normal comparison mode; desktop and 390px; no golden changes. |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` | 102 passed, 1 failed in `workspaces.spec.ts`; all 27 Trajectory cases passed again. Normal screenshot comparison; no golden changes. |
+
+Full-lane failure evidence: Playwright `test.trace` records successful completion
+of every test-body assertion, through `expect(errors).toEqual([])` at
+`workspaces.spec.ts:116` (`expect@160`). The next event is a stackless
+`TypeError: fetch failed` caused by `SocketError: other side closed`, before
+After Hooks, during the test's shutdown/finally phase. This is the same teardown
+failure class recorded on the starting PR; no Timeline flow failed. It is
+reported as a failure, not retried into a pass or fixed outside this scope.
+Local evidence: `/tmp/407-full-e2e.log` and
+`web-console/test-results/workspaces-two-isolated-Pr-26dc1-onsive-Workspace-navigation/trace.zip`.
