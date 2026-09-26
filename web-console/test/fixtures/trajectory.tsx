@@ -39,17 +39,18 @@ const params = new URLSearchParams(location.search);
 const long = params.has('long'); const threshold = params.has('threshold');
 const renumber = params.has('renumber');
 const structure = params.has('structure'); const toolFirst = params.has('tool');
+const snapshot = { records: long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records, next_cursor: 'older' };
 function Fixture() {
-  const [cache, setCache] = useState(() => replaceTrace({ records: long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records, next_cursor: 'older' }));
+  const [cache, setCache] = useState(() => replaceTrace(snapshot));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
     <header style={{ padding: '8px 12px', display: 'flex', gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
       <button onClick={() => setCache(current => refreshTrace(current, { records: [...current.page.records, traceRecord(Number(current.page.records.at(-1)!.id.split(':')[1]) + 1)], next_cursor: current.page.next_cursor }))}>Append</button>
       <button onClick={() => setCache(current => ({ ...current, page: { ...current.page, records: current.page.records.map(record => ({ ...record, preview: text('Lifecycle updated') })) } }))}>Update</button>
-      <span data-detail-reads={reads} data-history-reads={pages} data-native-count={cache.page.records.length}>Fixture</span>
+      <span data-detail-reads={reads} data-history-reads={pages} data-native-count={cache.page.records.length} data-trace-epoch={cache.epoch}>Fixture</span>
     </header>
     <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))}
-      latest={() => {}}
+      latest={() => setCache(current => replaceTrace(snapshot, current))}
       loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: renumber ? [traceRecord(50, { location: { attempt_id: 'older-attempt', step_id: 'old-step' } })] : Array.from({ length: 32 }, (_, n) => structure && n < 2 ? traceRecord(n + 50, { kind: n === 0 ? 'attempt' : 'step', request: null, location: n === 0 ? { attempt_id: 'attempt-a' } : { attempt_id: 'attempt-a', step_id: '1' } }) : request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
       onLoadDetail={id => {
         setReads(n => n + 1);

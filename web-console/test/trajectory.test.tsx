@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
-import { prependTrace, beginTraceDetail, completeTraceDetail, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
+import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
 import { matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemLabel, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
@@ -33,6 +33,21 @@ const richRequest = (n = 0) => {
   return record;
 };
 function row(type: string, id = 'trace:0') { return document.querySelector<HTMLElement>(`[data-display-type="${type}"][data-owner="${id}"]`)!; }
+const structureInspector = () => screen.getByRole('complementary', { name: 'Trace structure inspector' });
+/** The value beside one fact label of the structural inspector. */
+const fact = (label: string) => within(structureInspector()).getByText(label, { selector: 'dt' }).nextElementSibling?.textContent;
+/** Drag a Timeline interval in percent of a fixed 100px canvas. */
+function dragTimeline(from: number, to: number) {
+  const canvas = screen.getByLabelText('Timeline navigation: arrow keys pan, Escape clears focus');
+  canvas.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 40, width: 100, height: 40, toJSON: () => ({}) });
+  canvas.setPointerCapture = () => {};
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: from });
+  fireEvent.pointerMove(canvas, { pointerId: 1, clientX: to });
+  fireEvent.pointerUp(canvas, { pointerId: 1, clientX: to });
+}
+/** Every rendered inspectable row's Timeline focus membership, by native owner. */
+const timelineFocusOf = () => Object.fromEntries([...document.querySelectorAll<HTMLElement>('[data-owner]')].map(el => [el.dataset.owner, el.dataset.timelineFocus]));
+const focusOverlay = () => document.querySelector<HTMLElement>('[data-focus-range]');
 
 it('T1-01 maps every native prompt/tool combination without reading details', () => {
   for (const [prompt, tools, label, facet] of [
@@ -158,7 +173,7 @@ it('T1-06/10 segment anchors regroup within the same structure without acquiring
   expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:10', 'trace:11']);
 });
 
-it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never owns structural inspection', kind => {
+it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never lends its evidence to a structure without its exact native record', kind => {
   const child = kind === 'request' ? traceRecord(10) : traceTool(10);
   const load = vi.fn(); const select = vi.fn(); const older = vi.fn();
   render(<Trajectory cache={cacheOf([child])} onSelect={select} onLoadDetail={load} loadEarlier={older} latest={noop} />);
@@ -171,7 +186,11 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never owns st
     act(() => header.focus()); fireEvent.click(header); fireEvent.keyDown(header, { key: 'Enter' });
     expect(header.hasAttribute('data-owner')).toBe(false);
     expect(document.activeElement).toBe(header);
-    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
+    const evidence = structureInspector().textContent!;
+    expect(evidence).toContain(`The exact native ${type === 'TurnHeader' ? 'Attempt' : 'Step'} record is not loaded at this read cut`);
+    for (const borrowed of [child.id, 'attempt-a', child.state, 'request-10', 'tool-bash']) expect(evidence).not.toContain(borrowed);
+    expect(within(structureInspector()).queryByText('Record')).toBeNull();
   }
   expect(select.mock.calls.every(([id]) => id === undefined)).toBe(true);
   expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
@@ -181,16 +200,89 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never owns st
   expect(screen.getByRole('tab', { name: kind === 'request' ? 'System Prompt' : 'Input' })).toBeDefined();
 });
 
-it('T1-06 exact loaded native structures remain presentation-only and expose only their own evidence', () => {
-  const attempt = traceRecord(8, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' }, state: 'running' });
-  const step = traceRecord(9, { kind: 'step', request: null });
-  const records = [attempt, step, traceTool(10)];
+it('407: exact native Attempt and Step records are inspectable structural evidence without any detail read', () => {
+  const location = { attempt_id: 'attempt-opaque', step_id: 'step-opaque' };
+  // The Attempt has not settled and the Step was cancelled before any Request.
+  const attempt = traceRecord(8, { kind: 'attempt', request: null, preview: null, location: { attempt_id: location.attempt_id }, state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } });
+  const input = traceRecord(9, { kind: 'user', request: null, location: { attempt_id: location.attempt_id }, preview: { text: 'attempt input', truncated: false } });
+  const step = traceRecord(10, { kind: 'step', request: null, preview: null, location, state: 'cancelled' });
+  const records = [attempt, input, step];
   const structures = trajectoryItems(records).filter(item => item.type === 'GroupHeader' || item.type === 'TurnHeader');
-  expect(structures.map(item => item.native_record?.id)).toEqual([attempt.id, step.id]);
-  const load = vi.fn(); show(cacheOf(records), load);
-  for (const item of structures) fireEvent.click(document.querySelector(`[data-display-type="${item.type}"]`)!);
-  expect(screen.queryByRole('complementary')).toBeNull(); expect(load).not.toHaveBeenCalled();
+  expect(structures.map(item => [item.label, item.native_record?.id])).toEqual([['Turn 1', attempt.id], ['Message', undefined], ['Step 1', step.id]]);
+  const load = vi.fn(); const select = vi.fn();
+  render(<Trajectory cache={cacheOf(records)} onSelect={select} onLoadDetail={load} loadEarlier={noop} latest={noop} />);
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  expect(ledger.textContent).not.toContain('attempt-opaque');
+  expect(ledger.textContent).not.toContain('step-opaque');
+  expect(ledger.textContent).not.toContain('Attempt');
+  const turn = within(ledger).getByRole('row', { name: 'Turn 1' });
+  const message = within(ledger).getByRole('row', { name: 'Message' });
+  const stepRow = within(ledger).getByRole('row', { name: 'Step 1' });
+
+  fireEvent.click(turn);
+  expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
+  expect(within(structureInspector()).getByText('Turn 1 · native Attempt')).toBeDefined();
+  expect(fact('Native kind')).toBe('Attempt');
+  expect(fact('Record')).toBe(attempt.id);
+  expect(fact('Attempt')).toBe('attempt-opaque');
+  expect(fact('State')).toBe('running');
+  expect(fact('Ended')).toBe('Unavailable');
+  expect(fact('Duration')).toBe('Unavailable');
+  expect(within(structureInspector()).queryByText('Logical Step')).toBeNull();
+
+  // Keyboard: arrows move structural selection, Enter/Space open, Escape closes in place.
+  act(() => turn.focus()); fireEvent.keyDown(turn, { key: 'ArrowDown' });
+  expect(document.activeElement).toBe(message);
+  expect(structureInspector().textContent).toContain('no native structural record');
+  expect(structureInspector().textContent).not.toContain(input.id);
+  expect(structureInspector().textContent).not.toContain('attempt input');
+  act(() => stepRow.focus()); fireEvent.keyDown(stepRow, { key: 'Enter' });
+  expect(stepRow.getAttribute('aria-selected')).toBe('true');
+  expect(within(structureInspector()).getByText('Step 1 · native Step')).toBeDefined();
+  expect(fact('Native kind')).toBe('Step');
+  expect(fact('Record')).toBe(step.id);
+  expect(fact('Attempt')).toBe('attempt-opaque');
+  expect(fact('Logical Step')).toBe('step-opaque');
+  expect(fact('State')).toBe('cancelled');
+  expect(fact('Duration')).toBe('1.00 s');
+  fireEvent.keyDown(stepRow, { key: 'Escape' });
+  expect(screen.queryByRole('complementary')).toBeNull();
+  expect(document.activeElement).toBe(stepRow);
+  fireEvent.keyDown(stepRow, { key: ' ' });
+  const close = within(structureInspector()).getByRole('button', { name: 'Close structure' });
+  act(() => close.focus()); fireEvent.click(close);
+  // Focus returns to the header without reopening its inspection.
+  expect(document.activeElement).toBe(stepRow);
+  expect(screen.queryByRole('complementary')).toBeNull();
+  expect(load).not.toHaveBeenCalled();
+  expect(select.mock.calls.every(([id]) => id === undefined)).toBe(true);
   expect(document.querySelector('[data-display-type="TurnHeader"]')?.textContent).toContain('running');
+});
+
+it('407: prepend renumbering and lifecycle refresh keep the same native structural selection', () => {
+  const attempt = traceRecord(8, { kind: 'attempt', request: null, preview: null, location: { attempt_id: 'attempt-a' }, state: 'running' });
+  const records = [attempt, traceRecord(9, { kind: 'step', request: null, preview: null }), traceRecord(10)];
+  const initial = cacheOf(records);
+  const load = vi.fn(); const view = show(initial, load);
+  const turn = screen.getByRole('row', { name: 'Turn 1' });
+  act(() => turn.focus()); fireEvent.keyDown(turn, { key: 'Enter' });
+  expect(fact('Record')).toBe(attempt.id);
+  const older = prependTrace(initial, { records: [traceRecord(1, { location: { attempt_id: 'older-attempt', step_id: 'older-step' } })], next_cursor: null });
+  view.rerender(<Trajectory cache={older} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={load} />);
+  expect(screen.getByRole('row', { name: 'Turn 2' })).toBe(turn);
+  expect(turn.getAttribute('aria-selected')).toBe('true');
+  expect(document.activeElement).toBe(turn);
+  expect(within(structureInspector()).getByText('Turn 2 · native Attempt')).toBeDefined();
+  expect(fact('Record')).toBe(attempt.id);
+  expect(fact('Attempt')).toBe('attempt-a');
+  expect(fact('State')).toBe('running');
+  const refreshed = refreshTrace(older, { records: [{ ...attempt, state: 'completed' }], next_cursor: null });
+  expect(refreshed.epoch).toBe(initial.epoch);
+  view.rerender(<Trajectory cache={refreshed} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={load} />);
+  expect(fact('Record')).toBe(attempt.id);
+  expect(fact('State')).toBe('completed');
+  expect(turn.getAttribute('aria-selected')).toBe('true');
+  expect(load).not.toHaveBeenCalled();
 });
 
 it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hijack structural focus', async kind => {
@@ -198,7 +290,7 @@ it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hi
   let resolve!: (detail: TraceDetail) => void;
   const reads: string[] = []; const selections: (string | undefined)[] = [];
   function Fixture() {
-    const [cache, setCache] = useState(cacheOf([child]));
+    const [cache, setCache] = useState(cacheOf([traceRecord(9, { kind: 'step', request: null, preview: null }), child]));
     const load = useCallback((id: string) => {
       reads.push(id); setCache(current => beginTraceDetail(current, id));
       void new Promise<TraceDetail>(done => { resolve = done; }).then(detail => setCache(current => completeTraceDetail(current, id, 1, detail)));
@@ -210,9 +302,12 @@ it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hi
   const step = document.querySelector<HTMLElement>('[data-display-type="GroupHeader"]')!;
   act(() => step.focus()); fireEvent.keyDown(step, { key: 'Enter' });
   expect(selections.at(-1)).toBeUndefined();
+  expect(fact('Record')).toBe('trace:9');
   await act(async () => resolve(kind === 'request' ? requestDetail(10) : toolDetail(10)));
   expect(document.activeElement).toBe(step); expect(step.getAttribute('data-selected')).toBe('true');
-  expect(screen.queryByRole('complementary')).toBeNull(); expect(reads).toEqual([child.id]);
+  expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
+  expect(fact('Record')).toBe('trace:9'); expect(fact('Logical Step')).toBe('1');
+  expect(reads).toEqual([child.id]);
 });
 
 const proposal = () => traceRecord(0, { kind: 'assistant', request: null, message_id: 'assistant-0', calls: [{ call_id: 'same', tool_id: 'tool-a', name: 'same name' }, { call_id: 'not-executed', tool_id: 'tool-a', name: 'same name' }] });
@@ -679,4 +774,73 @@ it.each(['Turn 2', 'Step 2'])('%s reveals every semantic cell of its structural 
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
   expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(expected.map(cell => cell.display_key));
   expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual(query === 'Turn 2' ? ['trace:1', 'trace:5'] : ['trace:5']);
+});
+
+const epochRecords = (...ns: number[]) => ns.map(n => traceRecord(n, { location: { attempt_id: `attempt-${n}`, step_id: 'step' } }));
+
+it('407: Timeline focus keeps native identity across prepend and lifecycle refresh within one Trace epoch', () => {
+  const initial = cacheOf(epochRecords(0, 1, 2, 3));
+  const view = show(initial);
+  expect(timelineFocusOf()).toEqual({ 'trace:0': undefined, 'trace:1': undefined, 'trace:2': undefined, 'trace:3': undefined });
+  dragTimeline(30, 45);
+  expect(timelineFocusOf()).toEqual({ 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
+  const before = focusOverlay()!.style.left;
+  const prepended = prependTrace(initial, { records: epochRecords(9), next_cursor: null });
+  expect(prepended.epoch).toBe(initial.epoch);
+  view.rerender(<Trajectory cache={prepended} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  // Same native identities; the Turn ordinal and projected range both moved.
+  expect(timelineFocusOf()).toEqual({ 'trace:9': 'outside', 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
+  expect(screen.getByRole('row', { name: 'Turn 3' }).getAttribute('data-attempt')).toBe('attempt-1');
+  expect(focusOverlay()!.style.left).not.toBe(before);
+  const refreshed = refreshTrace(prepended, { records: [{ ...prepended.page.records[4]!, state: 'failed' }], next_cursor: null });
+  expect(refreshed.epoch).toBe(initial.epoch);
+  view.rerender(<Trajectory cache={refreshed} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(timelineFocusOf()).toEqual({ 'trace:9': 'outside', 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
+  expect(focusOverlay()).not.toBeNull();
+});
+
+it('407: a Trace epoch rebase retires Timeline focus even when record identities recur', () => {
+  const initial = cacheOf(epochRecords(0, 1, 2, 3));
+  const view = show(initial);
+  dragTimeline(30, 45);
+  expect(focusOverlay()).not.toBeNull();
+  const replaced = replaceTrace({ records: epochRecords(20, 21, 22, 23), next_cursor: null }, initial);
+  expect(replaced.epoch).toBe(initial.epoch + 1);
+  view.rerender(<Trajectory cache={replaced} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(focusOverlay()).toBeNull();
+  expect(document.querySelectorAll('[data-timeline-focus]')).toHaveLength(0);
+  // The epoch, not identity absence, owns the lifetime: recurring IDs stay unfocused.
+  const recurring = replaceTrace({ records: epochRecords(0, 1, 2, 3), next_cursor: null }, replaced);
+  view.rerender(<Trajectory cache={recurring} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(focusOverlay()).toBeNull();
+  expect(document.querySelectorAll('[data-timeline-focus]')).toHaveLength(0);
+  // A focus created in the new domain belongs to it.
+  dragTimeline(55, 70);
+  expect(timelineFocusOf()).toEqual({ 'trace:0': 'outside', 'trace:1': 'outside', 'trace:2': 'inside', 'trace:3': 'outside' });
+});
+
+it('407: Jump to latest rebases the read domain and leaves no stale Timeline dimming', () => {
+  // Mirrors AppServerClient.latestTrace: the resident snapshot replaces the window.
+  const snapshot = { records: epochRecords(4, 5, 6, 7), next_cursor: 'older' };
+  const epochs: number[] = [];
+  function Fixture() {
+    const [cache, setCache] = useState(() => replaceTrace(snapshot));
+    epochs.push(cache.epoch);
+    return <Trajectory cache={cache} onSelect={noop} onLoadDetail={noop} latest={() => setCache(current => replaceTrace(snapshot, current))}
+      loadEarlier={() => setCache(current => prependTrace(current, { records: epochRecords(0, 1, 2, 3), next_cursor: null }))} />;
+  }
+  render(<Fixture />);
+  fireEvent.click(screen.getByRole('button', { name: 'Load earlier records' }));
+  // Eight equal sequence spans: 13–24% covers only the second, trace:1.
+  dragTimeline(13, 24);
+  expect(Object.entries(timelineFocusOf()).filter(([, focus]) => focus === 'inside').map(([owner]) => owner)).toEqual(['trace:1']);
+  expect(timelineFocusOf()['trace:5']).toBe('outside');
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  Object.defineProperty(ledger, 'scrollHeight', { configurable: true, value: 900 });
+  ledger.scrollTop = 150; fireEvent.scroll(ledger);
+  fireEvent.click(screen.getByRole('button', { name: 'Jump to latest' }));
+  expect(epochs.at(-1)).toBe(2);
+  expect([...document.querySelectorAll<HTMLElement>('[data-owner]')].map(el => el.dataset.owner)).toEqual(['trace:4', 'trace:5', 'trace:6', 'trace:7']);
+  expect(document.querySelectorAll('[data-timeline-focus]')).toHaveLength(0);
+  expect(focusOverlay()).toBeNull();
 });

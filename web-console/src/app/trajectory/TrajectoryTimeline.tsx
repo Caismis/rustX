@@ -304,6 +304,7 @@ export function TrajectoryTimeline({
         {focus !== null && (
           <div
             className={css.focus}
+            data-focus-range=""
             aria-hidden="true"
             style={
               {

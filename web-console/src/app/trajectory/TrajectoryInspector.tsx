@@ -34,7 +34,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { diffLines } from 'diff';
-import type { TrajectoryFacet, TrajectorySelection } from './layout';
+import type { StructuralDisplayItem, TrajectoryFacet, TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
@@ -919,6 +919,75 @@ export function TrajectoryInspector({
         )}
       </InspectorPanel>
       </Tabs>
+    </aside>
+  );
+}
+
+/**
+ * Bounded evidence of one Turn or Step header.
+ *
+ * A header is presentation structure, not a detail owner: this reads only the
+ * exact native Attempt/Step summary record the projection already attached to
+ * it, and issues no detail read. Without that exact record it says so rather
+ * than borrowing identity, lifecycle or timing from a member record.
+ */
+export function TrajectoryStructureInspector({ item, onClose }: { item: StructuralDisplayItem; onClose: () => void }) {
+  const record = item.native_record;
+  const native = item.type === 'TurnHeader' ? 'Attempt' : item.kind === 'step' ? 'Step' : undefined;
+  return (
+    <aside className={css.inspector} aria-label="Trace structure inspector">
+      <header>
+        <strong>{item.label}{native ? ` · native ${native}` : ''}</strong>
+        <Button size="sm" onClick={onClose}>Close structure</Button>
+      </header>
+      <div className={css.inspectorBody}>
+        <p className={css.note}>“{item.label}” is a loaded-window ordinal, not an identity.</p>
+        {record ? (
+          <>
+            <dl className={css.facts}>
+              <dt>Native kind</dt>
+              <dd>{cellLabel[record.kind]}</dd>
+              <dt>State</dt>
+              <dd>{record.state}</dd>
+              <dt>Record</dt>
+              <dd className={css.machine}>{record.id}</dd>
+              <dt>Attempt</dt>
+              <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
+              {record.kind === 'step' && (
+                <>
+                  <dt>Logical Step</dt>
+                  <dd className={css.machine}>{record.location.step_id ?? <Unavailable />}</dd>
+                </>
+              )}
+              {record.native_id && (
+                <>
+                  <dt>Native identity</dt>
+                  <dd className={css.machine}>{record.native_id}</dd>
+                </>
+              )}
+              <dt>Started</dt>
+              <dd className={css.machine}>{formatInstant(record.timing.started_at)}</dd>
+              <dt>Ended</dt>
+              <dd className={css.machine}>{formatInstant(record.timing.ended_at)}</dd>
+              <dt>Duration</dt>
+              <dd>{record.timing.duration_ms == null ? <Unavailable /> : formatDuration(count(record.timing.duration_ms))}</dd>
+              {record.preview?.text && (
+                <>
+                  <dt>Summary</dt>
+                  <dd>{record.preview.text}</dd>
+                </>
+              )}
+            </dl>
+            <Truncated of={record.truncated || record.preview?.truncated} />
+          </>
+        ) : (
+          <p className={css.unavailable}>
+            {native
+              ? `The exact native ${native} record is not loaded at this read cut, so its structural evidence is unavailable.`
+              : 'Message groups Attempt-owned records with no logical Step; it has no native structural record.'}
+          </p>
+        )}
+      </div>
     </aside>
   );
 }

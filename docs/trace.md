@@ -483,8 +483,12 @@ and exact loaded membership for scrolling/search. The anchor is the first
 visible native record, **not** the structural or detail owner. A proven loaded
 Attempt/Step record may supply `native_record` evidence by exact kind and native
 structural IDs; no child can supply it. If the native start record is outside the
-page, that evidence is absent. Both headers remain presentation-only even when
-the exact native start is loaded: no fake detail domain and no owner-fetch paging.
+page, that evidence is absent. Neither header owns a detail read: no fake detail
+domain and no owner-fetch paging. Selecting a header opens a separate structure
+inspector that renders only its exact `native_record` summary (record ID, native
+kind, Attempt ID, Step ID for a Step, lifecycle state, recorded start/end/duration,
+native ID and preview when present). Without that record it states that exact
+structural evidence is unavailable at this read cut; Message never has one.
 
 Keys are JSON tuples, never indexes: record + native ID, system/request-boundary
 + Record ID + Request ID, context + Record ID + Request ID + Message ID, group +
@@ -506,8 +510,11 @@ focus. Calls construction remains solely in the display-policy projection.
 
 Detail selection stores display key, native owner, facet and optional Context
 Message ID. Structural focus is a separate local state with no detail owner.
-Click, focus, Enter or Space on a header selects that structure and closes any
-Inspector, clearing cache selection without a detail read. Arrow keys navigate
+Click, Enter or Space on a header selects that structure, replaces any record
+Inspector with the structure inspector and clears cache selection without a detail
+read; that inspector reads the header's evidence from the current projection, so
+a lifecycle refresh or Turn renumbering never shows a stale copy. Closing it
+returns focus to the header without reselecting it. Arrow keys navigate
 display items; entering an inspectable row explicitly selects its owner. A Turn's
 fold button changes only collapse state, preserving its selected cell and Inspector. Escape clears selection. Timeline
 selection only resolves inspectable items, never a structural header.
@@ -586,8 +593,12 @@ Each boundary is the minimum projected span start within its Turn, after the
 mode’s timing transform (including duration idle compression). A Turn without
 visible spans has no boundary. Structural Attempt/Step timestamps do not supply
 presentation coordinates; they remain native Inspector evidence.
-Drag focus persists as native record IDs, so prepending history only relocates its
-visible coordinates. Timing lanes are Input / Model / Tools. Request generation is counted once,
+Drag focus persists as native record IDs, so prepending history or a lifecycle
+refresh only relocates its visible coordinates. It is owned by the Trace cache
+epoch that created it: any `replaceTrace` rebase (Jump to latest, resynchronizing,
+a disjoint or over-bound refresh) retires it, even when the new domain reuses those
+record IDs, so no stale focus can dim rows without a visible interval. A drag
+that covers no span sets no focus. Timing lanes are Input / Model / Tools. Request generation is counted once,
 never again for canonical Assistant acceptance; Attempt/Step/SYSTEM acquire no
 durations. Parallel domain evidence retains overlap. Mode contracts:
 

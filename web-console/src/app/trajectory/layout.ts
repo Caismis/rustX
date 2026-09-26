@@ -14,8 +14,9 @@ interface Origin extends TrajectorySelection {
   label: string;
   preview: string;
 }
-/** A loaded anchor controls placement, never detail ownership. Headers stay
- * presentation-only even when the exact native structural record is loaded. */
+/** A loaded anchor controls placement, never detail ownership. Headers never
+ * own a detail read; an exact loaded native structural record is exposed only
+ * as its own bounded summary evidence, never borrowed from a member. */
 interface Structure {
   display_key: string;
   attempt_id: string;

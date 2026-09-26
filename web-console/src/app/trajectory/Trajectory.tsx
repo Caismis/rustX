@@ -5,7 +5,7 @@ import { Group, Panel, Separator } from 'react-resizable-panels';
 import { TRACE_LIMIT, type TraceCache } from '../../client/trace';
 import { Button } from '../../presentation/primitives/Button';
 import { Input } from '../../presentation/primitives/Input';
-import { TrajectoryInspector } from './TrajectoryInspector';
+import { TrajectoryInspector, TrajectoryStructureInspector } from './TrajectoryInspector';
 import { CellContent, CellIcon, SystemPromptCell } from './TrajectoryCell';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, preferredDisplayItem, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectoryDisplayItem, type TrajectorySelection } from './layout';
@@ -33,7 +33,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     return item ? selectionOf(item) : undefined;
   });
   const [structure, setStructure] = useState<StructuralDisplayItem | undefined>(undefined);
-  const [focusIds, setFocusIds] = useState<ReadonlySet<string> | null>(null);
+  const [focus, setFocus] = useState<{ epoch: number; ids: ReadonlySet<string> } | null>(null);
   const [width, setWidth] = useState(0);
   const [offTail, setOffTail] = useState(false);
   const root = useRef<HTMLElement>(null);
@@ -50,14 +50,19 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const selectionItems = useMemo(() => displayUniverse(allItems, rows), [allItems, rows]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(projection, mode), [projection, mode]);
-  // Drag selection persists as native record identities, not sequence positions.
-  // Prepending history changes the displayed range without moving its ownership.
-  const focusedIds = focusIds;
+  // Timeline focus is valid only within the Trace read domain that created it.
+  // Within one epoch (prepend, lifecycle refresh) it persists as native record
+  // identities, so renumbered Turns and moved coordinates keep its ownership.
+  // A rebase onto a new epoch retires it: no stale set can dim the new domain.
+  const focusedIds = focus?.epoch === cache.epoch ? focus.ids : null;
   const range = useMemo<TrajectoryTimeRange | null>(() => {
-    const spans = timelineModel?.spans.filter(span => focusIds?.has(span.id)) ?? [];
+    const spans = timelineModel?.spans.filter(span => focusedIds?.has(span.id)) ?? [];
     return spans.length ? { start: Math.min(...spans.map(span => span.start)), end: Math.max(...spans.map(span => span.end)) } : null;
-  }, [timelineModel, focusIds]);
-  const setRange = (range: TrajectoryTimeRange | null) => setFocusIds(timelineFocus(timelineModel, range));
+  }, [timelineModel, focusedIds]);
+  const setRange = (range: TrajectoryTimeRange | null) => {
+    const ids = timelineFocus(timelineModel, range);
+    setFocus(ids?.size ? { epoch: cache.epoch, ids } : null);
+  };
   const virtualized = rows.length > 100;
   const activeStickyIndex = useRef<number | undefined>(undefined);
   const stickyIndexes = useMemo(() => rows.flatMap((row, index) => row.type === 'TurnHeader' ? [index] : []), [rows]);
@@ -114,6 +119,9 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     setStructure(next);
   }, [allItems, structure, virtualized]);
   const activeKey = structure?.display_key ?? selection?.display_key;
+  // Structural evidence is read from the current projection, so a lifecycle
+  // refresh or renumbering of the same native Attempt/Step is never stale.
+  const structureItem = structure ? preferredStructure(allItems, structure) : undefined;
   useLayoutEffect(() => {
     const key = pendingFocus.current;
     if (!key) return;
@@ -174,13 +182,20 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     return groups;
   }, []);
   const close = () => {
-    if (selection) {
-      const target = rows.find(row => row.display_key === selection.display_key)
-        ?? rows.find(row => row.type === 'TurnHeader' && row.attempt_id === selected?.location.attempt_id);
+    const key = structure?.display_key ?? selection?.display_key;
+    if (key) {
+      const attempt = structure ? structure.attempt_id : selected?.location.attempt_id;
+      const target = rows.find(row => row.display_key === key)
+        ?? rows.find(row => row.type === 'TurnHeader' && row.attempt_id === attempt);
       pendingFocus.current = target?.display_key;
     }
     select();
   };
+  const inspector = structureItem
+    ? <TrajectoryStructureInspector item={structureItem} onClose={close} />
+    : selected && selection
+      ? <TrajectoryInspector record={selected} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error} selection={selection} onFacet={facet => setSelection(current => current ? { ...current, facet } : current)} onLoadDetail={onLoadDetail} onClose={close} />
+      : null;
   return <section ref={root} className={css.root} aria-label="Trajectory" onFocusCapture={event => {
     focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
   }}>
@@ -216,7 +231,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                 if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]; if (next && next.type !== 'HistoryBoundary') { pendingFocus.current = next.display_key; select(next); } }
               };
               if (!isInspectable(row)) return <div key={row.display_key} data-display-key={row.display_key} data-display-type={row.type} data-anchor={row.anchor_record_id} data-attempt={row.attempt_id} data-step={row.type === 'GroupHeader' ? row.step_id : undefined} data-structural="true" data-selected={activeKey === row.display_key || undefined}
-                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={row.label} tabIndex={0} className={css.record} style={style} onClick={activate} onFocus={event => { if (event.target === event.currentTarget && structure?.display_key !== row.display_key) activate(); }} onKeyDown={onKeyDown} title={row.type === 'GroupHeader' ? row.label : `${row.label} · loaded-window ordinal`}>
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={row.label} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown} title={row.type === 'GroupHeader' ? row.label : `${row.label} · loaded-window ordinal`}>
                 <span role="cell" className={css.event}>
                   {row.type === 'TurnHeader' && <button className={css.foldToggle} aria-label={`${collapsedTurns.has(row.attempt_id) ? 'Expand' : 'Fold'} ${row.label}`} onClick={event => { event.stopPropagation(); toggleTurn(row.attempt_id); }}>{collapsedTurns.has(row.attempt_id) ? '▸' : '▾'}</button>}
                   <span className={css.kindTag} data-kind={row.type === 'GroupHeader' ? 'step' : 'attempt'}>{row.label}</span>
@@ -252,8 +267,8 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
           {!rows.length && <p className={css.note}>{matches ? 'No loaded item matches this search.' : 'No records in the loaded window.'}</p>}
         </div>
       </Panel>
-      {selected && selection && <><Separator className={css.separator} /><Panel id="inspector" minSize={narrow ? '180px' : '320px'} defaultSize={narrow ? '48%' : `${Math.min(440, Math.max(320, width * .38))}px`} maxSize={narrow ? '70%' : `${Math.max(320, width - 346)}px`}>
-        <TrajectoryInspector record={selected} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error} selection={selection} onFacet={facet => setSelection(current => current ? { ...current, facet } : current)} onLoadDetail={onLoadDetail} onClose={close} />
+      {inspector && <><Separator className={css.separator} /><Panel id="inspector" minSize={narrow ? '180px' : '320px'} defaultSize={narrow ? '48%' : `${Math.min(440, Math.max(320, width * .38))}px`} maxSize={narrow ? '70%' : `${Math.max(320, width - 346)}px`}>
+        {inspector}
       </Panel></>}
     </Group>
   </section>;

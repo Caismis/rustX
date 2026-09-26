@@ -207,3 +207,60 @@ exposed the two real Request rows at both widths. Reviewed screenshots are
 `/tmp/rustx-414-search-1440.png` and `/tmp/rustx-414-search-390.png` (not committed).
 An initial manual navigation used the already-stopped E2E server; starting the
 separate fixture server resolved it. No semantic test sleeps were added.
+
+## PR #414 review repair: focus epoch and structural evidence (2026-09-26)
+
+Starting head `1764de64bae844e707227a542f5f2bff4f2c2bea`; base `origin/main`
+`f268175bb8d31010706e7070aae80d2b46b7aced` had not moved.
+
+**Timeline focus is owned by the Trace read epoch.** Drag focus is stored as
+`{ epoch, ids }`, and `Trajectory` treats it as active only while `focus.epoch ===
+cache.epoch`. Prepend and lifecycle refresh keep the epoch, so native record IDs
+keep the focus across Turn renumbering and moved coordinates. Every `replaceTrace`
+rebase (Jump to latest, resynchronizing, a disjoint or over-bound refresh) moves to
+a new epoch and retires the focus, even when the new window reuses those record IDs.
+Previously the ID set outlived the epoch. It projected no range in the new domain,
+yet it still marked every new row `data-timeline-focus="outside"`. A drag that
+covers no span now sets no focus.
+
+**Structural evidence without detail ownership.** Turn/Step headers are still not
+`InspectableDisplayItem`s, and they never call `onLoadDetail`. Selecting one opens a
+separate `TrajectoryStructureInspector`. It reads only the header's exact
+`native_record`, taken from the current projection, and shows record ID, native
+kind, Attempt ID, Step ID, state, start/end/duration, native ID and preview. When
+that record is not loaded, it says exact structural evidence is unavailable at this
+read cut. A Message group has no structural record by construction. Focus no
+longer activates a header, so closing the structure inspector returns focus to the
+header without reopening it. The earlier test required headers never to open an
+inspector, which left a loaded Attempt/Step record uninspectable. That test was
+replaced.
+
+New or rewritten deterministic regressions (no sleeps):
+
+- Unit: prepend and lifecycle refresh preserve focus IDs within one epoch and move
+  the overlay. `replaceTrace` clears the overlay and every `data-timeline-focus`,
+  including when identities recur. A Jump to latest fixture that mirrors
+  `latestTrace()` leaves no stale dimming. With the epoch check removed, the
+  rebase tests fail.
+- Unit: exact Attempt/Step evidence (IDs, state, timing) is reachable by click,
+  Enter/Space, arrows, Escape and Close with no detail read. Headers without an
+  exact record lend no child facts. Late Request/Tool detail cannot replace
+  structural inspection. Prepend renumbering and lifecycle refresh keep the same
+  structural selection.
+- Browser: the fixture `latest` now performs the real `replaceTrace` rebase. The
+  virtual sticky/drag test checks that Jump to latest retires focus. The structural
+  prepend test checks unavailable → exact `trace:51` Step evidence. A new
+  1440/390px keyboard test inspects Turn/Step evidence with zero detail reads.
+
+| Command | Result |
+| --- | --- |
+| `pnpm typecheck` | Passed. |
+| `pnpm build` | Passed, including artifact provenance; existing chunk warning only. |
+| `pnpm test` | 55 files / 992 tests passed. |
+| `pnpm exec vitest run test/trajectory.test.tsx` | 55 tests passed. |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` | 23 passed. |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` | 99 passed; normal golden comparison, no reference changes. |
+| `pnpm check:provenance` | 135 source records and 131 notices verified after structural inventory rehash. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed; no native edits. |
+| `git diff --check` | Passed. |

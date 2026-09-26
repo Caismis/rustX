@@ -974,7 +974,9 @@ inspectable without inventing a historical Tool-catalog diff absent from Trace.
 
 One `TrajectoryProjection` feeds both ledger and overview. All interaction state
 uses native or record keys, including drag focus; Turn ordinals can change after
-prepend. The old contiguous Attempt/Step segments and SystemRow facet abstraction
+prepend. Drag focus lives only within the Trace cache epoch that created it.
+Turn/Step headers never own detail reads; their exact loaded native
+Attempt/Step record is shown in a separate bounded structure inspector. The old contiguous Attempt/Step segments and SystemRow facet abstraction
 are removed. Request-relative timing, finite cache/frontiers and native prompt
 classification remain unchanged. See `docs/trace.md` for the current contract and
 `docs/trajectory-407-validation.md` for deterministic regressions and validation.
