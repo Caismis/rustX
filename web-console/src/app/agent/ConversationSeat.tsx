@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 import { useState } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
@@ -14,7 +15,8 @@ import type { CommandId } from '../commands/registry';
 import css from '../../presentation/agent/Conversation.module.css';
 
 export function ConversationStatus({ client, sessionId, recover }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void }) {
-  const product = useClientSelector(client, state => deriveSessionProductState(state, state.views[sessionId]), sameValue);
+  const tx = useTranslation();
+  const product = useClientSelector(client, state => deriveSessionProductState(tx, state, state.views[sessionId]), sameValue);
   return <SessionStatus product={product} recover={recover}/>;
 }
 

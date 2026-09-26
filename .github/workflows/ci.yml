@@ -449,6 +449,9 @@ jobs:
       - name: Deterministic native client and presentation tests
         working-directory: web-console
         run: pnpm test
+      - name: Product UI translation ownership
+        working-directory: web-console
+        run: pnpm check:i18n
       - name: Source provenance and dependency notices
         working-directory: web-console
         run: pnpm check:provenance

@@ -984,3 +984,33 @@ Attempt/Step record is shown in a separate bounded structure inspector. The old 
 are removed. Request-relative timing, finite cache/frontiers and native prompt
 classification remain unchanged. See `docs/trace.md` for the current contract and
 `docs/trajectory-407-validation.md` for deterministic regressions and validation.
+
+## Issue #410 — browser-owned English/Chinese presentation
+
+The read-only Harness checkout was clean at
+`477b4f420553e8a52c2fbccc464d7561b239c443`. Its locale owner, browser bootstrap,
+settings store and static UI-copy check were studied as design references only.
+The rustX controller, React subscription, typed translation path and bounded
+TypeScript AST gate are independently implemented; no Harness Host, Cordis,
+plugin registration or dynamic language-pack runtime is imported.
+
+Matching English/Chinese presentation wording was materially adapted from the
+current Harness workspace, sidebar, General Settings and conversation locale
+files into the feature-owned `src/locale/dictionaries` modules. Each adapted
+module records its actual sources and this exact upstream revision in
+`source-inventory.json`, including the moved legacy workspace dictionary.
+Commands and Inspector dictionaries are independently authored. Existing
+derived presentation files retain their original attribution; their local
+hashes and import closures are refreshed. The repository-wide historical
+baseline is unchanged.
+
+The former English-only static translator, separate workspace translation API
+and Sidebar inline translator are removed. All authored chrome uses one typed
+translation path; native/user/model/Tool text remains opaque. The locale layer
+imports only itself and React, and the presentation dependency boundary permits
+only its React and translation entry points.
+
+PR #418 review corrections (invariant command search, deferred clipboard notices,
+option-label checking and typed status presentation) are independent rustX work.
+No additional Harness material was copied or adapted. Existing source records
+retain their upstream revisions; local hashes and import closures are refreshed.

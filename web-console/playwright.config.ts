@@ -9,6 +9,6 @@ export default defineConfig({
   // only a strict tripwire: an accidental toHaveScreenshot must never inherit a permissive
   // Playwright default, and normal runs must never write snapshots.
   expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 0 } },
-  use: { connectOptions: { wsEndpoint }, baseURL: 'http://127.0.0.1:5173', viewport: { width: 1440, height: 1000 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
+  use: { locale: 'en-US', storageState: { cookies: [], origins: ['http://127.0.0.1:5173', 'http://127.0.0.1:5174'].map(origin => ({ origin, localStorage: [{ name: 'rustx-locale-v1', value: 'en' }] })) }, connectOptions: { wsEndpoint }, baseURL: 'http://127.0.0.1:5173', viewport: { width: 1440, height: 1000 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
   webServer: [{ command: 'pnpm preview --port 5173 --strictPort', url: 'http://127.0.0.1:5173', reuseExistingServer: false }, { command: 'pnpm dev --port 5174 --strictPort', url: 'http://127.0.0.1:5174/test/fixtures/foundation.html', reuseExistingServer: false }],
 });

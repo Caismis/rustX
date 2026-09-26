@@ -1,3 +1,5 @@
+import { backgroundStateLabel } from './status-labels';
+import type { Translate } from '../locale/translation';
 import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v23';
 
 /** Agent Status is historical, request-scoped model context. Nothing here is a
@@ -103,39 +105,39 @@ const DETAIL_ENTRY_LIMIT = 6;
  * string would make this client a second interpreter of a composition it already
  * receives structurally. A section the runtime published with nothing to say
  * contributes no facet rather than an `0` nobody asked about. */
-export function agentStatusFacets(status: AgentStatusView): AgentStatusFacet[] {
-  return status.sections.flatMap(section => { const facet = facetOf(section); return facet ? [facet] : []; });
+export function agentStatusFacets(tx: Translate, status: AgentStatusView): AgentStatusFacet[] {
+  return status.sections.flatMap(section => { const facet = facetOf(tx, section); return facet ? [facet] : []; });
 }
 
-function facetOf(section: RuntimeClientStatusSection): AgentStatusFacet | undefined {
+function facetOf(tx: Translate, section: RuntimeClientStatusSection): AgentStatusFacet | undefined {
   if (section.type === 'temporal') {
-    const time = formatStatusTime(section.current_time, section.timezone ?? undefined);
-    return { kind: 'temporal', compact: time, label: 'Time', values: [time] };
+    const time = formatStatusTime(tx, section.current_time, section.timezone ?? undefined);
+    return { kind: 'temporal', compact: time, label: tx('agent:agent-status.time'), values: [time] };
   }
   if (section.type === 'background_executions') {
     const executions = section.executions ?? [];
     const total = executions.length + section.omitted_count;
     if (!total) return undefined;
-    const values = executions.slice(0, DETAIL_ENTRY_LIMIT).map(execution => clip(`${execution.tool_name} · ${execution.state}`, DETAIL_LIMIT));
+    const values = executions.slice(0, DETAIL_ENTRY_LIMIT).map(execution => `${execution.tool_name} · ${backgroundStateLabel(tx, execution.state)}`);
     const hidden = section.omitted_count + Math.max(0, executions.length - DETAIL_ENTRY_LIMIT);
-    if (hidden > 0) values.push(`… and ${hidden} more`);
-    return { kind: 'background_executions', compact: `background ${total}`, label: 'Background', values };
+    if (hidden > 0) values.push(tx('agent:copy.and-value-more', { p0: hidden }));
+    return { kind: 'background_executions', compact: tx('agent:status.background', { n: total }), label: tx('agent:agent-status.background'), values };
   }
   if (!section.active_count) return undefined;
   const values: string[] = [];
   if (section.current) values.push(clip(todoSubject(section.current), DETAIL_LIMIT));
   // Counts restate the runtime's committed totals; they are never recomputed from
   // the bounded task list, which may omit entries.
-  const counts = [`${section.active_count} active`];
-  if (section.blocked_count > 0) counts.push(`${section.blocked_count} blocked`);
-  if (section.completed_count > 0) counts.push(`${section.completed_count} completed`);
+  const counts = [tx('agent:copy.value-active', { p0: section.active_count })];
+  if (section.blocked_count > 0) counts.push(tx('agent:copy.value-blocked', { p0: section.blocked_count }));
+  if (section.completed_count > 0) counts.push(tx('agent:copy.value-completed', { p0: section.completed_count }));
   values.push(counts.join(' · '));
-  return { kind: 'todo', compact: `todo ${section.active_count}`, label: 'Todo', values };
+  return { kind: 'todo', compact: tx('agent:status.todo', { n: section.active_count }), label: tx('agent:agent-status.todo'), values };
 }
 
 /** The compact one-line annotation body, without styling. */
-export function agentStatusSummary(status: AgentStatusView): string {
-  return agentStatusFacets(status).map(facet => clip(facet.compact, VALUE_LIMIT)).join(' · ');
+export function agentStatusSummary(tx: Translate, status: AgentStatusView): string {
+  return agentStatusFacets(tx, status).map(facet => clip(facet.compact, VALUE_LIMIT)).join(' · ');
 }
 
 const todoSubject = (task: RuntimeClientTodoStatusTask) => task.status === 'in_progress' && task.active_form ? task.active_form : task.subject;
@@ -143,15 +145,15 @@ const todoSubject = (task: RuntimeClientTodoStatusTask) => task.status === 'in_p
 /** The sampled runtime clock, in the timezone the runtime configured. Both the
  * instant and the zone are runtime-published, so one composition reads the same
  * on every machine; an unparseable instant is shown verbatim rather than guessed. */
-export function formatStatusTime(currentTime: string, timezone?: string): string {
+export function formatStatusTime(tx: Translate, currentTime: string, timezone?: string): string {
   const instant = new Date(currentTime);
   if (Number.isNaN(instant.getTime())) return clip(currentTime, VALUE_LIMIT);
-  return zonedParts(instant, timezone ?? 'UTC') ?? zonedParts(instant, 'UTC') ?? instant.toISOString();
+  return zonedParts(tx, instant, timezone ?? 'UTC') ?? zonedParts(tx, instant, 'UTC') ?? instant.toISOString();
 }
 
-function zonedParts(instant: Date, zone: string): string | undefined {
+function zonedParts(tx: Translate, instant: Date, zone: string): string | undefined {
   let parts;
-  try { parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'short' }).formatToParts(instant); }
+  try { parts = new Intl.DateTimeFormat(tx.language, { timeZone: zone, hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'short' }).formatToParts(instant); }
   catch { return undefined; } // An unknown IANA zone is a runtime fact this client cannot render, not a render failure.
   const value = (type: string) => parts.find(part => part.type === type)?.value;
   const hour = value('hour'), minute = value('minute'), name = value('timeZoneName');

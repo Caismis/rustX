@@ -1,3 +1,5 @@
+import { message } from '../../locale/translation';
+import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState } from 'react';
 import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v23';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
@@ -10,8 +12,9 @@ import { selectSessionModel } from '../model-preference';
 /** Replaceable read cache scoped to one native attachment. Mutations never update
  * displayed selection; only a subsequent authoritative read unlocks controls. */
 export function AgentControls({ client, view, draft }: { client: AppServerClient; view?: SessionView; draft?: { source?: SourceSettings; intent?: SessionModelConfig; choose: (selection: SessionModelConfig) => void; disabled: boolean } }) {
+  const tx = useTranslation();
  const [catalog, setCatalog] = useState<ModelCatalogView>();
- const [busy, setBusy] = useState(false), [error, setError] = useState(''), [blocked, setBlocked] = useState(true);
+ const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [blocked, setBlocked] = useState(true);
  const guard = useRef(false), epoch = useRef(0);
  const generation = client.getSnapshot().generation;
  const target = view?.target;
@@ -38,7 +41,7 @@ export function AgentControls({ client, view, draft }: { client: AppServerClient
    if (guard.current || blocked || busy || !attached) return;
    const at = epoch.current; guard.current = true; setBusy(true); setBlocked(true); setError('');
    try { await operation(); if (current(at)) await read(at); }
-   catch (cause) { if (epoch.current === at) setError(isOutcomeUncertain(cause) ? 'Outcome uncertain. No replay; reconnect and reread authority before continuing.' : `${String(cause)} Reread authority before continuing.`); }
+   catch (cause) { if (epoch.current === at) setError(isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) })); }
    finally { if (epoch.current === at) { guard.current = false; setBusy(false); } }
  };
  const model = view?.snapshot?.model;
@@ -53,7 +56,7 @@ export function AgentControls({ client, view, draft }: { client: AppServerClient
      void mutate(async () => {
        await selectSessionModel(client, view!.id, selection);
      }); }}/>
-   {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective.model && <small>Running: {view?.snapshot?.attempt?.model?.primary.model}</small>}
-   {!draft && blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={load}>Reread models</Button>}
+   {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective.model && <small>{tx('agent:agent-controls.running')}{' '}{view?.snapshot?.attempt?.model?.primary.model}</small>}
+   {!draft && blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={load}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;
 }

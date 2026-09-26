@@ -1,3 +1,5 @@
+import { message, displayText, type DisplayText } from '../../../locale/translation';
+import { useTranslation, useNotice } from '../../../locale/react';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Choice, Toggle } from '../primitives/aria';
@@ -39,24 +41,25 @@ function Bound<T, V>({ form, name, children }: {
 }
 
 function Errors({ field }: { field: BoundField }) {
+  const tx = useTranslation();
   const errors = field.state.meta.errors.filter(Boolean);
   if (!field.state.meta.isTouched || !errors.length) return null;
-  return <span role="alert" className={css.error}>{errors.map(error => String((error as { message?: string })?.message ?? error)).join('; ')}</span>;
+  return <span role="alert" className={css.error}>{errors.map(error => displayText(tx, ((error as { message?: DisplayText })?.message ?? error) as DisplayText)).join('; ')}</span>;
 }
 
 /** Syntactic checks a browser can make truthfully. Each returns a message or
  * `undefined`; none of them decides whether native would accept the value. */
 export const syntactic = {
-  required: (label: string) => (value: unknown) => (value === undefined || value === null || String(value).trim() === '') ? `${label} is required.` : undefined,
-  url: (value: unknown) => { if (!value) return undefined; try { new URL(String(value)); return undefined; } catch { return 'Enter a complete URL, including its scheme.'; } },
-  positive: (label: string) => (value: unknown) => value === undefined || value === null || value === '' ? undefined : Number(value) > 0 ? undefined : `${label} must be a positive number.`,
+  required: (value: unknown) => (value === undefined || value === null || String(value).trim() === '') ? message('settings:validation.required') : undefined,
+  url: (value: unknown) => { if (!value) return undefined; try { new URL(String(value)); return undefined; } catch { return message('settings:validation.url'); } },
+  positive: (value: unknown) => value === undefined || value === null || value === '' ? undefined : Number(value) > 0 ? undefined : message('settings:validation.positive'),
 };
 
 export function Text<T>({ form, name, label, required = false, url = false, placeholder }: {
   form: TypedUnitForm<T>; name: FieldPath<T>; label: string; required?: boolean; url?: boolean; placeholder?: string;
 }) {
-  const validate = (value: unknown) => (required ? syntactic.required(label)(value) : undefined) ?? (url ? syntactic.url(value) : undefined);
-  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => string | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
+  const validate = (value: unknown) => (required ? syntactic.required(value) : undefined) ?? (url ? syntactic.url(value) : undefined);
+  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => DisplayText | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
   return <Field name={name as string} validators={{ onChange: ({ value }) => validate(value) }}>{field => <label>{label}
     <input value={(field.state.value as string | null | undefined) ?? ''} placeholder={placeholder}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
@@ -86,8 +89,8 @@ export function Area<T>({ form, name, label }: { form: TypedUnitForm<T>; name: F
 export function Numeric<T>({ form, name, label, min = 1, empty = null }: {
   form: TypedUnitForm<T>; name: FieldPath<T>; label: string; min?: number; empty?: null | undefined;
 }) {
-  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => string | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
-  return <Field name={name as string} validators={{ onChange: ({ value }) => syntactic.positive(label)(value) }}>{field => <label>{label}
+  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => DisplayText | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
+  return <Field name={name as string} validators={{ onChange: ({ value }) => syntactic.positive(value) }}>{field => <label>{label}
     <input type="number" min={min} value={(field.state.value as number | string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value ? Number(event.target.value) : empty) as never)} />
@@ -98,8 +101,8 @@ export function Numeric<T>({ form, name, label, min = 1, empty = null }: {
 /** A numeric field native models as a decimal string, kept as a string so no
  * precision is lost in the browser. */
 export function NumericText<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
-  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => string | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
-  return <Field name={name as string} validators={{ onChange: ({ value }) => syntactic.positive(label)(value) }}>{field => <label>{label}
+  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => DisplayText | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
+  return <Field name={name as string} validators={{ onChange: ({ value }) => syntactic.positive(value) }}>{field => <label>{label}
     <input type="number" min={1} value={(field.state.value as string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value || null) as never)} />
@@ -128,26 +131,28 @@ export function Bool<T>({ form, name, label }: { form: TypedUnitForm<T>; name: F
 /** A three-state boolean: on, off, or no authored value at all. Absent is
  * never collapsed into `false`. */
 export function TriBool<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
+  const tx = useTranslation();
   return <Bound<T, boolean | null | undefined> form={form} name={name}>{(value, change) =>
     <Choice label={label} value={value === undefined || value === null ? '' : String(value)}
-      options={[['', 'Native default'], ['true', 'On'], ['false', 'Off']]}
+      options={[['', tx('settings:copy.native-default')], ['true', tx('settings:copy.on')], ['false', tx('settings:copy.off')]]}
       onChange={next => change(next === '' ? undefined : next === 'true')} />}</Bound>;
 }
 
 /** A list of identities. An empty list is an authored empty list and is never
  * presented as an absent value. */
 export function Strings<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
+  const tx = useTranslation();
   const Field = form.Field as unknown as (props: { name: string; mode: 'array'; children: (field: BoundField & { pushValue: (value: never) => void; removeValue: (index: number) => void }) => ReactNode }) => ReactNode;
   return <Field name={name as string} mode="array">{field => {
     const value = (field.state.value as string[] | null | undefined) ?? [];
     return <fieldset><legend>{label}</legend>
       {value.map((entry, index) => <div className={css.names} key={index}>
-        <input aria-label={`${label} ${index + 1}`} value={entry}
+        <input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={entry}
           onChange={event => field.handleChange(value.map((item, at) => at === index ? event.target.value : item) as never)} />
-        <Button aria-label={`Remove ${label} ${index + 1}`} onClick={() => field.removeValue(index)}>Remove</Button>
+        <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => field.removeValue(index)}>{tx('settings:controls.remove')}{' '}</Button>
       </div>)}
-      <Button onClick={() => field.pushValue('' as never)}>Add {label}</Button>
-      {!value.length && <p className={css.hint}>Empty list · no entries</p>}
+      <Button onClick={() => field.pushValue('' as never)}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
+      {!value.length && <p className={css.hint}>{tx('settings:controls.empty-list-no-entries')}</p>}
     </fieldset>;
   }}</Field>;
 }
@@ -166,6 +171,7 @@ export function Entries<T>({ form, name, label, secret = false }: {
 export function EntryRows({ label, value, change, secret = false }: {
   label: string; value: Record<string, string>; change: (value: Record<string, string>) => void; secret?: boolean;
 }) {
+  const tx = useTranslation();
   const [key, setKey] = useState('');
   const id = useId();
   const duplicate = key !== '' && key in value;
@@ -173,12 +179,12 @@ export function EntryRows({ label, value, change, secret = false }: {
     {Object.entries(value).map(([entry, current]) => <div key={entry}>
       <label>{entry}<input type={secret ? 'password' : 'text'} autoComplete={secret ? 'new-password' : undefined} value={current}
         onChange={event => change({ ...value, [entry]: event.target.value })} /></label>
-      <Button onClick={() => { const next = { ...value }; delete next[entry]; change(next); }}>Remove {entry}</Button>
+      <Button onClick={() => { const next = { ...value }; delete next[entry]; change(next); }}>{tx('settings:controls.remove')}{' '}{entry}</Button>
     </div>)}
-    <label htmlFor={id}>{label} name</label>
+    <label htmlFor={id}>{label} {tx('settings:fields.name')}</label>
     <input id={id} value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} />
-    {duplicate && <span role="alert" className={css.error}>{key} is already listed.</span>}
-    <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>Add {label}</Button>
+    {duplicate && <span role="alert" className={css.error}>{key} {tx('settings:fields.is-already-listed')}</span>}
+    <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
   </fieldset>;
 }
 
@@ -190,17 +196,18 @@ export function RequestParameters<T>({ form, name }: { form: TypedUnitForm<T>; n
     <RequestParameterRows value={raw ?? {}} change={change} />}</Bound>;
 }
 export function RequestParameterRows({ value, change }: { value: Record<string, unknown>; change: (value: Record<string, unknown>) => void }) {
+  const tx = useTranslation();
   const [key, setKey] = useState('');
   const duplicate = key !== '' && key in value;
-  return <fieldset><legend>Explicit request parameters</legend>
+  return <fieldset><legend>{tx('settings:fields.explicit-request-parameters')}</legend>
     {Object.entries(value).map(([parameter, current]) => <div key={parameter}>
       <label>{parameter}<JsonValue value={current} change={next => change({ ...value, [parameter]: next })} /></label>
-      <Button onClick={() => { const next = { ...value }; delete next[parameter]; change(next); }}>Remove {parameter}</Button>
+      <Button onClick={() => { const next = { ...value }; delete next[parameter]; change(next); }}>{tx('settings:controls.remove')}{' '}{parameter}</Button>
     </div>)}
-    <label>Parameter name<input value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} /></label>
-    {duplicate && <span role="alert" className={css.error}>{key} is already a request parameter.</span>}
-    <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>Add parameter</Button>
-    <p className={css.hint}>Each value is a JSON scalar, array, or object. Native Rust validates protected keys and protocol support. Do not enter secrets.</p>
+    <label>{tx('settings:fields.parameter-name')}<input value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} /></label>
+    {duplicate && <span role="alert" className={css.error}>{key} {tx('settings:fields.is-already-a-request-parameter')}</span>}
+    <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>{tx('settings:fields.add-parameter')}</Button>
+    <p className={css.hint}>{tx('settings:fields.each-value-is-a-json-scalar-array-or-object-native-rust-validate')}</p>
   </fieldset>;
 }
 /** One request parameter's JSON value.
@@ -220,7 +227,7 @@ export function RequestParameterRows({ value, change }: { value: Record<string, 
 function JsonValue({ value, change }: { value: unknown; change: (value: unknown) => void }) {
   const serialized = JSON.stringify(value) ?? '';
   const [text, setText] = useState(serialized);
-  const [error, setError] = useState('');
+  const [error, setError] = useNotice();
   const input = useRef<HTMLInputElement>(null);
   // The serialized value this buffer currently reflects: the owner's, or the
   // one this input last emitted into it.
@@ -239,7 +246,7 @@ function JsonValue({ value, change }: { value: unknown; change: (value: unknown)
       const next = event.target.value;
       setText(next);
       let parsed: unknown;
-      try { parsed = JSON.parse(next); } catch { setError('Enter a complete JSON value before saving.'); return; }
+      try { parsed = JSON.parse(next); } catch { setError(message('settings:copy.enter-a-complete-json-value-before-saving')); return; }
       setError('');
       reflected.current = JSON.stringify(parsed);
       change(parsed);

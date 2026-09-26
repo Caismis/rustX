@@ -1,3 +1,5 @@
+import type { Translate } from '../../../locale/translation';
+import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
 import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v23';
 import { Badge } from '../../../presentation/settings/SettingsContent';
@@ -18,10 +20,7 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
 import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
 
 type Filter = 'all' | ExtensionFamily;
-const filters: readonly (readonly [Filter, string])[] = [
-  ['all', 'All'], ['mcp', 'MCP'], ['skill', 'Skills'], ['agent', 'Agents'],
-  ['workflow', 'Workflows'], ['managed_python', 'Python'], ['native', 'Native'],
-];
+
 
 /** The one Extensions resource-management surface.
  *
@@ -40,6 +39,11 @@ export function ExtensionsPage({ source, scope, revision, models, focus, onFocus
   source: SourceSettings; scope: SourceScope; revision?: string; models: string[];
   focus?: PageFocus['extensions']; onFocus: (focus?: PageFocus['extensions']) => void;
 }) {
+  const tx = useTranslation();
+  const filters: readonly (readonly [Filter, string])[] = [
+  ['all', tx('settings:copy.all')], ['mcp', 'MCP'], ['skill', tx('settings:tools-page.skills')], ['agent', tx('settings:copy.agents')],
+  ['workflow', tx('settings:copy.workflows')], ['managed_python', tx('settings:copy.python')], ['native', tx('settings:copy.native')],
+];
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   if (focus) {
@@ -52,29 +56,29 @@ export function ExtensionsPage({ source, scope, revision, models, focus, onFocus
   // it does not parse, no MCP identity can be authored in it.
   const mcp = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
   const matches = entries.filter(entry => entry.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  return <section aria-label="Extensions">
-    <h3>Extensions</h3>
-    <p>Everything this Agent can be extended with. Defining a resource is not the same as preparing it, and preparing it is not the same as allowing the root Agent to use it — each is shown as its own fact.</p>
-    <FilterTabs label="Extension kinds" value={filter} onChange={setFilter} options={filters}>
+  return <section aria-label={tx('settings:extensions-page.extensions')}>
+    <h3>{tx('settings:extensions-page.extensions')}</h3>
+    <p>{tx('settings:extensions-page.everything-this-agent-can-be-extended-with-defining-a-resource-i')}</p>
+    <FilterTabs label={tx('settings:extensions-page.extension-kinds')} value={filter} onChange={setFilter} options={filters}>
       {filter === 'native'
         ? <NativeExtensions source={source} scope={scope} revision={revision} />
         : <>
           <div className={workflow.toolbar}>
-            <Search label="Find an extension" value={query} onChange={setQuery} placeholder="Find by identity" />
+            <Search label={tx('settings:extensions-page.find-an-extension')} value={query} onChange={setQuery} placeholder={tx('settings:extensions-page.find-by-identity')} />
           </div>
-          <ResourceList label={`${filters.find(([id]) => id === filter)![1]} extensions`}
-            rows={matches.map(entry => extensionRow(entry, scope))}
+          <ResourceList label={tx('settings:extensions-page.value-extensions', { p0: filters.find(([id]) => id === filter)![1] })}
+            rows={matches.map(entry => extensionRow(tx, entry, scope))}
             onOpen={id => { const entry = matches.find(item => rowId(item) === id); if (entry) onFocus({ kind: 'extension', family: entry.family, name: entry.name }); }}
-            empty={query ? `No extension identity matches ${query}.` : 'No definition of this kind is present in this native projection.'} />
+            empty={query ? tx('settings:copy.no-extension-identity-matches-value', { p0: query }) : tx('settings:copy.no-definition-of-this-kind-is-present-in-this-native-projection')} />
           {filter === 'mcp' && mcp.state === 'malformed' && <>
-            <p role="alert" className={css.error}>{mcp.diagnostic}</p>
-            <p role="status">MCP editing is unavailable because this document does not parse. Correct {mcp.path}, then rescan configuration files on Advanced.</p>
+            <p role="alert" className={css.error}>{mcp.diagnostic ?? tx('settings:source.not-loaded')}</p>
+            <p role="status">{tx('settings:extensions-page.mcp-editing-is-unavailable-because-this-document-does-not-parse')}{' '}{mcp.path}{tx('settings:extensions-page.then-rescan-configuration-files-on-advanced')}</p>
           </>}
           {filter !== 'all' && admitsAuthoring(filter as ExtensionFamily) && !(filter === 'mcp' && mcp.state !== 'structured')
             && <NewResource family={filter as ExtensionFamily} exists={entries.map(entry => entry.name)}
               open={name => onFocus({ kind: 'extension', family: filter as ExtensionFamily, name })} />}
           {filter !== 'all' && !admitsAuthoring(filter as ExtensionFamily)
-            && <p className={css.hint}>This protocol has no operation that authors a {extensionFamilyLabel(filter as ExtensionFamily)} definition. Inventory, diagnostics and root selection are supported; authoring belongs to the native resource source.</p>}
+            && <p className={css.hint}>{tx('settings:extension-detail.this-protocol-has-no-operation-that-authors-a')}{' '}{extensionFamilyLabel(tx, filter as ExtensionFamily)} {tx('settings:extensions-page.definition-inventory-diagnostics-and-root-selection-are-supporte')}</p>}
           <CollectionDiagnostics source={source} families={filter === 'all' ? resourceFamilies : [filter as ResourceFamily]} />
         </>}
     </FilterTabs>
@@ -85,22 +89,22 @@ function rowId(entry: ExtensionEntry): string { return `${entry.family}:${entry.
 
 /** One resource row. Each native fact is its own badge, because collapsing
  * them would claim something native never said. */
-function extensionRow(entry: ExtensionEntry, scope: SourceScope): ResourceRow {
-  const preparation = preparationLabel(entry);
-  const selection = selectionLabel(entry);
+function extensionRow(tx: Translate, entry: ExtensionEntry, scope: SourceScope): ResourceRow {
+  const preparation = preparationLabel(tx, entry);
+  const selection = selectionLabel(tx, entry);
   return {
     id: rowId(entry), name: entry.name,
     facts: <>
-      <Badge>{extensionFamilyLabel(entry.family)}</Badge>
-      <Badge>{entry.owner === 'user' ? 'User' : 'Workspace'}</Badge>
-      <Badge>{relationshipLabel(entry, scope)}</Badge>
-      <Badge tone={entry.valid === undefined ? undefined : entry.valid ? 'success' : 'error'}>{validityLabel(entry)}</Badge>
+      <Badge>{extensionFamilyLabel(tx, entry.family)}</Badge>
+      <Badge>{entry.owner === 'user' ? tx('settings:extension-detail.user') : tx('settings:extension-detail.workspace')}</Badge>
+      <Badge>{relationshipLabel(tx, entry, scope)}</Badge>
+      <Badge tone={entry.valid === undefined ? undefined : entry.valid ? 'success' : 'error'}>{validityLabel(tx, entry)}</Badge>
       {preparation && <Badge>{preparation}</Badge>}
       {selection && <Badge>{selection}</Badge>}
     </>,
     detail: <>
       <p className={css.hint}>{entry.path}</p>
-      {entry.shadowed && <p className={css.hint}>Shadows {entry.shadowed}. The losing definition is not parsed or prepared.</p>}
+      {entry.shadowed && <p className={css.hint}>{tx('settings:extensions-page.shadows')}{' '}{entry.shadowed}{tx('settings:extensions-page.the-losing-definition-is-not-parsed-or-prepared')}</p>}
       {entry.diagnostics.map((reason, index) => <p className={css.error} key={index}>{reason}</p>)}
     </>,
   };
@@ -114,23 +118,25 @@ function extensionRow(entry: ExtensionEntry, scope: SourceScope): ResourceRow {
  * which name packages rather than Skill identities, so they are listed here on
  * the same terms. */
 function CollectionDiagnostics({ source, families }: { source: SourceSettings; families: readonly ResourceFamily[] }) {
+  const tx = useTranslation();
   const diagnostics = collectionDiagnostics(source, families);
   const skills = families.includes('skill') ? source.prospective_resources?.skill_diagnostics ?? [] : [];
   if (!diagnostics.length && !skills.length) return null;
-  return <section aria-label="Source diagnostics">
-    <h4>Source diagnostics</h4>
+  return <section aria-label={tx('settings:extensions-page.source-diagnostics')}>
+    <h4>{tx('settings:extensions-page.source-diagnostics')}</h4>
     {diagnostics.map((item, index) => <p className={css.error} key={index}>
-      {extensionFamilyLabel(item.subject.family)} source{item.file ? ` ${item.file}` : ''}: {item.reason}
+      {extensionFamilyLabel(tx, item.subject.family)} {tx('settings:extensions-page.source')}{item.file ? tx('settings:extensions-page.value', { p0: item.file }) : ''}: {item.reason}
     </p>)}
-    {!!skills.length && <Advanced title={`Skill discovery diagnostics (${skills.length})`}><NativeFacts value={skills} /></Advanced>}
+    {!!skills.length && <Advanced title={tx('settings:extensions-page.skill-discovery-diagnostics-value', { p0: skills.length })}><NativeFacts value={skills} /></Advanced>}
   </section>;
 }
 
 function NewResource({ family, exists, open }: { family: ExtensionFamily; exists: readonly string[]; open: (name: string) => void }) {
+  const tx = useTranslation();
   const [name, setName] = useState('');
-  const label = extensionFamilyLabel(family);
+  const label = extensionFamilyLabel(tx, family);
   return <div className={css.actions}>
-    <TextField label={`New ${label} identity`} value={name} change={setName} />
-    <Button disabled={!name || exists.includes(name)} onClick={() => { open(name); setName(''); }}>Add {label}</Button>
+    <TextField label={tx('settings:extensions-page.new-value-identity', { p0: label })} value={name} change={setName} />
+    <Button disabled={!name || exists.includes(name)} onClick={() => { open(name); setName(''); }}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
   </div>;
 }

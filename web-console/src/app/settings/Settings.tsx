@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
@@ -29,7 +30,7 @@ import {
   settingsTargetKey, settingsTargetLabel, settingsTargetScope, type SettingsTarget,
 } from './projection';
 import {
-  admitsFocus, connectionFocus, settingsPageLabel, settingsPages,
+  admitsFocus, connectionFocus, settingsPages,
   type FocusMap, type SettingsFocus, type SettingsNavigationActor, type SettingsPage,
 } from './machines/navigation';
 
@@ -49,8 +50,9 @@ export interface SettingsProps {
  * single unit — a read or convergence fact of the target as a whole. Each
  * unit's own save reports itself, next to the unit it is about. */
 function MutationNotice({ outcome }: { outcome: MutationOutcome }) {
+  const tx = useTranslation();
   switch (outcome.kind) {
-    case 'uncertain': return <p role="alert" className={css.error}>Save outcome uncertain. Authority is reread; the write is never replayed. Review the current source before saving again.</p>;
+    case 'uncertain': return <p role="alert" className={css.error}>{tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re')}</p>;
     default: return null;
   }
 }
@@ -99,6 +101,7 @@ export function Settings(props: SettingsProps) {
 function SettingsDialog({ client, host, theme = 'light', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
+  const tx = useTranslation();
   // The navigation machine admits only pages and details this owner
   // authorizes, so the page and focus are rendered exactly as they are.
   const { actor, transport } = useSettingsTarget(client, target, host);
@@ -169,13 +172,13 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
       processPolicyImpacts={source.process_policy_impacts} busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
         current revision. It exists only while the document does not parse. */}
-    {config.state === 'malformed' && current !== 'extensions' && <UnitForm title="Repair malformed source" blank="" revision={config.revision} removable={false}
+    {config.state === 'malformed' && current !== 'extensions' && <UnitForm title={tx('settings:settings.repair-malformed-source')} blank="" revision={config.revision} removable={false}
       mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
-      {(value, change) => <label>Replacement TOML<textarea value={value} onChange={event => change(event.target.value)} /></label>}
+      {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
     </UnitForm>}
   </fieldset>;
 
-  const pages = settingsPages(target).map(id => ({ id, label: settingsPageLabel(id), icon: pageIcons[id]() }));
+  const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
   return <SettingsPanel pages={pages} activeId={current}
     onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })} onClose={() => navigation.send({ type: 'CLOSE' })}
     // The owner this dialog is bound to, and the state of its authoritative
@@ -188,21 +191,21 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
     // stay on Advanced.
     context={<div className={css.context}>
       <div className={css.contextTitle}>
-        <h2>{settingsTargetLabel(target)}</h2>
-        <p role="status" className={css.lifecycle} data-lifecycle={lifecycle}>{settingsLifecycleLabel(lifecycle)}</p>
+        <h2>{settingsTargetLabel(tx, target)}</h2>
+        <p role="status" className={css.lifecycle} data-lifecycle={lifecycle}>{settingsLifecycleLabel(tx, lifecycle)}</p>
       </div>
-      <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>Reload configuration</Button>
+      <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
     </div>}>
-    <section className={`${css.settings} ${css.page}`} aria-label="Settings" aria-busy={busy}>
-      {scope === 'workspace' && current !== 'models' && <p className={css.hint}>Bound to this exact authorized Workspace. Session focus never retargets this editor.</p>}
+    <section className={`${css.settings} ${css.page}`} aria-label={tx('settings:settings.settings')} aria-busy={busy}>
+      {scope === 'workspace' && current !== 'models' && <p className={css.hint}>{tx('settings:settings.bound-to-this-exact-authorized-workspace-session-focus-never-ret')}</p>}
       {/* Target-wide facts, each reported as itself: a read failure, a
           convergence report, an unknown save outcome and a maintenance
           failure are separate alerts, and none of them hides another. */}
-      {readError && <p role="alert" className={css.error}>Source read failed. {readError}</p>}
+      {readError && <p role="alert" className={css.error}>{tx('settings:settings.source-read-failed')}{' '}{readError}</p>}
       {convergenceError && <p role="alert" className={css.error}>{convergenceError}</p>}
       <MutationNotice outcome={outcome} />
       {maintenanceError && <p role="alert" className={css.error}>{maintenanceError}</p>}
-      {scope === 'workspace' && current !== 'general' && current !== 'models' && <p className={css.hint}>Use global default removes the unit this Workspace authors, so the global value applies again. It never removes the global definition.</p>}
+      {scope === 'workspace' && current !== 'general' && current !== 'models' && <p className={css.hint}>{tx('settings:settings.use-global-default-removes-the-unit-this-workspace-authors-so-th')}</p>}
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
         ? <ConnectionSettings connection={connection} client={client} />
         : !source ? <SourcePending lifecycle={lifecycle} />
@@ -211,7 +214,7 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
           </SourceContext></SettingsActorContext>}
       {connectionReachable && <p>
         <Button onClick={() => onFocus(connectionFocused ? undefined : connectionFocus)}>
-          {connectionFocused ? 'Back to Advanced' : 'Connection'}
+          {connectionFocused ? tx('settings:settings.back-to-advanced') : tx('settings:connection-settings.connection')}
         </Button>
       </p>}
     </section>
@@ -222,9 +225,10 @@ function SettingsDialog({ client, host, theme = 'light', setTheme, connection, n
  * a stale one. Loading, connecting and unavailable are different states, and
  * none of them is shown as an empty configuration. */
 function SourcePending({ lifecycle }: { lifecycle: ReturnType<typeof settingsLifecycle> }) {
-  const text = lifecycle === 'failed' ? 'No configuration can be shown until the source is read. Reload configuration to try again.'
-    : lifecycle === 'connecting' ? 'Configuration is shown once the App Server connection is established.'
-      : 'Reading this source from the App Server. Nothing is shown until native answers.';
+  const tx = useTranslation();
+  const text = lifecycle === 'failed' ? tx('settings:copy.no-configuration-can-be-shown-until-the-source-is-read-reload-configuration-to-try-again')
+    : lifecycle === 'connecting' ? tx('settings:copy.configuration-is-shown-once-the-app-server-connection-is-established')
+      : tx('settings:copy.reading-this-source-from-the-app-server-nothing-is-shown-until-native-answers');
   return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}><p>{text}</p></div>;
 }
 
@@ -232,12 +236,13 @@ function SourcePending({ lifecycle }: { lifecycle: ReturnType<typeof settingsLif
  * because that reason is what the repair below has to address. Advanced
  * reports that reason with its other native diagnostics instead. */
 function MalformedNotice({ config, diagnostic = true }: {
-  config: { state: 'malformed'; path: string; diagnostic: string } | { state: 'structured' } | { state: 'unavailable' };
+  config: { state: 'malformed'; path: string; diagnostic?: string } | { state: 'structured' } | { state: 'unavailable' };
   diagnostic?: boolean;
 }) {
+  const tx = useTranslation();
   if (config.state !== 'malformed') return null;
   return <>
-    <p role="status">Structured editing is unavailable because {config.path} does not parse. Repair the source to edit it again.</p>
-    {diagnostic && <p role="alert" className={css.error}>{config.diagnostic}</p>}
+    <p role="status">{tx('settings:settings.structured-editing-is-unavailable-because')}{' '}{config.path} {tx('settings:settings.does-not-parse-repair-the-source-to-edit-it-again')}</p>
+    {diagnostic && <p role="alert" className={css.error}>{config.diagnostic ?? tx('settings:source.not-loaded')}</p>}
   </>;
 }

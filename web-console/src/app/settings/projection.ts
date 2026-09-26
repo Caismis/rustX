@@ -1,3 +1,4 @@
+import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
@@ -21,8 +22,8 @@ export function settingsTargetScope(target: SettingsTarget): SourceScope { retur
 export function settingsTargetKey(target: SettingsTarget): string {
   return target.kind === 'user' ? 'user' : `workspace:${target.id}`;
 }
-export function settingsTargetLabel(target: SettingsTarget): string {
-  return target.kind === 'user' ? 'User Settings' : `Workspace Settings — ${target.displayName}`;
+export function settingsTargetLabel(tx: Translate, target: SettingsTarget): string {
+  return target.kind === 'user' ? tx('settings:copy.user-settings') : tx('settings:copy.workspace-settings-value', { p0: target.displayName });
 }
 
 /** Every resource kind the one Extensions surface manages. `native` is the
@@ -30,12 +31,12 @@ export function settingsTargetLabel(target: SettingsTarget): string {
  * units rather than through a resource document of their own. */
 export type ExtensionFamily = ResourceFamily | 'native';
 export const extensionFamilies: readonly ExtensionFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python', 'native'];
-export function extensionFamilyLabel(family: ExtensionFamily): string {
+export function extensionFamilyLabel(tx: Translate, family: ExtensionFamily): string {
   return family === 'mcp' ? 'MCP'
-    : family === 'skill' ? 'Skill'
-      : family === 'agent' ? 'Agent'
-        : family === 'workflow' ? 'Workflow'
-          : family === 'managed_python' ? 'Managed Python' : 'Native';
+    : family === 'skill' ? tx('settings:copy.skill')
+      : family === 'agent' ? tx('settings:agent-page.agent')
+        : family === 'workflow' ? tx('settings:extension-detail.workflow')
+          : family === 'managed_python' ? tx('settings:copy.managed-python') : tx('settings:copy.native');
 }
 
 /** The native application scope this source target publishes under, exactly as
@@ -167,13 +168,13 @@ export function unitProvenance(source: SourceSettings | undefined, mutation: Sou
   if (!members.length) return { state: 'unavailable' };
   return members.every(origin => sameOrigin(origin, members[0])) ? { state: 'known', origin: members[0] } : { state: 'mixed' };
 }
-export function provenanceLabel(origin: UnitOrigin): string {
-  if (origin.state === 'unavailable') return 'Origin not reported';
-  if (origin.state === 'mixed') return 'Mixed origins';
-  return origin.origin.kind === 'builtin' ? 'Native default'
-    : origin.origin.kind === 'user' ? 'Inherited from User'
-      : origin.origin.kind === 'workspace' ? 'Workspace override'
-        : 'Process default';
+export function provenanceLabel(tx: Translate, origin: UnitOrigin): string {
+  if (origin.state === 'unavailable') return tx('settings:copy.origin-not-reported');
+  if (origin.state === 'mixed') return tx('settings:copy.mixed-origins');
+  return origin.origin.kind === 'builtin' ? tx('settings:copy.native-default')
+    : origin.origin.kind === 'user' ? tx('settings:copy.inherited-from-user')
+      : origin.origin.kind === 'workspace' ? tx('settings:copy.workspace-override')
+        : tx('settings:copy.process-default');
 }
 
 /** One semantic unit's authored and effective facts, kept orthogonal.
@@ -212,13 +213,13 @@ export function sourceView(source: SourceSettings | undefined, scope: SourceScop
  * nothing about an MCP document, a named Agent resource or any inventory. */
 export type DocumentAuthoring<T> =
   | { state: 'structured'; path: string; revision: string; document: T }
-  | { state: 'malformed'; path: string; revision: string; diagnostic: string }
+  | { state: 'malformed'; path: string; revision: string; diagnostic?: string }
   | { state: 'unavailable' };
 export function documentAuthoring<T>(view: { path: string; revision: string; authored?: T | null; diagnostic?: string | null } | null | undefined): DocumentAuthoring<T> {
   if (!view) return { state: 'unavailable' };
   const { path, revision } = view;
   if (view.authored) return { state: 'structured', path, revision, document: view.authored };
-  return { state: 'malformed', path, revision, diagnostic: view.diagnostic ?? 'Source document was not loaded.' };
+  return { state: 'malformed', path, revision, diagnostic: view.diagnostic ?? undefined };
 }
 /** This scope's `rustx.toml`. */
 export function configAuthoring(source: SourceSettings | undefined, scope: SourceScope): DocumentAuthoring<RuntimeLayer> {
@@ -251,20 +252,20 @@ export function effectiveFacts(source: SourceSettings | undefined, mutation: Sou
 export function unitFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): UnitFacts {
   return { authored: authoredFacts(source, scope, mutation), effective: effectiveFacts(source, mutation), origin: unitProvenance(source, mutation) };
 }
-export function authoredStateLabel(authored: AuthoredFacts, scope: SourceScope): string {
+export function authoredStateLabel(tx: Translate, authored: AuthoredFacts, scope: SourceScope): string {
   const workspace = scope === 'workspace';
-  return authored.state === 'present' ? (workspace ? 'Workspace override — empty selections remain explicit' : 'User authored value')
-    : authored.state === 'redacted' ? (workspace ? 'Workspace override — value never projected' : 'User authored value — value never projected')
-      : authored.state === 'absent' ? (workspace ? 'Inherited — no Workspace override' : 'No User authored value')
-        : authored.state === 'invalid' ? 'Authored source is invalid'
-          : 'Authored source unavailable';
+  return authored.state === 'present' ? (workspace ? tx('settings:copy.workspace-override-empty-selections-remain-explicit') : tx('settings:copy.user-authored-value'))
+    : authored.state === 'redacted' ? (workspace ? tx('settings:copy.workspace-override-value-never-projected') : tx('settings:copy.user-authored-value-value-never-projected'))
+      : authored.state === 'absent' ? (workspace ? tx('settings:copy.inherited-no-workspace-override') : tx('settings:copy.no-user-authored-value'))
+        : authored.state === 'invalid' ? tx('settings:copy.authored-source-is-invalid')
+          : tx('settings:copy.authored-source-unavailable');
 }
-export function effectiveStateLabel(effective: EffectiveFacts): string {
-  return effective.state === 'available' ? 'Native effective value available'
-    : effective.state === 'redacted' ? 'Native effective value exists — the literal is never projected'
-      : effective.state === 'unset' ? 'No source authors this unit — native default applies'
-        : effective.state === 'invalid' ? 'Native effective value unavailable — resolution failed'
-          : 'Native effective value not observed';
+export function effectiveStateLabel(tx: Translate, effective: EffectiveFacts): string {
+  return effective.state === 'available' ? tx('settings:copy.native-effective-value-available')
+    : effective.state === 'redacted' ? tx('settings:copy.native-effective-value-exists-the-literal-is-never-projected')
+      : effective.state === 'unset' ? tx('settings:copy.no-source-authors-this-unit-native-default-applies')
+        : effective.state === 'invalid' ? tx('settings:copy.native-effective-value-unavailable-resolution-failed')
+          : tx('settings:copy.native-effective-value-not-observed');
 }
 
 /** The non-sensitive native selector that names which source revision settles
@@ -443,8 +444,8 @@ export function applicationOwners(application: ConfigurationApplication | null |
 export function sourceTargetKey(target: SourceTarget): string {
   return target.kind === 'user' ? 'user' : `workspace:${target.directory}`;
 }
-export function openOwnerLabel(target: SourceTarget): string {
-  return target.kind === 'user' ? 'Open User Settings' : `Open Workspace Settings — ${target.directory}`;
+export function openOwnerLabel(tx: Translate, target: SourceTarget): string {
+  return target.kind === 'user' ? tx('settings:copy.open-user-settings') : tx('settings:copy.open-workspace-settings-value', { p0: target.directory });
 }
 
 /** Per-unit native application/process observation. A unit is never inferred
@@ -455,13 +456,13 @@ export const observedUnits: readonly ObservedUnit[] = ['capabilities', 'executio
 export function unitApplication(application: ConfigurationApplication | null | undefined, unit: ObservedUnit): UnitApplication | undefined {
   return application?.units?.[unit];
 }
-export function observedUnitLabel(unit: ObservedUnit): string {
-  return unit === 'process_bindings' ? 'Process bindings'
-    : unit === 'capabilities' ? 'Capabilities'
-      : unit === 'execution_policy' ? 'Execution policy'
-        : unit === 'instructions' ? 'Instructions'
-          : unit === 'provider' ? 'Providers & Models'
-            : 'Shared capacity';
+export function observedUnitLabel(tx: Translate, unit: ObservedUnit): string {
+  return unit === 'process_bindings' ? tx('settings:advanced-page.process-bindings')
+    : unit === 'capabilities' ? tx('settings:copy.capabilities')
+      : unit === 'execution_policy' ? tx('settings:copy.execution-policy')
+        : unit === 'instructions' ? tx('settings:agent-page.instructions')
+          : unit === 'provider' ? tx('settings:copy.providers-models')
+            : tx('settings:copy.shared-capacity');
 }
 /** A truthful observed result. `ready` carries native cache impact; `applied`
  * is the native-confirmed state and is never called a classification. */
@@ -480,13 +481,13 @@ export function observedResult(unit: UnitApplication | undefined): ObservedResul
   if (unit.status === 'process_restart') return { state: 'restart_pending' };
   return { state: 'ready', impact: unit.impact };
 }
-export function observedResultLabel(result: ObservedResult): string {
-  return result.state === 'applied' ? 'Applied'
-    : result.state === 'preparing' ? 'Preparing'
-      : result.state === 'failed' ? 'Failed'
-        : result.state === 'restart_pending' ? 'Restart pending'
-          : result.state === 'ready' ? 'Ready'
-            : 'Not observed';
+export function observedResultLabel(tx: Translate, result: ObservedResult): string {
+  return result.state === 'applied' ? tx('settings:copy.applied')
+    : result.state === 'preparing' ? tx('settings:copy.preparing')
+      : result.state === 'failed' ? tx('settings:copy.failed')
+        : result.state === 'restart_pending' ? tx('settings:copy.restart-pending')
+          : result.state === 'ready' ? tx('settings:copy.ready')
+            : tx('settings:copy.not-observed');
 }
 
 /** Native change behavior, distinct from an observed result. */
@@ -495,10 +496,10 @@ export function changeBehavior(impacts: Record<string, ProcessPolicyImpact> | un
   const impact = impacts?.[key];
   return impact === undefined ? undefined : impact === 'hot' ? 'immediate' : 'restart';
 }
-export function changeBehaviorLabel(behavior: ChangeBehavior | undefined): string {
-  return behavior === 'immediate' ? 'Applies immediately'
-    : behavior === 'restart' ? 'Requires App Server restart'
-      : 'Change behavior not reported';
+export function changeBehaviorLabel(tx: Translate, behavior: ChangeBehavior | undefined): string {
+  return behavior === 'immediate' ? tx('settings:copy.applies-immediately')
+    : behavior === 'restart' ? tx('settings:copy.requires-app-server-restart')
+      : tx('settings:copy.change-behavior-not-reported');
 }
 
 /** Distinct connection/read lifecycle states. `loading` is not a synonym for
@@ -513,10 +514,10 @@ export function settingsLifecycle(input: { connection: ConnectionState; hasSourc
   }
   return 'failed';
 }
-export function settingsLifecycleLabel(lifecycle: SettingsLifecycle): string {
-  return lifecycle === 'connecting' ? 'Connecting to the App Server…'
-    : lifecycle === 'loading' ? 'Loading authoritative sources…'
-      : lifecycle === 'ready' ? 'Authoritative source observed'
-        : lifecycle === 'stale' ? 'Last observation retained; current status uncertain'
-          : 'Source authority unavailable';
+export function settingsLifecycleLabel(tx: Translate, lifecycle: SettingsLifecycle): string {
+  return lifecycle === 'connecting' ? tx('settings:copy.connecting-to-the-app-server')
+    : lifecycle === 'loading' ? tx('settings:copy.loading-authoritative-sources')
+      : lifecycle === 'ready' ? tx('settings:copy.authoritative-source-observed')
+        : lifecycle === 'stale' ? tx('settings:copy.last-observation-retained-current-status-uncertain')
+          : tx('settings:copy.source-authority-unavailable');
 }

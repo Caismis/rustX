@@ -1,5 +1,7 @@
+import { traceStateLabel } from '../../bindings/status-labels';
+import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v23';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v23';
 
 export type TrajectoryFacet = 'Summary' | 'System Prompt' | 'Diff' | 'Context' | 'Tools' | 'Options' | 'Usage' | 'Timing' | 'Native' | 'Content' | 'Thinking' | 'Raw' | 'Input' | 'Code' | 'Result' | 'Schema' | 'Artifacts';
 export interface TrajectorySelection {
@@ -42,6 +44,10 @@ export function isInspectable(item: TrajectoryDisplayItem): item is InspectableD
   return item.type !== 'HistoryBoundary' && item.type !== 'GroupHeader' && item.type !== 'TurnHeader';
 }
 export const displayKey = (...parts: (string | number | null | undefined)[]) => JSON.stringify(parts);
+/** The only visible names of these closed domains. The native context kind and
+ * the facet identity stay untranslated; only their labels follow the locale. */
+export const contextKindLabel = (tx: Translate, kind: TraceContextKind) => tx(`trajectory:context.${kind}`);
+export const facetLabel = (tx: Translate, facet: TrajectoryFacet) => tx(`trajectory:facet.${facet}`);
 
 function origin(record: TraceRecord, tag: string, label: string, preview = '', facet: TrajectoryFacet = 'Summary', ...parts: string[]): Origin {
   return { record, owner_record_id: record.id, display_key: displayKey(tag, ...parts), facet, label, preview };
@@ -49,22 +55,22 @@ function origin(record: TraceRecord, tag: string, label: string, preview = '', f
 
 /** Project each native dimension independently. Previews and neighboring requests
  * cannot establish a relationship or erase a fact from the other dimension. */
-export function systemPresentation(record: TraceRecord): { label: string; facet: TrajectoryFacet } | undefined {
+export function systemPresentation(tx: Translate, record: TraceRecord): { label: string; facet: TrajectoryFacet } | undefined {
   const request = record.request;
   if (!request) return;
   const prompt = request.system_prompt.state;
   const tools = request.tool_catalog;
   const promptLabel = {
-    initial: 'Initial System Prompt', changed: 'System Prompt Updated',
-    unchanged: '', previous_unavailable: 'Previous System Prompt unavailable',
+    initial: tx('trajectory:layout.initial-system-prompt'), changed: tx('trajectory:layout.system-prompt-updated'),
+    unchanged: '', previous_unavailable: tx('trajectory:copy.previous-system-prompt-unavailable'),
   }[prompt];
   const toolsLabel = {
-    initial: 'Initial Tools', changed: 'Tools Updated',
-    unchanged: '', previous_unavailable: 'Previous Tool catalog unavailable',
+    initial: tx('trajectory:copy.initial-tools'), changed: tx('trajectory:layout.tools-updated'),
+    unchanged: '', previous_unavailable: tx('trajectory:copy.previous-tool-catalog-unavailable'),
   }[tools];
   // These compact names retain the established presentation for complete facts.
-  const label = prompt === 'initial' && tools === 'initial' ? 'Initial System Prompt'
-    : prompt === 'changed' && tools === 'changed' ? 'System Prompt and Tools Updated'
+  const label = prompt === 'initial' && tools === 'initial' ? tx('trajectory:layout.initial-system-prompt')
+    : prompt === 'changed' && tools === 'changed' ? tx('trajectory:layout.system-prompt-and-tools-updated')
     : [promptLabel, toolsLabel].filter(Boolean).join(' · ');
   if (!label) return;
   const facet = prompt === 'changed' ? 'Diff' : prompt === 'initial' ? 'System Prompt'
@@ -72,9 +78,9 @@ export function systemPresentation(record: TraceRecord): { label: string; facet:
   return { label, facet };
 }
 
-export function recordLabel(record: TraceRecord): string {
-  if (record.kind === 'compaction') return record.state === 'completed' ? 'COMPACTED' : record.state === 'running' ? 'Compacting…' : `Compaction · ${record.state}`;
-  return record.kind.toUpperCase();
+export function recordLabel(tx: Translate, record: TraceRecord): string {
+  if (record.kind === 'compaction') return record.state === 'completed' ? tx('trajectory:compacted') : record.state === 'running' ? tx('trajectory:copy.compacting') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, record.state) });
+  return tx(`trajectory:kind.${record.kind}`);
 }
 
 /** One native Step, or attempt-owned material with no Step. No proximity inference. */
@@ -99,17 +105,17 @@ export interface TrajectoryProjection {
   sections: TrajectorySection[];
 }
 
-function cellsOf(record: TraceRecord): InspectableDisplayItem[] {
+function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   if (record.kind === 'attempt' || record.kind === 'step') return [];
-  if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(record), record.preview?.text ?? '', 'Summary', record.id), type: 'RecordRow' }];
+  if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(tx, record), record.preview?.text ?? '', 'Summary', record.id), type: 'RecordRow' }];
   const request = record.request;
   const cells: InspectableDisplayItem[] = [];
-  const change = systemPresentation(record);
-  if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? (request.tool_catalog === 'changed' ? 'Frozen Tool catalog changed' : 'Initial frozen Tool catalog') : 'Prompt preview unavailable'), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
+  const change = systemPresentation(tx, record);
+  if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? (request.tool_catalog === 'changed' ? tx('trajectory:copy.frozen-tool-catalog-changed') : tx('trajectory:copy.initial-frozen-tool-catalog')) : tx('trajectory:copy.prompt-preview-unavailable')), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
   for (const context of request.context_additions) {
-    cells.push({ ...origin(record, 'context', context.context_kind.replaceAll('_', ' '), context.preview?.text ?? 'Content unavailable', 'Context', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
+    cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'Context', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
   }
-  cells.push({ ...origin(record, 'request-boundary', 'Request', request.model, 'Summary', record.id, request.request_id), type: 'RequestBoundary' });
+  cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model, 'Summary', record.id, request.request_id), type: 'RequestBoundary' });
   return cells;
 }
 
@@ -117,14 +123,14 @@ function cellsOf(record: TraceRecord): InspectableDisplayItem[] {
  * Durable input order orders Turns and Steps, but never establishes ownership.
  * Interleaved records with the same exact location join the same group. Unscoped
  * records remain standalone sections, never members of a nearby Turn. */
-export function projectTrajectory(records: readonly TraceRecord[]): TrajectoryProjection {
+export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]): TrajectoryProjection {
   const sections: TrajectorySection[] = [];
   const turns = new Map<string, TrajectoryTurnModel>();
   const groups = new Map<string, TrajectoryGroupModel>();
   for (const record of records) {
     const { attempt_id: attempt, step_id: step } = record.location;
     if (attempt == null) {
-      sections.push({ kind: 'outside', record, cells: cellsOf(record) });
+      sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });
       continue;
     }
     let turn = turns.get(attempt);
@@ -139,8 +145,8 @@ export function projectTrajectory(records: readonly TraceRecord[]): TrajectoryPr
     let group = groups.get(key);
     if (!group) {
       group = step == null
-        ? { kind: 'message', label: 'Message', records: [], cells: [] }
-        : { kind: 'step', nativeStepId: step, label: `Step ${turn.groups.filter(group => group.kind === 'step').length + 1}`, records: [], cells: [] };
+        ? { kind: 'message', label: tx('trajectory:group.message'), records: [], cells: [] }
+        : { kind: 'step', nativeStepId: step, label: tx('trajectory:group.step', { n: turn.groups.filter(group => group.kind === 'step').length + 1 }), records: [], cells: [] };
       groups.set(key, group);
       // Attempt-only inputs form the Message group; request-owned prompt/context
       // cells retain their exact Step, including an initial prompt.
@@ -148,13 +154,13 @@ export function projectTrajectory(records: readonly TraceRecord[]): TrajectoryPr
       else turn.groups.push(group);
     }
     group.records.push(record);
-    group.cells.push(...cellsOf(record));
+    group.cells.push(...cellsOf(tx, record));
   }
   return { sections };
 }
 
 /** Flatten only the shared projection, never reconstruct ownership in a renderer. */
-export function trajectoryItems(projection: TrajectoryProjection, cursor?: string | null): TrajectoryDisplayItem[] {
+export function trajectoryItems(tx: Translate, projection: TrajectoryProjection, cursor?: string | null): TrajectoryDisplayItem[] {
   const items: TrajectoryDisplayItem[] = [];
   if (cursor) items.push({ type: 'HistoryBoundary', display_key: displayKey('history-boundary', cursor), cursor });
   for (const section of projection.sections) {
@@ -163,7 +169,7 @@ export function trajectoryItems(projection: TrajectoryProjection, cursor?: strin
     const native = section.records.find(record => record.kind === 'attempt');
     items.push({ type: 'TurnHeader', display_key: displayKey('turn', attempt), attempt_id: attempt,
       anchor_record_id: section.records[0]!.id, record_ids: section.records.map(record => record.id),
-      ordinal: section.displayOrdinal, label: `Turn ${section.displayOrdinal}`, preview: '', ...(native ? { native_record: native } : {}) });
+      ordinal: section.displayOrdinal, label: tx('trajectory:copy.turn-value', { p0: section.displayOrdinal }), preview: '', ...(native ? { native_record: native } : {}) });
     for (const group of section.groups) {
       const native = group.records.find(record => record.kind === 'step');
       items.push({ type: 'GroupHeader', kind: group.kind, display_key: displayKey('group', attempt, group.nativeStepId), attempt_id: attempt,
@@ -204,13 +210,13 @@ export function matchingCalls(records: readonly TraceRecord[]): Map<string, Trac
   return matches;
 }
 
-export function callsSummary(owner: TraceRecord, executions: readonly TraceRecord[]): string {
-  const states = new Map<string, number>();
+export function callsSummary(tx: Translate, owner: TraceRecord, executions: readonly TraceRecord[]): string {
+  const states = new Map<TraceRecord['state'], number>();
   for (const execution of executions) {
-    const state = execution.state === 'completed' ? 'settled' : execution.state;
+    const state = execution.state;
     states.set(state, (states.get(state) ?? 0) + 1);
   }
-  return `${owner.calls.length} proposed · ${executions.length} loaded matching executions${[...states].map(([state, count]) => ` · ${count} ${state}`).join('')} · ${executions.filter(record => record.tool?.started).length} started`;
+  return tx('trajectory:copy.value-proposed-value-loaded-matching-executionsvalue-value-started', { p0: owner.calls.length, p1: executions.length, p2: [...states].map(([state, count]) => ` · ${count} ${traceStateLabel(tx, state)}`).join(''), p3: executions.filter(record => record.tool?.started).length });
 }
 
 /** Search visibility and timeline dimming share the projection's exact membership.
@@ -225,7 +231,7 @@ export function matchedRecordIds(items: readonly TrajectoryDisplayItem[], matche
 }
 
 /** Search bypasses both collapse policies. It never performs a read. */
-export function visibleItems(items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], attempts: ReadonlySet<string>, calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
+export function visibleItems(tx: Translate, items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], attempts: ReadonlySet<string>, calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
   if (matches) {
     const owners = matchedRecordIds(items, matches)!;
     return items.filter(item => isInspectable(item) ? matches.has(item.display_key)
@@ -241,7 +247,7 @@ export function visibleItems(items: readonly TrajectoryDisplayItem[], records: r
     if (item.type === 'RecordRow' && hidden.has(item.owner_record_id)) return [];
     if (item.type === 'RecordRow' && calls.has(item.owner_record_id) && item.record.calls.length) {
       const executions = matching.get(item.owner_record_id) ?? [];
-      const summary: TrajectoryDisplayItem = { ...origin(item.record, 'collapsed-calls', 'Calls', callsSummary(item.record, executions), 'Summary', item.record.message_id ?? item.record.id), type: 'CollapsedCallSummary', executions };
+      const summary: TrajectoryDisplayItem = { ...origin(item.record, 'collapsed-calls', tx('trajectory:trajectory.calls'), callsSummary(tx, item.record, executions), 'Summary', item.record.message_id ?? item.record.id), type: 'CollapsedCallSummary', executions };
       return [item, summary];
     }
     return [item];

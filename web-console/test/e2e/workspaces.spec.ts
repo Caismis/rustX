@@ -114,5 +114,5 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(existsSync(join(a.directory, 'state', 'rustx', 'trust'))).toBe(false);
     expect(readFileSync(join(a.workspaceA, 'rustx.toml'), 'utf8')).toContain('Workspace guidance');
     expect(errors).toEqual([]);
-  } finally { await remoteA.shutdown(); await remoteB.shutdown(); await a.stop(false); await b.stop(false); }
+  } finally { await page.close(); await remoteA.shutdown(); await remoteB.shutdown(); await a.stop(false); await b.stop(false); }
 });

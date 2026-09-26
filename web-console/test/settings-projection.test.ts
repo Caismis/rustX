@@ -1,3 +1,4 @@
+import { translator } from '../src/locale/translation';
 // @vitest-environment node
 import { expect, it } from 'vitest';
 import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v23';
@@ -42,12 +43,12 @@ it('S1-03 native effective value and provenance are projected, never recomputed 
   const facts = unitFacts(source, 'workspace', tools);
   expect(facts.authored.state).toBe('absent');
   expect(facts.effective).toEqual({ state: 'available', value: ['read', 'glob'] });
-  expect(provenanceLabel(facts.origin)).toBe('Inherited from User');
-  expect(provenanceLabel({ state: 'known', origin: { kind: 'builtin' } })).toBe('Native default');
-  expect(provenanceLabel({ state: 'known', origin: workspace })).toBe('Workspace override');
-  expect(provenanceLabel({ state: 'known', origin: { kind: 'process', base: '/run' } })).toBe('Process default');
-  expect(provenanceLabel({ state: 'mixed' })).toBe('Mixed origins');
-  expect(provenanceLabel({ state: 'unavailable' })).toBe('Origin not reported');
+  expect(provenanceLabel(translator('en'), facts.origin)).toBe('Inherited from User');
+  expect(provenanceLabel(translator('en'), { state: 'known', origin: { kind: 'builtin' } })).toBe('Native default');
+  expect(provenanceLabel(translator('en'), { state: 'known', origin: workspace })).toBe('Workspace override');
+  expect(provenanceLabel(translator('en'), { state: 'known', origin: { kind: 'process', base: '/run' } })).toBe('Process default');
+  expect(provenanceLabel(translator('en'), { state: 'mixed' })).toBe('Mixed origins');
+  expect(provenanceLabel(translator('en'), { state: 'unavailable' })).toBe('Origin not reported');
 });
 
 it('S1-03 invalid and unavailable authored state is neither absent nor empty', () => {
@@ -77,7 +78,7 @@ it('S1-13 Case A a valid Workspace source that authors nothing still reports an 
   expect(facts.effective).toEqual({ state: 'invalid', diagnostic: 'Source cannot be resolved; repair the diagnosed authored document.' });
   // "No Workspace override" must never be reported as an unset effective value.
   expect(facts.effective.value).toBeUndefined();
-  expect(effectiveStateLabel(facts.effective)).toBe('Native effective value unavailable — resolution failed');
+  expect(effectiveStateLabel(translator('en'), facts.effective)).toBe('Native effective value unavailable — resolution failed');
   // The malformed lower source does not make the valid Workspace unit invalid.
   expect(unitFacts(source, 'user', tools).authored.state).toBe('invalid');
 });
@@ -186,8 +187,8 @@ it('S1-14 a container whose identities disagree reports mixed origins instead of
 });
 
 it('S1-01/S1-02 entry ownership is named by the exact target, never by a selector value', () => {
-  expect(settingsTargetLabel(userSettingsTarget)).toBe('User Settings');
-  expect(settingsTargetLabel(workspaceSettingsTarget('a', 'Workspace A'))).toBe('Workspace Settings — Workspace A');
+  expect(settingsTargetLabel(translator('en'), userSettingsTarget)).toBe('User Settings');
+  expect(settingsTargetLabel(translator('en'), workspaceSettingsTarget('a', 'Workspace A'))).toBe('Workspace Settings — Workspace A');
   expect(settingsTargetKey(userSettingsTarget)).toBe('user');
   expect(settingsTargetKey(workspaceSettingsTarget('a', 'A'))).toBe('workspace:a');
   expect(applicationScope({ kind: 'user' })).toBe('source:user');
@@ -207,8 +208,8 @@ it('S1-15 owner navigation reads the native source owners, never the application
     .toEqual([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/B' }]);
   expect(applicationOwners(null)).toEqual([]);
   expect(applicationOwners(undefined)).toEqual([]);
-  expect(openOwnerLabel({ kind: 'user' })).toBe('Open User Settings');
-  expect(openOwnerLabel({ kind: 'workspace', directory: '/workspace/A' })).toBe('Open Workspace Settings — /workspace/A');
+  expect(openOwnerLabel(translator('en'), { kind: 'user' })).toBe('Open User Settings');
+  expect(openOwnerLabel(translator('en'), { kind: 'workspace', directory: '/workspace/A' })).toBe('Open Workspace Settings — /workspace/A');
   expect(sourceTargetKey({ kind: 'user' })).toBe('user');
   expect(sourceTargetKey({ kind: 'workspace', directory: '/workspace/A' })).toBe('workspace:/workspace/A');
 });
@@ -216,13 +217,13 @@ it('S1-15 owner navigation reads the native source owners, never the application
 it('S1-08 native per-unit observations stay independent and never pose as a classification', () => {
   const application = cfg3Application();
   application.units = { capabilities: { status: 'preparing' }, instructions: { status: 'applied' }, provider: { status: 'failed', diagnostic: 'resource failed' }, process_bindings: { status: 'process_restart' }, shared_capacity: { status: 'ready', impact: 'unproven' } };
-  expect(observedResultLabel(observedResult(unitApplication(application, 'capabilities')))).toBe('Preparing');
-  expect(observedResultLabel(observedResult(unitApplication(application, 'instructions')))).toBe('Applied');
+  expect(observedResultLabel(translator('en'), observedResult(unitApplication(application, 'capabilities')))).toBe('Preparing');
+  expect(observedResultLabel(translator('en'), observedResult(unitApplication(application, 'instructions')))).toBe('Applied');
   expect(observedResult(unitApplication(application, 'provider'))).toEqual({ state: 'failed', diagnostic: 'resource failed' });
-  expect(observedResultLabel(observedResult(unitApplication(application, 'process_bindings')))).toBe('Restart pending');
+  expect(observedResultLabel(translator('en'), observedResult(unitApplication(application, 'process_bindings')))).toBe('Restart pending');
   expect(observedResult(unitApplication(application, 'execution_policy'))).toEqual({ state: 'unavailable' });
-  expect(changeBehaviorLabel(changeBehavior({ max_connections: 'hot', shutdown_deadline_ms: 'restart' }, 'max_connections'))).toBe('Applies immediately');
-  expect(changeBehaviorLabel(changeBehavior({ shutdown_deadline_ms: 'restart' }, 'shutdown_deadline_ms'))).toBe('Requires App Server restart');
+  expect(changeBehaviorLabel(translator('en'), changeBehavior({ max_connections: 'hot', shutdown_deadline_ms: 'restart' }, 'max_connections'))).toBe('Applies immediately');
+  expect(changeBehaviorLabel(translator('en'), changeBehavior({ shutdown_deadline_ms: 'restart' }, 'shutdown_deadline_ms'))).toBe('Requires App Server restart');
 });
 
 it('S1-07 connecting, loading, ready, stale and failed are distinct lifecycle states', () => {
@@ -272,9 +273,9 @@ it('S1-15 a catalog enumerates native effective identities with this scope\'s au
   // native origin, while this scope authors nothing for it.
   expect(entries[0].authored).toBeUndefined();
   expect(entries[0].effective).toEqual({ base_url: 'https://user.invalid', credential: { type: 'literal' } });
-  expect(provenanceLabel(entries[0].origin)).toBe('Inherited from User');
+  expect(provenanceLabel(translator('en'), entries[0].origin)).toBe('Inherited from User');
   expect(entries[1].authored).toBeTruthy();
-  expect(provenanceLabel(entries[1].origin)).toBe('Workspace override');
+  expect(provenanceLabel(translator('en'), entries[1].origin)).toBe('Workspace override');
   // User authoring inherits from nothing: a Workspace-owned identity is never
   // offered there as something User may override.
   expect(catalogEntries(source, 'user', 'providers').map(entry => entry.id)).toEqual(['transport']);

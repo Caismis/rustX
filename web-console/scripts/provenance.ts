@@ -65,11 +65,27 @@ for (const file of [...walk(resolve(web, 'src')), ...walk(resolve(web, 'test'))]
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && ts.isStringLiteral(node.arguments[0])) specifier = node.arguments[0].text;
     if (specifier) {
       assert(!/deepseek|cordis|protocol|client|bindings/.test(specifier), `Authority import ${specifier} in ${file}`);
-      if (specifier.startsWith('.')) assert(resolve(dirname(file), specifier).startsWith(resolve(web, 'src/presentation') + '/'), `Layer escape ${file}: ${specifier}`);
+      if (specifier.startsWith('.')) {
+        const imported = resolve(dirname(file), specifier);
+        const localePresentation = ['react', 'translation'].some(name => imported === resolve(web, 'src/locale', name));
+        assert(localePresentation || imported.startsWith(resolve(web, 'src/presentation') + '/'), `Layer escape ${file}: ${specifier}`);
+      }
     }
     ts.forEachChild(node, check);
   }
   check(ast);
+}
+for (const file of walk(resolve(web, 'src/locale')).filter(file => /\.ts$/.test(file))) {
+  const ast = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  function checkLocale(node: ts.Node) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const specifier = node.moduleSpecifier.text;
+      assert(specifier === 'react' || (specifier.startsWith('.') && resolve(dirname(file), specifier).startsWith(resolve(web, 'src/locale') + '/')), `Native authority in locale layer ${file}`);
+    }
+    if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && ts.isIdentifier(node.expression)) assert(!['fetch', 'WebSocket'].includes(node.expression.text), `Network authority in locale layer ${file}`);
+    ts.forEachChild(node, checkLocale);
+  }
+  checkLocale(ast);
 }
 for (const entry of inventory.inspected_only) verifyReference(entry);
 const notice = inventory.files.find((entry: { upstream: string }) => entry.upstream === 'LICENSE');

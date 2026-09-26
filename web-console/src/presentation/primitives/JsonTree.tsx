@@ -257,7 +257,7 @@ function primitiveValue(value: unknown): ReactNode {
     return <span className={css.numberValue}>{String(value)}</span>
   }
   if (typeof value === 'bigint') {
-    return <span className={css.numberValue}>{`${value.toString()}n`}</span>
+    return <span className={css.numberValue}>{/* i18n-raw: JavaScript bigint syntax */ `${value.toString()}n`}</span>
   }
   if (value instanceof Date) {
     return <span className={css.otherValue}>{value.toISOString()}</span>

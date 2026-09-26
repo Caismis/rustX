@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTimeline.tsx; see PROVENANCE.md. */
 /**
  * The fixed timing overview above the ledger.
@@ -64,10 +65,11 @@ function EarlierHistoryBoundary({
   enabled: boolean;
   onLoad: () => void;
 }) {
+  const tx = useTranslation();
   const actionable = enabled && !loading;
   return (
     <Tooltip
-      label={loading ? 'Loading earlier records…' : 'Load earlier records'}
+      label={loading ? tx('trajectory:trajectory.loading-earlier-records') : tx('trajectory:trajectory.load-earlier-records')}
       side="right"
     >
       <button
@@ -76,7 +78,7 @@ function EarlierHistoryBoundary({
         data-earlier-history=""
         data-loading={loading || undefined}
         aria-label={
-          loading ? 'Loading earlier records' : 'Load earlier records into the overview'
+          loading ? tx('trajectory:trajectory-timeline.loading-earlier-records') : tx('trajectory:trajectory-timeline.load-earlier-records-into-the-overview')
         }
         aria-disabled={!actionable}
         onClick={event => {
@@ -144,6 +146,7 @@ function TimelineInteraction({
   canLoadEarlier,
   onLoadEarlier,
 }: TrajectoryTimelineProps) {
+  const tx = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
   const panRef = useRef<Pan | null>(null);
@@ -180,8 +183,8 @@ function TimelineInteraction({
   // path below, inside the positioned canvas.
   if (model === null || domain === null) {
     return (
-      <section className={css.root} aria-label="Timing overview">
-        <p className={css.empty}>No recorded timing in the loaded window</p>
+      <section className={css.root} aria-label={tx('trajectory:trajectory-timeline.timing-overview')}>
+        <p className={css.empty}>{tx('trajectory:trajectory-timeline.no-recorded-timing-in-the-loaded-window')}</p>
       </section>
     );
   }
@@ -260,23 +263,23 @@ function TimelineInteraction({
   }
 
   return (
-    <section className={css.root} aria-label="Timing overview">
+    <section className={css.root} aria-label={tx('trajectory:trajectory-timeline.timing-overview')}>
       <div className={css.legend}>
-        <span>Overview</span>
-        <small>Loaded window · drag to focus · wheel to zoom</small>
+        <span>{tx('trajectory:trajectory-timeline.overview')}</span>
+        <small>{tx('trajectory:trajectory-timeline.loaded-window-drag-to-focus-wheel-to-zoom')}</small>
         <div className={css.controls}>
-          <Button size="sm" aria-label="Zoom timeline in" onClick={() => {
+          <Button size="sm" aria-label={tx('trajectory:trajectory-timeline.zoom-timeline-in')} onClick={() => {
             const next = Math.max(MINIMUM_ZOOM_SPAN, span * .8);
             if (next < span) setViewport({ start: domain.start, end: domain.start + next });
           }}>+</Button>
-          <Button size="sm" aria-label="Reset timeline" onClick={() => { setViewport(null); onRangeChange(null); }}>Reset</Button>
+          <Button size="sm" aria-label={tx('trajectory:trajectory-timeline.reset-timeline')} onClick={() => { setViewport(null); onRangeChange(null); }}>{tx('trajectory:trajectory-timeline.reset')}</Button>
         </div>
       </div>
       <div
         ref={rootRef}
         className={css.canvas}
         tabIndex={0}
-        aria-label="Timeline navigation: arrow keys pan, Escape clears focus"
+        aria-label={tx('trajectory:trajectory-timeline.timeline-navigation-arrow-keys-pan-escape-clears-focus')}
         data-domain-start={domain.start}
         data-domain-end={domain.end}
         onKeyDown={event => {
@@ -324,7 +327,7 @@ function TimelineInteraction({
         ))}
         {TRAJECTORY_LANES.map((lane, index) => (
           <div className={css.lane} key={lane}>
-            <span className={css.laneLabel}>{lane}</span>
+            <span className={css.laneLabel}>{tx(`trajectory:lane.${lane}`)}</span>
             <div className={css.laneTrack}>
               {model.spans
                 .filter(candidate => candidate.lane === index)
@@ -338,15 +341,15 @@ function TimelineInteraction({
                       : `${100 * (at - candidate.start) / (candidate.end - candidate.start)}%`;
                   const detail = [
                     candidate.label,
-                    `Started ${formatInstant(
+                    tx('trajectory:copy.started-value', { p0: formatInstant(tx,
                       candidate.startedAt === undefined ? undefined : new Date(candidate.startedAt).toISOString(),
-                    )}`,
+                    ) }),
                     candidate.durationMs === undefined
-                      ? 'Journal duration unavailable'
-                      : `Journal duration ${formatDuration(candidate.durationMs)}`,
+                      ? tx('trajectory:copy.journal-duration-unavailable')
+                      : tx('trajectory:copy.journal-duration-value', { p0: formatDuration(tx, candidate.durationMs) }),
                     candidate.ttftMs === undefined || candidate.generationMs === undefined
                       ? undefined
-                      : `Dispatch → first output ${formatDuration(candidate.ttftMs)} · first output → provider terminal ${formatDuration(candidate.generationMs)}`,
+                      : tx('trajectory:copy.dispatch-first-output-value-first-output-provider-terminal-value', { p0: formatDuration(tx, candidate.ttftMs), p1: formatDuration(tx, candidate.generationMs) }),
                   ]
                     .filter(value => value !== undefined)
                     .join('\n');
@@ -364,7 +367,7 @@ function TimelineInteraction({
                       data-dimmed={
                         searchMatches !== null && !searchMatches.has(candidate.id) ? '' : undefined
                       }
-                      aria-label={`Inspect ${candidate.label}`}
+                      aria-label={tx('trajectory:trajectory-timeline.inspect-value', { p0: candidate.label })}
                       title={detail}
                       onFocus={() => setHover(candidate.id)}
                       onBlur={() => setHover(null)}
@@ -399,7 +402,7 @@ function TimelineInteraction({
         {hover === null
           ? viewport === null
             ? ''
-            : 'Zoomed · wheel out or right-drag to pan'
+            : tx('trajectory:trajectory-timeline.zoomed-wheel-out-or-right-drag-to-pan')
           : model.spans.find(candidate => candidate.id === hover)?.label ?? ''}
       </p>
     </section>

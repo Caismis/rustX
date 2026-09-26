@@ -1,3 +1,6 @@
+import { message } from '../../locale/translation';
+import type { Translate } from '../../locale/translation';
+import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx inspector; see PROVENANCE.md. */
 /**
  * The record inspector.
@@ -13,11 +16,10 @@
  * durations, infers no outcomes and fills no missing evidence: where the
  * server said a fact is unavailable, this says so too.
  */
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import type {
   TraceArtifact,
   TraceContentBlock,
-  TraceContextKind,
   TraceContextPresentation,
   TraceDetail,
   TraceGeneration,
@@ -34,24 +36,25 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { diffLines } from 'diff';
-import type { StructuralDisplayItem, TrajectoryFacet, TrajectorySelection } from './layout';
+import { contextKindLabel, facetLabel, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
 import { previewOf, cellLabel } from './TrajectoryCell';
+import { traceStateLabel } from '../../bindings/status-labels';
 
-const JSON_LABELS: JsonTreeLabels = {
-  copyValue: 'Copy value',
-  copyJson: 'Copy JSON',
-  copyPath: 'Copy path',
-  copyPrettyJson: 'Copy pretty JSON',
-  copyCompactJson: 'Copy compact JSON',
-  copied: 'Copied',
-  copyFailed: 'Copy failed',
-  collapseNode: 'Collapse',
-  expandNode: 'Expand',
+function JSON_LABELS(tx: Translate): JsonTreeLabels { return {
+  copyValue: tx('trajectory:copy.copy-value'),
+  copyJson: tx('trajectory:copy.copy-json'),
+  copyPath: tx('trajectory:copy.copy-path'),
+  copyPrettyJson: tx('trajectory:copy.copy-pretty-json'),
+  copyCompactJson: tx('trajectory:copy.copy-compact-json'),
+  copied: tx('trajectory:trajectory-inspector.copied'),
+  copyFailed: tx('trajectory:copy.copy-failed'),
+  collapseNode: tx('trajectory:trajectory.collapse'),
+  expandNode: tx('trajectory:trajectory.expand'),
   copyButtonTitle: action => action,
-};
+}; }
 
 /** A large integer the wire carries losslessly as a string. */
 function count(value: string | number | null | undefined): number | undefined {
@@ -61,16 +64,19 @@ function count(value: string | number | null | undefined): number | undefined {
 }
 
 function Unavailable() {
-  return <span className={css.unavailable}>Unavailable</span>;
+  const tx = useTranslation();
+  return <span className={css.unavailable}>{tx('trajectory:trajectory-inspector.unavailable')}</span>;
 }
 
 function Truncated({ of }: { of: boolean | undefined }) {
-  return of ? <p className={css.truncated}>Shown partially · truncated at the inspection bound</p> : null;
+  const tx = useTranslation();
+  return of ? <p className={css.truncated}>{tx('trajectory:trajectory-inspector.shown-partially-truncated-at-the-inspection-bound')}</p> : null;
 }
 
 function Text({ value, markdown = false }: { value: TraceText; markdown?: boolean }) {
-  const [copied, setCopied] = useState<string>();
-  if (value.text === '' && !value.truncated) return <span className={css.unavailable}>Empty</span>;
+  const tx = useTranslation();
+  const [copied, setCopied] = useNotice();
+  if (value.text === '' && !value.truncated) return <span className={css.unavailable}>{tx('trajectory:trajectory-inspector.empty')}</span>;
   return (
     <>
       {markdown ? (
@@ -80,7 +86,7 @@ function Text({ value, markdown = false }: { value: TraceText; markdown?: boolea
       ) : (
         <pre className={css.payload}>{value.text}</pre>
       )}
-      <Button size="sm" className={css.copyText} onClick={() => { void writeClipboard(value.text).then(ok => setCopied(ok ? 'Copied' : 'Copy failed')); }}>{copied ?? 'Copy text'}</Button>
+      <Button size="sm" className={css.copyText} onClick={() => { void writeClipboard(value.text).then(ok => setCopied(ok ? message('trajectory:trajectory-inspector.copied') : message('trajectory:copy.copy-failed'))); }}>{copied || tx('trajectory:trajectory-inspector.copy-text')}</Button>
       <Truncated of={value.truncated} />
     </>
   );
@@ -111,6 +117,7 @@ function InspectorPanel({ active, children, selectedId, content }: { active: str
 }
 
 function Structured({ value, label }: { value: TraceJson; label: string }) {
+  const tx = useTranslation();
   const body = useContext(InspectorBody);
   const data = value.value;
   if (data === null || typeof data !== 'object') {
@@ -126,7 +133,7 @@ function Structured({ value, label }: { value: TraceJson; label: string }) {
       <JsonTree
         data={data as object}
         label={label}
-        labels={JSON_LABELS}
+        labels={JSON_LABELS(tx)}
         collapsedStringLines={12}
         className={css.jsonTree}
         menuFocusOwner={body}
@@ -137,7 +144,8 @@ function Structured({ value, label }: { value: TraceJson; label: string }) {
 }
 
 function Attachments({ artifacts }: { artifacts: readonly TraceArtifact[] }) {
-  if (artifacts.length === 0) return <p className={css.unavailable}>No durable artifacts recorded</p>;
+  const tx = useTranslation();
+  if (artifacts.length === 0) return <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.no-durable-artifacts-recorded')}</p>;
   return (
     <div className="attachment-gallery">
       {artifacts.map(artifact => (
@@ -155,45 +163,46 @@ function Attachments({ artifacts }: { artifacts: readonly TraceArtifact[] }) {
 
 /** One projected content block, rendered by its own semantic. */
 function Block({ block }: { block: TraceContentBlock }): ReactNode {
+  const tx = useTranslation();
   switch (block.type) {
     case 'text':
       return <Text value={block.text} markdown />;
     case 'refusal':
       return (
         <div>
-          <h4 className={css.blockLabel}>Refusal</h4>
+          <h4 className={css.blockLabel}>{tx('trajectory:trajectory-inspector.refusal')}</h4>
           <Text value={block.text} markdown />
         </div>
       );
     case 'reasoning':
       return (
         <details className={css.reasoning}>
-          <summary>Reasoning</summary>
+          <summary>{tx('trajectory:trajectory-inspector.reasoning')}</summary>
           <Text value={block.text} markdown />
         </details>
       );
     case 'json':
-      return <Structured value={block.value} label="Structured content" />;
+      return <Structured value={block.value} label={tx('trajectory:trajectory-inspector.structured-content')} />;
     case 'tool_call':
       return (
         <div className={css.blockGroup}>
           <h4 className={css.blockLabel}>
-            Proposed ToolCall · <span className={css.machine}>{block.name}</span>
+            {tx('trajectory:trajectory-inspector.proposed-toolcall')}{' '}<span className={css.machine}>{block.name}</span>
           </h4>
           <dl className={css.facts}>
-            <dt>ToolCall</dt>
+            <dt>{tx('trajectory:trajectory-inspector.toolcall')}</dt>
             <dd className={css.machine}>{block.call_id}</dd>
-            <dt>Tool</dt>
+            <dt>{tx('trajectory:trajectory-inspector.tool')}</dt>
             <dd className={css.machine}>{block.tool_id}</dd>
           </dl>
-          <Structured value={block.arguments} label={`${block.name} arguments`} />
+          <Structured value={block.arguments} label={tx('trajectory:trajectory-inspector.value-arguments', { p0: block.name })} />
         </div>
       );
     case 'tool_result':
       return (
         <div className={css.blockGroup}>
           <h4 className={css.blockLabel}>
-            Tool result · <span className={css.machine}>{block.outcome}</span>
+            {tx('trajectory:trajectory-inspector.tool-result')}{' '}<span className={css.machine}>{block.outcome}</span>
           </h4>
           {block.blocks.map((nested, index) => (
             <Block key={index} block={nested} />
@@ -210,43 +219,45 @@ function Block({ block }: { block: TraceContentBlock }): ReactNode {
     case 'upload':
       return (
         <p className={css.blockLabel}>
-          Session upload · <span className={css.machine}>{block.name}</span>
+          {tx('trajectory:trajectory-inspector.session-upload')}{' '}<span className={css.machine}>{block.name}</span>
         </p>
       );
   }
 }
 
 function Definition({ definition }: { definition: TraceToolDefinition }) {
+  const tx = useTranslation();
   return (
     <div className={css.blockGroup}>
       <h4 className={css.blockLabel}>
         {definition.name} <span className={css.machine}>{definition.tool_id}</span>
       </h4>
       <Text value={definition.description} />
-      <Structured value={definition.input_schema} label={`${definition.name} input schema`} />
+      <Structured value={definition.input_schema} label={tx('trajectory:trajectory-inspector.value-input-schema', { p0: definition.name })} />
     </div>
   );
 }
 
 /** Derived generation metrics, each unavailable unless its evidence exists. */
 function Generation({ generation }: { generation: TraceGeneration }) {
+  const tx = useTranslation();
   const ttft = count(generation.ttft_ms);
   const decode = count(generation.generation_ms);
   const rate = generation.output_tokens_per_second ?? undefined;
   return (
     <>
-      <dt>Request duration (start → provider terminal)</dt>
-      <dd>{formatDuration(count(generation.timeline?.terminal_ms))}</dd>
-      <dt>Request start → dispatch</dt>
-      <dd>{formatDuration(count(generation.timeline?.dispatch_ms))}</dd>
-      <dt>Dispatch → first output (TTFT)</dt>
-      <dd>{ttft === undefined ? <Unavailable /> : formatDuration(ttft)}</dd>
-      <dt>First output → provider terminal</dt>
-      <dd>{decode === undefined ? <Unavailable /> : formatDuration(decode)}</dd>
-      <dt>Dispatch → provider terminal</dt>
-      <dd>{formatDuration(count(generation.terminal_ms))}</dd>
-      <dt>Throughput</dt>
-      <dd>{rate === undefined ? <Unavailable /> : `${rate.toFixed(1)} tokens/s`}</dd>
+      <dt>{tx('trajectory:trajectory-inspector.request-duration-start-provider-terminal')}</dt>
+      <dd>{formatDuration(tx, count(generation.timeline?.terminal_ms))}</dd>
+      <dt>{tx('trajectory:trajectory-inspector.request-start-dispatch')}</dt>
+      <dd>{formatDuration(tx, count(generation.timeline?.dispatch_ms))}</dd>
+      <dt>{tx('trajectory:trajectory-inspector.dispatch-first-output-ttft')}</dt>
+      <dd>{ttft === undefined ? <Unavailable /> : formatDuration(tx, ttft)}</dd>
+      <dt>{tx('trajectory:trajectory-inspector.first-output-provider-terminal')}</dt>
+      <dd>{decode === undefined ? <Unavailable /> : formatDuration(tx, decode)}</dd>
+      <dt>{tx('trajectory:trajectory-inspector.dispatch-provider-terminal')}</dt>
+      <dd>{formatDuration(tx, count(generation.terminal_ms))}</dd>
+      <dt>{tx('trajectory:trajectory-inspector.throughput')}</dt>
+      <dd>{rate === undefined ? <Unavailable /> : tx('trajectory:trajectory-inspector.value-tokens-s', { p0: rate.toFixed(1) })}</dd>
     </>
   );
 }
@@ -258,36 +269,27 @@ function Generation({ generation }: { generation: TraceGeneration }) {
  * because the difference that matters to a reader is *what was compared*:
  * the nearest preceding actual request, not the previous row on screen.
  */
-const SYSTEM_PROMPT_STATE: Record<
+function SYSTEM_PROMPT_STATE(tx: Translate): Record<
   TraceSystemPromptPresentation['state'],
   { label: string; note: string }
-> = {
+> { return {
   initial: {
-    label: 'Initial',
-    note: 'No earlier actual request exists in this conversation.',
+    label: tx('trajectory:trajectory-inspector.initial'),
+    note: tx('trajectory:copy.no-earlier-actual-request-exists-in-this-conversation'),
   },
   changed: {
-    label: 'Changed',
-    note: 'The nearest preceding actual request froze a different prompt.',
+    label: tx('trajectory:trajectory-inspector.changed'),
+    note: tx('trajectory:copy.the-nearest-preceding-actual-request-froze-a-different-prompt'),
   },
   unchanged: {
-    label: 'Unchanged',
-    note: 'The nearest preceding actual request froze the identical prompt.',
+    label: tx('trajectory:trajectory-inspector.unchanged'),
+    note: tx('trajectory:copy.the-nearest-preceding-actual-request-froze-the-identical-prompt'),
   },
   previous_unavailable: {
-    label: 'Previous unavailable',
-    note: 'A preceding request exists, but its frozen prompt could not be established at this read cut.',
+    label: tx('trajectory:trajectory-inspector.previous-unavailable'),
+    note: tx('trajectory:copy.a-preceding-request-exists-but-its-frozen-prompt-could-not-be-established-at-this-read-cut'),
   },
-};
-
-/** Display names for the closed Context presentation families. */
-const CONTEXT_KIND: Record<TraceContextKind, string> = {
-  native_environment: "Native context",
-  goal_status: 'Goal status',
-  runtime_tool_observation: 'Runtime tool observation',
-  extension_environment: 'Extension environment',
-  agent_status: 'Agent status',
-};
+}; }
 
 /**
  * The exact native producer the server copied from the canonical message.
@@ -297,8 +299,8 @@ const CONTEXT_KIND: Record<TraceContextKind, string> = {
  * server sent. No name is derived from the Context kind, and no extension
  * catalog is consulted: this is display of a resolved fact, not inference.
  */
-function contextSource(source: TraceContextPresentation['source']): string {
-  return source.type === 'runtime' ? 'Runtime' : `Extension ${source.contributor}`;
+function contextSource(tx: Translate, source: TraceContextPresentation['source']): string {
+  return source.type === 'runtime' ? tx('trajectory:copy.runtime') : tx('trajectory:copy.extension-value', { p0: source.contributor });
 }
 
 /**
@@ -309,10 +311,11 @@ function contextSource(source: TraceContextPresentation['source']): string {
  * them and names the complete prompt's own home.
  */
 function SystemPrompt({ system }: { system: TraceSystemPromptPresentation }) {
-  const { label, note } = SYSTEM_PROMPT_STATE[system.state];
+  const tx = useTranslation();
+  const { label, note } = SYSTEM_PROMPT_STATE(tx)[system.state];
   return (
     <>
-      <dt>System prompt</dt>
+      <dt>{tx('trajectory:trajectory-inspector.system-prompt')}</dt>
       <dd>
         {label}
         <p className={css.note}>{note}</p>
@@ -342,31 +345,29 @@ function ContextAdditions({
   additions: readonly TraceContextPresentation[];
   truncated: boolean;
 }) {
+  const tx = useTranslation();
   return (
     <>
-      <h3 className={css.sectionLabelHeading}>Context introduced by this request</h3>
+      <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.context-introduced-by-this-request')}</h3>
       <p className={css.note}>
-        The canonical context facts this actual request committed with its own start. A retry or
-        recovery request reuses admitted context and introduces none.
-      </p>
+        {tx('trajectory:trajectory-inspector.the-canonical-context-facts-this-actual-request-committed-with-i')}</p>
       {additions.length === 0 && (
-        <p className={css.unavailable}>This request introduced no canonical context</p>
+        <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.this-request-introduced-no-canonical-context')}</p>
       )}
       {additions.map(addition => (
         <section key={addition.message_id} className={css.requestMessage} data-context-message-id={addition.message_id} data-selected={addition.message_id === selectedId || undefined}>
           <h4 className={css.blockLabel}>
-            {CONTEXT_KIND[addition.context_kind]} · {contextSource(addition.source)}
+            {contextKindLabel(tx, addition.context_kind)} · {contextSource(tx, addition.source)}
             <span className={css.machine}> {addition.message_id}</span>
           </h4>
-          {addition.preview ? <p>{addition.preview.text || "Empty"}</p> : <p>Content unavailable</p>}
+          {addition.preview ? <p>{addition.preview.text || tx('trajectory:trajectory-inspector.empty')}</p> : <p>{tx('trajectory:trajectory-inspector.content-unavailable')}</p>}
           {addition.attachments.length > 0 && <Attachments artifacts={addition.attachments} />}
           <Truncated of={addition.truncated || addition.preview?.truncated} />
         </section>
       ))}
       {truncated && (
         <p className={css.truncated}>
-          Further context facts omitted at the summary bound; the first, in native order, are shown.
-        </p>
+          {tx('trajectory:trajectory-inspector.further-context-facts-omitted-at-the-summary-bound-the-first-in')}</p>
       )}
     </>
   );
@@ -387,17 +388,18 @@ function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined, select
 
 /** Native classification is an input, never the output of jsdiff. */
 function PromptDiff({ record, detail }: { record: TraceRecord; detail: TraceDetail | undefined }) {
+  const tx = useTranslation();
   const request = detail?.request;
-  if (!request) return <p className={css.unavailable}>Prompt content unavailable until detail is loaded.</p>;
+  if (!request) return <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.prompt-content-unavailable-until-detail-is-loaded')}</p>;
   const previous = request.previous_system_prompt;
-  if (request.predecessor.availability === 'not_applicable') return <p>No predecessor · initial prompt.</p>;
-  if (request.predecessor.availability === 'unavailable' || !previous) return <p>Previous prompt unavailable · a complete diff cannot be produced.</p>;
-  if (request.effective_system_prompt.truncated || previous.truncated) return <p className={css.truncated}>A complete diff cannot be produced: {request.effective_system_prompt.truncated ? 'current prompt truncated' : ''}{request.effective_system_prompt.truncated && previous.truncated ? '; ' : ''}{previous.truncated ? 'previous prompt truncated' : ''}. Native relationship: {record.request?.system_prompt.state}.</p>;
-  if (record.request?.system_prompt.state === 'unchanged') return <p>No changes · complete frozen prompts are natively unchanged.</p>;
-  if (record.request?.system_prompt.state !== 'changed') return <p>Native prompt relationship unavailable · a complete diff cannot be produced.</p>;
+  if (request.predecessor.availability === 'not_applicable') return <p>{tx('trajectory:trajectory-inspector.no-predecessor-initial-prompt')}</p>;
+  if (request.predecessor.availability === 'unavailable' || !previous) return <p>{tx('trajectory:trajectory-inspector.previous-prompt-unavailable-a-complete-diff-cannot-be-produced')}</p>;
+  if (request.effective_system_prompt.truncated || previous.truncated) return <p className={css.truncated}>{tx('trajectory:trajectory-inspector.a-complete-diff-cannot-be-produced')}{' '}{request.effective_system_prompt.truncated ? tx('trajectory:trajectory-inspector.current-prompt-truncated') : ''}{request.effective_system_prompt.truncated && previous.truncated ? '; ' : ''}{previous.truncated ? tx('trajectory:trajectory-inspector.previous-prompt-truncated') : ''}{tx('trajectory:trajectory-inspector.native-relationship')}{' '}{record.request?.system_prompt.state}.</p>;
+  if (record.request?.system_prompt.state === 'unchanged') return <p>{tx('trajectory:trajectory-inspector.no-changes-complete-frozen-prompts-are-natively-unchanged')}</p>;
+  if (record.request?.system_prompt.state !== 'changed') return <p>{tx('trajectory:trajectory-inspector.native-prompt-relationship-unavailable-a-complete-diff-cannot-be')}</p>;
   const changes = diffLines(previous.text, request.effective_system_prompt.text, { maxEditLength: 4096 });
-  if (!changes) return <p>A complete diff cannot be produced within the display work bound.</p>;
-  return <pre className={css.diff} aria-label="System prompt diff">{changes.map((change, index) => <span key={index} data-change={change.added ? 'added' : change.removed ? 'removed' : 'context'}>{change.added ? '+ ' : change.removed ? '− ' : '  '}{change.value}</span>)}</pre>;
+  if (!changes) return <p>{tx('trajectory:trajectory-inspector.a-complete-diff-cannot-be-produced-within-the-display-work-bound')}</p>;
+  return <pre className={css.diff} aria-label={tx('trajectory:trajectory-inspector.system-prompt-diff')}>{changes.map((change, index) => <span key={index} data-change={change.added ? 'added' : change.removed ? 'removed' : 'context'}>{change.added ? '+ ' : change.removed ? '− ' : '  '}{change.value}</span>)}</pre>;
 }
 
 type ToolDetailState =
@@ -412,11 +414,12 @@ function toolDetailState(detail: TraceDetail | undefined, loading: boolean | und
   if (loading || !detail) return { type: 'pending', loading: loading === true };
   return { type: detail.tool ? 'loaded_tool' : 'loaded_missing_tool' };
 }
-function ToolFacet({ state, facet, children }: { state: ToolDetailState; facet: string; children: ReactNode }) {
+function ToolFacet({ state, facet, children }: { state: ToolDetailState; facet: TrajectoryFacet; children: ReactNode }) {
+  const tx = useTranslation();
   switch (state.type) {
-    case 'pending': return <p role="status" className={css.unavailable}>{state.loading ? 'Loading record detail…' : 'Historical Tool detail has not been loaded.'}</p>;
-    case 'read_error': return <p role="alert" className={css.error}>{facet} could not be established because the historical detail read failed: {state.error}</p>;
-    case 'loaded_missing_tool': return <p className={css.unavailable}>Tool detail is unavailable in this bounded detail projection.</p>;
+    case 'pending': return <p role="status" className={css.unavailable}>{state.loading ? tx('trajectory:trajectory-inspector.loading-record-detail') : tx('trajectory:trajectory-inspector.historical-tool-detail-has-not-been-loaded')}</p>;
+    case 'read_error': return <p role="alert" className={css.error}>{facetLabel(tx, facet)} {tx('trajectory:trajectory-inspector.could-not-be-established-because-the-historical-detail-read-fail')}{' '}{state.error}</p>;
+    case 'loaded_missing_tool': return <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.tool-detail-is-unavailable-in-this-bounded-detail-projection')}</p>;
     case 'loaded_tool': return children;
   }
 }
@@ -449,6 +452,7 @@ export function TrajectoryInspector({
   onLoadDetail,
   onClose,
 }: TrajectoryInspectorProps) {
+  const tx = useTranslation();
   const section = selection.facet;
   useEffect(() => {
     if (record.has_detail && !detail && !loading && !error) onLoadDetail(record.id);
@@ -460,29 +464,27 @@ export function TrajectoryInspector({
   const toolState = toolDetailState(detail, loading, error);
   const toolFactFacet = record.kind === 'tool' && ['Input', 'Result', 'Schema'].includes(active);
   const messages = detail?.messages ?? [];
-  const title = selection.cell_type === 'SystemPromptCell' ? 'System Prompt' : selection.cell_type === 'ContextRow' ? 'Context' :
+  const title = selection.cell_type === 'SystemPromptCell' ? tx('trajectory:copy.system-prompt') : selection.cell_type === 'ContextRow' ? tx('trajectory:copy.context') :
     record.kind === 'request' && record.request
-      ? `Request · ${record.request.model}`
+      ? tx('trajectory:copy.request-value', { p0: record.request.model })
       : record.kind === 'tool' && record.tool
-        ? `Tool · ${record.tool.name ?? record.tool.tool_id}`
-        : cellLabel[record.kind];
+        ? tx('trajectory:copy.tool-value', { p0: record.tool.name ?? record.tool.tool_id })
+        : cellLabel(tx)[record.kind];
 
   return (
-    <aside className={css.inspector} aria-label="Trace record inspector">
+    <aside className={css.inspector} aria-label={tx('trajectory:trajectory-inspector.trace-record-inspector')}>
       <header>
         <strong>{title}</strong>
         <Button size="sm" onClick={onClose}>
-          Close record
-        </Button>
+          {tx('trajectory:trajectory-inspector.close-record')}</Button>
       </header>
       <Tabs className={css.inspectorTabs} selectedKey={active} onSelectionChange={key => onFacet(key as TrajectoryFacet)}>
-      <TabList aria-label="Record sections" className={css.tabs}>
-        {sections.map(name => <Tab key={name} id={name}>{name}</Tab>)}
+      <TabList aria-label={tx('trajectory:trajectory-inspector.record-sections')} className={css.tabs}>
+        {sections.map(name => <Tab key={name} id={name}>{facetLabel(tx, name)}</Tab>)}
       </TabList>
       {loading && !toolFactFacet && (
         <p role="status" className={css.unavailable}>
-          Loading record detail…
-        </p>
+          {tx('trajectory:trajectory-inspector.loading-record-detail')}</p>
       )}
       {error && !toolFactFacet && (
         <p role="alert" className={css.error}>
@@ -492,34 +494,34 @@ export function TrajectoryInspector({
       <InspectorPanel active={active} selectedId={selection.context_message_id} content={detail}>
         {active === 'Summary' && (
           <>
-          <div className={css.summaryPreview}><MarkdownText text={previewOf(record)} /></div>
+          <div className={css.summaryPreview}><MarkdownText text={previewOf(tx, record)} /></div>
           {tool?.source && <section className={css.summaryPreview}>
-            <h3 className={css.sectionLabelHeading}>Code</h3>
-            <CodeBlock code={tool.source.text.text} lang={tool.source.language ?? undefined} lineNumbers copyLabel="Copy source" copiedLabel="Copied" />
+            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.code')}</h3>
+            <CodeBlock code={tool.source.text.text} lang={tool.source.language ?? undefined} lineNumbers copyLabel={tx('trajectory:copy.copy-source')} copiedLabel={tx('trajectory:trajectory-inspector.copied')} />
             <Truncated of={tool.source.text.truncated} />
           </section>}
           {tool?.arguments && !tool.source && <section className={css.summaryPreview}>
-            <h3 className={css.sectionLabelHeading}>Input</h3><Structured value={tool.arguments} label="Recorded arguments" />
+            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.input')}</h3><Structured value={tool.arguments} label={tx('trajectory:trajectory-inspector.recorded-arguments')} />
           </section>}
           {tool?.result && <section className={css.summaryPreview}>
-            <h3 className={css.sectionLabelHeading}>Result · {tool.result.outcome}</h3>
+            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.result')}{' '}{tool.result.outcome}</h3>
             {tool.result.blocks.map((block, index) => <Block key={index} block={block} />)}
             <Truncated of={tool.result.blocks_truncated} />
           </section>}
           <dl className={css.facts}>
-            <dt>Status</dt><dd>{record.state}</dd>
+            <dt>{tx('trajectory:trajectory-inspector.status')}</dt><dd>{traceStateLabel(tx, record.state)}</dd>
             {record.request && <>
-              <dt>Model</dt><dd>{record.request.model}</dd>
-              <dt>Retry / recovery ordinal</dt><dd>{record.request.retry_number}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.model')}</dt><dd>{record.request.model}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.retry-recovery-ordinal')}</dt><dd>{record.request.retry_number}</dd>
               <SystemPrompt system={record.request.system_prompt} />
-              <dt>Tools</dt><dd>{record.request.tool_catalog.replaceAll('_', ' ')}</dd>
-              <dt>Context introduced</dt><dd>{record.request.context_additions.length}{record.request.context_truncated ? ' · truncated' : ''}</dd>
-              {record.request.failure_kind && <><dt>Failure</dt><dd>{record.request.failure_kind}</dd></>}
-              {sections.includes('System Prompt') && <><dt>Historical input</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>View System Prompt</Button> <Button size="sm" onClick={() => onFacet('Tools')}>View Tools</Button></dd></>}
-              <dt>Acceptance</dt><dd>Provider completion alone does not prove canonical Assistant acceptance.</dd>
+              <dt>{tx('trajectory:trajectory-inspector.tools')}</dt><dd>{record.request.tool_catalog.replaceAll('_', ' ')}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.context-introduced')}</dt><dd>{record.request.context_additions.length}{record.request.context_truncated ? tx('trajectory:trajectory-inspector.truncated') : ''}</dd>
+              {record.request.failure_kind && <><dt>{tx('trajectory:trajectory-inspector.failure')}</dt><dd>{record.request.failure_kind}</dd></>}
+              {sections.includes('System Prompt') && <><dt>{tx('trajectory:trajectory-inspector.historical-input')}</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>{tx('trajectory:trajectory-inspector.view-system-prompt')}</Button> <Button size="sm" onClick={() => onFacet('Tools')}>{tx('trajectory:trajectory-inspector.view-tools')}</Button></dd></>}
+              <dt>{tx('trajectory:trajectory-inspector.acceptance')}</dt><dd>{tx('trajectory:trajectory-inspector.provider-completion-alone-does-not-prove-canonical-assistant-acc')}</dd>
             </>}
-            {record.calls.length > 0 && <><dt>Proposed calls</dt><dd>{record.calls.length} · A proposal proves assembly, not execution.</dd></>}
-            {record.tool && <><dt>Execution</dt><dd>{record.tool.started ? 'Started · a durable start fact exists' : 'Proposed only'}</dd><dt>Outcome</dt><dd>{record.tool.outcome ?? 'Unknown'}</dd></>}
+            {record.calls.length > 0 && <><dt>{tx('trajectory:trajectory-inspector.proposed-calls')}</dt><dd>{record.calls.length} {tx('trajectory:trajectory-inspector.a-proposal-proves-assembly-not-execution')}</dd></>}
+            {record.tool && <><dt>{tx('trajectory:trajectory-inspector.execution')}</dt><dd>{record.tool.started ? tx('trajectory:trajectory-inspector.started-a-durable-start-fact-exists') : tx('trajectory:trajectory-inspector.proposed-only')}</dd><dt>{tx('trajectory:trajectory-inspector.outcome')}</dt><dd>{record.tool.outcome ?? tx('trajectory:trajectory-inspector.unknown')}</dd></>}
           </dl>
           <Truncated of={record.truncated || detail?.truncated} />
 
@@ -528,67 +530,64 @@ export function TrajectoryInspector({
 
         {active === 'Native' && <>          <section className={css.nativeDetails}>
           <dl className={css.facts}>
-            <dt>State</dt>
+            <dt>{tx('trajectory:trajectory-inspector.state')}</dt>
             <dd>{record.state}</dd>
-            <dt>Record</dt>
+            <dt>{tx('trajectory:trajectory-inspector.record')}</dt>
             <dd className={css.machine}>{record.id}</dd>
-            <dt>Attempt</dt>
+            <dt>{tx('trajectory:trajectory-inspector.attempt')}</dt>
             <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
-            <dt>Logical Step</dt>
+            <dt>{tx('trajectory:trajectory-inspector.logical-step')}</dt>
             <dd className={css.machine}>{record.location.step_id ?? <Unavailable />}</dd>
             {record.request && (
               <>
-                <dt>Actual request</dt>
+                <dt>{tx('trajectory:trajectory-inspector.actual-request')}</dt>
                 <dd className={css.machine}>{record.request.request_id}</dd>
-                <dt>Retry / recovery ordinal</dt>
+                <dt>{tx('trajectory:trajectory-inspector.retry-recovery-ordinal')}</dt>
                 <dd>
                   {record.request.retry_number}
                   {record.request.retry_number > 0
-                    ? ' · retry or recovery within this Step'
-                    : ' · initial request'}
+                    ? tx('trajectory:trajectory-inspector.retry-or-recovery-within-this-step')
+                    : tx('trajectory:trajectory-inspector.initial-request')}
                 </dd>
-                <dt>Preceding request failure</dt>
+                <dt>{tx('trajectory:trajectory-inspector.preceding-request-failure')}</dt>
                 <dd>{record.request.previous_failure_kind ?? <Unavailable />}</dd>
-                <dt>Failure class</dt>
-                <dd>{record.request.failure_kind ?? 'None recorded'}</dd>
+                <dt>{tx('trajectory:trajectory-inspector.failure-class')}</dt>
+                <dd>{record.request.failure_kind ?? tx('trajectory:trajectory-inspector.none-recorded')}</dd>
                 <SystemPrompt system={record.request.system_prompt} />
-                <dt>Context introduced</dt>
+                <dt>{tx('trajectory:trajectory-inspector.context-introduced')}</dt>
                 <dd>
                   {record.request.context_additions.length}
-                  {record.request.context_truncated ? ' (bounded)' : ''}
+                  {record.request.context_truncated ? tx('trajectory:trajectory-inspector.bounded') : ''}
                 </dd>
               </>
             )}
             {record.originating_tool_call_id && (
               <>
-                <dt>Originating ToolCall</dt>
+                <dt>{tx('trajectory:trajectory-inspector.originating-toolcall')}</dt>
                 <dd className={css.machine}>{record.originating_tool_call_id}</dd>
                 <dd className={css.note}>
-                  Server-resolved navigation correlation from this domain's own start fact. It
-                  remains exact when the parent Tool row is outside the loaded window, and it
-                  confers no lifecycle, ownership or settlement authority.
-                </dd>
+                  {tx('trajectory:trajectory-inspector.server-resolved-navigation-correlation-from-this-domain-s-own-st')}</dd>
               </>
             )}
             {record.tool && (
               <>
-                <dt>ToolCall</dt>
+                <dt>{tx('trajectory:trajectory-inspector.toolcall')}</dt>
                 <dd className={css.machine}>{record.tool.call_id}</dd>
-                <dt>Tool</dt>
+                <dt>{tx('trajectory:trajectory-inspector.tool')}</dt>
                 <dd className={css.machine}>{record.tool.tool_id}</dd>
-                <dt>Execution</dt>
+                <dt>{tx('trajectory:trajectory-inspector.execution')}</dt>
                 <dd>
                   {tool?.lifecycle === 'settled'
-                    ? 'Settled · a canonical Tool message was accepted'
+                    ? tx('trajectory:trajectory-inspector.settled-a-canonical-tool-message-was-accepted')
                     : record.tool.started
-                      ? 'Started · a durable start fact exists'
-                      : 'Proposed · assembly only, execution is not implied'}
+                      ? tx('trajectory:trajectory-inspector.started-a-durable-start-fact-exists')
+                      : tx('trajectory:trajectory-inspector.proposed-assembly-only-execution-is-not-implied')}
                 </dd>
-                <dt>Outcome</dt>
+                <dt>{tx('trajectory:trajectory-inspector.outcome')}</dt>
                 <dd>{record.tool.outcome ?? <Unavailable />}</dd>
                 {record.tool.detail && (
                   <>
-                    <dt>Detail</dt>
+                    <dt>{tx('trajectory:trajectory-inspector.detail')}</dt>
                     <dd>{record.tool.detail.text}</dd>
                   </>
                 )}
@@ -596,7 +595,7 @@ export function TrajectoryInspector({
             )}
             {record.calls.length > 0 && (
               <>
-                <dt>Assembled ToolCalls</dt>
+                <dt>{tx('trajectory:trajectory-inspector.assembled-toolcalls')}</dt>
                 <dd>
                   {record.calls.map(call => (
                     <div key={call.call_id} className={css.machine}>
@@ -604,29 +603,27 @@ export function TrajectoryInspector({
                     </div>
                   ))}
                   <p className={css.note}>
-                    A proposal proves assembly. Execution requires its own started record.
-                  </p>
+                    {tx('trajectory:trajectory-inspector.a-proposal-proves-assembly-execution-requires-its-own-started-re')}</p>
                 </dd>
               </>
             )}
             {record.native_id && (
               <>
-                <dt>Native identity</dt>
+                <dt>{tx('trajectory:trajectory-inspector.native-identity')}</dt>
                 <dd className={css.machine}>{record.native_id}</dd>
               </>
             )}
             {record.message_id && (
               <>
-                <dt>Canonical message</dt>
+                <dt>{tx('trajectory:trajectory-inspector.canonical-message')}</dt>
                 <dd className={css.machine}>{record.message_id}</dd>
               </>
             )}
             {record.kind === 'request' && (
               <>
-                <dt>Acceptance</dt>
+                <dt>{tx('trajectory:trajectory-inspector.acceptance')}</dt>
                 <dd className={css.note}>
-                  Provider completion alone does not prove canonical Assistant acceptance.
-                </dd>
+                  {tx('trajectory:trajectory-inspector.provider-completion-alone-does-not-prove-canonical-assistant-acc')}</dd>
               </>
             )}
             <Truncated of={record.truncated} />
@@ -636,11 +633,11 @@ export function TrajectoryInspector({
         {active === 'Content' && messages.map(message => (
           <section key={message.message_id}>
             <dl className={css.facts}>
-              <dt>Role</dt>
+              <dt>{tx('trajectory:trajectory-inspector.role')}</dt>
               <dd>{message.role}</dd>
               {message.source && (
                 <>
-                  <dt>Provenance</dt>
+                  <dt>{tx('trajectory:trajectory-inspector.provenance')}</dt>
                   <dd>{message.source}</dd>
                 </>
               )}
@@ -653,10 +650,10 @@ export function TrajectoryInspector({
         ))}
 
         {active === 'Raw' && (
-          <Structured value={{ value: messages, truncated: detail?.truncated ?? false }} label="Projected messages" />
+          <Structured value={{ value: messages, truncated: detail?.truncated ?? false }} label={tx('trajectory:trajectory-inspector.projected-messages')} />
         )}
 
-        {active === 'System Prompt' && request && (<><h3 className={css.sectionLabelHeading}>Effective system prompt</h3><Text value={request.effective_system_prompt} markdown /></>)}
+        {active === 'System Prompt' && request && (<><h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.effective-system-prompt')}</h3><Text value={request.effective_system_prompt} markdown /></>)}
 
         {active === 'Diff' && <PromptDiff record={record} detail={detail} />}
 
@@ -674,25 +671,23 @@ export function TrajectoryInspector({
           <>
             {request.contributions.map(contribution => (
               <section key={contribution.message_id} className={css.requestMessage}>
-                <h3 className={css.sectionLabelHeading}>Accepted contribution</h3>
-                <p className={css.note}>Frozen request context, not current domain state.</p>
-                <Structured value={{ value: contribution, truncated: false }} label="Accepted contribution metadata" />
+                <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.accepted-contribution')}</h3>
+                <p className={css.note}>{tx('trajectory:trajectory-inspector.frozen-request-context-not-current-domain-state')}</p>
+                <Structured value={{ value: contribution, truncated: false }} label={tx('trajectory:trajectory-inspector.accepted-contribution-metadata')} />
               </section>
             ))}
-            <h3 className={css.sectionLabelHeading}>Reconstructed request context</h3>
+            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.reconstructed-request-context')}</h3>
             <p className={css.note}>
-              The exact provider-neutral messages this request carried, rebuilt from its frozen
-              snapshot and the historical Surface revision it referenced.
-            </p>
+              {tx('trajectory:trajectory-inspector.the-exact-provider-neutral-messages-this-request-carried-rebuilt')}</p>
             {request.messages.map((entry, index) => (
               <section key={entry.message_id ?? index} className={css.requestMessage} data-context-message-id={entry.message_id} data-selected={entry.message_id === selection.context_message_id || undefined}>
                 <h4 className={css.blockLabel}>
                   {entry.role}
-                  {entry.source ? ` · ${entry.source}` : ''}
+                  {entry.source ? tx('trajectory:trajectory-inspector.value', { p0: entry.source }) : ''}
                   {entry.message_id ? (
                     <span className={css.machine}> {entry.message_id}</span>
                   ) : (
-                    <span className={css.note}> request-only, no canonical identity</span>
+                    <span className={css.note}> {tx('trajectory:trajectory-inspector.request-only-no-canonical-identity')}</span>
                   )}
                 </h4>
                 {entry.blocks.map((block, blockIndex) => (
@@ -703,21 +698,19 @@ export function TrajectoryInspector({
             ))}
             {request.messages_truncated && (
               <p className={css.truncated}>
-                Older context omitted at the inspection bound; the newest items are shown.
-              </p>
+                {tx('trajectory:trajectory-inspector.older-context-omitted-at-the-inspection-bound-the-newest-items-a')}</p>
             )}
           </>
         )}
 
         {active === 'Input' && (
           <ToolFacet state={toolState} facet={active}>
-            <h3 className={css.sectionLabelHeading}>Recorded arguments</h3>
+            <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.recorded-arguments')}</h3>
             {tool?.arguments ? (
-              <Structured value={tool.arguments} label={`${tool.name ?? tool.tool_id} arguments`} />
+              <Structured value={tool.arguments} label={tx('trajectory:trajectory-inspector.value-arguments', { p0: tool.name ?? tool.tool_id })} />
             ) : (
               <p className={css.unavailable}>
-                The canonical proposal for this call is not loadable at this read cut.
-              </p>
+                {tx('trajectory:trajectory-inspector.the-canonical-proposal-for-this-call-is-not-loadable-at-this-rea')}</p>
             )}
           </ToolFacet>
         )}
@@ -725,19 +718,19 @@ export function TrajectoryInspector({
         {active === 'Code' && tool?.source && (
           <>
             <h3 className={css.sectionLabelHeading}>
-              Program source · <span className={css.machine}>{tool.source.field}</span>
+              {tx('trajectory:trajectory-inspector.program-source')}{' '}<span className={css.machine}>{tool.source.field}</span>
             </h3>
             <p className={css.note}>
               {tool.source.language
-                ? `Highlighted as ${tool.source.language}; the native Tool contract fixes this language.`
-                : 'No language is highlighted: this Tool contract identifies the field as source without fixing a language.'}
+                ? tx('trajectory:trajectory-inspector.highlighted-as-value-the-native-tool-contract-fixes-this-languag', { p0: tool.source.language })
+                : tx('trajectory:trajectory-inspector.no-language-is-highlighted-this-tool-contract-identifies-the-fie')}
             </p>
             <CodeBlock
               code={tool.source.text.text}
               lang={tool.source.language ?? undefined}
               lineNumbers
-              copyLabel="Copy source"
-              copiedLabel="Copied"
+              copyLabel={tx('trajectory:copy.copy-source')}
+              copiedLabel={tx('trajectory:trajectory-inspector.copied')}
             />
             <Truncated of={tool.source.text.truncated} />
           </>
@@ -746,46 +739,46 @@ export function TrajectoryInspector({
         {active === 'Result' && <ToolFacet state={toolState} facet={active}>
           {tool?.result ? <>
             <dl className={css.facts}>
-              <dt>Outcome</dt>
+              <dt>{tx('trajectory:trajectory-inspector.outcome')}</dt>
               <dd>{tool.result.outcome}</dd>
-              <dt>Execution duration</dt>
-              <dd>{formatDuration(count(tool.result.duration_ms))}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.execution-duration')}</dt>
+              <dd>{formatDuration(tx, count(tool.result.duration_ms))}</dd>
               {tool.result.exit_code != null && (
                 <>
-                  <dt>Exit code</dt>
+                  <dt>{tx('trajectory:trajectory-inspector.exit-code')}</dt>
                   <dd className={css.machine}>{tool.result.exit_code}</dd>
                 </>
               )}
               {tool.result.truncation && (
                 <>
-                  <dt>Tool-recorded truncation</dt>
+                  <dt>{tx('trajectory:trajectory-inspector.tool-recorded-truncation')}</dt>
                   <dd>
-                    {tool.result.truncation.truncated ? 'Output was truncated by the Tool' : 'Complete'}
+                    {tool.result.truncation.truncated ? tx('trajectory:trajectory-inspector.output-was-truncated-by-the-tool') : tx('trajectory:trajectory-inspector.complete')}
                     {tool.result.truncation.original_bytes != null
-                      ? ` · ${tool.result.truncation.original_bytes} bytes originally`
+                      ? tx('trajectory:trajectory-inspector.value-bytes-originally', { p0: tool.result.truncation.original_bytes })
                       : ''}
                   </dd>
                 </>
               )}
               {tool.result.managed_output && (
                 <>
-                  <dt>Managed output</dt>
+                  <dt>{tx('trajectory:trajectory-inspector.managed-output')}</dt>
                   <dd>
                     {tool.result.managed_output.available
                       ? tool.result.managed_output.complete
-                        ? 'Complete'
-                        : 'Partial'
-                      : 'Unavailable'}
+                        ? tx('trajectory:trajectory-inspector.complete')
+                        : tx('trajectory:trajectory-inspector.partial')
+                      : tx('trajectory:trajectory-inspector.unavailable')}
                   </dd>
                   {tool.result.managed_output.locator != null ? (
                     <>
-                      <dt>Locator</dt>
+                      <dt>{tx('trajectory:trajectory-inspector.locator')}</dt>
                       <dd>{tool.result.managed_output.locator}</dd>
                     </>
                   ) : null}
                   {tool.result.managed_output.diagnostic ? (
                     <>
-                      <dt>Diagnostic</dt>
+                      <dt>{tx('trajectory:trajectory-inspector.diagnostic')}</dt>
                       <dd><Text value={tool.result.managed_output.diagnostic} /></dd>
                     </>
                   ) : null}
@@ -794,7 +787,7 @@ export function TrajectoryInspector({
             </dl>
             {tool.result.detail && (
               <>
-                <h3 className={css.sectionLabelHeading}>Status detail</h3>
+                <h3 className={css.sectionLabelHeading}>{tx('trajectory:trajectory-inspector.status-detail')}</h3>
                 <Text value={tool.result.detail} />
               </>
             )}
@@ -802,24 +795,23 @@ export function TrajectoryInspector({
               <Block key={index} block={block} />
             ))}
             <Truncated of={tool.result.blocks_truncated} />
-          </> : <p className={css.unavailable}>No canonical Tool result is recorded at this read cut.</p>}
+          </> : <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.no-canonical-tool-result-is-recorded-at-this-read-cut')}</p>}
         </ToolFacet>}
 
         {active === 'Schema' && <ToolFacet state={toolState} facet={active}>
-          {tool?.definition ? <Definition definition={tool.definition} /> : <p className={css.unavailable}>The historical Tool definition is unavailable at this read cut.</p>}
+          {tool?.definition ? <Definition definition={tool.definition} /> : <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.the-historical-tool-definition-is-unavailable-at-this-read-cut')}</p>}
         </ToolFacet>}
 
         {active === 'Tools' && request && (
           <>
             <p className={css.note}>
-              The exact historical Tool catalog this request carried, not the current one.
-            </p>
-            {request.tools.length === 0 && <p className={css.unavailable}>No Tool definitions recorded</p>}
+              {tx('trajectory:trajectory-inspector.the-exact-historical-tool-catalog-this-request-carried-not-the-c')}</p>
+            {request.tools.length === 0 && <p className={css.unavailable}>{tx('trajectory:trajectory-inspector.no-tool-definitions-recorded')}</p>}
             {request.tools.map(definition => (
               <Definition key={definition.tool_id} definition={definition} />
             ))}
             {request.tools_truncated && (
-              <p className={css.truncated}>Further Tool definitions omitted at the inspection bound</p>
+              <p className={css.truncated}>{tx('trajectory:trajectory-inspector.further-tool-definitions-omitted-at-the-inspection-bound')}</p>
             )}
           </>
         )}
@@ -827,18 +819,18 @@ export function TrajectoryInspector({
         {active === 'Options' && request && (
           <>
             <dl className={css.facts}>
-              <dt>Model</dt>
+              <dt>{tx('trajectory:trajectory-inspector.model')}</dt>
               <dd className={css.machine}>{request.model}</dd>
-              <dt>Protocol</dt>
+              <dt>{tx('trajectory:trajectory-inspector.protocol')}</dt>
               <dd className={css.machine}>{request.protocol}</dd>
-              <dt>Output token limit</dt>
+              <dt>{tx('trajectory:trajectory-inspector.output-token-limit')}</dt>
               <dd className={css.machine}>{request.max_output_tokens}</dd>
-              <dt>Context window</dt>
+              <dt>{tx('trajectory:trajectory-inspector.context-window')}</dt>
               <dd className={css.machine}>{request.context_window_tokens}</dd>
-              <dt>Reasoning</dt>
+              <dt>{tx('trajectory:trajectory-inspector.reasoning')}</dt>
               <dd>
-                {request.reasoning_enabled ? 'enabled' : 'disabled'}
-                {request.reasoning_profile ? ` · ${request.reasoning_profile}` : ''}
+                {request.reasoning_enabled ? tx('trajectory:trajectory-inspector.enabled') : tx('trajectory:trajectory-inspector.disabled')}
+                {request.reasoning_profile ? tx('trajectory:trajectory-inspector.value', { p0: request.reasoning_profile }) : ''}
               </dd>
               {request.options.map(option => (
                 <div key={option.name} className={css.option}>
@@ -849,10 +841,7 @@ export function TrajectoryInspector({
             </dl>
             {request.omitted_option_count > 0 && (
               <p className={css.note}>
-                {request.omitted_option_count} configured request parameter
-                {request.omitted_option_count === 1 ? '' : 's'} outside the inspection allowlist
-                {request.omitted_option_count === 1 ? ' is' : ' are'} not shown.
-              </p>
+                {tx(request.omitted_option_count === 1 ? 'trajectory:options.omitted.one' : 'trajectory:options.omitted.other', { n: request.omitted_option_count })}</p>
             )}
           </>
         )}
@@ -861,24 +850,24 @@ export function TrajectoryInspector({
           <dl className={css.facts}>
             {record.request?.usage ? (
               <>
-                <dt>Input tokens</dt>
+                <dt>{tx('trajectory:trajectory-inspector.input-tokens')}</dt>
                 <dd className={css.machine}>{record.request.usage.input_tokens}</dd>
-                <dt>Output tokens</dt>
+                <dt>{tx('trajectory:trajectory-inspector.output-tokens')}</dt>
                 <dd className={css.machine}>{record.request.usage.output_tokens}</dd>
-                <dt>Total tokens</dt>
+                <dt>{tx('trajectory:trajectory-inspector.total-tokens')}</dt>
                 <dd className={css.machine}>{record.request.usage.total_tokens}</dd>
-                <dt>Reasoning tokens</dt>
+                <dt>{tx('trajectory:trajectory-inspector.reasoning-tokens')}</dt>
                 <dd className={css.machine}>
                   {record.request.usage.details?.reasoning_tokens ?? <Unavailable />}
                 </dd>
-                <dt>Cached input</dt>
+                <dt>{tx('trajectory:trajectory-inspector.cached-input')}</dt>
                 <dd className={css.machine}>
                   {record.request.usage.details?.cached_input_tokens ?? <Unavailable />}
                 </dd>
               </>
             ) : (
               <>
-                <dt>Usage</dt>
+                <dt>{tx('trajectory:trajectory-inspector.usage')}</dt>
                 <dd>
                   <Unavailable />
                 </dd>
@@ -889,27 +878,26 @@ export function TrajectoryInspector({
 
         {active === 'Timing' && (
           <dl className={css.facts}>
-            <dt>Started</dt>
-            <dd className={css.machine}>{formatInstant(record.timing.started_at)}</dd>
-            <dt>Ended</dt>
-            <dd className={css.machine}>{formatInstant(record.timing.ended_at)}</dd>
-            <dt>{record.kind === 'request' ? 'Journal wall duration' : 'Duration'}</dt>
-            <dd>{record.timing.duration_ms == null ? <Unavailable /> : formatDuration(count(record.timing.duration_ms))}</dd>
+            <dt>{tx('trajectory:trajectory-inspector.started')}</dt>
+            <dd className={css.machine}>{formatInstant(tx, record.timing.started_at)}</dd>
+            <dt>{tx('trajectory:trajectory-inspector.ended')}</dt>
+            <dd className={css.machine}>{formatInstant(tx, record.timing.ended_at)}</dd>
+            <dt>{record.kind === 'request' ? tx('trajectory:trajectory-inspector.journal-wall-duration') : tx('trajectory:trajectory.duration')}</dt>
+            <dd>{record.timing.duration_ms == null ? <Unavailable /> : formatDuration(tx, count(record.timing.duration_ms))}</dd>
             {record.request?.generation ? (
               <Generation generation={record.request.generation} />
             ) : record.kind === 'request' ? (
               <>
-                <dt>Generation evidence</dt>
+                <dt>{tx('trajectory:trajectory-inspector.generation-evidence')}</dt>
                 <dd className={css.note}>
-                  No settled generation evidence was recorded for this request.
-                </dd>
+                  {tx('trajectory:trajectory-inspector.no-settled-generation-evidence-was-recorded-for-this-request')}</dd>
               </>
             ) : null}
-            <dt>Source</dt>
+            <dt>{tx('trajectory:trajectory-inspector.source')}</dt>
             <dd className={css.note}>
               {record.timing.duration_ms == null
-                ? 'One endpoint only; an in-flight or unterminated record has no duration.'
-                : 'Two authoritative durable timestamps.'}
+                ? tx('trajectory:trajectory-inspector.one-endpoint-only-an-in-flight-or-unterminated-record-has-no-dur')
+                : tx('trajectory:trajectory-inspector.two-authoritative-durable-timestamps')}
             </dd>
           </dl>
         )}
@@ -932,48 +920,49 @@ export function TrajectoryInspector({
  * than borrowing identity, lifecycle or timing from a member record.
  */
 export function TrajectoryStructureInspector({ item, onClose }: { item: StructuralDisplayItem; onClose: () => void }) {
+  const tx = useTranslation();
   const record = item.native_record;
-  const native = item.type === 'TurnHeader' ? 'Attempt' : item.kind === 'step' ? 'Step' : undefined;
+  const native = item.type === 'TurnHeader' ? tx('trajectory:trajectory-inspector.attempt') : item.kind === 'step' ? tx('trajectory:copy.step') : undefined;
   return (
-    <aside className={css.inspector} aria-label="Trace structure inspector">
+    <aside className={css.inspector} aria-label={tx('trajectory:copy.trace-structure-inspector')}>
       <header>
-        <strong>{item.label}{native ? ` · native ${native}` : ''}</strong>
-        <Button size="sm" onClick={onClose}>Close structure</Button>
+        <strong>{item.label}{native ? ' ' + tx('trajectory:copy.native-value', { p0: native }) : ''}</strong>
+        <Button size="sm" onClick={onClose}>{tx('trajectory:copy.close-structure')}</Button>
       </header>
       <div className={css.inspectorBody}>
-        <p className={css.note}>“{item.label}” is a loaded-window ordinal, not an identity.</p>
+        <p className={css.note}>“{item.label}{tx('trajectory:copy.is-a-loaded-window-ordinal-not-an-identity')}</p>
         {record ? (
           <>
             <dl className={css.facts}>
-              <dt>Native kind</dt>
-              <dd>{cellLabel[record.kind]}</dd>
-              <dt>State</dt>
+              <dt>{tx('trajectory:copy.native-kind')}</dt>
+              <dd>{cellLabel(tx)[record.kind]}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.state')}</dt>
               <dd>{record.state}</dd>
-              <dt>Record</dt>
+              <dt>{tx('trajectory:trajectory-inspector.record')}</dt>
               <dd className={css.machine}>{record.id}</dd>
-              <dt>Attempt</dt>
+              <dt>{tx('trajectory:trajectory-inspector.attempt')}</dt>
               <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
               {record.kind === 'step' && (
                 <>
-                  <dt>Logical Step</dt>
+                  <dt>{tx('trajectory:trajectory-inspector.logical-step')}</dt>
                   <dd className={css.machine}>{record.location.step_id ?? <Unavailable />}</dd>
                 </>
               )}
               {record.native_id && (
                 <>
-                  <dt>Native identity</dt>
+                  <dt>{tx('trajectory:trajectory-inspector.native-identity')}</dt>
                   <dd className={css.machine}>{record.native_id}</dd>
                 </>
               )}
-              <dt>Started</dt>
-              <dd className={css.machine}>{formatInstant(record.timing.started_at)}</dd>
-              <dt>Ended</dt>
-              <dd className={css.machine}>{formatInstant(record.timing.ended_at)}</dd>
-              <dt>Duration</dt>
-              <dd>{record.timing.duration_ms == null ? <Unavailable /> : formatDuration(count(record.timing.duration_ms))}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.started')}</dt>
+              <dd className={css.machine}>{formatInstant(tx, record.timing.started_at)}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.ended')}</dt>
+              <dd className={css.machine}>{formatInstant(tx, record.timing.ended_at)}</dd>
+              <dt>{tx('trajectory:trajectory.duration')}</dt>
+              <dd>{record.timing.duration_ms == null ? <Unavailable /> : formatDuration(tx, count(record.timing.duration_ms))}</dd>
               {record.preview?.text && (
                 <>
-                  <dt>Summary</dt>
+                  <dt>{tx('trajectory:copy.summary')}</dt>
                   <dd>{record.preview.text}</dd>
                 </>
               )}
@@ -983,8 +972,8 @@ export function TrajectoryStructureInspector({ item, onClose }: { item: Structur
         ) : (
           <p className={css.unavailable}>
             {native
-              ? `The exact native ${native} record is not loaded at this read cut, so its structural evidence is unavailable.`
-              : 'Message groups Attempt-owned records with no logical Step; it has no native structural record.'}
+              ? tx('trajectory:copy.the-exact-native-value-record-is-not-loaded-at-this-read-cut-so-its-structural-evidence-is', { p0: native })
+              : tx('trajectory:copy.message-groups-attempt-owned-records-with-no-logical-step-it-has-no-native-structural-reco')}
           </p>
         )}
       </div>

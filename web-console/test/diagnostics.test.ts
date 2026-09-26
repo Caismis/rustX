@@ -1,3 +1,4 @@
+import { translator } from '../src/locale/translation';
 import { expect, it } from 'vitest';
 import { ProtocolLog, filterLog } from '../src/client/protocol-log';
 import { displayNumber, emptyDraft, finiteNumber, submission } from '../src/bindings/questionnaire';
@@ -23,9 +24,9 @@ it('filtering, pause, clear and resume are deterministic and keep bounded storag
   log.pause(false); expect(log.getSnapshot().entries).toHaveLength(1);
 });
 it('encodes native Questionnaire scalar, choice, custom, boolean and partial answers exactly', () => {
-  expect(finiteNumber('1.25')).toBe('3ff4000000000000'); expect(displayNumber(finiteNumber('1.25'))).toBe(1.25);
-  expect(finiteNumber('-0')).toBe('0000000000000000'); expect(() => finiteNumber('Infinity')).toThrow('finite');
-  const response = submission([
+  expect(finiteNumber(translator('en'), '1.25')).toBe('3ff4000000000000'); expect(displayNumber(finiteNumber(translator('en'), '1.25'))).toBe(1.25);
+  expect(finiteNumber(translator('en'), '-0')).toBe('0000000000000000'); expect(() => finiteNumber(translator('en'), 'Infinity')).toThrow('finite');
+  const response = submission(translator('en'), [
     { header: 'Integer', question: 'Integer?', answer: { type: 'integer' } },
     { header: 'Number', question: 'Number?', answer: { type: 'number' } },
     { header: 'Bool', question: 'Bool?', answer: { type: 'boolean' } },
@@ -40,7 +41,7 @@ it('encodes native Questionnaire scalar, choice, custom, boolean and partial ans
     { type: 'boolean', value: { value: false } }, { type: 'text', value: { value: 'rustX' } },
     { type: 'options', value: { option_indices: [0, 1] } }, { type: 'custom', value: { answer: 'Custom' } },
   ]);
-  expect(() => submission([{ header: 'i', question: 'i', answer: { type: 'integer' } }], [{ ...emptyDraft(), text: '9223372036854775808' }])).toThrow('bounds');
+  expect(() => submission(translator('en'), [{ header: 'i', question: 'i', answer: { type: 'integer' } }], [{ ...emptyDraft(), text: '9223372036854775808' }])).toThrow('bounds');
 });
 
 it('identifies a Session in a native create response even before an attachment exists', () => {

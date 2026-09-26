@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted ContextInjectionRow chrome; native status semantics. See PROVENANCE.md. */
 import { useState } from 'react';
 import type { AgentStatusView } from '../../../../protocol/app-server/v23';
@@ -15,12 +16,13 @@ import css from './AgentStatus.module.css';
  * is never parsed here. The caller owns placement — this component never looks at
  * neighbouring rows, timestamps or array positions. */
 export function AgentStatusAnnotation({ status }: { status: AgentStatusView }) {
+  const tx = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const facets = agentStatusFacets(status);
-  const summary = agentStatusSummary(status);
-  return <div className={css.root} role="note" aria-label="Agent Status" data-agent-status={status.status_message_id}>
+  const facets = agentStatusFacets(tx, status);
+  const summary = agentStatusSummary(tx, status);
+  return <div className={css.root} role="note" aria-label={tx('agent:agent-status.agent-status')} data-agent-status={status.status_message_id}>
     <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
-      icon={<IconContextInjectionOutline16 size={14} />} title="Agent Status" open={expanded} expandable={facets.length > 0} expandOnRowClick
+      icon={<IconContextInjectionOutline16 size={14} />} title={tx('agent:agent-status.agent-status')} open={expanded} expandable={facets.length > 0} expandOnRowClick
       keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
       collapsedContent={summary ? <><span className={css.sep} aria-hidden/><span className={css.summary}>{summary}</span></> : undefined}>
       <dl className={css.sections}>{facets.map(facet => <div key={facet.kind} className={css.section} data-status-section={facet.kind}>

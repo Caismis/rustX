@@ -1,3 +1,5 @@
+import { traceStateLabel } from '../../bindings/status-labels';
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
@@ -24,12 +26,13 @@ export interface TrajectoryProps {
 
 /** Native owner selection stays in the read cache; display/facet lives locally. */
 export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail }: TrajectoryProps) {
+  const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<string>>(new Set());
   const [calls, setCalls] = useState<ReadonlySet<string>>(new Set());
   const [selection, setSelection] = useState<TrajectorySelection | undefined>(() => {
-    const item = cache.selection ? preferredItem(trajectoryItems(projectTrajectory(cache.page.records)), cache.selection.id) : undefined;
+    const item = cache.selection ? preferredItem(trajectoryItems(tx, projectTrajectory(tx, cache.page.records)), cache.selection.id) : undefined;
     return item ? selectionOf(item) : undefined;
   });
   const [structure, setStructure] = useState<StructuralDisplayItem | undefined>(undefined);
@@ -43,13 +46,13 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const pendingFocus = useRef<string | undefined>(undefined);
   const prepend = useRef<{ first: string | undefined; item: FocusableDisplayItem; offset: number } | null>(null);
   const records = cache.page.records;
-  const projection = useMemo(() => projectTrajectory(records), [records]);
-  const allItems = useMemo(() => trajectoryItems(projection, cache.page.next_cursor), [projection, cache.page.next_cursor]);
+  const projection = useMemo(() => projectTrajectory(tx, records), [tx, records]);
+  const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(projection, query), [projection, query]);
-  const rows = useMemo(() => visibleItems(allItems, records, collapsedTurns, calls, matches), [allItems, records, collapsedTurns, calls, matches]);
+  const rows = useMemo(() => visibleItems(tx, allItems, records, collapsedTurns, calls, matches), [tx, allItems, records, collapsedTurns, calls, matches]);
   const selectionItems = useMemo(() => displayUniverse(allItems, rows), [allItems, rows]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
-  const timelineModel = useMemo(() => trajectoryTimeline(projection, mode), [projection, mode]);
+  const timelineModel = useMemo(() => trajectoryTimeline(tx, projection, mode), [tx, projection, mode]);
   // Timeline focus is valid only within the Trace read domain that created it.
   // Within one epoch (prepend, lifecycle refresh) it persists as native record
   // identities, so renumbered Turns and moved coordinates keep its ownership.
@@ -196,16 +199,16 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     : selected && selection
       ? <TrajectoryInspector record={selected} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error} selection={selection} onFacet={facet => setSelection(current => current ? { ...current, facet } : current)} onLoadDetail={onLoadDetail} onClose={close} />
       : null;
-  return <section ref={root} className={css.root} aria-label="Trajectory" onFocusCapture={event => {
+  return <section ref={root} className={css.root} aria-label={tx('trajectory:trajectory.trajectory')} onFocusCapture={event => {
     focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
   }}>
-    <div className={css.toolbar} role="toolbar" aria-label="Trajectory controls">
-      <Button size="sm" aria-pressed={mode === 'duration' || mode === 'actual'} onClick={() => { setMode(mode === 'duration' ? 'sequence' : mode === 'actual' ? 'time' : mode === 'time' ? 'actual' : 'duration'); setRange(null); }}>Duration</Button>
-      <Button size="sm" aria-pressed={mode === 'time' || mode === 'actual'} onClick={() => { setMode(mode === 'actual' ? 'duration' : mode === 'time' ? 'sequence' : mode === 'duration' ? 'actual' : 'time'); setRange(null); }}>Actual time</Button>
-      <Button size="sm" aria-label={collapsedTurns.size ? 'Expand Turns' : 'Fold Turns'} aria-pressed={collapsedTurns.size > 0} onClick={() => setCollapsedTurns(collapsedTurns.size ? new Set() : new Set(turnIds))}>Turns</Button>
-      <Button size="sm" aria-label={calls.size ? 'Expand Calls' : 'Collapse Calls'} aria-pressed={calls.size > 0} onClick={() => setCalls(calls.size ? new Set() : new Set(callOwners))}>Calls</Button>
-      <Input className={css.search} aria-label="Search loaded Trace" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search loaded history" />
-      {offTail && <Button size="sm" onClick={() => { followsTail.current = true; setOffTail(false); latest(); if (virtualized) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' }); else if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight; }}>Jump to latest</Button>}
+    <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:trajectory.trajectory-controls')}>
+      <Button size="sm" aria-pressed={mode === 'duration' || mode === 'actual'} onClick={() => { setMode(mode === 'duration' ? 'sequence' : mode === 'actual' ? 'time' : mode === 'time' ? 'actual' : 'duration'); setRange(null); }}>{tx('trajectory:trajectory.duration')}</Button>
+      <Button size="sm" aria-pressed={mode === 'time' || mode === 'actual'} onClick={() => { setMode(mode === 'actual' ? 'duration' : mode === 'time' ? 'sequence' : mode === 'duration' ? 'actual' : 'time'); setRange(null); }}>{tx('trajectory:trajectory.actual-time')}</Button>
+      <Button size="sm" aria-label={collapsedTurns.size ? tx('trajectory:copy.expand-turns') : tx('trajectory:copy.fold-turns')} aria-pressed={collapsedTurns.size > 0} onClick={() => setCollapsedTurns(collapsedTurns.size ? new Set() : new Set(turnIds))}>{tx('trajectory:copy.turns')}</Button>
+      <Button size="sm" aria-label={calls.size ? tx('trajectory:trajectory.expand-calls') : tx('trajectory:trajectory.collapse-calls')} aria-pressed={calls.size > 0} onClick={() => setCalls(calls.size ? new Set() : new Set(callOwners))}>{' '}{tx('trajectory:trajectory.calls')}</Button>
+      <Input className={css.search} aria-label={tx('trajectory:trajectory.search-loaded-trace')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:trajectory.search-loaded-history')} />
+      {offTail && <Button size="sm" onClick={() => { followsTail.current = true; setOffTail(false); latest(); if (virtualized) virtualizer.scrollToIndex(rows.length - 1, { align: 'end' }); else if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight; }}>{tx('trajectory:trajectory.jump-to-latest')}</Button>}
     </div>
     {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
@@ -215,8 +218,8 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       onSelect={id => { const item = preferredItem(allItems, id); if (!item) return; setCollapsedTurns(current => { const next = new Set(current); if (item.record.location.attempt_id) next.delete(item.record.location.attempt_id); return next; }); setCalls(current => { const matching = matchingCalls(records); return new Set([...current].filter(owner => !matching.get(owner)?.some(record => record.id === item.owner_record_id))); }); if (matches && !matches.has(item.display_key)) setQuery(''); followsTail.current = false; pendingFocus.current = item.display_key; select(item); }} />
     <Group className={css.split} orientation={narrow ? 'vertical' : 'horizontal'}>
       <Panel id="ledger" minSize={narrow ? '160px' : '340px'} className={css.ledgerPanel}>
-        <div className={css.columns} aria-hidden="true"><span>Event</span><span>Content</span></div>
-        <div ref={viewport} className={css.ledger} data-trajectory-scroll="" role="table" aria-label="Trace ledger" aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }} onScroll={event => {
+        <div className={css.columns} aria-hidden="true"><span>{tx('trajectory:trajectory.event')}</span><span>{tx('trajectory:trajectory.content')}</span></div>
+        <div ref={viewport} className={css.ledger} data-trajectory-scroll="" role="table" aria-label={tx('trajectory:trajectory.trace-ledger')} aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }} onScroll={event => {
           const pane = event.currentTarget;
           followsTail.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2;
           setOffTail(!followsTail.current);
@@ -224,7 +227,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
           <div style={virtualized ? { height: virtualizer.getTotalSize(), position: 'relative' } : { position: 'relative' }}>
             {renderedGroups.map(group => <div key={virtualized ? 'virtual-canvas' : group[0]?.row.display_key} style={virtualized ? { height: '100%' } : undefined}>{group.map(({ row, index, start }) => {
               const style = { height: heightOf(row), ...(virtualized ? { position: index === activeStickyIndex.current ? 'sticky' as const : 'absolute' as const, top: 0, left: 0, width: '100%', ...(index === activeStickyIndex.current ? {} : { transform: `translateY(${start}px)` }) } : {}) };
-              if (row.type === 'HistoryBoundary') return <div key={row.display_key} data-display-key={row.display_key} className={css.loadRow} style={style}><Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>{cache.loading ? 'Loading earlier records…' : 'Load earlier records'}</Button></div>;
+              if (row.type === 'HistoryBoundary') return <div key={row.display_key} data-display-key={row.display_key} className={css.loadRow} style={style}><Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>{cache.loading ? tx('trajectory:trajectory.loading-earlier-records') : tx('trajectory:trajectory.load-earlier-records')}</Button></div>;
               const activate = () => select(row);
               const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
                 if (event.target !== event.currentTarget) return;
@@ -233,40 +236,40 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
                 if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]; if (next && next.type !== 'HistoryBoundary') { pendingFocus.current = next.display_key; select(next); } }
               };
               if (!isInspectable(row)) return <div key={row.display_key} data-display-key={row.display_key} data-display-type={row.type} data-anchor={row.anchor_record_id} data-attempt={row.attempt_id} data-step={row.type === 'GroupHeader' ? row.step_id : undefined} data-structural="true" data-selected={activeKey === row.display_key || undefined}
-                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={row.label} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown} title={row.type === 'GroupHeader' ? row.label : `${row.label} · loaded-window ordinal`}>
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={row.label} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown} title={row.type === 'GroupHeader' ? row.label : tx('trajectory:copy.value-loaded-window-ordinal', { p0: row.label })}>
                 <span role="cell" className={css.event}>
-                  {row.type === 'TurnHeader' && <button className={css.foldToggle} aria-label={`${collapsedTurns.has(row.attempt_id) ? 'Expand' : 'Fold'} ${row.label}`} onClick={event => { event.stopPropagation(); toggleTurn(row.attempt_id); }}>{collapsedTurns.has(row.attempt_id) ? '▸' : '▾'}</button>}
+                  {row.type === 'TurnHeader' && <button className={css.foldToggle} aria-label={tx('trajectory:trajectory.value-value', { p0: collapsedTurns.has(row.attempt_id) ? tx('trajectory:trajectory.expand') : tx('trajectory:copy.fold'), p1: row.label })} onClick={event => { event.stopPropagation(); toggleTurn(row.attempt_id); }}>{collapsedTurns.has(row.attempt_id) ? '▸' : '▾'}</button>}
                   <span className={css.kindTag} data-kind={row.type === 'GroupHeader' ? 'step' : 'attempt'}>{row.label}</span>
                 </span>
                 <div role="cell" className={css.content}>
-                  {row.type === 'TurnHeader' && collapsedTurns.has(row.attempt_id) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === row.attempt_id && r.state !== 'completed').map(r => r.state).join(' · ')}</span>}
-                  {row.type === 'TurnHeader' && row.native_record && row.native_record.state !== 'completed' && <span className={css.state}>{row.native_record.state}</span>}
+                  {row.type === 'TurnHeader' && collapsedTurns.has(row.attempt_id) && <span className={css.preview}>{records.filter(r => r.location.attempt_id === row.attempt_id && r.state !== 'completed').map(r => traceStateLabel(tx, r.state)).join(' · ')}</span>}
+                  {row.type === 'TurnHeader' && row.native_record && row.native_record.state !== 'completed' && <span className={css.state}>{traceStateLabel(tx, row.native_record.state)}</span>}
                 </div>
               </div>;
               const record = row.record;
               const warning = record.state !== 'completed' && (row.type === 'RecordRow' || row.type === 'RequestBoundary');
               const truncated = row.type === 'ContextRow' ? row.context.truncated || row.context.preview?.truncated : row.type === 'SystemPromptCell' ? record.request?.system_prompt.preview?.truncated : record.truncated || record.preview?.truncated;
               return <div key={row.display_key} data-display-key={row.display_key} data-owner={row.owner_record_id} data-trace-id={record.id} data-display-type={row.type} data-kind={record.kind} data-state={record.state} data-selected={activeKey === row.display_key || undefined} data-timeline-focus={focusedIds ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
-                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={`${row.label} · ${row.preview || record.state}`} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown}>
+                role="row" aria-rowindex={index + 1} aria-selected={activeKey === row.display_key} aria-label={tx('trajectory:trajectory.value-value-2', { p0: row.label, p1: row.preview || traceStateLabel(tx, record.state) })} tabIndex={0} className={css.record} style={style} onClick={activate} onKeyDown={onKeyDown}>
                 <span role="cell" className={css.event}>
                   <span className={css.kindTag} data-kind={row.type === 'SystemPromptCell' ? 'system' : row.type === 'ContextRow' ? 'context' : record.kind}>
                     {row.type === 'RecordRow' && <span className={css.kindIcon}><CellIcon kind={record.kind} /></span>}
-                    <span>{row.type === 'SystemPromptCell' ? 'SYSTEM' : row.type === 'ContextRow' ? 'CONTEXT' : row.label}</span>
+                    <span>{row.type === 'SystemPromptCell' ? tx('trajectory:trajectory.system') : row.type === 'ContextRow' ? tx('trajectory:trajectory.context') : row.label}</span>
                   </span>
                 </span>
                 <div role="cell" className={css.content}>
-                  {row.type === 'SystemPromptCell' ? <SystemPromptCell cell={row} /> : row.type === 'RecordRow' ? <CellContent record={record} /> : <span className={css.preview}>{row.type === 'ContextRow' ? `${row.label} · ${row.preview || 'Empty'}` : row.preview}</span>}
-                  {row.type === 'RequestBoundary' && (record.request?.retry_number ?? 0) > 0 && <span className={css.relation}>retry / recovery {record.request?.retry_number}</span>}
-                  {row.type === 'CollapsedCallSummary' && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>Expand Calls</button>}
-                  {row.type === 'RecordRow' && record.calls.length > 0 && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>{calls.has(record.id) ? 'Expand' : 'Collapse'} Calls</button>}
-                  {warning && <span className={css.state}>{record.state}</span>}
-                  {truncated && <span className={css.state}>Truncated</span>}
-                  {row.type === 'RequestBoundary' && record.request?.context_truncated && <span className={css.state}>Context history truncated</span>}
+                  {row.type === 'SystemPromptCell' ? <SystemPromptCell cell={row} /> : row.type === 'RecordRow' ? <CellContent record={record} /> : <span className={css.preview}>{row.type === 'ContextRow' ? tx('trajectory:trajectory.value-value-2', { p0: row.label, p1: row.preview || tx('trajectory:trajectory-inspector.empty') }) : row.preview}</span>}
+                  {row.type === 'RequestBoundary' && (record.request?.retry_number ?? 0) > 0 && <span className={css.relation}>{tx('trajectory:trajectory.retry-recovery')} {record.request?.retry_number}</span>}
+                  {row.type === 'CollapsedCallSummary' && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>{tx('trajectory:trajectory.expand-calls')}</button>}
+                  {row.type === 'RecordRow' && record.calls.length > 0 && <button className={css.collapsed} onClick={event => { event.stopPropagation(); toggleCalls(record.id); }}>{calls.has(record.id) ? tx('trajectory:trajectory.expand') : tx('trajectory:trajectory.collapse')} {tx('trajectory:trajectory.calls')}</button>}
+                  {warning && <span className={css.state}>{traceStateLabel(tx, record.state)}</span>}
+                  {truncated && <span className={css.state}>{tx('trajectory:trajectory.truncated')}</span>}
+                  {row.type === 'RequestBoundary' && record.request?.context_truncated && <span className={css.state}>{tx('trajectory:trajectory.context-history-truncated')}</span>}
                 </div>
               </div>;
             })}</div>)}
           </div>
-          {!rows.length && <p className={css.note}>{matches ? 'No loaded item matches this search.' : 'No records in the loaded window.'}</p>}
+          {!rows.length && <p className={css.note}>{matches ? tx('trajectory:trajectory.no-loaded-item-matches-this-search') : tx('trajectory:trajectory.no-records-in-the-loaded-window')}</p>}
         </div>
       </Panel>
       {inspector && <><Separator className={css.separator} /><Panel id="inspector" minSize={narrow ? '180px' : '320px'} defaultSize={narrow ? '48%' : `${Math.min(440, Math.max(320, width * .38))}px`} maxSize={narrow ? '70%' : `${Math.max(320, width - 346)}px`}>

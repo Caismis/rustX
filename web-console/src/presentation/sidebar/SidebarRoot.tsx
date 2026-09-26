@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 /**
  * Sidebar shell: column geometry and global panel navigation.
@@ -45,7 +46,7 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
   settings: (wide: boolean) => ReactNode; footer?: (wide: boolean) => ReactNode;
   panels?: readonly { id: string; label: string; icon: ReactNode; active?: boolean; select: () => void }[];
 }) {
-  const t = (key: string) => ({ 'toggle.open': 'Expand Sidebar', 'toggle.collapse': 'Collapse Sidebar', 'session.new.label': 'New Conversation', 'session.new': 'New Conversation', 'brand.localBuild': 'rustX', 'panels.label': 'Global panels' }[key] ?? key);
+  const tx = useTranslation();
   // Wide content stays mounted while the collapse animates (fading via
   // .collapsed .wide), unmounts at settle, and remounts right away on expand.
   const [settled, setSettled] = useState(collapsed)
@@ -116,11 +117,11 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
   // (the expand affordance, figma sidebar-hover flow). Expanded it is a plain
   // panel icon.
   const toggle = (
-    <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
+    <Tooltip label={collapsed ? tx('sidebar:toggle.open') : tx('sidebar:toggle.collapse')} delayMs={500}>
       <button
         type="button"
         className={clsx(css.iconButton, css.toggle)}
-        aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
+        aria-label={collapsed ? tx('sidebar:toggle.open') : tx('sidebar:toggle.collapse')}
         onClick={() => { toggleSidebar() }}
       >
         {!wide && (
@@ -138,7 +139,7 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
   return (
     <div
       ref={column}
-      aria-label="Sidebar"
+      aria-label={tx('sidebar:sidebar-root.sidebar')}
       data-sidebar-wide={wide}
       className={clsx(
         css.root, !wide && css.collapsed, !wide && everWide.current && css.railIn,
@@ -158,7 +159,7 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
           <button
             type="button"
             className={clsx(css.brand, css.wide)}
-            aria-label={t('session.new.label')}
+            aria-label={tx('sidebar:session.new.label')}
             onClick={() => { startSession() }}
           >
             <span className={css.brandIdentity} aria-hidden="true">
@@ -175,20 +176,20 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
       </div>
 
       {/* Expanded, the button carries its own label — tooltip only on the rail. */}
-      <Tooltip label={t('session.new.label')} delayMs={500} disabled={wide}>
+      <Tooltip label={tx('sidebar:session.new.label')} delayMs={500} disabled={wide}>
         <button
           type="button"
           className={css.newSession}
-          aria-label={t('session.new.label')}
+          aria-label={tx('sidebar:session.new.label')}
           onClick={() => { startSession() }}
         >
           <IconNewChatOutline16 size={wide ? 14 : 18} />
-          {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{t('session.new')}</span>}
+          {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{tx('sidebar:session.new')}</span>}
         </button>
       </Tooltip>
 
       {panels.length > 0 && (
-        <nav className={css.panelList} aria-label={t('panels.label')}>
+        <nav className={css.panelList} aria-label={tx('sidebar:panels.label')}>
           {panels.map(panel => <Tooltip key={panel.id} label={panel.label} disabled={wide}>
             <button type="button" className={clsx(css.panelRow, panel.active && css.panelActive)} aria-label={panel.label} aria-current={panel.active ? 'page' : undefined} onClick={panel.select}>
               <span className={css.panelGlyph} aria-hidden>{panel.icon}</span>{wide && <span className={clsx(css.panelTitle, css.wide)}>{panel.label}</span>}

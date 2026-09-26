@@ -1,3 +1,4 @@
+import { translator, displayText } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -34,7 +35,7 @@ it.each([
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'workspace', resource_count: 2 } }, 'Retained workspaces'],
   [{ status: 'blocked', session_id: 'private-id', reason: { kind: 'invalid_ownership' } }, 'could not be verified'],
 ] as const)('preserves the native deletion outcome without raw DTOs: %j', (result, copy) => {
-  const notice = sessionDeletionNotice(result as RuntimeClientSessionDeletionResult);
+  const notice = displayText(translator('en'), sessionDeletionNotice(result as RuntimeClientSessionDeletionResult));
   expect(notice).toContain(copy); expect(notice).not.toContain('private-id');
 });
 function canonicalUser(content: string | null): RuntimeClientSnapshot {
@@ -46,7 +47,7 @@ it.each([
   [{ preview: 'Native first-message preview' }, 'Native first-message preview'],
   [{ name: 'Manual name', preview: 'Native preview' }, 'Manual name'],
 ])('displays catalog metadata without generating a title: %j', (summary, expected) => {
-  expect(sessionDisplayTitle(summary)).toBe(expected);
+  expect(sessionDisplayTitle(translator('en'), summary)).toBe(expected);
 });
 
 it('uses only the Sidebar for selection; switching preserves concurrent work and Close view releases only its controller', async () => {
@@ -367,7 +368,7 @@ it('unscoped uncertainty is global, not assigned to every Session; reviewed diag
   await act(async () => { server.socket.close(); await lost; await server.connect(); });
   const state = server.client.getSnapshot();
   expect(state.uncertain[0].sessionId).toBeUndefined();
-  for (const id of ['A', 'B']) expect(deriveSessionProductState(state, state.views[id]).status).toBe('idle');
+  for (const id of ['A', 'B']) expect(deriveSessionProductState(translator('en'), state, state.views[id]).status).toBe('idle');
   expect(screen.getByText(/A global operation needs verification/)).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
   expect(JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toEqual([]);

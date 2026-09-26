@@ -1,9 +1,10 @@
+import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v23';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { agentStatusAnchor, agentStatusPlacement, isAgentStatusContext, statusesAt } from '../src/bindings/agent-status';
+import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isAgentStatusContext, statusesAt } from '../src/bindings/agent-status';
 import { todoDock } from '../src/bindings/composer-context';
 import { replaceTranscript } from '../src/client/transcript';
 import { Server, snapshot } from './fixture';
@@ -239,4 +240,23 @@ describe('cold attach, live folding and resync converge on one placement', () =>
     expect((history.parentElement as HTMLElement).querySelector('pre')?.textContent).toContain('rendered prose s1');
     expect(within(panel).queryByText(/Tools, Subagents, Workflows and Agent status/)).toBeNull();
   });
+});
+
+
+it('background Agent Status translates every lifecycle label while preserving exact native Tool identity', () => {
+  const tool = 'native.Tool /路径  exact';
+  const labels = {
+    starting: ['starting', '启动中'], running: ['running', '运行中'], cancelling: ['cancelling', '取消中'],
+    publishing_terminal: ['publishing terminal', '发布结束状态中'], succeeded: ['succeeded', '成功'],
+    failed: ['failed', '失败'], denied: ['denied', '已拒绝'], cancelled: ['cancelled', '已取消'],
+    timed_out: ['timed out', '已超时'], outcome_unknown: ['outcome unknown', '结果未知'],
+  } as const;
+  for (const state of Object.keys(labels) as (keyof typeof labels)[]) {
+    const composition = status('status-native', fresh('u1'), [{ type: 'background_executions', executions: [{ execution_id: 'e-native', tool_id: 'native-id', tool_name: tool, state }], omitted_count: 0 }]);
+    const before = structuredClone(composition);
+    for (const [index, locale] of (['en', 'zh'] as const).entries()) {
+      expect(agentStatusFacets(translator(locale), composition)[0].values).toEqual([`${tool} · ${labels[state][index]}`]);
+    }
+    expect(composition).toEqual(before);
+  }
 });

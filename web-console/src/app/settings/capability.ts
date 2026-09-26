@@ -1,3 +1,4 @@
+import type { Translate } from '../../locale/translation';
 import type { ResourceFamily } from '../../../../protocol/app-server/v23';
 import type { ExtensionFamily } from './projection';
 
@@ -106,8 +107,8 @@ export function toolSourceId(family: ResourceFamily, name: string): string {
  * units rather than resource documents. */
 export type NativeExtension = 'todo' | 'goal' | 'agent_status';
 export const nativeExtensions: readonly NativeExtension[] = ['todo', 'goal', 'agent_status'];
-export function nativeExtensionLabel(extension: NativeExtension): string {
-  return extension === 'todo' ? 'Todo' : extension === 'goal' ? 'Goal' : 'Agent Status';
+export function nativeExtensionLabel(tx: Translate, extension: NativeExtension): string {
+  return extension === 'todo' ? tx('settings:copy.todo') : extension === 'goal' ? tx('settings:copy.goal') : tx('settings:extension-detail.agent-status');
 }
 
 /** The User-only semantic units. App Server process policy is assigned from the
