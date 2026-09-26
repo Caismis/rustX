@@ -36,11 +36,16 @@ function row(type: string, id = 'trace:0') { return document.querySelector<HTMLE
 const structureInspector = () => screen.getByRole('complementary', { name: 'Trace structure inspector' });
 /** The value beside one fact label of the structural inspector. */
 const fact = (label: string) => within(structureInspector()).getByText(label, { selector: 'dt' }).nextElementSibling?.textContent;
-/** Drag a Timeline interval in percent of a fixed 100px canvas. */
-function dragTimeline(from: number, to: number) {
+/** The current Timeline canvas, measured as a fixed 100px so clientX is a percent. */
+function timelineCanvas() {
   const canvas = screen.getByLabelText('Timeline navigation: arrow keys pan, Escape clears focus');
   canvas.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 40, width: 100, height: 40, toJSON: () => ({}) });
   canvas.setPointerCapture = () => {};
+  return canvas;
+}
+/** Drag a Timeline interval in percent of the canvas. */
+function dragTimeline(from: number, to: number) {
+  const canvas = timelineCanvas();
   fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: from });
   fireEvent.pointerMove(canvas, { pointerId: 1, clientX: to });
   fireEvent.pointerUp(canvas, { pointerId: 1, clientX: to });
@@ -785,6 +790,7 @@ it('407: Timeline focus keeps native identity across prepend and lifecycle refre
   dragTimeline(30, 45);
   expect(timelineFocusOf()).toEqual({ 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
   const before = focusOverlay()!.style.left;
+  const canvas = timelineCanvas();
   const prepended = prependTrace(initial, { records: epochRecords(9), next_cursor: null });
   expect(prepended.epoch).toBe(initial.epoch);
   view.rerender(<Trajectory cache={prepended} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
@@ -792,11 +798,14 @@ it('407: Timeline focus keeps native identity across prepend and lifecycle refre
   expect(timelineFocusOf()).toEqual({ 'trace:9': 'outside', 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
   expect(screen.getByRole('row', { name: 'Turn 3' }).getAttribute('data-attempt')).toBe('attempt-1');
   expect(focusOverlay()!.style.left).not.toBe(before);
+  // The same epoch keeps the same Timeline instance: no coordinate state is reset.
+  expect(timelineCanvas()).toBe(canvas);
   const refreshed = refreshTrace(prepended, { records: [{ ...prepended.page.records[4]!, state: 'failed' }], next_cursor: null });
   expect(refreshed.epoch).toBe(initial.epoch);
   view.rerender(<Trajectory cache={refreshed} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   expect(timelineFocusOf()).toEqual({ 'trace:9': 'outside', 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
   expect(focusOverlay()).not.toBeNull();
+  expect(timelineCanvas()).toBe(canvas);
 });
 
 it('407: a Trace epoch rebase retires Timeline focus even when record identities recur', () => {
@@ -842,5 +851,79 @@ it('407: Jump to latest rebases the read domain and leaves no stale Timeline dim
   expect(epochs.at(-1)).toBe(2);
   expect([...document.querySelectorAll<HTMLElement>('[data-owner]')].map(el => el.dataset.owner)).toEqual(['trace:4', 'trace:5', 'trace:6', 'trace:7']);
   expect(document.querySelectorAll('[data-timeline-focus]')).toHaveLength(0);
+  expect(focusOverlay()).toBeNull();
+});
+
+const domainOf = () => { const canvas = timelineCanvas(); return [canvas.dataset.domainStart, canvas.dataset.domainEnd]; };
+
+it.each([
+  ['unrelated', epochRecords(20, 21, 22, 23)],
+  ['recurring', epochRecords(0, 1, 2, 3)],
+] as const)('407: an in-flight E1 Timeline drag cannot commit into E2 with %s record IDs and the same numeric domain', (_, next) => {
+  const select = vi.fn();
+  const initial = cacheOf(epochRecords(0, 1, 2, 3));
+  const render = (cache: TraceCache) => <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={select} onLoadDetail={noop} />;
+  const view = show(initial);
+  view.rerender(render(initial));
+  const domain = domainOf();
+  const stale = timelineCanvas();
+  fireEvent.pointerDown(stale, { button: 0, pointerId: 1, clientX: 30 });
+  fireEvent.pointerMove(stale, { pointerId: 1, clientX: 45 });
+  // The uncommitted draft is visible, but no focus exists yet.
+  expect(focusOverlay()).not.toBeNull();
+  expect(document.querySelectorAll('[data-timeline-focus]')).toHaveLength(0);
+  const replaced = replaceTrace({ records: [...next], next_cursor: null }, initial);
+  expect(replaced.epoch).toBe(initial.epoch + 1);
+  view.rerender(render(replaced));
+  // Identical projected coordinates: a coordinate-derived reset key cannot tell E1 from E2.
+  expect(domainOf()).toEqual(domain);
+  expect(focusOverlay()).toBeNull();
+  // The old gesture's release reaches both the detached E1 canvas and the E2 canvas under the pointer.
+  fireEvent.pointerUp(stale, { pointerId: 1, clientX: 45 });
+  fireEvent.pointerUp(timelineCanvas(), { pointerId: 1, clientX: 45 });
+  expect(focusOverlay()).toBeNull();
+  expect(document.querySelectorAll('[data-timeline-focus]')).toHaveLength(0);
+  expect(document.querySelectorAll('[aria-selected="true"]')).toHaveLength(0);
+  expect(screen.queryByRole('complementary')).toBeNull();
+  expect(select).not.toHaveBeenCalled();
+  // Only a gesture begun in E2 can focus E2.
+  dragTimeline(30, 45);
+  const ids = next.map(record => record.id);
+  expect(timelineFocusOf()).toEqual({ [ids[0]!]: 'outside', [ids[1]!]: 'inside', [ids[2]!]: 'outside', [ids[3]!]: 'outside' });
+});
+
+it('407: a pressed E1 span cannot select a recurring E2 record after a rebase', () => {
+  const select = vi.fn(); const load = vi.fn();
+  const initial = cacheOf(epochRecords(0, 1, 2, 3));
+  const render = (cache: TraceCache) => <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={select} onLoadDetail={load} />;
+  const view = show(initial);
+  view.rerender(render(initial));
+  timelineCanvas();
+  fireEvent.pointerDown(document.querySelector('[data-record-id="trace:1"]')!, { button: 0, pointerId: 1, clientX: 30 });
+  view.rerender(render(replaceTrace({ records: epochRecords(0, 1, 2, 3), next_cursor: null }, initial)));
+  fireEvent.pointerUp(timelineCanvas(), { pointerId: 1, clientX: 30 });
+  expect(select).not.toHaveBeenCalled(); expect(load).not.toHaveBeenCalled();
+  expect(document.querySelectorAll('[aria-selected="true"]')).toHaveLength(0);
+});
+
+it('407: Timeline zoom, pan and hover belong to the Trace epoch even across an identical numeric domain', () => {
+  // Eight sequence spans: large enough to zoom above the minimum viewport span.
+  const initial = cacheOf(epochRecords(0, 1, 2, 3, 4, 5, 6, 7));
+  const view = show(initial);
+  const hint = () => screen.getByLabelText('Timing overview').querySelector(':scope > p')!.textContent;
+  const full = domainOf();
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom timeline in' }));
+  fireEvent.keyDown(timelineCanvas(), { key: 'ArrowRight' });
+  const zoomed = domainOf();
+  expect(zoomed).not.toEqual(full);
+  expect(hint()).toContain('Zoomed');
+  fireEvent.focus(document.querySelector('[data-record-id="trace:1"]')!);
+  expect(hint()).not.toBe('');
+  expect(hint()).not.toContain('Zoomed');
+  // E2 reuses the IDs and the numeric domain; only the epoch differs.
+  const replaced = replaceTrace({ records: epochRecords(0, 1, 2, 3, 4, 5, 6, 7), next_cursor: null }, initial);
+  view.rerender(<Trajectory cache={replaced} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(domainOf()).toEqual(full);
+  expect(hint()).toBe('');
   expect(focusOverlay()).toBeNull();
 });

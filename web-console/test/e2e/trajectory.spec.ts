@@ -243,6 +243,53 @@ test('407: virtual sticky Turn and drag focus retain native ownership through pr
 });
 
 for (const width of [1440, 390]) {
+  test(`407: Timeline gesture and viewport cannot cross a Trace epoch at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?long');
+    const ledger = page.getByRole('table', { name: 'Trace ledger' });
+    const epoch = page.locator('[data-trace-epoch]');
+    const canvas = page.getByLabel('Timeline navigation: arrow keys pan, Escape clears focus');
+    const jump = page.getByRole('button', { name: 'Jump to latest' });
+    const domain = () => canvas.evaluate(el => [el.getAttribute('data-domain-start'), el.getAttribute('data-domain-end')]);
+    const full = await domain();
+    await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    // Zoom and pan in E1; the latest snapshot has the identical numeric domain.
+    await page.getByRole('button', { name: 'Zoom timeline in' }).click();
+    await canvas.focus(); await page.keyboard.press('ArrowRight');
+    await expect.poll(domain).not.toEqual(full);
+    await jump.click();
+    await expect(epoch).toHaveAttribute('data-trace-epoch', '2');
+    await expect.poll(domain).toEqual(full);
+    // Hold an E1 drag across the rebase and release it only in E2.
+    await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    await expect(jump).toBeVisible();
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + box.width * .35, box.y + 30);
+    await page.mouse.down(); await page.mouse.move(box.x + box.width * .45, box.y + 30);
+    await expect(page.locator('[data-focus-range]')).toHaveCount(1);
+    await expect(ledger.locator('[data-timeline-focus]')).toHaveCount(0);
+    // A DOM click keeps the physical button pressed while the domain is replaced.
+    await jump.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(epoch).toHaveAttribute('data-trace-epoch', '3');
+    await expect(page.locator('[data-focus-range]')).toHaveCount(0);
+    await page.mouse.up();
+    await expect(page.locator('[data-focus-range]')).toHaveCount(0);
+    await expect(ledger.locator('[data-timeline-focus]')).toHaveCount(0);
+    await expect(ledger.locator('[aria-selected="true"]')).toHaveCount(0);
+    await expect(page.getByRole('complementary')).toHaveCount(0);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    // A gesture begun in E3 focuses E3 normally. The toolbar lost its Jump
+    // button, so the canvas may have moved: measure it again.
+    const current = (await canvas.boundingBox())!;
+    await page.mouse.move(current.x + current.width * .35, current.y + 30);
+    await page.mouse.down(); await page.mouse.move(current.x + current.width * .45, current.y + 30); await page.mouse.up();
+    await expect(page.locator('[data-focus-range]')).toHaveCount(1);
+    await expect(ledger.locator('[data-timeline-focus]').first()).toBeAttached();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
+for (const width of [1440, 390]) {
   test(`407: exact native Turn/Step evidence is inspectable by keyboard without detail reads at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');

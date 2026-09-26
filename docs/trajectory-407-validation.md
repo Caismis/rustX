@@ -264,3 +264,50 @@ New or rewritten deterministic regressions (no sleeps):
 | `cargo fmt --all -- --check` | Passed. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Passed; no native edits. |
 | `git diff --check` | Passed. |
+
+## PR #414 review repair: Timeline coordinate state per epoch (2026-09-26)
+
+Starting head `f09fa6ca65abe99576e715b67f15171d7c75e527`; `origin/main`
+`f268175bb8d31010706e7070aae80d2b46b7aced` had not moved.
+
+Root cause: committed focus was fenced by epoch, but `TrajectoryTimeline` kept its
+coordinate-local state (`dragRef`, `panRef`, `draft`, `viewport`, `hover`) across
+a rebase. Its only reset key was the numeric `model.start:model.end`, which two
+epochs can share. A pointerDown/pointerMove in E1 followed by `replaceTrace` and a
+pointerUp committed the E1 interval through the E2 model and epoch. A press on an
+E1 span could likewise select a recurring E2 record.
+
+Repair: `Trajectory` renders `<TrajectoryTimeline key={cache.epoch}>`. The epoch
+owns the Timeline coordinate domain and, through it, every drag/pan/draft/
+viewport/hover state. A rebase remounts the component and drops all of it at once.
+The old instance's handlers and wheel listener go with it, so no E1 gesture can
+reach the E2 callbacks. Committed focus stays in the parent as `{ epoch, ids }`.
+Same-epoch prepend and refresh keep the same Timeline instance, so native-ID focus
+survives while its coordinates move. The same-epoch `domainKey` viewport reset is
+unchanged.
+
+Regressions (no sleeps). Each new one fails when the key is removed:
+
+- Unit: pointerDown → pointerMove → `replaceTrace` → pointerUp (sent to both the
+  detached E1 canvas and the E2 canvas). E2 IDs are either unrelated or recurring,
+  and E1/E2 have an identical numeric domain. Result: no overlay, focus, selection,
+  inspector or `onSelect`, and a new E2 drag focuses normally.
+- Unit: a pressed E1 span released after a rebase selects nothing and reads nothing.
+- Unit: zoom + pan + hover in E1, then rebase onto an identical numeric domain.
+  The full default domain returns and the hint is empty.
+- Unit: prepend/refresh focus tests now also assert the same Timeline instance.
+- Browser, 1440/390px (`?long`): zoom/pan reset across Jump to latest, and a real
+  mouse held across a Jump to latest rebase commits nothing. A fresh E3 gesture
+  focuses normally.
+
+| Command | Result |
+| --- | --- |
+| `pnpm typecheck` | Passed. |
+| `pnpm build` | Passed, including artifact provenance. |
+| `pnpm test` | 55 files / 996 tests passed. |
+| `pnpm exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts` | 2 files / 71 tests passed. |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` | 25 passed. The first run of the new test failed at 390px only because the test reused a canvas box measured before the toolbar lost its Jump button; the test now measures again. |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` | 100 passed, 1 failed. All Trajectory specs passed. The failure is `workspaces.spec.ts`: every assertion in the test body, including `errors == []`, passed. The trace then shows a stackless `TypeError: fetch failed` (ECONNREFUSED) in the `finally` block, after `a.stop()`. That is the known Product Host proxy fetch during context teardown, and it is unrelated to Trajectory. It was recorded as-is, not re-run into a pass. The previous lane on `f09fa6ca` passed 99/99. |
+| `pnpm check:provenance` | 135 source records and 131 notices verified after structural rehash. |
+| `cargo fmt --all -- --check` / `cargo clippy --all-targets --all-features -- -D warnings` | Passed; no native edits. |
+| `git diff --check` | Passed. |

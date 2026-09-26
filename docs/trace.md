@@ -598,7 +598,12 @@ refresh only relocates its visible coordinates. It is owned by the Trace cache
 epoch that created it: any `replaceTrace` rebase (Jump to latest, resynchronizing,
 a disjoint or over-bound refresh) retires it, even when the new domain reuses those
 record IDs, so no stale focus can dim rows without a visible interval. A drag
-that covers no span sets no focus. Timing lanes are Input / Model / Tools. Request generation is counted once,
+that covers no span sets no focus. The Timeline component is keyed by the same
+epoch, so its coordinate-local state (in-flight drag or pan, draft interval,
+zoom/pan viewport, hover) is discarded atomically by a rebase: a gesture begun in
+one epoch can never commit focus or selection into the next, even when both
+epochs project an identical numeric domain or reuse record IDs. Same-epoch
+prepend and refresh keep the same Timeline instance. Timing lanes are Input / Model / Tools. Request generation is counted once,
 never again for canonical Assistant acceptance; Attempt/Step/SYSTEM acquire no
 durations. Parallel domain evidence retains overlap. Mode contracts:
 

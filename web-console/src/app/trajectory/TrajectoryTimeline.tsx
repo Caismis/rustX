@@ -148,7 +148,9 @@ export function TrajectoryTimeline({
     [projection, mode],
   );
 
-  // A rebuilt domain invalidates a viewport expressed in the old one.
+  // A rebuilt domain invalidates a viewport expressed in the old one. This
+  // covers same-epoch projection changes; the parent keys this component by
+  // Trace epoch, so a new read domain replaces every coordinate-local state.
   const domainKey = model === null ? '' : `${model.start}:${model.end}`;
   useEffect(() => { setViewport(null); }, [domainKey, mode]);
 
