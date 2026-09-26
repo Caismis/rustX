@@ -985,8 +985,38 @@ impl WakeGate {
 #[derive(Debug, Default)]
 struct DrainCompletion {
     completed: AtomicBool,
-    result: Mutex<Option<Result<(), ShutdownError>>>,
+    result: Mutex<Option<NativeDrainOutcome>>,
     notify: tokio::sync::Notify,
+}
+
+/// Native physical supervision and logical/durable quiescence are distinct
+/// facts. A publication failure may keep the runtime Draining after all native
+/// owners have positively settled. The child's durable physical receipt must
+/// not lose that proof merely because logical publication failed.
+#[derive(Debug, Clone)]
+struct NativeDrainOutcome {
+    logical: Result<(), ShutdownError>,
+    physical: Result<(), Vec<String>>,
+}
+
+impl NativeDrainOutcome {
+    fn failed(
+        failures: &std::collections::BTreeSet<String>,
+        physical_failures: std::collections::BTreeSet<String>,
+    ) -> Self {
+        Self {
+            logical: Err(ShutdownError::RuntimeOwnedSettlement {
+                detail: aggregate_settlement_failures(failures),
+            }),
+            // Call only after every native supervision boundary. Durable
+            // diagnostics cannot erase that positive physical proof.
+            physical: if physical_failures.is_empty() {
+                Ok(())
+            } else {
+                Err(physical_failures.into_iter().collect())
+            },
+        }
+    }
 }
 
 /// Conservative native idle refusal; no App Server copy of execution state.
@@ -1014,6 +1044,8 @@ enum DrainTrigger {
     RuntimeShutdown,
     /// The parent transport died; interaction requests have no outcome owner.
     ParentLost,
+    /// Child composition is being rolled back before semantic activation.
+    ChildPreparationRollback,
     /// An authoritative MCP physical-settlement failure.
     McpSettlementFailure(String),
 }
@@ -1065,13 +1097,17 @@ impl ManualCompactionCompletion {
 }
 
 impl DrainCompletion {
-    fn complete(&self, result: Result<(), ShutdownError>) {
+    fn complete(&self, result: NativeDrainOutcome) {
         *self.result.lock().expect("drain completion lock poisoned") = Some(result);
         self.completed.store(true, Ordering::Release);
         self.notify.notify_waiters();
     }
 
     async fn wait(&self) -> Result<(), ShutdownError> {
+        self.wait_outcome().await.logical
+    }
+
+    async fn wait_outcome(&self) -> NativeDrainOutcome {
         loop {
             if self.completed.load(Ordering::Acquire) {
                 return self
@@ -1516,6 +1552,7 @@ impl RuntimeInner {
         let mut first = false;
         let mcp_failure = matches!(&trigger, DrainTrigger::McpSettlementFailure(_));
         let parent_lost = matches!(&trigger, DrainTrigger::ParentLost);
+        let preparation_rollback = matches!(&trigger, DrainTrigger::ChildPreparationRollback);
         // Runtime shutdown is only a cancellation contender. The active
         // attempt's AgentCancellation remains the one cause authority, so
         // every runtime-driven interaction settlement must use the winner it
@@ -1535,13 +1572,13 @@ impl RuntimeInner {
             }
             match lifecycle_state {
                 ConversationLifecycleState::Inactive => {
-                    if !mcp_failure {
+                    if !mcp_failure && !preparation_rollback {
                         return Err(ShutdownError::Inactive);
                     }
-                    let transitioned = self.lifecycle.begin_failure_drain();
+                    let transitioned = self.lifecycle.begin_inactive_drain();
                     debug_assert!(
                         transitioned,
-                        "the coordinator lock owns the inactive failure transition"
+                        "the coordinator lock owns the inactive drain transition"
                     );
                     first = true;
                 }
@@ -1735,8 +1772,9 @@ impl RuntimeInner {
         self: &Arc<Self>,
         _completion: Arc<DrainCompletion>,
         interaction_cancel_reason: CancellationReason,
-    ) -> Result<(), ShutdownError> {
+    ) -> NativeDrainOutcome {
         let mut failures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut physical_failures = std::collections::BTreeSet::new();
         // This is the async reliable route boundary for child-owned
         // interactions. It runs after `Running -> Draining` has closed new
         // admission, but before the drain waits for foreground ownership, so
@@ -1805,6 +1843,7 @@ impl RuntimeInner {
             }
             self.lifecycle.wait_for_no_admissions().await;
             if let Err(details) = self.capability.drain_conversation_owned().await {
+                physical_failures.extend(details.iter().cloned());
                 failures.extend(details);
             }
             self.lifecycle.wait_for_no_admissions().await;
@@ -1827,24 +1866,27 @@ impl RuntimeInner {
             if let Some(subagents) = &self.subagents {
                 subagents.wait_recovery_reconciliation().await;
                 for activation_id in subagents.unproven_settlements() {
-                    failures.insert(format!(
-                        "subagent {activation_id}: physical settlement is unresolved"
-                    ));
+                    let detail =
+                        format!("subagent {activation_id}: physical settlement is unresolved");
+                    physical_failures.insert(detail.clone());
+                    failures.insert(detail);
                 }
             }
             if let Some(detail) = self.durability_failure_diagnostic() {
                 failures.insert(format!("durable authority: {detail}"));
             }
             if let Some(detail) = self.lock_state().mcp_settlement_failure.clone() {
+                physical_failures.insert(detail.clone());
                 failures.insert(detail);
             }
             if !failures.is_empty() {
-                return Err(ShutdownError::RuntimeOwnedSettlement {
-                    detail: aggregate_settlement_failures(&failures),
-                });
+                return NativeDrainOutcome::failed(&failures, physical_failures);
             }
             if self.lifecycle.mark_quiescent() {
-                return Ok(());
+                return NativeDrainOutcome {
+                    logical: Ok(()),
+                    physical: Ok(()),
+                };
             }
         }
     }
@@ -3486,11 +3528,10 @@ impl ConversationRuntime {
         // the runtime-owned `Inactive` lifecycle and is refused. This is
         // the deterministic total-order point against any standalone child
         // ownership commit that won the race before the bind. That commit
-        // holds the registry mutex through its durable ownership write and
-        // record publication, so this authoritative pristine check blocks
-        // until it finishes and then observes the non-pristine plane — a
-        // live child started outside this runtime's ownership transfer is
-        // never silently adopted.
+        // installs an exact ownership_committing claim before its off-lock
+        // durable write. This pristine check observes that claim or the
+        // published record atomically; it never waits on SQLite or silently
+        // adopts a child started outside this runtime's ownership transfer.
         if let Some(subagents) = &config.subagents
             && !subagents.is_pristine()
         {
@@ -5546,13 +5587,27 @@ impl ConversationRuntime {
         Ok(())
     }
 
-    /// Reuses the native shutdown owner after parent loss without fabricating
-    /// human interaction settlement. Physical proof is identical to shutdown.
-    pub(crate) async fn shutdown_after_parent_loss(&self) -> Result<(), ShutdownError> {
-        self.inner
-            .begin_drain_internal(DrainTrigger::ParentLost)?
-            .wait()
-            .await
+    /// The child's physical lifetime joins the one native drain and consumes
+    /// only its explicit physical result. Durable publication failure remains
+    /// a logical shutdown error, but cannot erase already-proven containment.
+    /// An inactive composition enters drain directly without ever opening
+    /// semantic admission.
+    pub(crate) async fn settle_child_physical_lifetime(
+        &self,
+        parent_lost: bool,
+    ) -> Result<(), Vec<String>> {
+        let trigger = if !self.is_activated() {
+            DrainTrigger::ChildPreparationRollback
+        } else if parent_lost {
+            DrainTrigger::ParentLost
+        } else {
+            DrainTrigger::RuntimeShutdown
+        };
+        let completion = self
+            .inner
+            .begin_drain_internal(trigger)
+            .map_err(|error| vec![format!("{error:?}")])?;
+        completion.wait_outcome().await.physical
     }
 
     /// Returns a durable read handle for historical Request Snapshots.
@@ -7764,18 +7819,13 @@ mod tests {
     /// typed. The runtime never silently adopts a child started outside its
     /// ownership transfer.
     ///
-    /// Production synchronization: the standalone commit holds the registry
-    /// mutex across its durable ownership write and record publication
-    /// (`with_running_commit` + record creation under one lock), so the
-    /// constructor's post-claim `is_pristine()` blocks until the commit
-    /// finishes and then sees the record.
+    /// Production synchronization: the registry installs the exact committing
+    /// owner before the off-lock durable append. `is_pristine` observes either
+    /// that claim or the committed record, with no empty cut between them.
     ///
-    /// Test hook: the registry's `CommitBoundaryHook` parks the commit
-    /// inside that ownership critical section (mailbox standalone decision
-    /// already crossed, registry mutex held, mailbox still unbound). The
-    /// constructor starts only after the hook is entered, so the forced
-    /// interleaving is: standalone commit in flight -> constructor binds
-    /// mailbox -> commit publishes -> post-claim check rejects.
+    /// The commit hook parks after standalone arbitration, before `SQLite`.
+    /// Construction must reject while the hook is still parked, proving both
+    /// ownership exclusion and absence of a registry I/O lock.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn a_standalone_subagent_commit_winning_the_transfer_race_rejects_construction() {
@@ -7802,7 +7852,7 @@ mod tests {
         subagents.push_staged_override(staged);
 
         // The standalone commit task: prepares privately and parks inside
-        // the ownership-commit critical section (the CommitBoundaryHook),
+        // the off-lock ownership commit boundary (the CommitBoundaryHook),
         // proving it crossed the mailbox standalone decision with the
         // mailbox still unbound.
         let commit_registry = subagents.clone();
@@ -7849,9 +7899,13 @@ mod tests {
 
         // Start the constructor only now: static domain validation passes,
         // the mailbox is bound to the runtime's Inactive lifecycle, and the
-        // post-claim pristine arbitration blocks on the registry mutex held
-        // by the parked standalone commit.
+        // post-claim pristine arbitration sees the exact committing owner
+        // without waiting for its parked durability operation.
         let constructor = tokio::spawn(async move { ConversationRuntime::new(config) });
+        let construction = tokio::time::timeout(std::time::Duration::from_secs(10), constructor)
+            .await
+            .expect("constructor liveness while durability is parked")
+            .expect("constructor task");
         hook.release();
 
         let commit_outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
@@ -7865,10 +7919,6 @@ mod tests {
                 panic!("no cancellation was requested")
             }
         };
-        let construction = tokio::time::timeout(std::time::Duration::from_secs(10), constructor)
-            .await
-            .expect("constructor liveness")
-            .expect("constructor task");
         assert!(
             matches!(
                 construction,
@@ -9358,6 +9408,10 @@ mod tests {
         );
         assert!(model.requests().is_empty(), "no attempt crossed activation");
 
+        assert!(
+            runtime.settle_child_physical_lifetime(false).await.is_err(),
+            "MCP containment failure must remain physically unproven"
+        );
         let shutdown = runtime.shutdown().await;
         let Err(super::ShutdownError::RuntimeOwnedSettlement { detail }) = shutdown else {
             panic!("shutdown must retain the pre-activation settlement failure: {shutdown:?}");
@@ -14978,6 +15032,11 @@ mod tests {
             "the abandoned publication is honest settlement evidence: {shutdown:?}"
         );
         assert_eq!(
+            runtime.settle_child_physical_lifetime(false).await,
+            Ok(()),
+            "the native runner and callback settled; publication failure cannot erase physical proof",
+        );
+        assert_eq!(
             background.abandoned_publications(),
             vec![execution_id.clone()],
             "the abandoned fact is observable only after the callback returned"
@@ -15562,6 +15621,102 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement() {
+        use crate::runtime::subagent::ipc::{
+            ChildFrame, ChildResultStatus, ParentFrame, ResultFrame, read_parent_frame,
+            write_child_frame,
+        };
+        use crate::runtime::subagent::{
+            ActivationAdmission, AgentActivationOrigin, DurableAgentAuthority,
+            InheritedExecutionPolicy, SubagentStartOutcome, SubagentStartSpec,
+            SubagentTerminalMode,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = ConversationId::generate();
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation.clone()).unwrap(),
+        );
+        let (runtime, _, subagents) = headless_runtime_over_store_with_subagents(
+            &dir,
+            conversation.as_str(),
+            store.clone(),
+            None,
+        )
+        .await;
+        runtime.activate();
+        let (mut staged, mut peer) =
+            stage_runtime_test_child(&dir.path().join("unproven-abandoned"));
+        staged.retain_for_test(
+            crate::runtime::identity::ProcessUnitId::new("unprovable-unit"),
+            i32::MAX,
+        );
+        subagents.push_staged_override(staged);
+        let cancellation = CancellationSignal::new();
+        let prepared = subagents
+            .prepare(
+                &SubagentStartSpec {
+                    authority: DurableAgentAuthority {
+                        resolved: test_resolved_subagent("reviewer"),
+                        execution_policy: InheritedExecutionPolicy::default(),
+                        approval_mode: ApprovalMode::Policy,
+                    },
+                    admission: ActivationAdmission {
+                        task: "unproven child with abandoned publication".into(),
+                        context: None,
+                        origin: AgentActivationOrigin::CreationTool {
+                            tool_call_id: ToolCallId::new("unproven-abandoned-create"),
+                        },
+                        terminal: SubagentTerminalMode::Normal,
+                    },
+                },
+                &cancellation,
+            )
+            .await
+            .unwrap();
+        let SubagentStartOutcome::Accepted(admitted) =
+            subagents.commit(prepared, &cancellation).await.unwrap()
+        else {
+            panic!("owned child");
+        };
+        assert!(matches!(
+            read_parent_frame(&mut peer).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        // The real driver holds an explicitly unprovable retained anchor.
+        // Publication fails only after that driver's physical classification.
+        store.arm_fail_accept_times(3);
+        write_child_frame(
+            &mut peer,
+            &ChildFrame::Result(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                content: Some("semantic answer".into()),
+                diagnostic: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let snapshot = subagents
+            .wait_until_settled(&admitted.subagent_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot.settlement.publication,
+            crate::runtime::subagent::SubagentPublication::Abandoned
+        );
+        assert_eq!(
+            snapshot.settlement.physical,
+            crate::runtime::subagent::SubagentPhysicalSettlement::Unproven
+        );
+        assert_eq!(subagents.unproven_settlements(), vec![admitted.subagent_id]);
+        assert!(
+            runtime.settle_child_physical_lifetime(false).await.is_err(),
+            "abandoning logical publication cannot invent a physical receipt for the containing child"
+        );
+        assert!(runtime.shutdown().await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
         use crate::runtime::subagent::ipc::{
@@ -15703,6 +15858,10 @@ mod tests {
             matches!(error, super::ShutdownError::RuntimeOwnedSettlement { ref detail }
             if detail.contains(admitted.subagent_id.as_str()) && detail.contains("physical settlement is unresolved")),
             "{error:?}"
+        );
+        assert!(
+            runtime.settle_child_physical_lifetime(false).await.is_err(),
+            "the explicit unresolved physical owner forbids a child recovery receipt",
         );
         assert!(!runtime.is_quiescent());
     }

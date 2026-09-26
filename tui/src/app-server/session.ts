@@ -538,6 +538,10 @@ export class AppServerSession {
     return result.job;
   }
 
+  async listJobs() {
+    return this.#client.call("job/list", { target: this.#target }, "jobs");
+  }
+
   async waitJob(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
     const result = await this.#client.call("job/wait", { target: this.#target, job_id: jobId }, "job");
     return result.job;

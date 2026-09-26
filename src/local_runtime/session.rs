@@ -1109,7 +1109,21 @@ impl SessionCatalog {
         runtime_root: &Path,
         state: &SessionPersistentState,
     ) -> Result<Self, SessionError> {
-        let mut catalog = Self::create_unpublished(runtime_root, state)?;
+        Self::create_with_identities(
+            runtime_root,
+            state,
+            Arc::new(crate::runtime::identity::SystemUuidV7Generator),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create_with_identities(
+        runtime_root: &Path,
+        state: &SessionPersistentState,
+        identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
+    ) -> Result<Self, SessionError> {
+        let mut catalog =
+            Self::create_unpublished_with_identities(runtime_root, state, identities)?;
         let planned = catalog.plan_unchanged(&catalog.persisted_session_ids()[0]);
         catalog.commit_planned(planned)?;
         Ok(catalog)

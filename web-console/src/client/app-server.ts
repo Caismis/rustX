@@ -4,7 +4,7 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v25';
+} from '../../../protocol/app-server/v26';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -113,7 +113,27 @@ export function isOutcomeUncertain(error: unknown): boolean {
   return error instanceof OutcomeUncertain || (error instanceof RpcFailure && error.error.data?.kind === "committed_durability_uncertain");
 }
 export class RpcFailure extends Error {
-  constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(error.data?.kind === 'agent_settlement' ? `Agent ${error.data.agent_id} is unavailable; physical settlement, publication, or workspace authority requires explicit repair` : error.data?.kind === 'archive_preparation_failed' ? error.message : `${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
+  constructor(readonly error: Extract<Response, { error: unknown }>['error']) {
+    const data = error.data;
+    let message = `${error.message} (${error.code})${data ? `: ${JSON.stringify(data)}` : ''}`;
+    switch (data?.kind) {
+      case 'agent_not_delivered':
+        message = `Agent ${data.agent_id} was cancelled before input delivery; no input was delivered`;
+        break;
+      case 'agent_delivery_unknown':
+        message = `Agent ${data.agent_id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically`;
+        break;
+      case 'job_publication_abandoned':
+        message = `Job ${data.job_id} terminal publication was abandoned; no durable terminal result is available`;
+        break;
+      case 'agent_settlement':
+        message = `Agent ${data.agent_id} is unavailable; physical settlement, publication, or workspace authority requires explicit repair`;
+        break;
+      case 'archive_preparation_failed':
+        message = error.message;
+    }
+    super(message);
+  }
 }
 /** GoalDomain serializes its bounded rejection into the error message. Only the
  * reason is displayed; its embedded `current` is never adopted as authority. */
@@ -235,7 +255,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v25', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v26', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -253,12 +273,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 25, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 26, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 25 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v25 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 26 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v26 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -994,7 +1014,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v25').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v26').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

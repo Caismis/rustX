@@ -1,12 +1,12 @@
 //! Durable child identity and activation-specific controls. All decisions use
 //! the registry mutex shared by message admission, sealing and settlement.
 use super::{
-    AgentId, CancellationReason, CancellationSignal, ConversationId, GuidanceTicket,
-    NotificationState, PoisonError, RegistryState, ResolvedSubagentSpec, SubagentExecutionProfile,
-    SubagentId, SubagentLifecycle, SubagentObservation, SubagentRecord, SubagentRegistry,
-    SubagentSnapshot, SubagentStartError, SubagentStartOutcome, SubagentStartSpec,
-    SubagentSteerError, SubagentTerminalMode, SubagentTerminalState,
-    SubagentWorkspaceResourceState, SubagentWorkspaceTerminalResource, WorkspaceUnresolvedRecord,
+    AgentId, CancellationReason, CancellationSignal, ConversationId, GuidanceTicket, PoisonError,
+    RegistryState, ResolvedSubagentSpec, SubagentExecutionProfile, SubagentId, SubagentLifecycle,
+    SubagentObservation, SubagentRecord, SubagentRegistry, SubagentSnapshot, SubagentStartError,
+    SubagentStartOutcome, SubagentStartSpec, SubagentSteerError, SubagentTerminalMode,
+    SubagentTerminalState, SubagentWorkspaceResourceState, SubagentWorkspaceTerminalResource,
+    WorkspaceUnresolvedRecord,
 };
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +75,8 @@ struct CapturedAgentActivation {
 
 pub(super) struct ResumeReservation {
     pub activation_id: SubagentId,
+    /// Public identity is withheld until its durable allocation is installed.
+    pub identity_persisted: bool,
     pub origin: super::super::AgentActivationOrigin,
     pub cancellation: CancellationSignal,
     pub completion: tokio::sync::watch::Sender<AdmissionSettlement>,
@@ -83,8 +85,11 @@ pub(super) struct ResumeReservation {
 pub(super) struct ResumeIdentity {
     pub activation_id: SubagentId,
     pub workspace: crate::runtime::workspace::AgentWorkspace,
+    pub workspace_access: std::sync::Mutex<Option<crate::runtime::workspace::AgentWorkspaceAccess>>,
     pub agent_id: AgentId,
     pub conversation_id: ConversationId,
+    pub physical_owner:
+        Option<std::sync::Arc<super::super::physical_recovery::ParentPhysicalLease>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -105,6 +110,8 @@ pub struct AgentSnapshot {
     pub parent_agent_id: AgentId,
     pub agent: String,
     pub state: AgentState,
+    /// The durable current/reserved activation. Admitting can temporarily have
+    /// None while internal arbitration precedes durable identity allocation.
     pub current_activation: Option<SubagentId>,
     pub latest_activation: SubagentId,
     pub observation: SubagentObservation,
@@ -144,6 +151,10 @@ pub enum AgentControlError {
         "Agent is unavailable: physical settlement, canonical publication, or workspace authority requires explicit repair"
     )]
     Settlement,
+    #[error("Delegate delivery did not start; no input was delivered")]
+    NotDelivered,
+    #[error("child input acceptance was not acknowledged; delivery may be unknown")]
+    DeliveryUnknown,
     #[error("activation admission task failed: {0}")]
     Admission(String),
 }
@@ -178,6 +189,7 @@ impl SubagentRegistry {
             current_activation: agent
                 .resuming
                 .as_ref()
+                .filter(|r| r.identity_persisted)
                 .map(|r| r.activation_id.clone())
                 .or_else(|| {
                     (!activation.lifecycle.is_terminal() || !activation.physical_settlement_proven)
@@ -246,14 +258,17 @@ impl SubagentRegistry {
                     .index
                     .get(activation)
                     .ok_or(AgentControlError::Settlement)?];
-                if record.input_accepted {
+                if record.delegate_delivery == super::DelegateDelivery::Accepted {
                     return Ok(());
                 }
                 if record.lifecycle.is_terminal() || record.publication_abandoned {
-                    return Err(AgentControlError::Admission(
-                        "child input acceptance was not acknowledged; delivery may be unknown"
-                            .into(),
-                    ));
+                    return Err(
+                        if record.delegate_delivery == super::DelegateDelivery::Started {
+                            AgentControlError::DeliveryUnknown
+                        } else {
+                            AgentControlError::NotDelivered
+                        },
+                    );
                 }
             }
             changes
@@ -269,7 +284,7 @@ impl SubagentRegistry {
         id: &AgentId,
         interrupt: bool,
     ) -> Result<CapturedAgentActivation, AgentControlError> {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let agent = state
             .agents
             .get(id)
@@ -279,12 +294,19 @@ impl SubagentRegistry {
             return Err(AgentControlError::Settlement);
         }
         if let Some(reservation) = &agent.resuming {
+            let activation_id = reservation.activation_id.clone();
+            let admission = reservation.completion.subscribe();
             if interrupt {
                 reservation.cancellation.cancel();
+                // If canonical ownership is currently committing off-lock,
+                // preserve this exact interruption reason when it publishes.
+                if let Some((_, reason)) = state.ownership_committing.get_mut(&activation_id) {
+                    reason.get_or_insert(CancellationReason::UserRequested);
+                }
             }
             return Ok(CapturedAgentActivation {
-                id: Some(reservation.activation_id.clone()),
-                admission: Some(reservation.completion.subscribe()),
+                id: Some(activation_id),
+                admission: Some(admission),
             });
         }
         let snapshot = Self::agent_snapshot_locked(&state, id).expect("Agent owns activation");
@@ -406,101 +428,111 @@ impl SubagentRegistry {
             .runtime_ownership_admission()
             .await
             .map_err(|error| AgentControlError::Admission(error.to_string()))?;
-        let mut admission_sequence = None;
-        let decision = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            if caller_cancellation.is_cancelled() {
-                return Err(AgentControlError::Start(SubagentStartError::Cancelled));
-            }
-            let agent = state
-                .agents
-                .get(id)
-                .ok_or_else(|| AgentControlError::Unknown(id.clone()))?;
-            let activation_id = agent.latest_activation.clone();
-            let activation = &state.records[state.index[&activation_id]];
-            if agent.unavailable(activation) {
-                return Err(AgentControlError::Settlement);
-            }
-            if agent.resuming.is_some() {
-                return Err(AgentControlError::Stopping);
-            }
-            let decision = match activation.lifecycle {
-                SubagentLifecycle::Running => {
-                    let (sequence, answer, ticket) = self
-                        .admit_guidance_locked(&mut state, &activation_id, message)
-                        .map_err(AgentControlError::Message)?;
-                    Decision::Deliver(activation_id, sequence, answer, ticket)
-                }
-                lifecycle if lifecycle.is_terminal() && activation.physical_settlement_proven => {
-                    let admission =
-                        self.config.mailbox.begin_running_admission().map_err(|_| {
-                            AgentControlError::Start(SubagentStartError::ConversationInactive)
-                        })?;
-                    let activation_id = SubagentId::for_conversation(
-                        &self.config.conversation_id,
-                        state.next_ordinal,
-                    );
-                    state.next_ordinal += 1;
-                    let cancellation = caller_cancellation.child();
-                    let agent = state.agents.get_mut(id).expect("looked up under same lock");
-                    let spec = SubagentStartSpec {
-                        authority: agent.authority.clone(),
-                        admission: super::ActivationAdmission {
-                            task: message.to_owned(),
-                            context: None,
-                            origin,
-                            terminal: SubagentTerminalMode::Normal,
-                        },
-                    };
-                    let receipt = self
-                        .config
-                        .mailbox
-                        .commit_agent_activation_admission(
-                            &ownership,
-                            super::super::admission_event(
+        let mut changes = self.state_version.subscribe();
+        let decision = loop {
+            changes.borrow_and_update();
+            let decision = {
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                if state.goal_idle_committing {
+                    None
+                } else {
+                    if caller_cancellation.is_cancelled() {
+                        return Err(AgentControlError::Start(SubagentStartError::Cancelled));
+                    }
+                    let agent = state
+                        .agents
+                        .get(id)
+                        .ok_or_else(|| AgentControlError::Unknown(id.clone()))?;
+                    let activation_id = agent.latest_activation.clone();
+                    let activation = &state.records[state.index[&activation_id]];
+                    if agent.unavailable(activation) {
+                        return Err(AgentControlError::Settlement);
+                    }
+                    if agent.resuming.is_some() {
+                        return Err(AgentControlError::Stopping);
+                    }
+                    let decision = match activation.lifecycle {
+                        SubagentLifecycle::Running => {
+                            let (sequence, answer, ticket) = self
+                                .admit_guidance_locked(&mut state, &activation_id, message)
+                                .map_err(AgentControlError::Message)?;
+                            Decision::Deliver(activation_id, sequence, answer, ticket)
+                        }
+                        lifecycle
+                            if lifecycle.is_terminal() && activation.physical_settlement_proven =>
+                        {
+                            let admission =
+                                self.config.mailbox.begin_running_admission().map_err(|_| {
+                                    AgentControlError::Start(
+                                        SubagentStartError::ConversationInactive,
+                                    )
+                                })?;
+                            let activation_id = SubagentId::for_conversation(
                                 &self.config.conversation_id,
-                                id,
-                                &activation_id,
-                                &spec.admission.origin,
-                                crate::events::types::AgentActivationAdmissionPhase::Reserved,
-                                self.config.clock.now(),
-                            ),
-                        )
-                        .map_err(|error| AgentControlError::Admission(error.to_string()))?;
-                    admission_sequence = Some(receipt.sequence);
-                    let (completion, _) = tokio::sync::watch::channel(AdmissionSettlement::Pending);
-                    agent.resuming = Some(ResumeReservation {
-                        activation_id: activation_id.clone(),
-                        origin: spec.admission.origin.clone(),
-                        cancellation: cancellation.clone(),
-                        completion: completion.clone(),
-                    });
-                    Decision::Resume(
-                        Box::new(spec),
-                        Box::new(ResumeIdentity {
-                            activation_id,
-                            workspace: agent.workspace.clone(),
-                            agent_id: id.clone(),
-                            conversation_id: agent.conversation_id.clone(),
-                        }),
-                        cancellation,
-                        completion,
-                        admission,
-                    )
+                                state.next_ordinal,
+                            );
+                            state.next_ordinal += 1;
+                            let cancellation = caller_cancellation.child();
+                            let agent =
+                                state.agents.get_mut(id).expect("looked up under same lock");
+                            let spec = SubagentStartSpec {
+                                authority: agent.authority.clone(),
+                                admission: super::ActivationAdmission {
+                                    task: message.to_owned(),
+                                    context: None,
+                                    origin: origin.clone(),
+                                    terminal: SubagentTerminalMode::Normal,
+                                },
+                            };
+                            let (completion, _) =
+                                tokio::sync::watch::channel(AdmissionSettlement::Pending);
+                            agent.resuming = Some(ResumeReservation {
+                                activation_id: activation_id.clone(),
+                                identity_persisted: false,
+                                origin: spec.admission.origin.clone(),
+                                cancellation: cancellation.clone(),
+                                completion: completion.clone(),
+                            });
+                            Decision::Resume(
+                                Box::new(spec),
+                                Box::new(ResumeIdentity {
+                                    activation_id,
+                                    workspace: agent.workspace.clone(),
+                                    workspace_access: std::sync::Mutex::new(None),
+                                    agent_id: id.clone(),
+                                    conversation_id: agent.conversation_id.clone(),
+                                    physical_owner: None,
+                                }),
+                                cancellation,
+                                completion,
+                                admission,
+                            )
+                        }
+                        _ => return Err(AgentControlError::Stopping),
+                    };
+                    let index = state.index[&state.agents[id].latest_activation];
+                    // In-memory reservation is the message/interruption arbitration boundary.
+                    // Its owner task installs recoverable authority and commits Reserved off-lock.
+                    super::publish_snapshot(&mut state, &self.state_version, index);
+                    Some(decision)
                 }
-                _ => return Err(AgentControlError::Stopping),
             };
-            let index = state.index[&state.agents[id].latest_activation];
-            if let Some(sequence) = admission_sequence {
-                super::publish_committed_snapshot(&mut state, &self.state_version, index, sequence);
-            } else {
-                super::publish_snapshot(&mut state, &self.state_version, index);
+            if let Some(decision) = decision {
+                break decision;
             }
-            decision
+            tokio::select! {
+                biased;
+                () = caller_cancellation.cancelled() => {
+                    return Err(AgentControlError::Start(SubagentStartError::Cancelled));
+                }
+                notification = changes.changed() => {
+                    notification.map_err(|_| AgentControlError::Settlement)?;
+                }
+            }
         };
-        drop(ownership);
         match decision {
             Decision::Deliver(activation_id, sequence, answer, _ticket) => {
+                drop(ownership);
                 let outcome = answer.await;
                 self.record_child_decision(&activation_id, sequence, &outcome);
                 #[cfg(test)]
@@ -537,7 +569,7 @@ impl SubagentRegistry {
                     resumed: false,
                 })
             }
-            Decision::Resume(spec, identity, cancellation, completion, admission) => {
+            Decision::Resume(spec, mut identity, cancellation, completion, admission) => {
                 // The owner retains staging/rollback even if the caller drops
                 // its response future after the reservation committed.
                 let registry = self.clone();
@@ -545,7 +577,62 @@ impl SubagentRegistry {
                     let _admission = admission;
                     #[cfg(test)]
                     let mut test_gates = registry.state.lock().unwrap().resume_test_gates.take();
+                    let mut reserved = false;
                     let mut result = async {
+                        #[cfg(test)]
+                        let authority_hook = registry.state.lock().unwrap().authority_install_hook.take();
+                        #[cfg(test)]
+                        if let Some(hook) = authority_hook { hook.wait(); }
+                        // Authority exists before the first durable obligation. The same
+                        // locked open-file description is inherited by the physical child.
+                        identity.physical_owner = Some(std::sync::Arc::new(
+                            super::super::physical_recovery::ParentPhysicalLease::reserve(
+                                &registry.config.spawn.product_root,
+                                &registry.config.spawn.session_id,
+                                &identity.conversation_id,
+                                &identity.activation_id,
+                            ).map_err(|error| SubagentStartError::Durability { detail: error.to_string() })?
+                        ));
+                        {
+                            let mut state = registry.state.lock().unwrap_or_else(PoisonError::into_inner);
+                            let agent = state.agents.get_mut(&identity.agent_id).expect("reserved Agent remains owned");
+                            let reservation = agent.resuming.as_mut().expect("admission owner retains its reservation");
+                            assert_eq!(reservation.activation_id, identity.activation_id);
+                            reservation.identity_persisted = true;
+                            let latest = agent.latest_activation.clone();
+                            let index = state.index[&latest];
+                            // This is the first public appearance of the reserved
+                            // activation ID. Its consumed allocation is already durable.
+                            super::publish_snapshot(&mut state, &registry.state_version, index);
+                        }
+                        // Recovered workspace verification may run native Git
+                        // commands. Complete this prerequisite before Reserved:
+                        // once the durable obligation exists, the only executable
+                        // owner is the child inheriting the physical lease.
+                        *identity.workspace_access.get_mut().unwrap() = Some(identity.workspace.acquire().await
+                            .map_err(|detail| SubagentStartError::Workspace { detail })?);
+                        #[cfg(test)]
+                        let reserved_hook = registry.state.lock().unwrap().reserved_commit_hook.take();
+                        #[cfg(test)]
+                        if let Some(hook) = reserved_hook { hook.wait(); }
+                        let receipt = registry.config.mailbox.commit_agent_activation_admission(
+                            &ownership,
+                            super::super::admission_event(
+                                &registry.config.conversation_id, &identity.agent_id,
+                                &identity.activation_id, &spec.admission.origin,
+                                crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                                registry.config.clock.now(),
+                            ),
+                        ).map_err(|error| SubagentStartError::Durability { detail: error.to_string() })?;
+                        reserved = true;
+                        {
+                            let mut state = registry.state.lock().unwrap_or_else(PoisonError::into_inner);
+                            let agent = &state.agents[&identity.agent_id];
+                            assert!(agent.resuming.as_ref().is_some_and(|reservation| reservation.activation_id == identity.activation_id));
+                            let index = state.index[&agent.latest_activation];
+                            super::publish_committed_snapshot(&mut state, &registry.state_version, index, receipt.sequence);
+                        }
+                        drop(ownership);
                         let prepared = registry
                             .prepare_inner(&spec, &cancellation, &mut None, Some(&identity))
                             .await?;
@@ -559,9 +646,24 @@ impl SubagentRegistry {
                         registry.commit(prepared, &cancellation).await
                     }
                     .await;
+                    // A pre-prepare cancellation may leave the verified access
+                    // unconsumed. Release it before publishing Inactive so a
+                    // later activation observes the same completed owner cut.
+                    drop(identity.workspace_access.get_mut().unwrap().take());
                     let mut rollback_sequence = None;
-                    if !matches!(&result, Ok(SubagentStartOutcome::Accepted(_))) {
-                        let physical_settlement_proven = !matches!(&result, Err(SubagentStartError::Rollback { .. }));
+                    if reserved && !matches!(&result, Ok(SubagentStartOutcome::Accepted(_))) {
+                        let mut physical_settlement_proven = match &result {
+                            Ok(SubagentStartOutcome::RolledBack) => true,
+                            Err(error) => error.rollback_is_proven(),
+                            Ok(SubagentStartOutcome::Accepted(_)) => unreachable!("accepted activation never rolls back admission"),
+                        };
+                        if physical_settlement_proven
+                            && let Some(owner) = &identity.physical_owner
+                            && let Err(error) = owner.publish_quiescent()
+                        {
+                            physical_settlement_proven = false;
+                            result = Err(SubagentStartError::Rollback { detail: format!("rollback recovery proof publication failed: {error}") });
+                        }
                         let publication = async {
                             let ownership = registry.config.spawn.product_root.runtime_ownership_admission().await
                                 .map_err(|error| error.to_string())?;
@@ -604,6 +706,7 @@ impl SubagentRegistry {
                         }
                     }
                     let completion_outcome = match &result {
+                        _ if identity.physical_owner.is_none() => AdmissionSettlement::Failed,
                         Err(SubagentStartError::Rollback { .. }) => AdmissionSettlement::Failed,
                         Ok(SubagentStartOutcome::Accepted(_)) => AdmissionSettlement::Committed,
                         _ => AdmissionSettlement::RolledBack,
@@ -655,7 +758,8 @@ impl SubagentRegistry {
         let mut pending_admissions = std::collections::BTreeMap::new();
         let mut unsettled = std::collections::BTreeSet::new();
         let mut cursor = None;
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut events = Vec::new();
+        let mut authorities = std::collections::BTreeMap::new();
         loop {
             let page = store.read_events(cursor, 256)?;
             if page.events.is_empty() {
@@ -663,295 +767,269 @@ impl SubagentRegistry {
             }
             cursor = page.next_sequence;
             for envelope in page.events {
-                match envelope.event {
-                    RuntimeEvent::AgentActivationAdmission {
-                        agent_id,
-                        activation_id,
-                        origin,
-                        phase,
-                    } => match phase {
-                        crate::events::types::AgentActivationAdmissionPhase::Reserved => {
-                            pending_admissions.insert(activation_id, (agent_id, origin));
-                        }
-                        crate::events::types::AgentActivationAdmissionPhase::RolledBack {
-                            physical_settlement_proven: true,
-                        } => {
-                            pending_admissions.remove(&activation_id);
-                        }
-                        crate::events::types::AgentActivationAdmissionPhase::RolledBack {
-                            physical_settlement_proven: false,
-                        } => {}
-                    },
-                    RuntimeEvent::SubagentOwnershipCommitted {
-                        parent_agent_id,
-                        subagent_id,
-                        child_agent_id,
-                        child_conversation_id,
-                        origin,
-                        admitted_authority,
-                        workspace,
-                        ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                        ..
+                if let RuntimeEvent::SubagentOwnershipCommitted {
+                    admitted_authority: Some(agent_id),
+                    ..
+                } = &envelope.event
+                {
+                    authorities.insert(agent_id.clone(), store.load_agent_authority(agent_id)?);
+                }
+                events.push(envelope);
+            }
+        }
+        let consumed = super::super::physical_recovery::consumed_session_activation_ids(
+            &self.config.spawn.product_root,
+            &self.config.spawn.session_id,
+        )
+        .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?;
+        let next_ordinal = consumed
+            .iter()
+            .filter_map(|id| id.conversation_ordinal(&self.config.conversation_id))
+            .map(|ordinal| ordinal.saturating_add(1))
+            .max()
+            .unwrap_or(1);
+        // The I/O phase above finishes before this startup-only replay cut.
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.next_ordinal = state.next_ordinal.max(next_ordinal);
+        for envelope in events {
+            match envelope.event {
+                RuntimeEvent::AgentActivationAdmission {
+                    agent_id,
+                    activation_id,
+                    origin,
+                    phase,
+                } => match phase {
+                    crate::events::types::AgentActivationAdmissionPhase::Reserved => {
+                        pending_admissions.insert(activation_id, (agent_id, origin));
+                    }
+                    crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                        physical_settlement_proven: true,
                     } => {
-                        if let Some(existing) = state.agents.get(&child_agent_id) {
-                            let prior = &state.records[state.index[&existing.latest_activation]];
-                            if admitted_authority.is_some()
-                                || existing.conversation_id != child_conversation_id
-                                || prior.parent_agent_id != parent_agent_id
-                                || prior.workspace != workspace
-                            {
-                                return Err(ConversationStoreError::InvalidReference(format!(
-                                    "Agent {child_agent_id} changed admitted authority or identity"
-                                )));
-                            }
-                        } else if admitted_authority.is_none() {
+                        pending_admissions.remove(&activation_id);
+                    }
+                    crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                        physical_settlement_proven: false,
+                    } => {}
+                },
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    parent_agent_id,
+                    subagent_id,
+                    child_agent_id,
+                    child_conversation_id,
+                    origin,
+                    admitted_authority,
+                    workspace,
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    ..
+                } => {
+                    if let Some(existing) = state.agents.get(&child_agent_id) {
+                        let prior = &state.records[state.index[&existing.latest_activation]];
+                        if admitted_authority.is_some()
+                            || existing.conversation_id != child_conversation_id
+                            || prior.parent_agent_id != parent_agent_id
+                            || prior.workspace != workspace
+                        {
                             return Err(ConversationStoreError::InvalidReference(format!(
-                                "Agent {child_agent_id} has no initial frozen authority"
+                                "Agent {child_agent_id} changed admitted authority or identity"
                             )));
                         }
-                        pending_admissions.remove(&subagent_id);
-                        unsettled.insert(subagent_id.clone());
-                        if let Some(reference) = admitted_authority {
-                            if reference != child_agent_id {
-                                return Err(ConversationStoreError::InvalidReference(
-                                    "Agent authority reference names a different identity"
-                                        .to_owned(),
-                                ));
-                            }
-                            let authority = store.load_agent_authority(&child_agent_id)?;
-                            let scope = crate::runtime::workspace::AgentWorkspace::recovered(
-                                self.config.workspace.clone(),
-                                subagent_id.clone(),
-                                authority.resolved.workspace_policy,
-                                workspace.clone(),
-                                false,
-                            );
-                            state.agents.insert(
-                                child_agent_id.clone(),
-                                AgentRecord {
-                                    created_sequence: envelope.sequence,
-                                    authority,
-                                    workspace: scope,
-                                    conversation_id: child_conversation_id.clone(),
-                                    latest_activation: subagent_id.clone(),
-                                    resuming: None,
-                                },
-                            );
-                        }
-                        let agent = state
-                            .agents
-                            .get_mut(&child_agent_id)
-                            .expect("initial authority validated above");
-                        agent.latest_activation = subagent_id.clone();
-                        let spec = agent.authority.clone();
-                        if !state.index.contains_key(&subagent_id) {
-                            let index = state.records.len();
-                            state.index.insert(subagent_id.clone(), index);
-                            state.records.push(SubagentRecord {
-                                physical_settlement_proven: false,
-                                input_accepted: true,
-                                parent_agent_id,
-                                subagent_id,
-                                child_agent_id,
-                                child_conversation_id,
-                                origin,
-                                agent: spec.resolved.agent.clone(),
-                                definition_digest: spec.resolved.definition_digest.clone(),
-                                profile_digest: spec.resolved.profile_digest(),
-                                ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                                terminal: None,
-                                workspace,
-                                handoff: None,
-                                workspace_resource_state: SubagentWorkspaceResourceState::None,
-                                workspace_disposal: None,
-                                workspace_unresolved: None,
-                                // Reconciliation should supply a later terminal. Never
-                                // expose an orphan as Active while replay is in progress.
-                                lifecycle: SubagentLifecycle::Interrupted,
-                                cancel_reason: None,
-                                steer_tickets: Vec::new(),
-                                deadline_task: None,
-                                control: None,
-                                detail: None,
-                                observation: SubagentObservation::default(),
-                                profile: Some(SubagentExecutionProfile::from_frozen(
-                                    &spec.resolved.model,
-                                )),
-                                terminal_workflow_value: None,
-                                pending_terminal: None,
-                                publication_abandoned: false,
-                                notification: NotificationState::Delivered,
-                                started_at: envelope.timestamp,
-                            });
-                        }
+                    } else if admitted_authority.is_none() {
+                        return Err(ConversationStoreError::InvalidReference(format!(
+                            "Agent {child_agent_id} has no initial frozen authority"
+                        )));
                     }
-                    RuntimeEvent::SubagentOwnershipCommitted {
-                        parent_agent_id,
-                        subagent_id,
-                        child_agent_id,
-                        child_conversation_id,
-                        origin,
-                        agent,
-                        definition_digest,
-                        profile_digest,
-                        admitted_authority,
-                        workspace,
-                        ownership: crate::events::types::SubagentOwnershipKind::Workflow,
-                    } => {
-                        if admitted_authority.is_some() {
+                    pending_admissions.remove(&subagent_id);
+                    unsettled.insert(subagent_id.clone());
+                    if let Some(reference) = admitted_authority {
+                        if reference != child_agent_id {
                             return Err(ConversationStoreError::InvalidReference(
-                                "a finite Workflow child cannot own durable Agent authority".into(),
+                                "Agent authority reference names a different identity".to_owned(),
                             ));
                         }
-                        unsettled.insert(subagent_id.clone());
-                        if !state.index.contains_key(&subagent_id) {
-                            let agent = super::SubagentName::parse(&agent).map_err(|error| {
-                                ConversationStoreError::InvalidReference(error.to_string())
-                            })?;
-                            let definition_digest = serde_json::from_value(
-                                serde_json::Value::String(definition_digest),
-                            )
-                            .map_err(|error| {
-                                ConversationStoreError::InvalidReference(error.to_string())
-                            })?;
-                            let index = state.records.len();
-                            state.index.insert(subagent_id.clone(), index);
-                            state.records.push(SubagentRecord {
-                                ownership: crate::events::types::SubagentOwnershipKind::Workflow,
-                                terminal: None,
-                                physical_settlement_proven: false,
-                                input_accepted: false,
-                                parent_agent_id,
-                                subagent_id,
-                                child_agent_id,
-                                child_conversation_id,
-                                origin,
-                                agent,
-                                definition_digest,
-                                profile_digest:
-                                    super::SubagentExecutionProfileDigest::from_committed_fact(
-                                        profile_digest,
-                                    ),
-                                workspace,
-                                handoff: None,
-                                workspace_resource_state: SubagentWorkspaceResourceState::None,
-                                workspace_disposal: None,
-                                workspace_unresolved: None,
-                                lifecycle: SubagentLifecycle::Interrupted,
-                                cancel_reason: None,
-                                steer_tickets: Vec::new(),
-                                deadline_task: None,
-                                control: None,
-                                detail: None,
-                                observation: SubagentObservation::default(),
-                                profile: None,
-                                terminal_workflow_value: None,
-                                pending_terminal: None,
-                                publication_abandoned: false,
-                                notification: NotificationState::None,
-                                started_at: envelope.timestamp,
-                            });
-                        }
+                        let authority = authorities
+                            .remove(&child_agent_id)
+                            .expect("referenced Agent authority loaded before registry replay");
+                        let scope = crate::runtime::workspace::AgentWorkspace::recovered(
+                            self.config.workspace.clone(),
+                            subagent_id.clone(),
+                            authority.resolved.workspace_policy,
+                            workspace.clone(),
+                            false,
+                        );
+                        state.agents.insert(
+                            child_agent_id.clone(),
+                            AgentRecord {
+                                created_sequence: envelope.sequence,
+                                authority,
+                                workspace: scope,
+                                conversation_id: child_conversation_id.clone(),
+                                latest_activation: subagent_id.clone(),
+                                resuming: None,
+                            },
+                        );
                     }
-                    RuntimeEvent::SubagentTerminalPublished {
-                        subagent_id,
-                        state: terminal,
-                        workspace_resource,
-                        physical_settlement_proven,
-                        ..
+                    let agent = state
+                        .agents
+                        .get_mut(&child_agent_id)
+                        .expect("initial authority validated above");
+                    agent.latest_activation = subagent_id.clone();
+                    let spec = agent.authority.clone();
+                    if !state.index.contains_key(&subagent_id) {
+                        let index = state.records.len();
+                        state.index.insert(subagent_id.clone(), index);
+                        let evidence = crate::runtime::recovery::SubagentEvidence {
+                            subagent_id,
+                            child_agent_id,
+                            child_conversation_id,
+                            origin,
+                            agent: spec.resolved.agent.as_str().to_owned(),
+                            definition_digest: spec.resolved.definition_digest.as_str().to_owned(),
+                            profile_digest: spec.resolved.profile_digest().as_str().to_owned(),
+                            ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                            workspace,
+                            started_at: envelope.timestamp,
+                        };
+                        let mut record = SubagentRecord::recovered(parent_agent_id, &evidence)?;
+                        record.profile =
+                            Some(SubagentExecutionProfile::from_frozen(&spec.resolved.model));
+                        state.records.push(record);
                     }
-                    | RuntimeEvent::SubagentTerminalSettled {
-                        subagent_id,
-                        state: terminal,
-                        workspace_resource,
-                        physical_settlement_proven,
-                        ..
-                    } => {
-                        unsettled.remove(&subagent_id);
-                        if let Some(&index) = state.index.get(&subagent_id) {
-                            let record = &mut state.records[index];
-                            let child_agent_id = record.child_agent_id.clone();
-                            match workspace_resource {
-                                SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                                    reason,
-                                    detail,
-                                } => {
-                                    record.workspace_resource_state =
-                                        SubagentWorkspaceResourceState::PreservedUnresolved;
-                                    record.workspace_unresolved =
-                                        Some(WorkspaceUnresolvedRecord { reason, detail });
-                                    if let Some(agent) = state.agents.get(&child_agent_id) {
-                                        agent.workspace.poison();
-                                    }
-                                }
-                                SubagentWorkspaceTerminalResource::Retained { handoff } => {
-                                    record.workspace_resource_state =
-                                        SubagentWorkspaceResourceState::Retained;
-                                    record.handoff = Some(handoff);
-                                }
-                                SubagentWorkspaceTerminalResource::None => {}
-                            }
-                            state.records[index].physical_settlement_proven =
-                                physical_settlement_proven;
-                            state.records[index].lifecycle = match terminal {
-                                SubagentTerminalState::Succeeded => SubagentLifecycle::Succeeded,
-                                SubagentTerminalState::Failed => SubagentLifecycle::Failed,
-                                SubagentTerminalState::Cancelled => SubagentLifecycle::Cancelled,
-                                SubagentTerminalState::Interrupted => {
-                                    SubagentLifecycle::Interrupted
-                                }
-                            };
-                            if !physical_settlement_proven {
+                }
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    parent_agent_id,
+                    subagent_id,
+                    child_agent_id,
+                    child_conversation_id,
+                    origin,
+                    agent,
+                    definition_digest,
+                    profile_digest,
+                    admitted_authority,
+                    workspace,
+                    ownership: crate::events::types::SubagentOwnershipKind::Workflow,
+                } => {
+                    if admitted_authority.is_some() {
+                        return Err(ConversationStoreError::InvalidReference(
+                            "a finite Workflow child cannot own durable Agent authority".into(),
+                        ));
+                    }
+                    unsettled.insert(subagent_id.clone());
+                    if !state.index.contains_key(&subagent_id) {
+                        let index = state.records.len();
+                        state.index.insert(subagent_id.clone(), index);
+                        let evidence = crate::runtime::recovery::SubagentEvidence {
+                            subagent_id,
+                            child_agent_id,
+                            child_conversation_id,
+                            origin,
+                            agent,
+                            definition_digest,
+                            profile_digest,
+                            ownership: crate::events::types::SubagentOwnershipKind::Workflow,
+                            workspace,
+                            started_at: envelope.timestamp,
+                        };
+                        state
+                            .records
+                            .push(SubagentRecord::recovered(parent_agent_id, &evidence)?);
+                    }
+                }
+                RuntimeEvent::SubagentTerminalPublished {
+                    subagent_id,
+                    state: terminal,
+                    workspace_resource,
+                    physical_settlement_proven,
+                    ..
+                }
+                | RuntimeEvent::SubagentTerminalSettled {
+                    subagent_id,
+                    state: terminal,
+                    workspace_resource,
+                    physical_settlement_proven,
+                    ..
+                } => {
+                    unsettled.remove(&subagent_id);
+                    if let Some(&index) = state.index.get(&subagent_id) {
+                        let record = &mut state.records[index];
+                        let child_agent_id = record.child_agent_id.clone();
+                        match workspace_resource {
+                            SubagentWorkspaceTerminalResource::PreservedUnresolved {
+                                reason,
+                                detail,
+                            } => {
+                                record.workspace_resource_state =
+                                    SubagentWorkspaceResourceState::PreservedUnresolved;
+                                record.workspace_unresolved =
+                                    Some(WorkspaceUnresolvedRecord { reason, detail });
                                 if let Some(agent) = state.agents.get(&child_agent_id) {
-                                    agent.workspace.await_recovered_physical_proof();
+                                    agent.workspace.poison();
                                 }
-                                state.recovery_pending.insert(subagent_id);
                             }
+                            SubagentWorkspaceTerminalResource::Retained { handoff } => {
+                                record.workspace_resource_state =
+                                    SubagentWorkspaceResourceState::Retained;
+                                record.handoff = Some(handoff);
+                            }
+                            SubagentWorkspaceTerminalResource::None => {}
+                        }
+                        state.records[index].physical_settlement_proven =
+                            physical_settlement_proven;
+                        state.records[index].lifecycle = match terminal {
+                            SubagentTerminalState::Succeeded => SubagentLifecycle::Succeeded,
+                            SubagentTerminalState::Failed => SubagentLifecycle::Failed,
+                            SubagentTerminalState::Cancelled => SubagentLifecycle::Cancelled,
+                            SubagentTerminalState::Interrupted => SubagentLifecycle::Interrupted,
+                        };
+                        if !physical_settlement_proven {
+                            if let Some(agent) = state.agents.get(&child_agent_id) {
+                                agent.workspace.await_recovered_physical_proof();
+                            }
+                            state.recovery_pending.insert(subagent_id);
                         }
                     }
-                    RuntimeEvent::SubagentPhysicalSettlementProven { subagent_id, .. } => {
-                        state.recovery_pending.remove(&subagent_id);
-                        if let Some(&index) = state.index.get(&subagent_id) {
-                            state.records[index].physical_settlement_proven = true;
-                            if let Some(agent) =
-                                state.agents.get(&state.records[index].child_agent_id)
-                            {
-                                agent.workspace.prove_recovered_physical_settlement();
-                            }
+                }
+                RuntimeEvent::SubagentPhysicalSettlementProven { subagent_id, .. } => {
+                    state.recovery_pending.remove(&subagent_id);
+                    if let Some(&index) = state.index.get(&subagent_id) {
+                        state.records[index].physical_settlement_proven = true;
+                        if let Some(agent) = state.agents.get(&state.records[index].child_agent_id)
+                        {
+                            agent.workspace.prove_recovered_physical_settlement();
                         }
                     }
-                    RuntimeEvent::SubagentWorkspaceDisposalStarted {
-                        subagent_id,
-                        workspace_handoff,
-                    } => {
-                        if let Some(&index) = state.index.get(&subagent_id) {
-                            let record = &mut state.records[index];
-                            record.workspace_resource_state =
-                                SubagentWorkspaceResourceState::DisposalInProgress;
-                            // Disposal intent transfers the retained handoff
-                            // into the exact private cleanup authority. It is
-                            // no longer an available public handoff, including
-                            // when replay follows the historical terminal.
-                            record.handoff = None;
-                            record.workspace_unresolved = None;
-                            record.workspace_disposal = Some(super::WorkspaceDisposalRecord {
-                                handoff: workspace_handoff,
-                                phase: super::WorkspaceDisposalPhase::Authorized,
-                            });
-                            let child = record.child_agent_id.clone();
-                            if let Some(agent) = state.agents.get(&child) {
-                                agent.workspace.poison();
-                            }
+                }
+                RuntimeEvent::SubagentWorkspaceDisposalStarted {
+                    subagent_id,
+                    workspace_handoff,
+                } => {
+                    if let Some(&index) = state.index.get(&subagent_id) {
+                        let record = &mut state.records[index];
+                        record.workspace_resource_state =
+                            SubagentWorkspaceResourceState::DisposalInProgress;
+                        // Disposal intent transfers the retained handoff
+                        // into the exact private cleanup authority. It is
+                        // no longer an available public handoff, including
+                        // when replay follows the historical terminal.
+                        record.handoff = None;
+                        record.workspace_unresolved = None;
+                        record.workspace_disposal = Some(super::WorkspaceDisposalRecord {
+                            handoff: workspace_handoff,
+                            phase: super::WorkspaceDisposalPhase::Authorized,
+                        });
+                        let child = record.child_agent_id.clone();
+                        if let Some(agent) = state.agents.get(&child) {
+                            agent.workspace.poison();
                         }
                     }
-                    RuntimeEvent::SubagentWorkspaceDisposalSettled {
-                        subagent_id,
-                        workspace_handoff,
-                        settlement,
-                    } => {
-                        if let Some(&index) = state.index.get(&subagent_id) {
-                            let record = &mut state.records[index];
-                            match settlement {
+                }
+                RuntimeEvent::SubagentWorkspaceDisposalSettled {
+                    subagent_id,
+                    workspace_handoff,
+                    settlement,
+                } => {
+                    if let Some(&index) = state.index.get(&subagent_id) {
+                        let record = &mut state.records[index];
+                        match settlement {
                                 crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved => {
                                     record.workspace_resource_state = SubagentWorkspaceResourceState::WorktreeRemoved;
                                     record.handoff = None;
@@ -968,14 +1046,13 @@ impl SubagentRegistry {
                                     record.handoff = None;
                                 }
                             }
-                            let child = record.child_agent_id.clone();
-                            if let Some(agent) = state.agents.get(&child) {
-                                agent.workspace.poison();
-                            }
+                        let child = record.child_agent_id.clone();
+                        if let Some(agent) = state.agents.get(&child) {
+                            agent.workspace.poison();
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
         for (activation_id, (agent_id, origin)) in pending_admissions {
@@ -984,6 +1061,7 @@ impl SubagentRegistry {
                 let (completion, _) = tokio::sync::watch::channel(AdmissionSettlement::Failed);
                 agent.resuming = Some(ResumeReservation {
                     activation_id: activation_id.clone(),
+                    identity_persisted: true,
                     origin,
                     cancellation: CancellationSignal::new(),
                     completion,

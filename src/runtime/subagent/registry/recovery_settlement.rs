@@ -5,6 +5,34 @@
 
 use super::{PoisonError, SubagentRegistry, publish_committed_snapshot};
 
+struct RecoveryObligation {
+    activation: super::SubagentId,
+    index: usize,
+    agent_id: super::AgentId,
+    conversation: super::ConversationId,
+    origin: Option<super::AgentActivationOrigin>,
+}
+
+/// One captured pass owns each obligation until its proof append and snapshot
+/// cut finish. Other passes skip it; neither controls nor readers wait for I/O.
+struct RecoveryPass {
+    registry: SubagentRegistry,
+    activations: Vec<super::SubagentId>,
+}
+
+impl Drop for RecoveryPass {
+    fn drop(&mut self) {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for activation in &self.activations {
+            state.recovery_inflight.remove(activation);
+        }
+    }
+}
+
 /// Releasing the reconciler's bounded ownership never asserts physical proof.
 /// On panic or cancellation, shutdown can classify the retained obligations.
 struct ReconciliationCompletion(tokio::sync::watch::Sender<bool>);
@@ -64,12 +92,15 @@ impl SubagentRegistry {
         self.reconcile_recovered_settlements();
     }
 
-    /// A bounded reconciliation pass at startup, Goal idle and runtime drain.
-    /// Missing evidence leaves the concrete obligation available for the next
-    /// pass/reopen. No inspection of a PID or clean Git tree substitutes for it.
-    pub(crate) fn reconcile_recovered_settlements(&self) {
+    fn capture_recovery_obligations(&self) -> Vec<RecoveryObligation> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let pending: Vec<_> = state.recovery_pending.iter().cloned().collect();
+        let pending: Vec<_> = state
+            .recovery_pending
+            .iter()
+            .filter(|id| !state.recovery_inflight.contains(*id))
+            .cloned()
+            .collect();
+        let mut obligations = Vec::new();
         for activation in pending {
             let (index, agent_id, conversation, origin) =
                 if let Some(&index) = state.index.get(&activation) {
@@ -95,6 +126,76 @@ impl SubagentRegistry {
                 } else {
                     continue;
                 };
+            state.recovery_inflight.insert(activation.clone());
+            obligations.push(RecoveryObligation {
+                activation,
+                index,
+                agent_id,
+                conversation,
+                origin,
+            });
+        }
+        obligations
+    }
+
+    fn recovered_settlement_event(
+        &self,
+        agent_id: &super::AgentId,
+        activation: &super::SubagentId,
+        origin: Option<&super::AgentActivationOrigin>,
+    ) -> crate::events::types::RuntimeEventEnvelope {
+        match origin {
+            None => super::super::physical_settlement_event(
+                &self.config.conversation_id,
+                activation,
+                agent_id,
+                self.config.clock.now(),
+            ),
+            Some(origin) => super::super::admission_event(
+                &self.config.conversation_id,
+                agent_id,
+                activation,
+                origin,
+                crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                    physical_settlement_proven: true,
+                },
+                self.config.clock.now(),
+            ),
+        }
+    }
+
+    /// A bounded reconciliation pass at startup, Goal idle and runtime drain.
+    /// Missing evidence leaves the concrete obligation available for the next
+    /// pass/reopen. No inspection of a PID or clean Git tree substitutes for it.
+    pub(crate) fn reconcile_recovered_settlements(&self) {
+        let obligations = self.capture_recovery_obligations();
+        let _pass = RecoveryPass {
+            registry: self.clone(),
+            activations: obligations
+                .iter()
+                .map(|obligation| obligation.activation.clone())
+                .collect(),
+        };
+        for RecoveryObligation {
+            activation,
+            index,
+            agent_id,
+            conversation,
+            origin,
+        } in obligations
+        {
+            #[cfg(test)]
+            {
+                let hook = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .recovery_probe_hook
+                    .take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
             let Ok(Some(_proof)) = super::super::physical_recovery::prove(
                 &self.config.spawn.product_root,
                 &self.config.spawn.session_id,
@@ -103,24 +204,7 @@ impl SubagentRegistry {
             ) else {
                 continue;
             };
-            let event = match &origin {
-                None => super::super::physical_settlement_event(
-                    &self.config.conversation_id,
-                    &activation,
-                    &agent_id,
-                    self.config.clock.now(),
-                ),
-                Some(origin) => super::super::admission_event(
-                    &self.config.conversation_id,
-                    &agent_id,
-                    &activation,
-                    origin,
-                    crate::events::types::AgentActivationAdmissionPhase::RolledBack {
-                        physical_settlement_proven: true,
-                    },
-                    self.config.clock.now(),
-                ),
-            };
+            let event = self.recovered_settlement_event(&agent_id, &activation, origin.as_ref());
             let Ok(committed) = self
                 .config
                 .mailbox
@@ -128,6 +212,28 @@ impl SubagentRegistry {
             else {
                 continue;
             };
+            // The claim pins an immutable activation, never an Agent's latest
+            // generation. Revalidate it after the filesystem/SQLite phase.
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let current = state.recovery_pending.contains(&activation)
+                && state.recovery_inflight.contains(&activation)
+                && match &origin {
+                    Some(_) => state.agents.get(&agent_id).is_some_and(|agent| {
+                        agent.conversation_id == conversation
+                            && agent
+                                .resuming
+                                .as_ref()
+                                .is_some_and(|r| r.activation_id == activation)
+                    }),
+                    None => {
+                        state.index.get(&activation) == Some(&index)
+                            && state.records[index].child_agent_id == agent_id
+                            && state.records[index].child_conversation_id == conversation
+                    }
+                };
+            if !current {
+                continue;
+            }
             // The durable receipt releases precisely this complete owner cut.
             if origin.is_some() {
                 let agent = state.agents.get_mut(&agent_id).unwrap();
@@ -158,7 +264,7 @@ impl SubagentRegistry {
             // A physical proof creates no new inbound message. Explicitly wake
             // the existing idle coordinator so an active Goal can re-evaluate.
             self.config.mailbox.wake().notify_one();
-            // Retain the inert incarnation as exact recovery evidence until
+            // Retain the immutable authority as exact recovery evidence until
             // Session deletion. It grants no execution or workspace authority.
         }
     }

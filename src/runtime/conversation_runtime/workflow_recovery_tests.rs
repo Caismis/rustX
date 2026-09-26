@@ -169,7 +169,7 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
         )
         .parent()
         .unwrap()
-        .join("incarnation-finite-recovery");
+        .join("physical-settlement").join(accepted.subagent_id.as_str());
         std::fs::create_dir_all(&incarnation).unwrap();
         // The real original driver has already reaped. This fixture retains
         // the exact native receipt writer lease to prove a receipt alone can

@@ -260,6 +260,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })));
     }
     for result in [
+        MethodResult::Jobs {
+            jobs: Vec::new(), returned: 0, matched: 0,
+            limit: crate::tools::background::MAX_JOB_LIST_LIMIT, truncated: false,
+        },
         MethodResult::InboundMutation {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
         },
@@ -300,6 +304,19 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         ))));
     }
+    fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
+        jsonrpc: JsonRpcVersion::V2,
+        id: Some(RequestId::String("job-publication-failed".into())),
+        error: RpcError {
+            code: -32000,
+            message: "Job terminal publication was abandoned".into(),
+            data: Some(super::protocol::ErrorData::JobPublicationAbandoned {
+                job_id: crate::runtime::identity::ToolExecutionId::new(
+                    "exec_0199c989-03a0-7000-8000-000000000001",
+                ),
+            }),
+        },
+    })));
     let run = crate::runtime::workflow::WorkflowRunId {
         conversation_id: target.conversation_id.clone(),
         attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
@@ -613,9 +630,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v25.schema.json", "v25.ts"]);
+        assert_eq!(generations, ["v26.schema.json", "v26.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v25.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v26.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -10,7 +10,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::runtime::identity::{ToolExecutionId, ToolId};
-use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
+use crate::tools::background::{
+    BackgroundExecutionSnapshot, BackgroundWaitError, ConversationBackgroundRegistry,
+    MAX_JOB_LIST_LIMIT,
+};
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
@@ -23,7 +26,6 @@ use super::registration::{NativeToolRegistration, input_schema};
 use super::support::{cancelled_result, failed_result, success_json};
 
 pub(crate) const NAMES: [&str; 4] = ["job_list", "job_status", "job_wait", "job_cancel"];
-const LIST_LIMIT: usize = 64;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -40,10 +42,10 @@ struct TargetInput {
 
 pub(super) fn definitions() -> Vec<ToolDefinition> {
     [
-        (NAMES[0], "List this conversation's finite background Tool jobs, newest first, bounded to 64. Reports truncation; excludes Agent conversations and ordinary foreground calls.", input_schema::<ListInput>()),
+        (NAMES[0], "List this conversation's finite background Tool jobs, newest first. Reports the domain limit and truncation; excludes Agent conversations and ordinary foreground calls.", input_schema::<ListInput>()),
         (NAMES[1], "Read the authoritative current snapshot of one background Tool job without waiting. Completion is delivered proactively in this conversation.", input_schema::<TargetInput>()),
-        (NAMES[2], "Wait for this exact finite background Tool job to reach terminal physical settlement. A terminal job never resumes. Does not consume or suppress its completion notification.", input_schema::<TargetInput>()),
-        (NAMES[3], "Cancel this exact background Tool job and wait for its terminal physical settlement. Already-terminal jobs stay terminal. Does not suppress completion notification.", input_schema::<TargetInput>()),
+        (NAMES[2], "Wait for this exact finite background Tool job to reach terminal physical settlement or report typed publication failure. A terminal job never resumes. Does not consume or suppress its completion notification.", input_schema::<TargetInput>()),
+        (NAMES[3], "Cancel this exact background Tool job and wait for its terminal physical settlement or typed publication failure. Already-terminal jobs stay terminal. Does not suppress completion notification.", input_schema::<TargetInput>()),
     ].into_iter().map(|(name, description, input_schema)| ToolDefinition {
         id: ToolId::new(format!("tool-{name}")),
         name: name.to_owned(),
@@ -88,7 +90,7 @@ impl ToolExecutor for JobExecutor {
                         Ok(input) => input,
                         Err(error) => return failed_result(error),
                     };
-                    let listing = self.0.listing(input.active_only, LIST_LIMIT);
+                    let listing = self.0.listing(input.active_only, MAX_JOB_LIST_LIMIT);
                     let jobs: Vec<_> = listing
                         .snapshots
                         .iter()
@@ -101,8 +103,8 @@ impl ToolExecutor for JobExecutor {
                         })
                         .collect();
                     return success_json(serde_json::json!({
-                        "returned": jobs.len(), "matched": listing.matched,
-                        "truncated": listing.matched > jobs.len(), "limit": LIST_LIMIT,
+                        "returned": listing.returned, "matched": listing.matched,
+                        "truncated": listing.truncated, "limit": listing.limit,
                         "jobs": jobs,
                     }));
                 }
@@ -128,8 +130,9 @@ impl ToolExecutor for JobExecutor {
                 tokio::select! {
                     biased;
                     snapshot = self.0.wait_until_terminal(&job_id) => match snapshot {
-                        Some(snapshot) => snapshot_result(&snapshot),
-                        None => failed_result(format!("job {job_id} is unavailable")),
+                        Ok(snapshot) => snapshot_result(&snapshot),
+                        Err(BackgroundWaitError::UnknownJob) => failed_result(format!("unknown job {job_id}")),
+                        Err(BackgroundWaitError::PublicationAbandoned) => publication_failed_result(&job_id),
                     },
                     () = cancellation.cancelled() => cancelled_result(cancellation.reason()),
                 }
@@ -147,4 +150,14 @@ fn snapshot_result(snapshot: &BackgroundExecutionSnapshot) -> ToolExecutionResul
         "progress": snapshot.progress,
         "result": snapshot.result,
     }))
+}
+
+fn publication_failed_result(job_id: &ToolExecutionId) -> ToolExecutionResult {
+    let mut result = failed_result(format!(
+        "Job {job_id} terminal publication was abandoned; no durable terminal result is available"
+    ));
+    result.content.push(crate::tools::types::ToolResultContent::Json {
+        value: serde_json::json!({ "error": { "kind": "job_publication_abandoned", "job_id": job_id } }),
+    });
+    result
 }

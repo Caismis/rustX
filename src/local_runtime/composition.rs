@@ -390,6 +390,8 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
 pub(crate) struct ChildPreparation {
     cancellation: crate::runtime::cancellation::CancellationSignal,
     parent_lost: Option<crate::local_runtime::dispatcher::ChildControlHandle>,
+    // Installed before external preparation can create physical resources.
+    capability: std::sync::Mutex<Option<CapabilityCoordinator>>,
 }
 
 impl ChildPreparation {
@@ -402,6 +404,7 @@ impl ChildPreparation {
         Self {
             cancellation,
             parent_lost: Some(parent_lost),
+            capability: std::sync::Mutex::new(None),
         }
     }
 
@@ -412,6 +415,39 @@ impl ChildPreparation {
         Self {
             cancellation: crate::runtime::cancellation::CancellationSignal::new(),
             parent_lost: None,
+            capability: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn retain_capability(&self, capability: CapabilityCoordinator) {
+        let mut owner = self
+            .capability
+            .lock()
+            .expect("child preparation owner lock");
+        assert!(
+            owner.is_none(),
+            "one capability owner per child preparation"
+        );
+        *owner = Some(capability);
+    }
+
+    /// Called only after composition has returned. Its physical owners have
+    /// completed preparation, but their retirement proof still belongs here
+    /// even when no `ConversationRuntime` could be constructed.
+    pub(crate) async fn settle(&self) -> Result<(), Vec<String>> {
+        self.cancellation.cancel();
+        let capability = self
+            .capability
+            .lock()
+            .expect("child preparation owner lock")
+            .clone();
+        match capability {
+            Some(capability) => {
+                capability.cancel_conversation_preparation();
+                capability.drain_conversation_owned().await
+            }
+            // The composition has not crossed the resource-creation boundary.
+            None => Ok(()),
         }
     }
 
@@ -1650,6 +1686,7 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;
+            preparation.retain_capability(capability.clone());
             // 10-11. Materialization. A child with no external requirement takes
             // the deterministic base-only path it always did; a child with one
             // takes the selected-only realization path, which is cancellable

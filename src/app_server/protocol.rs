@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v25 envelope and method vocabulary.
+//! Rust authority for the App Server v26 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 25;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 26;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -345,6 +345,18 @@ pub enum ErrorData {
         reason: crate::session_archive::SessionArchivePrepareError,
     },
 
+    JobPublicationAbandoned {
+        job_id: crate::runtime::identity::ToolExecutionId,
+    },
+    /// Cancellation won before Delegate could be sent; no input was delivered.
+    AgentNotDelivered {
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    /// Delegate may have reached the child, but canonical acceptance is unproven.
+    /// Automatic replay could duplicate user guidance.
+    AgentDeliveryUnknown {
+        agent_id: crate::runtime::identity::AgentId,
+    },
     AgentStopping {
         agent_id: crate::runtime::identity::AgentId,
     },
@@ -489,6 +501,10 @@ pub enum MethodResult {
     },
     Jobs {
         jobs: Vec<crate::runtime_client::snapshot::RuntimeClientJob>,
+        returned: usize,
+        matched: usize,
+        limit: usize,
+        truncated: bool,
     },
     Agent {
         agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,

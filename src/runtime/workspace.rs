@@ -49,11 +49,32 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::io::{Seek, SeekFrom, Write};
-use std::process::Stdio;
-use tokio::process::Command;
 
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::SubagentId;
+
+tokio::task_local! {
+    /// The activation parent retains this authority while its finite workspace
+    /// epilogue starts additional native Git processes. Each helper gets its
+    /// own recoverable supervisor authority before it can execute.
+    static SETTLEMENT_AUTHORITY: Arc<crate::runtime::subagent::physical_recovery::ParentPhysicalLease>;
+}
+
+pub(crate) fn with_physical_settlement_authority<T>(
+    owner: Option<Arc<crate::runtime::subagent::physical_recovery::ParentPhysicalLease>>,
+    operation: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = T> {
+    // Box before constructing the scope future, so workspace settlement does
+    // not duplicate its sizeable state in both branches of every caller.
+    let operation = Box::pin(operation);
+    async move {
+        if let Some(owner) = owner {
+            SETTLEMENT_AUTHORITY.scope(owner, operation).await
+        } else {
+            operation.await
+        }
+    }
+}
 
 mod candidate;
 mod git_output;
@@ -2471,64 +2492,16 @@ impl WorkspaceManager {
         args: Vec<OsString>,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<GitOutput, WorkspaceAcquireError> {
-        let mut command = Command::new("git");
-        command
-            .arg("-C")
-            .arg(cwd)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        #[cfg(unix)]
-        command.process_group(0);
-        let child = command
-            .spawn()
-            .map_err(|error| WorkspaceAcquireError::Git {
-                operation: "spawn git".to_owned(),
-                detail: error.to_string(),
-            })?;
-        let child_id = child.id();
-        // `Command::output()` owns the child inside an opaque future. That
-        // makes cancellation return before we can prove the Git mutation
-        // process has exited. Keep the child in a dedicated waiter instead;
-        // cancellation kills its private process group and awaits that same
-        // waiter before any workspace settlement can inspect or remove paths.
-        let mut wait_handle = tokio::spawn(async move {
-            git_output::collect(
-                child,
-                #[cfg(test)]
-                &git_output::Faults::default(),
-            )
-            .await
-        });
-        let wait_result = if let Some(cancellation) = cancellation {
-            tokio::select! {
-                biased;
-                () = cancellation.cancelled() => {
-                    kill_git_process_group(child_id);
-                    let _ = (&mut wait_handle).await;
-                    return Err(WorkspaceAcquireError::Cancelled);
-                }
-                output = &mut wait_handle => output,
-            }
-        } else {
-            wait_handle.await
-        };
-        let output = wait_result
-            .map_err(|error| WorkspaceAcquireError::Git {
-                operation: "wait for git".to_owned(),
-                detail: error.to_string(),
-            })?
-            .map_err(|error| WorkspaceAcquireError::Git {
-                operation: "run git".to_owned(),
-                detail: error.to_string(),
-            })?;
-        Ok(GitOutput {
-            status: output.status,
-            stdout: output.stdout,
-            stderr: output.stderr,
-        })
+        // Child-side preparation participates in the same retained-anchor
+        // protocol as every native Tool. Parent cleanup additionally carries
+        // durable continuation authority beyond the child's earlier receipt.
+        Box::pin(supervised_workspace_git(
+            SETTLEMENT_AUTHORITY.try_with(Arc::clone).ok(),
+            cwd,
+            args,
+            cancellation,
+        ))
+        .await
     }
 
     /// Inspects a worktree recorded by durable ownership after a parent
@@ -3046,6 +3019,116 @@ struct GitOutput {
     status: std::process::ExitStatus,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
+}
+
+/// Git output is semantic data (including NUL-separated listings), so this
+/// path captures exact bytes rather than the convenience runner's bounded
+/// diagnostics. The detached task, not its caller's future, owns settlement.
+async fn supervised_workspace_git(
+    owner: Option<Arc<crate::runtime::subagent::physical_recovery::ParentPhysicalLease>>,
+    cwd: &Path,
+    args: Vec<OsString>,
+    cancellation: Option<&CancellationSignal>,
+) -> Result<GitOutput, WorkspaceAcquireError> {
+    use crate::runtime::process_runner::{
+        ProcessOutcomeIntent, SupervisedCommandRunner, SupervisedCommandSpec,
+    };
+    use std::os::unix::ffi::OsStrExt;
+    let continuation = owner
+        .as_ref()
+        .map(|owner| owner.reserve_continuation())
+        .transpose()
+        .map_err(|error| WorkspaceAcquireError::Settlement {
+            detail: format!("cannot reserve workspace helper authority: {error}"),
+        })?;
+    // Bash ANSI-C byte quoting preserves every Unix argument exactly, including
+    // non-UTF8 paths. No argument bytes are interpreted as shell syntax.
+    let mut command = String::from("exec git");
+    for argument in args {
+        command.push_str(" $'");
+        for byte in argument.as_bytes() {
+            use std::fmt::Write as _;
+            write!(&mut command, "\\x{byte:02x}").expect("write to String");
+        }
+        command.push('\'');
+    }
+    let spec = SupervisedCommandSpec {
+        command,
+        cwd: cwd.to_path_buf(),
+        environment: std::env::vars().collect(),
+        timeout: None,
+        cancellation: cancellation.cloned().unwrap_or_default(),
+    };
+    let task = tokio::spawn(async move {
+        let (mut runner, stdout, stderr) =
+            SupervisedCommandRunner::spawn_with_continuation(&spec, None, continuation.as_ref())
+                .map_err(|error| WorkspaceAcquireError::Git {
+                    operation: "spawn supervised workspace Git".into(),
+                    detail: error.to_string(),
+                })?;
+        // Read errors cannot drop the runner: join every capture with the
+        // existing supervisor's explicit physical settlement owner.
+        #[cfg(test)]
+        let stdout_interrupt = std::sync::atomic::AtomicBool::new(false);
+        #[cfg(test)]
+        let stderr_interrupt = std::sync::atomic::AtomicBool::new(false);
+        let (terminal, stdout, stderr) = tokio::join!(
+            runner.settle(),
+            git_output::read_pipe(
+                stdout,
+                #[cfg(test)]
+                &stdout_interrupt
+            ),
+            git_output::read_pipe(
+                stderr,
+                #[cfg(test)]
+                &stderr_interrupt
+            ),
+        );
+        if let Some(continuation) = &continuation {
+            continuation.publish_quiescent().map_err(|error| {
+                WorkspaceAcquireError::Settlement {
+                    detail: format!("cannot publish workspace helper proof: {error}"),
+                }
+            })?;
+        }
+        let capture_error = |error: std::io::Error| WorkspaceAcquireError::Git {
+            operation: "read supervised workspace Git".into(),
+            detail: error.to_string(),
+        };
+        let stdout = stdout.map_err(capture_error)?;
+        let stderr = match &continuation {
+            Some(continuation) => std::fs::read(continuation.spec().path.join("diagnostics.log"))
+                .map_err(capture_error)?,
+            None => stderr.map_err(capture_error)?,
+        };
+        match terminal.intent {
+            ProcessOutcomeIntent::Completed => terminal
+                .exit_status
+                .map(|status| GitOutput {
+                    status,
+                    stdout,
+                    stderr,
+                })
+                .ok_or_else(|| WorkspaceAcquireError::Git {
+                    operation: "settle supervised workspace Git".into(),
+                    detail: "missing Git exit status".into(),
+                }),
+            ProcessOutcomeIntent::Cancelled => Err(WorkspaceAcquireError::Cancelled),
+            ProcessOutcomeIntent::TimedOut => Err(WorkspaceAcquireError::Git {
+                operation: "settle supervised workspace Git".into(),
+                detail: "workspace Git timed out".into(),
+            }),
+            ProcessOutcomeIntent::ProcessControlFailed(detail) => Err(WorkspaceAcquireError::Git {
+                operation: "settle supervised workspace Git".into(),
+                detail,
+            }),
+        }
+    });
+    task.await
+        .map_err(|error| WorkspaceAcquireError::Settlement {
+            detail: format!("workspace helper owner failed before settlement: {error}"),
+        })?
 }
 
 fn git_failure_detail(output: &GitOutput) -> String {
@@ -3671,18 +3754,6 @@ fn is_safe_repository_relative(path: &Path) -> bool {
         .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
-fn kill_git_process_group(child_id: Option<u32>) {
-    #[cfg(unix)]
-    if let Some(child_id) = child_id.and_then(|id| i32::try_from(id).ok()) {
-        let _ = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(child_id),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-    }
-    #[cfg(not(unix))]
-    let _ = child_id;
-}
-
 /// Checks one `git worktree list --porcelain` entry against an immutable
 /// workspace snapshot. Recovered inspection accepts any final `HEAD` because
 /// a committed child is expected to move it; acquisition requires the exact
@@ -4137,6 +4208,79 @@ mod tests {
     };
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::SubagentId;
+
+    #[tokio::test]
+    async fn supervised_settlement_git_preserves_large_binary_output_and_argument_bytes() {
+        use crate::runtime::identity::{ConversationId, SessionId};
+        use crate::runtime::local_storage::ProductRoot;
+        use crate::runtime::subagent::physical_recovery::{ParentPhysicalLease, prove};
+        use std::os::unix::ffi::OsStringExt;
+        use std::sync::Arc;
+
+        let repository = repository();
+        let resources = tempfile::tempdir().unwrap();
+        let product = ProductRoot::create(resources.path()).unwrap();
+        let session = SessionId::new("ses_01900000-0000-7000-8000-000000000001");
+        let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000002");
+        let activation = SubagentId::new("activation:1");
+        let owner = Arc::new(
+            ParentPhysicalLease::reserve(&product, &session, &conversation, &activation).unwrap(),
+        );
+        owner.publish_quiescent().unwrap();
+        let manager = WorkspaceManager::new(repository.path(), resources.path());
+        for index in 0..1500 {
+            std::fs::write(
+                repository
+                    .path()
+                    .join(format!("untracked-{index:04}-{}", "long-name-".repeat(6))),
+                [],
+            )
+            .unwrap();
+        }
+        let binary_name = std::ffi::OsString::from_vec(b"non-UTF8-\xff-$(touch NEVER)".to_vec());
+        std::fs::write(repository.path().join(&binary_name), []).unwrap();
+        let args = vec!["ls-files".into(), "--others".into(), "-z".into()];
+        let ordinary = manager
+            .git_raw(repository.path(), args.clone(), None)
+            .await
+            .unwrap();
+        assert!(ordinary.stdout.len() > 64 * 1024);
+        let supervised = super::with_physical_settlement_authority(
+            Some(owner.clone()),
+            manager.git_raw(repository.path(), args, None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(supervised.status, ordinary.status);
+        assert_eq!(supervised.stdout, ordinary.stdout);
+        assert_eq!(supervised.stderr, ordinary.stderr);
+        let exact = super::with_physical_settlement_authority(
+            Some(owner.clone()),
+            manager.git_raw(
+                repository.path(),
+                vec![
+                    "ls-files".into(),
+                    "--others".into(),
+                    "-z".into(),
+                    "--".into(),
+                    binary_name.clone(),
+                ],
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        let mut expected = binary_name.into_vec();
+        expected.push(0);
+        assert_eq!(exact.stdout, expected);
+        assert!(!repository.path().join("NEVER").exists());
+        drop(owner);
+        assert!(
+            prove(&product, &session, &conversation, &activation)
+                .unwrap()
+                .is_some()
+        );
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

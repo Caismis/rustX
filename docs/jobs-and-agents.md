@@ -143,15 +143,18 @@ Activity snapshots, control acknowledgements and wait results are not parallel
 report/history channels. The Event Journal records ownership and execution facts;
 it does not replace canonical child content.
 
-A resumed activation first commits an `AgentActivationAdmission::Reserved` fact
-before staging any physical child. Ownership must consume that same Agent,
-activation and origin. Conclusive rollback records `RolledBack` with an explicit
+A resumed activation first reserves an exact generation under the registry mutex.
+The detached admission owner installs and fsyncs a recoverable physical authority
+before publishing that activation ID or appending `AgentActivationAdmission::Reserved`.
+The append runs outside the mutex; interruption still captures the same reservation.
+Ownership must consume that same Agent, activation and origin. Conclusive rollback records `RolledBack` with an explicit
 physical-settlement proof. Recovery never treats the prior activation's terminal
 fact as proof about a later reserved generation: an unresolved reservation or
 unproven rollback keeps the Agent Unavailable with the exact reserved target and its
 workspace unavailable. Wait reports a settlement error, and Session deletion
-cannot remove that Agent's resources. The sequence watermark includes reservations
-so a later process never reuses their IDs. These facts contain execution correlation, never message bodies or private authority. The
+cannot remove that Agent's resources. The sequence watermark includes both committed reservations and positive physical-authority
+allocations across the Session, including staging that preceded ownership, so a later
+process never reuses a consumed ID. These facts contain execution correlation, never message bodies or private authority. The
 owner publishes each receipt as one combined Agent-and-activation observation
 after installing that whole transition under its mutex. One journal receipt
 releases exactly that complete projection cut; two partial observations must not
@@ -159,7 +162,7 @@ share and prematurely release the same receipt. This releases the observation
 journal frontier; later canonical reports cannot be stranded behind an unpublished
 admission fact.
 
-App Server v25 exposes separate `jobs` and `agents` snapshots and `job_updated`
+App Server v26 exposes separate `jobs` and `agents` snapshots and `job_updated`
 and `agent_updated` events. Agent rows carry `agent_id`, `parent_agent_id`, child
 ConversationId, `current_activation`, latest `activation_id`, `activation_state`
 and explicit Admitting/Active/Stopping/Inactive/Unavailable state. Replay folds activations into the
@@ -224,34 +227,72 @@ uncertainty; committed publication is never described as an unpublished terminal
 
 ## Recovery physical settlement owner
 
-Before composing capabilities or accepting Delegate, each child holds a mandatory
-exclusive lease in its unique incarnation directory. Parent-control EOF first
-releases pending child interactions as ControlLost, then uses the ordinary native
-runtime shutdown to contain nested processes and all other owned execution. Only
-Quiescent permits an exact activation/conversation receipt. The recovering
-registry requires both that receipt and acquisition of the released exclusive
-lease. A free lease alone, PID absence, elapsed time or clean workspace is no proof.
+The activation authority lives at
+`conversations/<conversation>/physical-settlement/<activation>/`, independently of
+the disposable runtime incarnation. Before durable Reserved, the parent creates and
+fsyncs an exact identity receipt and exclusively locked `physical-owner` file.
+The initial receipt is `Unstarted`. The parent passes the same open-file description
+on fd 2 into the child; closing the parent's descriptor cannot release a live child's
+copy. Before composition the child duplicates it CLOEXEC, restores diagnostics on
+stderr, and durably changes the receipt to `Running`.
 
-The registry retains unresolved activation and reservation IDs and their child namespaces as
-concrete reconciliation obligations. Startup performs a bounded pass and one
-watch-backed owner probes for up to 15 seconds; Goal idle performs a fresh pass,
-and shutdown joins that owner before classifying unresolved resources. The bound
-limits work, never establishes containment. Later reopen retries outstanding
-proof. Missing or invalid evidence remains fail-closed and requires explicit
-repair; repeating send_message is not a reconciliation protocol.
+One child lifetime epilogue joins composition rollback or runtime native drain for
+all normal exits. Only positive physical containment permits `Quiescent`; logical
+publication failure cannot erase containment already proved. The parent may also
+publish this proof after explicit direct and retained-native containment. Runtime
+cleanup never removes the authority or receipt. Evidence remains until Session
+deletion, hence survives terminal/rollback publication failure or parent death.
+
+All asynchronous workspace Git commands use the existing native command supervisor,
+so child-side preparation registers a retained process anchor before START.
+Parent-side Workflow workspace cleanup can launch Git after child settlement.
+Each such command reserves its own continuation authority under the activation,
+before spawning the existing trusted command supervisor. The supervisor owns the
+inherited lease and publishes proof only after its complete containment gate,
+including parent-control EOF. Commands cannot inherit or reuse the private authority.
+A `.pending-` directory is an unpublished allocation: no spawn permit has escaped.
+Only atomically published helper directories can be executable authorities.
+
+Recovery takes the parent authority lock and every published continuation lock.
+It accepts exact `Quiescent` receipts. `Unstarted` plus the released inherited lock
+is also positive proof: no reserving parent or executable prelude can still cross
+that authority's resource boundary. `Running`, missing or invalid evidence remains
+unproven. No process disappearance, free lock by itself, clean Git tree, or timeout
+supplies containment proof.
+
+The registry captures immutable obligations and claims them under its mutex, probes
+files and locks and commits SQLite outside it, then revalidates the exact generation
+and publishes one complete owner snapshot. A concurrent pass skips claimed work.
+Startup performs a bounded pass and one watch-backed owner probes for up to 15
+seconds; Goal idle performs a fresh pass, and shutdown joins that owner before
+classifying unresolved resources. The bound limits work and never proves settlement.
+Later reopen retries outstanding evidence without replaying input.
 
 Native proof commits `SubagentPhysicalSettlementProven` for a terminal activation.
-For a reserved generation it commits the exact original provenance with
-`RolledBack { physical_settlement_proven: true }`. An earlier unproven rollback
-is a separate resource fact and cannot close that obligation. The registry then
-releases recovery exclusion and publishes the complete owner projection under
-one mutex, waking the existing Goal idle coordinator without inventing input. Independent
-workspace poison is never cleared by physical proof. Logical Interrupted and its
-canonical parent notice remain unchanged; the dead activation is never reattached
-or replayed. Inert incarnation evidence remains until Session deletion, which
-folds the later proof instead of treating a historical false flag as permanent.
+For a reserved generation it commits the original provenance with
+`RolledBack { physical_settlement_proven: true }`. Proof locks remain held through
+that durable append and its snapshot cut. An earlier unproven rollback cannot close
+that obligation. Independent workspace poison is not cleared by physical proof.
+Logical Interrupted and its canonical parent notice remain unchanged; the old
+activation is never reattached. Session deletion folds subsequent physical facts
+rather than treating a historical false flag as permanent.
+
+Goal idle uses short claims in both execution registries: durable callbacks run
+outside the mutex while claims exclude new ownership. Private Job preparations
+also exclude idle; their rollback wakes the existing Goal coordinator.
 
 Finite Workflow recovery preserves durable ownership and physical proof for shared
 as well as retained workspaces. Restored execution history grants no executable
 terminal protocol or resumed Workflow authority; physical reconciliation never
 replays a Workflow node.
+
+Job observation captures one immutable Job ID. Wait and cancel finish only with
+its durable terminal snapshot or the typed `job_publication_abandoned` failure
+once that Job's owner exhausts terminal publication and finishes its final
+failure callback. Publication failure leaves the logical lifecycle at
+`publishing_terminal`; clients display the failure without inventing terminal
+success. Cancelling the observing Tool alone stops observation.
+
+Job discovery uses the Job domain's `MAX_JOB_LIST_LIMIT` (64). Model and client
+lists report `jobs`, `returned`, `matched`, `limit`, and `truncated` from one
+registry cut, newest first. The TUI `/jobs` command preserves those counts.

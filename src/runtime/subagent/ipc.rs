@@ -100,7 +100,10 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// inspection describes the same composition that execution materializes.
 /// Version 25 carries explicit response/cancel controls to the originating
 /// interaction coordinator. It is independent of App Server protocol v3.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 28;
+/// Version 29 passes the preinstalled physical-authority lease on fd 2 before
+/// the child reads Hello. The parent installed that authority before Reserved;
+/// the child clones it before composition and restores stderr to diagnostics.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 29;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///

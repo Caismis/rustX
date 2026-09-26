@@ -4,10 +4,43 @@ use std::sync::Arc;
 
 use super::super::support::domain_controls::{background_invocation, json_content};
 use super::super::{common, support};
+use rustx::durable::ConversationStore;
 use rustx::runtime::CancellationSignal;
 use rustx::tools::background::BackgroundDispatchOutcome;
 use rustx::tools::executor::ToolExecutor;
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
+
+struct GatedSettlement {
+    started: tokio::sync::watch::Sender<bool>,
+    release: tokio::sync::watch::Receiver<bool>,
+}
+impl ToolExecutor for GatedSettlement {
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
+    }
+
+    fn start<'a>(
+        &'a self,
+        _invocation: rustx::tools::types::ToolInvocation,
+        context: rustx::tools::executor::ToolExecutionContext<'a>,
+    ) -> rustx::tools::executor::ToolExecutionHandle<'a> {
+        let mut release = self.release.clone();
+        let cancellation = context.cancellation.clone();
+        rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                self.started.send_replace(true);
+                release.wait_for(|released| *released).await.unwrap();
+                let mut result = support::fake::success_result("settled");
+                result.status = ToolExecutionStatus::Cancelled {
+                    reason: cancellation.reason(),
+                    phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+                };
+                result
+            }),
+            context.cancellation,
+        )
+    }
+}
 
 #[tokio::test]
 async fn job_status_is_immediate_and_wait_captures_one_finite_job() {
@@ -97,7 +130,9 @@ async fn unknown_job_wait_returns_without_subscribing_forever() {
     tokio::pin!(wait);
     assert!(matches!(
         futures_util::poll!(&mut wait),
-        std::task::Poll::Ready(None)
+        std::task::Poll::Ready(Err(
+            rustx::tools::background::BackgroundWaitError::UnknownJob
+        ))
     ));
 }
 
@@ -105,38 +140,6 @@ async fn unknown_job_wait_returns_without_subscribing_forever() {
 /// gate. Merely emitting a cancellation signal cannot satisfy `job_cancel`.
 #[tokio::test]
 async fn job_cancel_waits_for_physical_settlement_and_preserves_one_notification() {
-    struct GatedSettlement {
-        started: tokio::sync::watch::Sender<bool>,
-        release: tokio::sync::watch::Receiver<bool>,
-    }
-    impl ToolExecutor for GatedSettlement {
-        fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
-            rustx::tools::ToolProgressCapability::None
-        }
-
-        fn start<'a>(
-            &'a self,
-            _invocation: rustx::tools::types::ToolInvocation,
-            context: rustx::tools::executor::ToolExecutionContext<'a>,
-        ) -> rustx::tools::executor::ToolExecutionHandle<'a> {
-            let mut release = self.release.clone();
-            let cancellation = context.cancellation.clone();
-            rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
-                Box::pin(async move {
-                    self.started.send_replace(true);
-                    release.wait_for(|released| *released).await.unwrap();
-                    let mut result = support::fake::success_result("settled");
-                    result.status = ToolExecutionStatus::Cancelled {
-                        reason: cancellation.reason(),
-                        phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
-                    };
-                    result
-                }),
-                context.cancellation,
-            )
-        }
-    }
-
     let fixture = common::native_fixture();
     let registry = fixture.runtime.background();
     let (started, mut starts) = tokio::sync::watch::channel(false);
@@ -192,4 +195,135 @@ async fn job_cancel_waits_for_physical_settlement_and_preserves_one_notification
     .await;
     assert_eq!(json_content(&repeated)["state"], "cancelled");
     assert!(mailbox.select_pending_batch().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn abandoned_publication_finishes_job_wait_and_cancel_with_typed_failure() {
+    let fixture = common::native_fixture();
+    let registry = fixture.runtime.background();
+    let (started, mut starts) = tokio::sync::watch::channel(false);
+    let (release, released) = tokio::sync::watch::channel(false);
+    let executor: Arc<dyn ToolExecutor> = Arc::new(GatedSettlement {
+        started,
+        release: released,
+    });
+    let prepared = registry
+        .prepare_dispatch(
+            &background_invocation("bash"),
+            &executor,
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .unwrap();
+    let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+        .commit_dispatch(prepared, &CancellationSignal::new())
+        .unwrap()
+    else {
+        panic!("accepted")
+    };
+    starts.wait_for(|started| *started).await.unwrap();
+
+    let input = serde_json::json!({ "job_id": execution_id });
+    let wait = common::run_tool(&fixture, "job_wait", input.clone());
+    let cancel = common::run_tool(&fixture, "job_cancel", input.clone());
+    tokio::pin!(wait, cancel);
+    assert!(futures_util::poll!(&mut wait).is_pending());
+    assert!(futures_util::poll!(&mut cancel).is_pending());
+    // Both captured this Job while its executor was held. Fault only the two
+    // real terminal publication attempts, then release physical settlement.
+    fixture.store.arm_fail_accept_times(2);
+    release.send_replace(true);
+    let results = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        [wait.await, cancel.await]
+    })
+    .await
+    .expect("abandoned Job observers must terminate");
+    for result in results {
+        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+        assert_eq!(
+            failure_json(&result)["error"],
+            serde_json::json!({
+                "kind": "job_publication_abandoned", "job_id": execution_id,
+            })
+        );
+    }
+    assert_eq!(
+        registry.snapshot(&execution_id).unwrap().state,
+        rustx::tools::background::BackgroundLifecycle::PublishingTerminal
+    );
+    assert_eq!(
+        registry.wait_until_terminal(&execution_id).await,
+        Err(rustx::tools::background::BackgroundWaitError::PublicationAbandoned)
+    );
+    assert!(fixture.store.load_pending().unwrap().is_empty());
+    assert!(
+        fixture
+            .store
+            .read_events(None, 100)
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| !matches!(
+                event.event,
+                rustx::events::RuntimeEvent::BackgroundTerminalPublished { .. }
+            ))
+    );
+    let repeated = common::run_tool(&fixture, "job_cancel", input).await;
+    assert_eq!(
+        failure_json(&repeated)["error"]["kind"],
+        "job_publication_abandoned"
+    );
+}
+
+#[tokio::test]
+async fn job_list_reports_newest_bounded_results_and_all_omission_metadata() {
+    let fixture = common::native_fixture();
+    let registry = fixture.runtime.background();
+    let mut ids = Vec::new();
+    for _ in 0..rustx::tools::background::MAX_JOB_LIST_LIMIT + 3 {
+        let (tool, release) = support::fake::FakeTool::parking(
+            common::tool_policies(
+                "bash",
+                "tool-bash",
+                ToolExecutionPolicy::ModelSelectable,
+                ToolConcurrencyPolicy::Sequential,
+            ),
+            support::fake::success_result("done"),
+        );
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                rustx::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .unwrap()
+        else {
+            panic!("accepted")
+        };
+        release.send_replace(true);
+        registry.wait_until_terminal(&execution_id).await.unwrap();
+        ids.push(execution_id);
+    }
+    let list = json_content(&common::run_tool(&fixture, "job_list", serde_json::json!({})).await);
+    let limit = rustx::tools::background::MAX_JOB_LIST_LIMIT;
+    assert_eq!(list["returned"], limit);
+    assert_eq!(list["matched"], ids.len());
+    assert_eq!(list["limit"], limit);
+    assert_eq!(list["truncated"], true);
+    let jobs = list["jobs"].as_array().unwrap();
+    assert_eq!(jobs.len(), limit);
+    for (job, id) in jobs.iter().zip(ids.iter().rev()) {
+        assert_eq!(job["job_id"], id.as_str());
+    }
+}
+
+fn failure_json(result: &rustx::tools::types::ToolExecutionResult) -> &serde_json::Value {
+    assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+    let rustx::tools::types::ToolResultContent::Json { value } = &result.content[0] else {
+        panic!("typed Job failure JSON")
+    };
+    value
 }

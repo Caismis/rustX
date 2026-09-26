@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v25';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v26';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts } from '../src/app/agent/Activity';
 import { Server, snapshot } from './fixture';
@@ -195,4 +195,42 @@ it('Starting activation uses authoritative Admitting owner state', async () => {
   expect(ui.getByText('Admitting…')).toBeTruthy();
   expect(ui.queryByText('Stopping…')).toBeNull();
   expect((ui.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it.each(['job/wait', 'job/cancel'] as const)('%s finishes with native publication failure and preserves owner state', async method => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const s = snapshot(); const job: RuntimeClientJob = { job_id: 'job-a', tool_id: 'tool-bash', tool_name: 'bash', state: 'publishing_terminal' }; s.jobs = [job]; server.snapshots.set('A', s);
+  server.handlers.set(method, () => { throw new RpcFailure({ code: -32000, message: 'Publication failed', data: { kind: 'job_publication_abandoned', job_id: job.job_id } }); });
+  const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: method === 'job/wait' ? 'Wait for Job' : 'Cancel Job' })); await server.waitFor(method, 1); });
+  expect(ui.getByRole('alert').textContent).toContain('Job job-a terminal publication was abandoned');
+  expect(ui.queryByText('Waiting for settlement…')).toBeNull();
+  expect(ui.queryByText('Request pending…')).toBeNull();
+  expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('publishing_terminal');
+  expect(server.requests.filter(row => row.request.method === method)).toHaveLength(1);
+});
+
+it('Job list returns the complete owner metadata through the Web client', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const jobs = Array.from({ length: 64 }, (_, index): RuntimeClientJob => ({ job_id: `exec_00000000-0000-7000-8000-${(66 - index).toString(16).padStart(12, "0")}`, tool_id: 'tool-bash', tool_name: 'bash', state: 'succeeded' }));
+  const listing = { type: 'jobs' as const, jobs, returned: 64, matched: 67, limit: 64, truncated: true };
+  server.handlers.set('job/list', () => listing);
+  const received = await server.client.request({ method: 'job/list', params: { target: server.client.target('A') } }, 'jobs');
+  expect(received).toEqual(listing);
+  expect(received.jobs[0].job_id).toBe('exec_00000000-0000-7000-8000-000000000042');
+  expect(received.jobs.at(-1)?.job_id).toBe('exec_00000000-0000-7000-8000-000000000003');
+});
+
+it.each([['agent_not_delivered', 'no input was delivered'], ['agent_delivery_unknown', 'do not replay automatically']] as const)('send-message renders %s and preserves the unacknowledged draft', async (kind, expected) => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const s = snapshot(); const agent = { ...agentFixture(), state: 'inactive' as const, current_activation: null }; s.agents = [agent]; server.snapshots.set('A', s);
+  server.handlers.set('agent/sendMessage', () => { throw new RpcFailure({ code: -32000, message: 'Delivery failed', data: { kind, agent_id: agent.agent_id } }); });
+  const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
+  await act(async () => {
+    fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Keep this guidance' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 1);
+  });
+  expect(ui.getByRole('alert').textContent).toContain(expected);
+  expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Keep this guidance');
+  expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
 });

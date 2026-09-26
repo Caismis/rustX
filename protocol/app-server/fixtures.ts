@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v25.js';
+import type {ProtocolMessage} from './v26.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -73,7 +73,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 25,
+      "protocol_version": 26,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -90,7 +90,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 25,
+      "protocol_version": 26,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -368,6 +368,18 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "id": "exact-u64",
     "result": {
+      "type": "jobs",
+      "jobs": [],
+      "returned": 0,
+      "matched": 0,
+      "limit": 64,
+      "truncated": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
       "type": "inbound_mutation",
       "outcome": {
         "status": "conflict"
@@ -410,6 +422,18 @@ export const fixtures = [
       "type": "inbound_accepted",
       "message_id": "message-fixture",
       "inbound_sequence": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "job-publication-failed",
+    "error": {
+      "code": -32000,
+      "message": "Job terminal publication was abandoned",
+      "data": {
+        "kind": "job_publication_abandoned",
+        "job_id": "exec_0199c989-03a0-7000-8000-000000000001"
+      }
     }
   },
   {

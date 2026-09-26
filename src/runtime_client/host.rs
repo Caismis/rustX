@@ -1553,20 +1553,23 @@ impl ClientInner {
     }
 
     pub(crate) fn job_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        use crate::tools::background::MAX_JOB_LIST_LIMIT;
         self.ensure_session_runtime_live()?;
-        let jobs = self
-            .runtime
-            .as_ref()
-            .map(|r| {
-                r.background_registry()
-                    .listing(false, 64)
-                    .snapshots
-                    .into_iter()
-                    .map(|s| background_view(&s))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(RuntimeClientResult::Jobs { jobs })
+        let listing = self.runtime.as_ref().map(|runtime| {
+            runtime
+                .background_registry()
+                .listing(false, MAX_JOB_LIST_LIMIT)
+        });
+        Ok(RuntimeClientResult::Jobs {
+            jobs: listing
+                .as_ref()
+                .map(|listing| listing.snapshots.iter().map(background_view).collect())
+                .unwrap_or_default(),
+            returned: listing.as_ref().map_or(0, |listing| listing.returned),
+            matched: listing.as_ref().map_or(0, |listing| listing.matched),
+            limit: MAX_JOB_LIST_LIMIT,
+            truncated: listing.as_ref().is_some_and(|listing| listing.truncated),
+        })
     }
 
     pub(crate) async fn job_wait(
@@ -1591,8 +1594,15 @@ impl ClientInner {
             .background_registry()
             .wait_until_terminal(id)
             .await
-            .ok_or_else(|| RuntimeClientError::UnknownBackgroundExecution {
-                execution_id: id.clone(),
+            .map_err(|error| match error {
+                crate::tools::background::BackgroundWaitError::UnknownJob => {
+                    RuntimeClientError::UnknownBackgroundExecution {
+                        execution_id: id.clone(),
+                    }
+                }
+                crate::tools::background::BackgroundWaitError::PublicationAbandoned => {
+                    RuntimeClientError::JobPublicationAbandoned { job_id: id.clone() }
+                }
             })?;
         Ok(RuntimeClientResult::Job {
             job: background_view(&snapshot),
@@ -2708,6 +2718,16 @@ fn agent_control_error(
     error: crate::runtime::subagent::AgentControlError,
 ) -> RuntimeClientError {
     match error {
+        crate::runtime::subagent::AgentControlError::NotDelivered => {
+            RuntimeClientError::AgentNotDelivered {
+                agent_id: id.clone(),
+            }
+        }
+        crate::runtime::subagent::AgentControlError::DeliveryUnknown => {
+            RuntimeClientError::AgentDeliveryUnknown {
+                agent_id: id.clone(),
+            }
+        }
         crate::runtime::subagent::AgentControlError::Stopping => {
             RuntimeClientError::AgentStopping {
                 agent_id: id.clone(),
@@ -2768,6 +2788,12 @@ mod tests {
     #[test]
     fn permanent_agent_settlement_is_a_typed_non_retryable_error() {
         let id = crate::runtime::identity::AgentId::new("agent-unavailable");
+        assert!(
+            matches!(super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::NotDelivered), crate::runtime_client::types::RuntimeClientError::AgentNotDelivered { agent_id } if agent_id == id)
+        );
+        assert!(
+            matches!(super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::DeliveryUnknown), crate::runtime_client::types::RuntimeClientError::AgentDeliveryUnknown { agent_id } if agent_id == id)
+        );
         assert!(matches!(
             super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::Settlement),
             crate::runtime_client::types::RuntimeClientError::AgentSettlement { agent_id } if agent_id == id
@@ -3103,7 +3129,7 @@ mod tests {
         )
         .await
         .unwrap_or_else(|_| panic!("{description}: terminal wait exceeded liveness guard"))
-        .unwrap_or_else(|| panic!("{description}: execution disappeared before terminal state"))
+        .unwrap_or_else(|error| panic!("{description}: Job wait failed: {error:?}"))
     }
 
     /// A fixed deterministic status clock.
@@ -3138,6 +3164,7 @@ mod tests {
         host: RuntimeClientHost,
         runtime: ConversationRuntime,
         coordinator: crate::capabilities::CapabilityCoordinator,
+        store: Option<Arc<SqliteConversationStore>>,
     }
 
     #[tokio::test]
@@ -3194,12 +3221,22 @@ mod tests {
         let conversation_id = ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
+        let store = Arc::new(
+            SqliteConversationStore::open(
+                conversation_id.clone(),
+                &dir.path().join("conversation.sqlite"),
+            )
+            .expect("store"),
+        );
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            crate::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace,
-                dir.path().join("artifacts"),
-            )
+            crate::tools::runtime::ConversationRuntimeConfig {
+                durable_binding: Some(crate::durable::ConversationStoreBinding::new(store.clone())),
+                ..crate::tools::runtime::ConversationRuntimeConfig::new(
+                    &workspace,
+                    dir.path().join("artifacts"),
+                )
+            }
             // These Runtime Client fixtures compose Agent Status and nothing
             // else: the composition must match the status engine below and
             // the extension Tool plane the coordinator is given, because
@@ -3304,6 +3341,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: Some(store),
             },
         )
     }
@@ -3405,6 +3443,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: None,
             },
         )
     }
@@ -5324,6 +5363,7 @@ mod tests {
             host,
             runtime,
             coordinator,
+            store: _,
         } = fixture;
 
         // Clone subsystem handles out of the runtime, exactly as an embedder
@@ -6128,6 +6168,119 @@ mod tests {
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.jobs[0].state, BackgroundLifecycle::Succeeded);
         assert!(snapshot.jobs[0].result.is_some());
+    }
+
+    #[tokio::test]
+    async fn job_wait_and_cancel_report_abandoned_publication_for_the_captured_job() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let registry = fixture.runtime.background_registry();
+        let invocation = ToolInvocation {
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("job-failure-call"),
+            },
+            tool_id: ToolId::new("tool-bg"),
+            tool_name: "bg".into(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = registry
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .unwrap()
+        else {
+            panic!("accepted")
+        };
+        started.wait_for(|started| *started).await.unwrap();
+        let wait = fixture.host.inner.job_wait(&execution_id, false);
+        let cancel = fixture.host.inner.job_wait(&execution_id, true);
+        tokio::pin!(wait, cancel);
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        assert!(futures_util::poll!(&mut cancel).is_pending());
+        fixture.store.as_ref().unwrap().arm_fail_accept_times(2);
+        release.send_replace(true);
+        let results = tokio::time::timeout(BACKGROUND_LIVENESS_GUARD, async {
+            [wait.await, cancel.await]
+        })
+        .await
+        .expect("abandoned Job observers must terminate");
+        for result in results {
+            assert!(
+                matches!(result, Err(RuntimeClientError::JobPublicationAbandoned { job_id }) if job_id == execution_id)
+            );
+        }
+        assert_eq!(
+            registry.snapshot(&execution_id).unwrap().state,
+            BackgroundLifecycle::PublishingTerminal
+        );
+        assert!(
+            matches!(fixture.host.inner.job_wait(&execution_id, true).await, Err(RuntimeClientError::JobPublicationAbandoned { job_id }) if job_id == execution_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn job_list_preserves_domain_bound_order_and_omission_metadata() {
+        use crate::tools::background::MAX_JOB_LIST_LIMIT;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let registry = fixture.runtime.background_registry();
+        let mut ids = Vec::new();
+        for index in 0..MAX_JOB_LIST_LIMIT + 3 {
+            let (tool, _, release) = ParkingBackgroundTool::new();
+            let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+            let invocation = ToolInvocation {
+                id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new(format!("job-list-{index}")),
+                },
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".into(),
+                mode: ToolInvocationMode::Background,
+                arguments: serde_json::json!({}),
+            };
+            let prepared = registry
+                .prepare_dispatch(
+                    &invocation,
+                    &executor,
+                    crate::tools::environment::ToolEnvironment::new(),
+                )
+                .unwrap();
+            let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+                .commit_dispatch(prepared, &CancellationSignal::new())
+                .unwrap()
+            else {
+                panic!("accepted")
+            };
+            release.send_replace(true);
+            registry.wait_until_terminal(&execution_id).await.unwrap();
+            ids.push(execution_id);
+        }
+        let RuntimeClientResult::Jobs {
+            jobs,
+            returned,
+            matched,
+            limit,
+            truncated,
+        } = fixture.host.inner.job_list().unwrap()
+        else {
+            panic!("jobs")
+        };
+        assert_eq!(
+            (returned, matched, limit, truncated),
+            (MAX_JOB_LIST_LIMIT, ids.len(), MAX_JOB_LIST_LIMIT, true)
+        );
+        assert_eq!(
+            jobs.iter().map(|job| &job.job_id).collect::<Vec<_>>(),
+            ids.iter()
+                .rev()
+                .take(MAX_JOB_LIST_LIMIT)
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Detached background work stays visible after the originating
@@ -7043,6 +7196,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: None,
             },
         )
     }
@@ -7148,6 +7302,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: None,
             },
         )
     }

@@ -390,7 +390,9 @@ pub enum RuntimeClientSessionRequest {
 /// Version 50 separates finite Jobs from durable Agents and exposes exact
 /// activation correlation and owner-arbitrated continuation controls (#411).
 /// Version 51 makes admission state, activation origin and bounded Agent listing explicit.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 51;
+/// Version 52 exposes Job publication abandonment, bounded listing metadata,
+/// and the distinction between proven absent Agent delivery and unknown delivery.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 52;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1175,6 +1177,10 @@ pub enum RuntimeClientResult {
     },
     Jobs {
         jobs: Vec<RuntimeClientJob>,
+        returned: usize,
+        matched: usize,
+        limit: usize,
+        truncated: bool,
     },
     Agent {
         agent: RuntimeClientAgent,
@@ -1279,8 +1285,18 @@ pub enum RuntimeClientError {
         /// The referenced execution identity.
         execution_id: ToolExecutionId,
     },
-    /// The referenced subagent child does not exist in the authoritative
-    /// conversation registry (Issue #60).
+    /// The captured Job owner exhausted terminal publication and cannot make
+    /// further lifecycle progress. Its candidate is not a durable terminal.
+    JobPublicationAbandoned { job_id: ToolExecutionId },
+    /// Cancellation won before Delegate could be sent; no input was delivered.
+    AgentNotDelivered {
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    /// Delegate may have reached the child, but canonical acceptance is unproven.
+    /// Automatic replay could duplicate user guidance.
+    AgentDeliveryUnknown {
+        agent_id: crate::runtime::identity::AgentId,
+    },
     /// Message admission is closed during settlement or activation reservation.
     AgentStopping {
         agent_id: crate::runtime::identity::AgentId,
@@ -1292,6 +1308,8 @@ pub enum RuntimeClientError {
     UnknownAgent {
         agent_id: crate::runtime::identity::AgentId,
     },
+    /// The referenced subagent child does not exist in the authoritative
+    /// conversation registry (Issue #60).
     UnknownSubagent {
         /// The referenced subagent identity.
         subagent_id: crate::runtime::identity::SubagentId,
@@ -1414,7 +1432,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 51);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 52);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

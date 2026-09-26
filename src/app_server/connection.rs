@@ -1163,7 +1163,19 @@ fn native_result(
         RuntimeClientResult::TranscriptPage { page } => MethodResult::Transcript { page },
         RuntimeClientResult::Goal { view } => MethodResult::Goal { view },
         RuntimeClientResult::Job { job } => MethodResult::Job { job },
-        RuntimeClientResult::Jobs { jobs } => MethodResult::Jobs { jobs },
+        RuntimeClientResult::Jobs {
+            jobs,
+            returned,
+            matched,
+            limit,
+            truncated,
+        } => MethodResult::Jobs {
+            jobs,
+            returned,
+            matched,
+            limit,
+            truncated,
+        },
         RuntimeClientResult::Agent { agent } => MethodResult::Agent {
             agent: Box::new(agent),
         },
@@ -1228,6 +1240,15 @@ fn native_result(
 }
 fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
+        RuntimeClientError::AgentNotDelivered { agent_id } => {
+            ErrorData::AgentNotDelivered { agent_id }
+        }
+        RuntimeClientError::AgentDeliveryUnknown { agent_id } => {
+            ErrorData::AgentDeliveryUnknown { agent_id }
+        }
+        RuntimeClientError::JobPublicationAbandoned { job_id } => {
+            ErrorData::JobPublicationAbandoned { job_id }
+        }
         RuntimeClientError::AgentStopping { agent_id } => ErrorData::AgentStopping { agent_id },
         RuntimeClientError::AgentSettlement { agent_id } => ErrorData::AgentSettlement { agent_id },
         RuntimeClientError::UnknownAgent { agent_id } => ErrorData::UnknownAgent { agent_id },
@@ -1280,6 +1301,15 @@ fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError
 }
 fn domain(data: ErrorData) -> RpcError {
     let message = match &data {
+        ErrorData::AgentNotDelivered { .. } => {
+            "Agent activation was cancelled before input delivery; no input was delivered"
+        }
+        ErrorData::AgentDeliveryUnknown { .. } => {
+            "Agent input acceptance was not acknowledged; delivery is unknown, do not replay automatically"
+        }
+        ErrorData::JobPublicationAbandoned { .. } => {
+            "Job terminal publication was abandoned; no durable terminal result is available"
+        }
         ErrorData::AgentStopping { .. } => {
             "Agent is stopping or admitting an activation; retry after settlement"
         }
@@ -1344,6 +1374,75 @@ fn source_settings_error(
 
 #[cfg(test)]
 mod capacity_tests {
+    #[test]
+    fn agent_delivery_failures_preserve_the_owner_three_way_contract() {
+        let agent_id = crate::runtime::identity::AgentId::new("agent-delivery");
+        let missing = super::client_error(
+            crate::runtime_client::types::RuntimeClientError::AgentNotDelivered {
+                agent_id: agent_id.clone(),
+            },
+        );
+        assert_eq!(
+            missing.data,
+            Some(super::ErrorData::AgentNotDelivered {
+                agent_id: agent_id.clone()
+            })
+        );
+        assert!(missing.message.contains("no input was delivered"));
+        let unknown = super::client_error(
+            crate::runtime_client::types::RuntimeClientError::AgentDeliveryUnknown {
+                agent_id: agent_id.clone(),
+            },
+        );
+        assert_eq!(
+            unknown.data,
+            Some(super::ErrorData::AgentDeliveryUnknown { agent_id })
+        );
+        assert!(unknown.message.contains("do not replay automatically"));
+    }
+
+    #[test]
+    fn job_publication_abandonment_preserves_typed_failure_and_identity() {
+        let job_id = crate::runtime::identity::ToolExecutionId::new(
+            "exec_0199c989-03a0-7000-8000-000000000001",
+        );
+        let error = super::native_result(Err(
+            crate::runtime_client::types::RuntimeClientError::JobPublicationAbandoned {
+                job_id: job_id.clone(),
+            },
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error.data,
+            Some(super::ErrorData::JobPublicationAbandoned { job_id })
+        );
+        assert!(error.message.contains("no durable terminal result"));
+    }
+
+    #[test]
+    fn job_listing_preserves_omission_metadata_on_the_wire() {
+        let result = super::native_result(Ok(
+            crate::runtime_client::types::RuntimeClientResult::Jobs {
+                jobs: Vec::new(),
+                returned: 0,
+                matched: 67,
+                limit: 64,
+                truncated: true,
+            },
+        ))
+        .unwrap();
+        assert!(matches!(
+            result,
+            super::MethodResult::Jobs {
+                returned: 0,
+                matched: 67,
+                limit: 64,
+                truncated: true,
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn agent_settlement_wire_error_does_not_advise_retry() {
         let error = super::client_error(

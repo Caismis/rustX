@@ -997,6 +997,10 @@ export type MethodResult =
     }
   | {
       jobs: RuntimeClientJob[];
+      returned: number;
+      matched: number;
+      limit: number;
+      truncated: boolean;
       type: 'jobs';
     }
   | {
@@ -2535,6 +2539,18 @@ export type ErrorData =
   | {
       reason: SessionArchivePrepareError;
       kind: 'archive_preparation_failed';
+    }
+  | {
+      job_id: ToolExecutionId;
+      kind: 'job_publication_abandoned';
+    }
+  | {
+      agent_id: AgentId;
+      kind: 'agent_not_delivered';
+    }
+  | {
+      agent_id: AgentId;
+      kind: 'agent_delivery_unknown';
     }
   | {
       agent_id: AgentId;

@@ -415,19 +415,47 @@ enum InnerAnchor {
 #[allow(clippy::too_many_lines)] // one coherent observe/un-wedge/contain/reap pipeline
 fn run_outer() -> i32 {
     let mut stream = ControlStream;
+    let continuation = match std::env::var("RUSTX_PHYSICAL_CONTINUATION") {
+        Ok(encoded) => {
+            let acquired = serde_json::from_str(&encoded)
+                .map_err(std::io::Error::other)
+                .and_then(|spec| {
+                    crate::runtime::subagent::physical_recovery::ChildPhysicalContinuation::acquire(
+                        &spec,
+                    )
+                });
+            match acquired {
+                Ok(continuation) => Some(continuation),
+                Err(error) => {
+                    let _ = stream.write_preownership_failure(&format!(
+                        "cannot acquire physical continuation: {error}"
+                    ));
+                    return 0;
+                }
+            }
+        }
+        Err(_) => None,
+    };
     if let Err(error) = become_child_subreaper() {
         let _ = stream.write_preownership_failure(&format!(
             "cannot become the invocation subreaper: {error}"
         ));
+        if let Some(continuation) = &continuation {
+            let _ = continuation.publish_quiescent();
+        }
         return 0;
     }
     if let Err(error) = fcntl(std::io::stdin(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
         let _ = stream.write_preownership_failure(&format!(
             "cannot make the outer control channel non-blocking: {error}"
         ));
+        if let Some(continuation) = &continuation {
+            let _ = continuation.publish_quiescent();
+        }
         return 0;
     }
     let inner_pid = match Command::new(supervisor_binary())
+        .env_remove("RUSTX_PHYSICAL_CONTINUATION")
         .env("RUSTX_SUPERVISOR_ROLE", ROLE_INNER)
         .spawn()
     {
@@ -436,6 +464,9 @@ fn run_outer() -> i32 {
             let _ = stream.write_preownership_failure(&format!(
                 "cannot spawn the invocation anchor supervisor: {error}"
             ));
+            if let Some(continuation) = &continuation {
+                let _ = continuation.publish_quiescent();
+            }
             return 0;
         }
     };
@@ -564,6 +595,13 @@ fn run_outer() -> i32 {
                             let _ = stream.write_failure(&error);
                             anchor = InnerAnchor::ContainmentFailed;
                             continue;
+                        }
+                        if let Some(continuation) = &continuation
+                            && let Err(error) = continuation.publish_quiescent()
+                        {
+                            let _ = stream.write_failure(&format!(
+                                "cannot publish physical continuation proof: {error}"
+                            ));
                         }
                         if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
                             await_terminal_ack();

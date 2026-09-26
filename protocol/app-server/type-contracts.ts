@@ -1,6 +1,6 @@
 // Regressions for fields contributed by draft-2020-12 $ref siblings.
 // These must be usable through the public union, not a handwritten DTO.
-import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v25.js';
+import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v26.js';
 
 const text = {type: 'text', text: 'Native content'} satisfies UserContentBlock;
 const user = {role: 'user', id: 'user-1', content: [text], source: 'human'} satisfies MessageBlock;
@@ -33,8 +33,8 @@ const invalidTool: MessageBlock = missingOwner;
 void nativeOwner;
 void invalidTool;
 
-// Native response projections and explicit cut side are the mandatory v25 contract.
-import type {CompletedResponseView, Request1} from './v25.js';
+// Native response projections and explicit cut side are the mandatory v26 contract.
+import type {CompletedResponseView, Request1} from './v26.js';
 const completed = {
   closing_message_id: 'destination-assistant',
   origin: {conversation_id: 'source-conversation', attempt_id: 'source-attempt', closing_message_id: 'source-assistant'},
@@ -45,3 +45,11 @@ void completed;
 const after: Extract<Request1, {method: 'session/branch'}>['params']['side'] = 'after';
 const before: Extract<Request1, {method: 'session/branch'}>['params']['side'] = 'before';
 void after; void before;
+
+// Job discovery must expose omitted matches, and abandonment is a typed failure.
+import type { MethodResult, ErrorData } from './v26.js';
+const jobs = { type: 'jobs', jobs: [], returned: 0, matched: 0, limit: 64, truncated: false } satisfies MethodResult;
+// @ts-expect-error A bounded list cannot silently omit its discovery metadata.
+const dishonestJobs: MethodResult = { type: 'jobs', jobs: [] };
+const failedJob = { kind: 'job_publication_abandoned', job_id: 'job-a' } satisfies ErrorData;
+void jobs; void dishonestJobs; void failedJob;

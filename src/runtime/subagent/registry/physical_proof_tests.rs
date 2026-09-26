@@ -319,7 +319,7 @@ async fn recovered_isolated_agent_workspace_has_no_activation_disposal_handoff()
     )
     .parent()
     .unwrap()
-    .join("incarnation-agent-workspace-proof");
+    .join("physical-settlement").join(accepted.subagent_id.as_str());
     std::fs::create_dir_all(&incarnation).unwrap();
     let lease = ChildPhysicalLease::for_test(
         incarnation,
@@ -363,4 +363,67 @@ async fn recovered_isolated_agent_workspace_has_no_activation_disposal_handoff()
         (agent, activation)
     );
     assert!(!events(&plane).iter().any(|event| matches!(event, crate::events::types::RuntimeEvent::SubagentWorkspaceDisposalStarted { subagent_id, .. } if *subagent_id == accepted.subagent_id)));
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parked_recovery_probe_does_not_hold_registry_mutex() {
+    let plane = plane(4);
+    let child = stage_with_unresolved_anchor(&plane);
+    let accepted = start(&plane, &spec("unproven recovery probe")).await;
+    child.complete(ChildResultStatus::Succeeded, Some("unproven")).await;
+    plane.registry.wait_until_settled(&accepted.subagent_id).await.unwrap();
+    let recovered = SubagentRegistry::new(plane.registry.config.clone());
+    recovered.restore_agents(plane.store.as_ref()).unwrap();
+    let (entered, entry) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::sync_channel(0);
+    recovered.state.lock().unwrap().recovery_probe_hook = Some(Box::new(move || {
+        entered.send(()).unwrap();
+        released.recv().unwrap();
+    }));
+    let probing = recovered.clone();
+    let task = std::thread::spawn(move || probing.reconcile_recovered_settlements());
+    entry.await.unwrap();
+    assert!(recovered.state.try_lock().is_ok(), "probe holds its exact claim, not the registry mutex");
+    assert_eq!(recovered.list_agents(MAX_AGENT_LIST_LIMIT).matched, 1);
+    assert_eq!(recovered.agent_snapshot(&accepted.child_agent_id).unwrap().state, AgentState::Unavailable);
+    assert!(matches!(recovered.interrupt_agent(&accepted.child_agent_id).await, Err(AgentControlError::Settlement)));
+    // A concurrent pass sees the claim and returns without probing/committing
+    // the same activation. No elapsed delay determines either ordering.
+    recovered.reconcile_recovered_settlements();
+    release.send(()).unwrap();
+    task.join().unwrap();
+    assert_eq!(recovered.unproven_settlements(), vec![accepted.subagent_id]);
+}
+
+#[test]
+fn recovered_activation_constructors_preserve_domain_defaults() {
+    let plane = plane(4);
+    let frozen = spec("recovery constructor").authority.resolved;
+    let mut evidence = crate::runtime::recovery::SubagentEvidence {
+        subagent_id: SubagentId::for_conversation(&plane.conversation_id, 1),
+        child_agent_id: AgentId::new("recovered-agent"),
+        child_conversation_id: ConversationId::new("conv_01900000-0000-7000-8000-000000000002"),
+        origin: AgentActivationOrigin::ClientControl,
+        agent: frozen.agent.as_str().to_owned(),
+        definition_digest: frozen.definition_digest.as_str().to_owned(),
+        profile_digest: frozen.profile_digest().as_str().to_owned(),
+        ownership: SubagentOwnershipKind::Normal,
+        started_at: Utc::now(),
+        workspace: WorkspaceSnapshot::shared(plane.dir.path().join("workspace")),
+    };
+    for ownership in [SubagentOwnershipKind::Normal, SubagentOwnershipKind::Workflow] {
+        evidence.ownership = ownership;
+        let record = SubagentRecord::recovered(AgentId::new("parent"), &evidence).unwrap();
+        assert_eq!(record.ownership, ownership);
+        assert_eq!(record.delegate_delivery, DelegateDelivery::Started,
+            "replay proves neither non-delivery nor canonical input acceptance");
+        assert!(!record.physical_settlement_proven);
+        assert!(record.terminal.is_none() && record.control.is_none() && record.profile.is_none());
+        assert!(record.steer_tickets.is_empty());
+        assert_eq!(record.lifecycle, SubagentLifecycle::Interrupted);
+        assert_eq!(record.notification, if ownership == SubagentOwnershipKind::Normal {
+            NotificationState::Delivered
+        } else { NotificationState::None });
+    }
 }

@@ -3,7 +3,7 @@ use super::input::decode;
 use super::registration::{NativeToolRegistration, input_schema};
 use super::support::{cancelled_result, failed_result, success_json};
 use crate::runtime::identity::{AgentId, ToolId};
-use crate::runtime::subagent::{MAX_AGENT_LIST_LIMIT, SubagentRegistry};
+use crate::runtime::subagent::{AgentControlError, MAX_AGENT_LIST_LIMIT, SubagentRegistry};
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
@@ -100,7 +100,7 @@ impl ToolExecutor for AgentExecutor {
                         biased;
                         result = self.0.send_message(&input.agent_id, &input.message, origin, input_cancellation) => match result {
                             Ok(accepted) => success_json(serde_json::json!(accepted)),
-                            Err(error) => failed_result(error.to_string()),
+                            Err(error) => message_error(&error),
                         },
                         () = cancellation.cancelled() => cancelled_result(cancellation.reason()),
                     };
@@ -130,5 +130,49 @@ impl ToolExecutor for AgentExecutor {
             }),
             context.cancellation.clone(),
         )
+    }
+}
+
+/// A failed send retains the delivery classification for the caller. Neither
+/// branch fabricates acceptance or authorizes automatic replay.
+fn message_error(error: &AgentControlError) -> crate::tools::types::ToolExecutionResult {
+    let delivery = match error {
+        AgentControlError::NotDelivered => Some("not_delivered"),
+        AgentControlError::DeliveryUnknown => Some("unknown"),
+        AgentControlError::Start(crate::runtime::subagent::SubagentStartError::Cancelled) => {
+            Some("not_delivered")
+        }
+        _ => None,
+    };
+    let mut result = failed_result(error.to_string());
+    if let Some(delivery) = delivery {
+        result
+            .content
+            .push(crate::tools::types::ToolResultContent::Json {
+                value: serde_json::json!({ "delivery": delivery }),
+            });
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_send_preserves_proven_non_delivery_and_unknown_delivery() {
+        for (error, delivery) in [
+            (AgentControlError::NotDelivered, "not_delivered"),
+            (AgentControlError::DeliveryUnknown, "unknown"),
+        ] {
+            let result = message_error(&error);
+            assert!(matches!(
+                result.status,
+                crate::tools::types::ToolExecutionStatus::Failed { .. }
+            ));
+            assert!(
+                matches!(&result.content[..], [crate::tools::types::ToolResultContent::Json { value }] if value["delivery"] == delivery)
+            );
+        }
     }
 }

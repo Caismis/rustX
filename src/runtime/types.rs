@@ -234,13 +234,12 @@ impl ConversationLifecycle {
         true
     }
 
-    /// Linearizes an unrecoverable runtime-owned physical-settlement failure
-    /// before activation. This is deliberately distinct from ordinary
-    /// shutdown: an inactive runtime has no healthy work to cancel, but the
-    /// failure must still move it into the existing drain/failure lifecycle
-    /// so a later activation cannot reopen admission.
+    /// Closes pre-activation composition after rollback or a physical
+    /// settlement failure. Ordinary shutdown still refuses Inactive; the
+    /// explicit composition owner uses this transition to drain its resources
+    /// without first opening semantic admission.
     #[must_use]
-    pub(crate) fn begin_failure_drain(&self) -> bool {
+    pub(crate) fn begin_inactive_drain(&self) -> bool {
         let _boundary = self
             .inner
             .commit_boundary

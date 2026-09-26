@@ -2403,7 +2403,7 @@ mod tests {
         assert_eq!(background.execution_id, execution_id);
         assert_eq!(background.state, before[0].state);
 
-        registry.wait_until_terminal(&execution_id).await;
+        registry.wait_until_terminal(&execution_id).await.unwrap();
         assert!(registry.active_snapshot().is_empty());
         release.send_replace(true);
     }
@@ -3040,7 +3040,7 @@ mod tests {
             .unwrap()
             .execution_id;
         release.send_replace(true);
-        registry.wait_until_terminal(&execution_id).await;
+        registry.wait_until_terminal(&execution_id).await.unwrap();
     }
 
     #[test]

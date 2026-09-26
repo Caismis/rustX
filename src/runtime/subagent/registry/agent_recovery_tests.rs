@@ -1,5 +1,41 @@
 // Included inside registry::tests so the existing deterministic staged-child
 // and physical-settlement fixtures remain the single test substrate.
+#[tokio::test]
+async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_restart() {
+    let plane = plane(4);
+    let orphaned_conversation = ConversationId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+    let consumed = SubagentId::for_conversation(&plane.conversation_id, 1);
+    let spawn = &plane.registry.config.spawn;
+    let owner = super::super::physical_recovery::ParentPhysicalLease::reserve(
+        &spawn.product_root,
+        &spawn.session_id,
+        &orphaned_conversation,
+        &consumed,
+    )
+    .unwrap();
+    assert!(events(&plane).is_empty(), "ownership has not committed");
+    drop(owner);
+
+    // No ownership event names this child Conversation. The positive durable
+    // allocation fact must still prevent reuse in the parent's ordinal domain.
+    let recovered = SubagentRegistry::new(plane.registry.config.clone());
+    recovered.restore_agents(plane.store.as_ref()).unwrap();
+    assert!(recovered.all_snapshots().is_empty());
+    assert!(recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents.is_empty());
+    assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
+    assert!(events(&plane).is_empty(), "allocation invents no logical ownership");
+    assert!(
+        super::super::physical_recovery::ParentPhysicalLease::reserve(
+            &spawn.product_root,
+            &spawn.session_id,
+            &orphaned_conversation,
+            &consumed,
+        )
+        .is_err(),
+        "the exact consumed namespace cannot be overwritten"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
     use crate::runtime::subagent::physical_recovery::ChildPhysicalLease;
@@ -29,7 +65,7 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
     )
     .parent()
     .unwrap()
-    .join("incarnation-recovery-proof");
+    .join("physical-settlement").join(admitted.subagent_id.as_str());
     std::fs::create_dir_all(&incarnation).unwrap();
     let lease = ChildPhysicalLease::for_test(
         incarnation.clone(),
@@ -409,7 +445,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             )
             .parent()
             .unwrap()
-            .join("incarnation-reserved-recovery");
+            .join("physical-settlement").join(reserved.as_str());
             std::fs::create_dir_all(&incarnation).unwrap();
             let lease = crate::runtime::subagent::physical_recovery::ChildPhysicalLease::for_test(
                 incarnation,

@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v25.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v26.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v25.schema.json
+ * protocol/app-server/v26.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v25.ts       (generated)
+ * protocol/app-server/v26.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundary,
   Success,
-} from "../../../protocol/app-server/v25.ts";
+} from "../../../protocol/app-server/v26.ts";
 
 export type {
   ConfigurationApplication,
@@ -132,7 +132,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v25.ts";
+} from "../../../protocol/app-server/v26.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -474,6 +474,12 @@ export function describeRpcError(error: RpcError): string {
       return `the App Server reached ${data.kind.replaceAll("_", " ")}`;
     case "server_draining":
       return "the App Server is shutting down and no longer accepts work";
+    case "agent_not_delivered":
+      return `Agent ${data.agent_id} was cancelled before input delivery; no input was delivered`;
+    case "agent_delivery_unknown":
+      return `Agent ${data.agent_id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically`;
+    case "job_publication_abandoned":
+      return `Job ${data.job_id} terminal publication was abandoned; no durable terminal result is available`;
     case "agent_settlement":
       return `Agent ${data.agent_id} is unavailable; physical settlement, publication, or workspace authority requires explicit repair`;
     case "agent_stopping":

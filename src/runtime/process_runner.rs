@@ -643,6 +643,8 @@ pub(crate) struct RunnerTestControl {
     #[cfg(test)]
     pub(crate) fail_wait: bool,
     #[cfg(test)]
+    pub(crate) interrupt_direct_wait: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(test)]
     pub(crate) fail_sigterm_handler: bool,
     #[cfg(test)]
     pub(crate) fail_subreaper_init: bool,
@@ -685,6 +687,7 @@ impl RunnerTestControl {
             fail_command_spawn: false,
             fail_signal: false,
             fail_wait: false,
+            interrupt_direct_wait: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             fail_sigterm_handler: false,
             fail_subreaper_init: false,
             force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -779,6 +782,28 @@ impl SupervisedCommandRunner {
         ),
         RunnerSpawnError,
     > {
+        Self::spawn_with_continuation(spec, control, None)
+    }
+
+    /// Retains one durable activation continuation in the trusted supervisor.
+    /// It writes proof only after the same native group containment gate used
+    /// by ordinary commands; the command never owns the authority descriptor.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn spawn_with_continuation(
+        spec: &SupervisedCommandSpec,
+        control: Option<RunnerTestControl>,
+        continuation: Option<
+            &crate::runtime::subagent::physical_recovery::ParentPhysicalContinuation,
+        >,
+    ) -> Result<
+        (
+            Self,
+            Option<tokio::process::ChildStdout>,
+            Option<tokio::process::ChildStderr>,
+        ),
+        RunnerSpawnError,
+    > {
         #[cfg(not(test))]
         let _ = control;
         #[cfg(test)]
@@ -812,6 +837,9 @@ impl SupervisedCommandRunner {
         for (key, value) in &spec.environment {
             supervisor.env(key, value);
         }
+        // Private continuation authority comes only from the typed descriptor
+        // below; caller environment cannot install or replay it.
+        supervisor.env_remove("RUSTX_PHYSICAL_CONTINUATION");
         supervisor.env(SUPERVISOR_ROLE_ENV, ROLE_OUTER);
         supervisor.env(COMMAND_ENV, &spec.command);
         #[cfg(test)]
@@ -840,7 +868,20 @@ impl SupervisedCommandRunner {
         }
         supervisor.stdin(Stdio::from(OwnedFd::from(stream_b)));
         supervisor.stdout(Stdio::piped());
-        supervisor.stderr(Stdio::piped());
+        if let Some(continuation) = continuation {
+            supervisor.env(
+                "RUSTX_PHYSICAL_CONTINUATION",
+                serde_json::to_string(&continuation.spec())
+                    .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+            );
+            supervisor.stderr(Stdio::from(
+                continuation
+                    .inherited_file()
+                    .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+            ));
+        } else {
+            supervisor.stderr(Stdio::piped());
+        }
         #[cfg(test)]
         if let Some(control) = &control
             && control.fail_supervisor_spawn
@@ -1141,7 +1182,26 @@ impl SupervisedCommandRunner {
         // point. Reaping the already-terminal direct child is semantically
         // required; it is never abandoned.
         if !self.direct_child_reaped {
-            match self.child.wait().await {
+            let wait = loop {
+                #[cfg(test)]
+                let interrupted = self.control.as_ref().is_some_and(|control| {
+                    control
+                        .interrupt_direct_wait
+                        .swap(false, std::sync::atomic::Ordering::SeqCst)
+                });
+                #[cfg(not(test))]
+                let interrupted = false;
+                let result = if interrupted {
+                    Err(std::io::ErrorKind::Interrupted.into())
+                } else {
+                    self.child.wait().await
+                };
+                match result {
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    result => break result,
+                }
+            };
+            match wait {
                 Ok(_) => {
                     self.direct_child_reaped = true;
                     #[cfg(test)]
@@ -1564,6 +1624,92 @@ mod tests {
         )
         .await
         .expect("rustX must reap the direct supervisor child");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn physical_continuation_survives_parent_control_loss_and_rejects_supervisor_death() {
+        use crate::runtime::identity::{ConversationId, SessionId, SubagentId};
+        use crate::runtime::local_storage::ProductRoot;
+        use crate::runtime::subagent::physical_recovery::{ParentPhysicalLease, prove};
+        use tokio::io::AsyncReadExt;
+
+        for kill_supervisor in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let product = ProductRoot::create(directory.path()).unwrap();
+            let session = SessionId::new("ses_01900000-0000-7000-8000-000000000001");
+            let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000002");
+            let activation = SubagentId::new("activation:1");
+            let owner =
+                ParentPhysicalLease::reserve(&product, &session, &conversation, &activation)
+                    .unwrap();
+            // The activation itself has no child here; its later native helper
+            // is the real production lifetime under test.
+            owner.publish_quiescent().unwrap();
+            let helper = owner.reserve_continuation().unwrap();
+            let fifo = directory.path().join("gate");
+            nix::unistd::mkfifo(
+                &fifo,
+                nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+            )
+            .unwrap();
+            let mut specification = spec("printf ready; exec cat gate", CancellationSignal::new());
+            specification.cwd = directory.path().to_path_buf();
+            let (mut runner, stdout, _) = super::SupervisedCommandRunner::spawn_with_continuation(
+                &specification,
+                None,
+                Some(&helper),
+            )
+            .unwrap();
+            let mut stdout = stdout.unwrap();
+            let mut ready = [0_u8; 5];
+            tokio::select! {
+                result = stdout.read_exact(&mut ready) => { result.unwrap(); }
+                result = runner.settle() => panic!("helper settled before its command gate: {result:?}"),
+            }
+            assert_eq!(&ready, b"ready");
+            let pgid = match runner.lifecycle {
+                super::ProcessLifecycle::OwnershipPossible { pgid }
+                | super::ProcessLifecycle::Owned { pgid } => pgid,
+                other => panic!("missing retained command anchor: {other:?}"),
+            };
+            // The output gate proves START crossed and the trusted outer has
+            // installed Running. Parent descriptor/control loss cannot remove
+            // its lock or create a proof. Command code never inherits the fd.
+            drop(helper);
+            drop(owner);
+            assert!(
+                prove(&product, &session, &conversation, &activation)
+                    .unwrap()
+                    .is_none()
+            );
+            let super::SupervisedCommandRunner {
+                mut child, stream, ..
+            } = runner;
+            if kill_supervisor {
+                child.start_kill().unwrap();
+            }
+            drop(stream); // exact parent-death control boundary
+            tokio::time::timeout(Duration::from_secs(15), child.wait())
+                .await
+                .unwrap()
+                .unwrap();
+            let proof = prove(&product, &session, &conversation, &activation).unwrap();
+            assert_eq!(proof.is_some(), !kill_supervisor);
+            if kill_supervisor {
+                // Cleanup uses the structural group anchor, not a vanished PID
+                // heuristic. It deliberately cannot rewrite the lost proof.
+                assert!(matches!(
+                    crate::runtime::supervised_unit::emergency_contain_group(pgid, false),
+                    Ok(crate::runtime::supervised_unit::EmergencyContainment::TerminalProven)
+                ));
+                assert!(
+                    prove(&product, &session, &conversation, &activation)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
     }
 
     // ---- Issue #145: the nested containment gate ----

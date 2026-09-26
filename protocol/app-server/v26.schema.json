@@ -5303,6 +5303,27 @@
                 "$ref": "#/$defs/RuntimeClientJob"
               }
             },
+            "returned": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "matched": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "limit": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "truncated": {
+              "type": "boolean"
+            },
             "type": {
               "type": "string",
               "const": "jobs"
@@ -5311,7 +5332,11 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "jobs"
+            "jobs",
+            "returned",
+            "matched",
+            "limit",
+            "truncated"
           ]
         },
         {
@@ -18587,6 +18612,59 @@
           "required": [
             "kind",
             "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "job_id": {
+              "$ref": "#/$defs/ToolExecutionId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "job_publication_abandoned"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "job_id"
+          ]
+        },
+        {
+          "description": "Cancellation won before Delegate could be sent; no input was delivered.",
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent_not_delivered"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "agent_id"
+          ]
+        },
+        {
+          "description": "Delegate may have reached the child, but canonical acceptance is unproven.\nAutomatic replay could duplicate user guidance.",
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "$ref": "#/$defs/AgentId"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent_delivery_unknown"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "agent_id"
           ]
         },
         {

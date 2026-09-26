@@ -417,6 +417,19 @@ pub struct BackgroundExecutionSnapshot {
     pub result: Option<ToolExecutionResult>,
 }
 
+/// Maximum number of Jobs returned by a discovery operation.
+pub const MAX_JOB_LIST_LIMIT: usize = 64;
+
+/// Why observation of one immutable Job ended without a durable terminal result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundWaitError {
+    /// This registry never owned the requested Job.
+    UnknownJob,
+    /// The owner exhausted publication and relinquished all remaining callbacks.
+    /// The retained candidate is not a canonical terminal result.
+    PublicationAbandoned,
+}
+
 /// The background execution domain's own bounded discovery read model
 /// (Issue #180).
 ///
@@ -442,6 +455,12 @@ pub struct BackgroundExecutionListing {
     pub snapshots: Vec<BackgroundExecutionSnapshot>,
     /// How many records matched the filter in total, before the bound.
     pub matched: usize,
+    /// The enforced materialization bound.
+    pub limit: usize,
+    /// How many Jobs are present in `snapshots`.
+    pub returned: usize,
+    /// Whether the bound omitted any matching Jobs.
+    pub truncated: bool,
 }
 
 /// The outcome of a committed background dispatch.
@@ -469,6 +488,9 @@ pub enum BackgroundDispatchOutcome {
 pub enum BackgroundDispatchError {
     /// The invocation is not a background invocation.
     NotBackgroundInvocation,
+    /// An autonomous Goal admission owns the idle frontier. No Job resources
+    /// were allocated; a later dispatch may try after that admission settles.
+    GoalAdmissionInProgress,
     /// The conversation mailbox of this registry is bound to a
     /// `ConversationRuntime` that has not been activated yet (Issue #61).
     ///
@@ -522,6 +544,10 @@ impl core::fmt::Display for BackgroundDispatchError {
             Self::NotBackgroundInvocation => write!(
                 f,
                 "only background invocations can be dispatched to the background registry"
+            ),
+            Self::GoalAdmissionInProgress => write!(
+                f,
+                "an autonomous Goal admission owns the idle frontier; no background Job was staged"
             ),
             Self::ConversationInactive { conversation_id } => write!(
                 f,
@@ -672,6 +698,9 @@ struct PreparedRecord {
 
 /// The synchronized registry state.
 struct BackgroundRegistryState {
+    /// A scoped Goal admission excludes new preparations while its durable
+    /// callback runs outside this mutex. Existing preparations preclude it.
+    goal_idle_claimed: bool,
     prepared: HashMap<ToolExecutionId, PreparedRecord>,
     records: Vec<BackgroundRecord>,
     index: HashMap<ToolExecutionId, usize>,
@@ -711,6 +740,18 @@ pub struct ConversationBackgroundRegistry {
     state_version: tokio::sync::watch::Sender<u64>,
 }
 
+/// The synchronous Goal admission owns exactly one idle claim. Dropping it also
+/// releases the frontier if the durable callback unwinds.
+struct BackgroundGoalIdleClaim<'a>(&'a ConversationBackgroundRegistry);
+
+impl Drop for BackgroundGoalIdleClaim<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.state();
+        debug_assert!(state.goal_idle_claimed);
+        state.goal_idle_claimed = false;
+    }
+}
+
 impl Clone for ConversationBackgroundRegistry {
     fn clone(&self) -> Self {
         Self {
@@ -738,6 +779,7 @@ impl ConversationBackgroundRegistry {
         Self {
             conversation_id,
             inner: Arc::new(Mutex::new(BackgroundRegistryState {
+                goal_idle_claimed: false,
                 prepared: HashMap::new(),
                 records: Vec::new(),
                 index: HashMap::new(),
@@ -869,7 +911,7 @@ impl ConversationBackgroundRegistry {
         lifecycle: &ConversationLifecycle,
     ) -> Result<(), BackgroundOwnershipClaimError> {
         let state = self.state();
-        if !state.prepared.is_empty() || !state.records.is_empty() {
+        if state.goal_idle_claimed || !state.prepared.is_empty() || !state.records.is_empty() {
             return Err(BackgroundOwnershipClaimError::NotQuiescent);
         }
         if coordinator_claimed
@@ -929,8 +971,9 @@ impl ConversationBackgroundRegistry {
     /// # Errors
     ///
     /// Returns [`BackgroundDispatchError::NotBackgroundInvocation`] for a
-    /// foreground invocation. Identity collisions and output allocation failures
-    /// refuse preparation without overwriting an existing locator.
+    /// foreground invocation, or [`BackgroundDispatchError::GoalAdmissionInProgress`]
+    /// when a Goal owns the idle frontier. Identity collisions and output
+    /// allocation failures refuse preparation without overwriting a locator.
     pub fn prepare_dispatch(
         &self,
         invocation: &ToolInvocation,
@@ -972,6 +1015,12 @@ impl ConversationBackgroundRegistry {
                 conversation_id: self.conversation_id.clone(),
             })?;
         let mut state = self.state();
+        // This check and prepared insertion share the Goal claim's mutex cut.
+        // A winning Goal admits no Job resource; a winning preparation makes
+        // the Goal wait until that exact preparation rolls back or settles.
+        if state.goal_idle_claimed {
+            return Err(BackgroundDispatchError::GoalAdmissionInProgress);
+        }
         let execution_id = self
             .resources
             .tool_output
@@ -1133,6 +1182,7 @@ impl ConversationBackgroundRegistry {
             prepared.committed = true;
             drop(state);
             self.notify_state_change();
+            self.resources.mailbox.wake().notify_one();
             return Err(BackgroundDispatchError::DurabilityFailed {
                 detail: refused.diagnostic.clone(),
             });
@@ -1253,6 +1303,14 @@ impl ConversationBackgroundRegistry {
         // and this ownership commit have one total order on the gate.
         drop(state);
         self.notify_state_change();
+        // A private preparation may have blocked the Goal idle cut. Refusals
+        // and rollback have no terminal inbound of their own to wake admission.
+        if !matches!(
+            &commit_result,
+            Ok(Ok(BackgroundDispatchOutcome::Accepted { .. }))
+        ) {
+            self.resources.mailbox.wake().notify_one();
+        }
         match commit_result {
             Err(_) => Err(BackgroundDispatchError::ConversationInactive {
                 conversation_id: self.conversation_id.clone(),
@@ -1373,9 +1431,8 @@ impl ConversationBackgroundRegistry {
     ///
     /// `matched` reports how many records matched before the bound, so a
     /// caller can report truncation without the registry ever materializing
-    /// an unbounded response. `limit` is the caller's materialization bound
-    /// and nothing more: the registry has no opinion on how large a
-    /// model-facing response may be, and never sees one.
+    /// an unbounded response. `limit` is capped by [`MAX_JOB_LIST_LIMIT`],
+    /// the same domain-owned bound for model and client discovery.
     ///
     /// `active_only` selects the non-terminal
     /// (Starting/Running/Cancelling/PublishingTerminal) records exactly as
@@ -1387,6 +1444,7 @@ impl ConversationBackgroundRegistry {
     /// state, and no observer seam.
     #[must_use]
     pub fn listing(&self, active_only: bool, limit: usize) -> BackgroundExecutionListing {
+        let limit = limit.min(MAX_JOB_LIST_LIMIT);
         let state = self.state();
         let matching = state
             .records
@@ -1394,8 +1452,14 @@ impl ConversationBackgroundRegistry {
             .rev()
             .filter(|record| !active_only || record.lifecycle.is_active());
         let matched = matching.clone().count();
-        let snapshots = matching.take(limit).map(snapshot_of).collect();
-        BackgroundExecutionListing { snapshots, matched }
+        let snapshots: Vec<_> = matching.take(limit).map(snapshot_of).collect();
+        BackgroundExecutionListing {
+            returned: snapshots.len(),
+            truncated: matched > snapshots.len(),
+            snapshots,
+            matched,
+            limit,
+        }
     }
 
     /// The runner-owned settlement boundary of one execution.
@@ -1747,24 +1811,36 @@ impl ConversationBackgroundRegistry {
 
     pub(crate) fn configuration_busy(&self) -> bool {
         let state = self.state();
-        !state.prepared.is_empty()
+        state.goal_idle_claimed
+            || !state.prepared.is_empty()
             || state
                 .records
                 .iter()
                 .any(|record| record.lifecycle.is_active())
     }
 
-    /// Holds the existing ownership lock across a Goal's idle frontier.
-    /// Lock order remains registry -> lifecycle commit -> durable store.
+    /// Claims the Goal's idle frontier without holding this mutex across the
+    /// callback's child recovery probes or durable Goal-round admission.
+    ///
+    /// The claim and Job preparation are ordered under one mutex cut: existing
+    /// preparations prevent the claim, and a claim prevents preparation before
+    /// any resource is allocated. Therefore no ownership commit can cross the
+    /// callback's idle decision. Reads, cancellation and drain stay available.
     pub(crate) fn with_goal_idle<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
-        let state = self.state();
-        if state
-            .records
-            .iter()
-            .any(|record| record.lifecycle.is_active())
         {
-            return None;
+            let mut state = self.state();
+            if state.goal_idle_claimed
+                || !state.prepared.is_empty()
+                || state
+                    .records
+                    .iter()
+                    .any(|record| record.lifecycle.is_active())
+            {
+                return None;
+            }
+            state.goal_idle_claimed = true;
         }
+        let _claim = BackgroundGoalIdleClaim(self);
         Some(operation())
     }
 
@@ -1792,22 +1868,9 @@ impl ConversationBackgroundRegistry {
     /// unlike a global durability-health check it never reports one record's
     /// failure as another record's settlement.
     pub(crate) async fn wait_until_settled(&self, execution_id: &ToolExecutionId) {
-        let mut version = self.state_version.subscribe();
-        loop {
-            {
-                let state = self.state();
-                let Some(index) = state.index.get(execution_id).copied() else {
-                    return;
-                };
-                let record = &state.records[index];
-                if record.lifecycle.is_terminal() || record.publication_abandoned {
-                    return;
-                }
-            }
-            if version.changed().await.is_err() {
-                return;
-            }
-        }
+        // Runtime drain checks abandoned_publications separately to report its
+        // aggregate failure. Both observers use the exact same owner frontier.
+        let _ = self.wait_until_terminal(execution_id).await;
     }
 
     /// Updates the latest bounded progress snapshot of one execution and
@@ -1884,19 +1947,45 @@ impl ConversationBackgroundRegistry {
         self.notify_state_change();
     }
 
-    /// Waits for one execution to reach an absorbing terminal state using the
-    /// registry's exact state-change notification, not scheduler polling.
+    /// Waits for the captured immutable Job until its owner can make no further
+    /// lifecycle progress: a durable terminal result, or typed publication
+    /// failure. Subscribe before inspecting both facts in one registry cut so
+    /// neither terminal publication nor abandonment can lose its wakeup.
+    ///
+    /// # Errors
+    /// Returns [`BackgroundWaitError::UnknownJob`] for an unowned identity, or
+    /// [`BackgroundWaitError::PublicationAbandoned`] once publication is
+    /// permanently abandoned by this exact Job's owner.
+    ///
+    /// # Panics
+    /// Panics only if the registry state lock is poisoned. The state-change
+    /// channel cannot close while this registry owns its sender.
     pub async fn wait_until_terminal(
         &self,
         execution_id: &ToolExecutionId,
-    ) -> Option<BackgroundExecutionSnapshot> {
+    ) -> Result<BackgroundExecutionSnapshot, BackgroundWaitError> {
         let mut version = self.state_version.subscribe();
         loop {
-            let snapshot = self.snapshot(execution_id)?;
-            if snapshot.state.is_terminal() {
-                return Some(snapshot);
+            {
+                let state = self.state();
+                let index = state
+                    .index
+                    .get(execution_id)
+                    .copied()
+                    .ok_or(BackgroundWaitError::UnknownJob)?;
+                let record = &state.records[index];
+                if record.lifecycle.is_terminal() {
+                    return Ok(snapshot_of(record));
+                }
+                if record.publication_abandoned {
+                    return Err(BackgroundWaitError::PublicationAbandoned);
+                }
             }
-            version.changed().await.ok()?;
+            // This registry owns the sender throughout the wait.
+            version
+                .changed()
+                .await
+                .expect("Job registry owns its state sender");
         }
     }
 
@@ -1926,8 +2015,15 @@ impl ConversationBackgroundRegistry {
     /// leaves no orphan file behind. No detached execution exists
     /// afterwards.
     fn rollback_prepared(&self, execution_id: &ToolExecutionId) {
-        let mut state = self.state();
-        self.discard_prepared_record(&mut state, execution_id);
+        let discarded = {
+            let mut state = self.state();
+            self.discard_prepared_record(&mut state, execution_id)
+        };
+        if discarded {
+            // No canonical terminal notification exists for a private owner.
+            // Revisit a Goal idle decision that this preparation blocked.
+            self.resources.mailbox.wake().notify_one();
+        }
     }
 
     /// The shared prepared-dispatch rollback under the held registry lock:
@@ -1937,12 +2033,15 @@ impl ConversationBackgroundRegistry {
         &self,
         state: &mut BackgroundRegistryState,
         execution_id: &ToolExecutionId,
-    ) {
+    ) -> bool {
         if let Some(prepared) = state.prepared.remove(execution_id) {
             prepared.runner.abort();
             self.resources
                 .tool_output
                 .discard_background_output(execution_id);
+            true
+        } else {
+            false
         }
     }
 
@@ -2594,6 +2693,31 @@ mod tests {
         assert_eq!(listing.matched, 3);
     }
 
+    #[test]
+    fn background_listing_enforces_the_domain_limit_with_honest_metadata() {
+        let plane = registry("conv_3b3799ec-ed96-703a-86e9-da36ce2518b9");
+        for index in 0..super::MAX_JOB_LIST_LIMIT + 3 {
+            seed_record(
+                &plane.registry,
+                &format!("exec_00000000-0000-7000-8000-{index:012x}"),
+                BackgroundLifecycle::Running,
+            );
+        }
+        let listing = plane.registry.listing(false, usize::MAX);
+        assert_eq!(listing.limit, super::MAX_JOB_LIST_LIMIT);
+        assert_eq!(listing.returned, super::MAX_JOB_LIST_LIMIT);
+        assert_eq!(listing.matched, super::MAX_JOB_LIST_LIMIT + 3);
+        assert!(listing.truncated);
+        assert_eq!(
+            listed_ids(&listing).first().unwrap(),
+            "exec_00000000-0000-7000-8000-000000000042"
+        );
+        assert_eq!(
+            listed_ids(&listing).last().unwrap(),
+            "exec_00000000-0000-7000-8000-000000000003"
+        );
+    }
+
     /// `active_only` is the domain's own lifecycle classification, under
     /// which `PublishingTerminal` is still active.
     #[test]
@@ -2901,6 +3025,147 @@ mod tests {
                 ToolEnvironment::new(),
             )
             .expect("prepare")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn parked_goal_idle_callback_releases_mutex_and_excludes_job_preparation() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e603");
+        let settled_id = ToolExecutionId::new("exec_00000000-0000-7000-8000-000000000063");
+        seed_record(
+            &fixture.registry,
+            settled_id.as_str(),
+            BackgroundLifecycle::Succeeded,
+        );
+        let (executor, mut started, release_executor) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let (entered, entrance) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let claiming = fixture.registry.clone();
+        let goal = tokio::task::spawn_blocking(move || {
+            claiming.with_goal_idle(|| {
+                entered.send(()).unwrap();
+                released.recv().unwrap();
+                "Goal callback completed"
+            })
+        });
+        entrance.await.unwrap();
+
+        // The callback is parked at the real Goal idle frontier. Registry reads,
+        // cancellation and admission refusal must finish before it is released.
+        let observing = fixture.registry.clone();
+        let preparing = executor.clone();
+        let controls = tokio::task::spawn_blocking(move || {
+            assert_eq!(observing.listing(false, 1).matched, 1);
+            assert_eq!(
+                observing.cancel(&settled_id).unwrap().state,
+                BackgroundLifecycle::Succeeded
+            );
+            assert!(observing.configuration_busy());
+            assert_eq!(
+                observing.with_goal_idle(|| panic!("claim is exclusive")),
+                None::<()>
+            );
+            assert!(matches!(
+                observing.prepare_dispatch(
+                    &background_invocation("bash"),
+                    &preparing,
+                    ToolEnvironment::new()
+                ),
+                Err(super::BackgroundDispatchError::GoalAdmissionInProgress)
+            ));
+            assert!(observing.state().prepared.is_empty());
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), controls)
+            .await
+            .expect("parked Goal callback cannot hold the registry mutex")
+            .unwrap();
+        assert!(!*started.borrow());
+        release.send(()).unwrap();
+        assert_eq!(goal.await.unwrap(), Some("Goal callback completed"));
+
+        let prepared = prepare(&fixture, &executor);
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
+            .registry
+            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+            .unwrap()
+        else {
+            panic!("Job may commit once Goal claim releases")
+        };
+        started.wait_for(|started| *started).await.unwrap();
+        release_executor.send_replace(true);
+        fixture
+            .registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .unwrap();
+        assert_eq!(fixture.registry.with_goal_idle(|| true), Some(true));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prepared_job_excludes_goal_idle_until_rollback_or_terminal_settlement() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e603");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let rolled_back = prepare(&fixture, &executor);
+        assert_eq!(
+            fixture
+                .registry
+                .with_goal_idle(|| panic!("private owner is not idle")),
+            None::<()>
+        );
+        let wake = fixture.mailbox.wake();
+        let admission = wake.notified();
+        tokio::pin!(admission);
+        assert!(futures_util::poll!(&mut admission).is_pending());
+        drop(rolled_back);
+        assert!(
+            futures_util::poll!(&mut admission).is_ready(),
+            "private rollback must wake the blocked idle decision"
+        );
+        assert_eq!(fixture.registry.with_goal_idle(|| true), Some(true));
+        let prepared = prepare(&fixture, &executor);
+        assert_eq!(
+            fixture
+                .registry
+                .with_goal_idle(|| panic!("private owner is not idle")),
+            None::<()>
+        );
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
+            .registry
+            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+            .unwrap()
+        else {
+            panic!("accepted")
+        };
+        started.wait_for(|started| *started).await.unwrap();
+        assert_eq!(
+            fixture
+                .registry
+                .with_goal_idle(|| panic!("active Job is not idle")),
+            None::<()>
+        );
+        release.send_replace(true);
+        fixture
+            .registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .unwrap();
+        assert_eq!(fixture.registry.with_goal_idle(|| true), Some(true));
+    }
+
+    #[test]
+    fn goal_idle_callback_unwind_releases_claim_without_poisoning_registry() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e603");
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = fixture
+                    .registry
+                    .with_goal_idle(|| panic!("callback failed"));
+            }))
+            .is_err()
+        );
+        assert!(!fixture.registry.configuration_busy());
+        assert_eq!(fixture.registry.with_goal_idle(|| true), Some(true));
     }
 
     /// A dispatch commit on a registry whose mailbox is bound to an

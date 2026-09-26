@@ -233,6 +233,7 @@ pub(crate) struct PhysicalChildRuntimeRoot {
     /// The stable child Message Ledger/Event Journal database, when this is a
     /// production-allocated root. Test-only roots do not own a durable store.
     durable_store: Option<PathBuf>,
+    physical_owner: Option<std::sync::Arc<super::physical_recovery::ParentPhysicalLease>>,
 }
 
 impl PhysicalChildRuntimeRoot {
@@ -346,6 +347,7 @@ impl PhysicalChildRuntimeRoot {
                     return Ok(Self {
                         path,
                         durable_store: (!existing).then_some(durable_store),
+                        physical_owner: None,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -367,6 +369,19 @@ impl PhysicalChildRuntimeRoot {
                 INCARNATION_ALLOCATION_ATTEMPTS
             ),
         })
+    }
+
+    pub(crate) fn install_physical_owner(
+        &mut self,
+        owner: std::sync::Arc<super::physical_recovery::ParentPhysicalLease>,
+    ) {
+        assert!(self.physical_owner.replace(owner).is_none());
+    }
+
+    fn publish_quiescent(&self) -> std::io::Result<()> {
+        self.physical_owner
+            .as_ref()
+            .map_or(Ok(()), |owner| owner.publish_quiescent())
     }
 
     /// The exact path handed to the child and used by its private stores.
@@ -426,6 +441,7 @@ impl PhysicalChildRuntimeRoot {
         Self {
             path,
             durable_store: None,
+            physical_owner: None,
         }
     }
 }
@@ -621,10 +637,30 @@ impl std::error::Error for RollbackError {}
 pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
-    runtime_root: PhysicalChildRuntimeRoot,
+    mut runtime_root: PhysicalChildRuntimeRoot,
     workspace: WorkspaceUse,
     preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
 ) -> Result<StagedChild, SpawnError> {
+    if runtime_root.physical_owner.is_none() {
+        match super::physical_recovery::ParentPhysicalLease::reserve(
+            &plan.product_root,
+            &plan.session_id,
+            &spec.child_conversation_id,
+            &spec.subagent_id,
+        ) {
+            Ok(owner) => runtime_root.install_physical_owner(std::sync::Arc::new(owner)),
+            Err(error) => {
+                return Err(discard_unstaged_resources(
+                    runtime_root,
+                    workspace,
+                    SpawnError::WorkspaceSetup {
+                        detail: error.to_string(),
+                    },
+                )
+                .await);
+            }
+        }
+    }
     if preparation_cancellation.is_cancelled() {
         return Err(
             discard_unstaged_resources(runtime_root, workspace, SpawnError::Cancelled).await,
@@ -696,7 +732,7 @@ pub(crate) async fn spawn_staged(
     }
     let spawned = match spawn_process(
         plan,
-        runtime_root.path(),
+        &runtime_root,
         workspace.logical_workspace(),
         &credentials,
     ) {
@@ -763,14 +799,17 @@ async fn discard_unstaged_resources(
     let durable_error = runtime_root.remove_durable_store().err().map(|cleanup| {
         format!("could not remove unowned durable child conversation store for {path}: {cleanup}")
     });
+    let physical_owner = runtime_root.physical_owner.clone();
     let root_error = runtime_root.remove().err().map(|cleanup| {
         format!("could not remove unowned physical child runtime root {path}: {cleanup}")
     });
-    let workspace_error = workspace
-        .settle_staged()
-        .await
-        .err()
-        .map(|error| error.detail);
+    let workspace_error = crate::runtime::workspace::with_physical_settlement_authority(
+        physical_owner,
+        workspace.settle_staged(),
+    )
+    .await
+    .err()
+    .map(|error| error.detail);
     match (durable_error, root_error, workspace_error) {
         (None, None, None) => error,
         (durable_error, root_error, workspace_error) => SpawnError::Rollback {
@@ -790,7 +829,7 @@ async fn discard_unstaged_resources(
 /// the disposable observation channel inherited as fd 1 (Issue #178).
 fn spawn_process(
     plan: &SubagentSpawnPlan,
-    runtime_root: &Path,
+    runtime_root: &PhysicalChildRuntimeRoot,
     project_workspace: &Path,
     credentials: &[(String, String)],
 ) -> Result<SpawnedProcess, SpawnError> {
@@ -821,15 +860,18 @@ fn spawn_process(
                 detail: format!("observation channel: {error}"),
             })?;
     let observation_stdio: Stdio = std::os::fd::OwnedFd::from(observation_child_std).into();
-    // The child's diagnostics never travel through a pipe to the parent: a
-    // hard parent death must not turn the child's stderr writes into
-    // SIGPIPE. They land in a child-private diagnostics log instead.
-    let diagnostics = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(runtime_root.join("diagnostics.log"))
+    // fd 2 carries the same locked open-file description into the child.
+    // The child duplicates it CLOEXEC before composition, then restores its
+    // diagnostic sink. There is no spawn-to-lease ownership gap.
+    let inherited_owner = runtime_root
+        .physical_owner
+        .as_ref()
+        .ok_or_else(|| SpawnError::WorkspaceSetup {
+            detail: "physical settlement authority is missing".into(),
+        })?
+        .inherited_file()
         .map_err(|error| SpawnError::WorkspaceSetup {
-            detail: format!("diagnostics log: {error}"),
+            detail: error.to_string(),
         })?;
     let mut command = tokio::process::Command::new(&plan.program);
     command.envs(credentials.iter().map(|(key, value)| (key, value)));
@@ -841,7 +883,7 @@ fn spawn_process(
         .arg("--subagent-child")
         .stdin(child_stdio)
         .stdout(observation_stdio)
-        .stderr(Stdio::from(diagnostics));
+        .stderr(Stdio::from(inherited_owner));
     #[cfg(unix)]
     command.process_group(0);
     let child = command.spawn().map_err(|error| SpawnError::Spawn {
@@ -1101,7 +1143,12 @@ impl StagedChild {
         let settlement = contain_retained(self.retained.take()).await;
         let workspace_result = if let Some(workspace) = self.workspace.take() {
             if settlement.unproven.is_empty() {
-                workspace.settle_after_child().await.workspace
+                crate::runtime::workspace::with_physical_settlement_authority(
+                    self.runtime_root.physical_owner.clone(),
+                    workspace.settle_after_child(),
+                )
+                .await
+                .workspace
             } else {
                 workspace.preserve_after_unresolved_nested(
                     "a nested supervised process anchor remains physically unresolved",
@@ -1121,6 +1168,14 @@ impl StagedChild {
         let runtime_root = self.runtime_root;
         remove_inspection_liveness_marker(&runtime_root);
         let runtime_root_cleanup_error = if settlement.unproven.is_empty() {
+            // Reaping the direct child and containing every retained anchor
+            // prove physical quiescence. Dirty retained work or Git cleanup
+            // failure remains a rollback error below, but cannot erase that
+            // independent positive proof when the child needed escalation.
+            let proof_error = runtime_root
+                .publish_quiescent()
+                .err()
+                .map(|error| format!("publish staged physical settlement proof: {error}"));
             let path = runtime_root.path().display().to_string();
             let durable_error = runtime_root.remove_durable_store().err().map(|error| {
                 format!("remove uncommitted durable child conversation store for {path}: {error}")
@@ -1129,7 +1184,7 @@ impl StagedChild {
                 .remove()
                 .err()
                 .map(|error| format!("remove child runtime root {path}: {error}"));
-            [durable_error, root_error]
+            [proof_error, durable_error, root_error]
                 .into_iter()
                 .flatten()
                 .reduce(|left, right| format!("{left}; {right}"))
@@ -1659,6 +1714,9 @@ async fn drive_child_control(
         if let Some(provider_available) = provider_available.as_ref() {
             delegate.interaction_provider_available = *provider_available.borrow();
         }
+        if let Some(owner) = &interactions {
+            owner.begin_delegate();
+        }
         if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await
         {
             return settle_after_driver_loss(
@@ -2004,7 +2062,13 @@ async fn settle_nested(
     // nested process may still hold or mutate the worktree after the direct
     // child exits; only the complete physical settlement permits cleanup.
     let workspace = match workspace {
-        Some(lease) if nested.unproven.is_empty() => lease.settle_after_child().await,
+        Some(lease) if nested.unproven.is_empty() => {
+            crate::runtime::workspace::with_physical_settlement_authority(
+                runtime_root.physical_owner.clone(),
+                lease.settle_after_child(),
+            )
+            .await
+        }
         Some(lease) => lease
             .preserve_after_unresolved_nested(
                 "a nested supervised process anchor remains physically unresolved",
@@ -2015,12 +2079,19 @@ async fn settle_nested(
         ))
         .into(),
     };
-    let runtime_root_cleanup_error = if nested.unproven.is_empty() {
+    let runtime_root_cleanup_error = if nested.unproven.is_empty()
+        && !matches!(outcome, PhysicalOutcome::ControlFailure { .. })
+    {
         let path = runtime_root.path().display().to_string();
-        runtime_root
+        let proof_error = runtime_root
+            .publish_quiescent()
+            .err()
+            .map(|error| format!("publish child physical settlement proof: {error}"));
+        let cleanup_error = runtime_root
             .remove()
             .err()
-            .map(|error| format!("remove child runtime root {path}: {error}"))
+            .map(|error| format!("remove child runtime root {path}: {error}"));
+        proof_error.or(cleanup_error)
     } else {
         // An unproven nested unit may still be alive, so keep its mutable
         // namespace rather than deleting it before physical settlement is
@@ -2555,8 +2626,23 @@ mod tests {
         std::fs::write(workspace.join("staged-work.txt"), "retain me\n")
             .expect("staged project work");
 
-        let harness = stage();
+        let mut harness = stage();
         let runtime_root = harness.runtime_root.clone();
+        let product = crate::runtime::local_storage::ProductRoot::create(artifacts.path()).unwrap();
+        let session = crate::runtime::identity::SessionId::generate();
+        let conversation = ConversationId::generate();
+        let activation = SubagentId::new("staged-workspace-handoff:1");
+        let owner = super::super::physical_recovery::ParentPhysicalLease::reserve(
+            &product,
+            &session,
+            &conversation,
+            &activation,
+        )
+        .unwrap();
+        harness
+            .staged
+            .runtime_root
+            .install_physical_owner(std::sync::Arc::new(owner));
         let error = tokio::time::timeout(
             DEADLINE,
             harness
@@ -2572,6 +2658,24 @@ mod tests {
         assert!(
             !runtime_root.exists(),
             "the disposable child-private root is removed independently"
+        );
+        let receipt_path =
+            super::super::child_conversation_store_path(product.root(), &session, &conversation)
+                .parent()
+                .unwrap()
+                .join("physical-settlement")
+                .join(activation.as_str())
+                .join("physical-settlement.json");
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(receipt_path).unwrap()).unwrap();
+        assert_eq!(
+            receipt["phase"], "quiescent",
+            "native rollback preserves its physical proof despite retained user work"
+        );
+        assert!(
+            super::super::physical_recovery::prove(&product, &session, &conversation, &activation,)
+                .unwrap()
+                .is_some()
         );
 
         // The test owns the retained worktree and can make it clean before

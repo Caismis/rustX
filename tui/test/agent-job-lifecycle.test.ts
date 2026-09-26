@@ -151,3 +151,45 @@ for (const [ownerState, activationState] of [["admitting", "stopping"], ["unavai
     }
   });
 }
+
+for (const [command, method] of [["/job-wait", "job/wait"], ["/job-cancel", "job/cancel"]] as const) {
+  test(`${command} finishes on typed publication abandonment without inventing terminal state`, async () => {
+    const job = backgroundExecution("exec_c8536561-1a50-7edc-a396-b3a459465efb", "publishing_terminal");
+    const h = await harness(snapshot({ jobs: [job] }));
+    const controlling = h.dispatcher.submit(`${command} ${job.job_id}`);
+    const request = await nextRequest(h, method);
+    h.transport.respondError(request.id, { code: -32000, message: "Publication failed", data: { kind: "job_publication_abandoned", job_id: job.job_id } });
+    const result = await controlling;
+    assert.match(JSON.stringify(result), /terminal publication was abandoned/);
+    assert.deepEqual(h.session.state.jobs, [job]);
+    assert.equal(h.transport.transportCount(method), 1);
+    h.client.close();
+  });
+}
+
+test("/jobs renders the owner's omission counts without inferring totals", async () => {
+  const h = await harness();
+  const listing = h.dispatcher.submit("/jobs");
+  const request = await nextRequest(h, "job/list");
+  const jobs = Array.from({ length: 64 }, (_, index) => backgroundExecution(`exec_00000000-0000-7000-8000-${(66 - index).toString(16).padStart(12, "0")}`, "succeeded"));
+  h.transport.respond(request.id, { type: "jobs", jobs, returned: 64, matched: 67, limit: 64, truncated: true });
+  const result = await listing;
+  assert.match(JSON.stringify(result), /Returned 64 of 67 Jobs \(limit 64\); older Jobs omitted/);
+  assert.equal(h.transport.transportCount("job/list"), 1);
+  h.client.close();
+});
+
+for (const [kind, expected] of [["agent_not_delivered", "no input was delivered"], ["agent_delivery_unknown", "do not replay automatically"]] as const) {
+  test(`send-message renders ${kind} without retrying or mutating owner state`, async () => {
+    const agent = subagent("worker", "frozen", "inactive");
+    const h = await harness(snapshot({ agents: [agent] }));
+    const sending = h.dispatcher.submit("/send-message agent-child guidance");
+    const request = await nextRequest(h, "agent/sendMessage");
+    h.transport.respondError(request.id, { code: -32000, message: "Delivery failed", data: { kind, agent_id: agent.agent_id } });
+    const result = await sending;
+    assert.ok(JSON.stringify(result).includes(expected));
+    assert.deepEqual(h.session.state.agents, [agent]);
+    assert.equal(h.transport.transportCount("agent/sendMessage"), 1);
+    h.client.close();
+  });
+}

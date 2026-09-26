@@ -94,6 +94,7 @@ struct Lab {
     registry: SubagentRegistry,
     store: Arc<crate::durable::SqliteConversationStore>,
     child_runtime_group: std::path::PathBuf,
+    product: crate::runtime::local_storage::ProductRoot,
     ready_marker: std::path::PathBuf,
     gate_listener: tokio::net::UnixListener,
 }
@@ -147,6 +148,8 @@ impl Lab {
         );
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let product = crate::runtime::local_storage::ProductRoot::create(&runtime_root)
+            .expect("product root");
         let registry = SubagentRegistry::new(SubagentRegistryConfig {
             conversation_id: conversation_id.clone(),
             agent_id: AgentId::new("agent-parent"),
@@ -159,10 +162,7 @@ impl Lab {
                 ),
 
                 program: wrapper,
-                product_root: crate::runtime::local_storage::ProductRoot::create(
-                    &runtime_root.clone(),
-                )
-                .expect("product root"),
+                product_root: product.clone(),
             },
             workspace: crate::runtime::workspace::WorkspaceManager::new(&workspace, &runtime_root),
             max_active: 4,
@@ -174,6 +174,7 @@ impl Lab {
             registry,
             store,
             child_runtime_group,
+            product,
             ready_marker,
             gate_listener,
         }
@@ -297,11 +298,47 @@ impl Lab {
         assert!(
             ConversationId::parse(allocations[0].file_name().unwrap().to_str().unwrap()).is_ok()
         );
+        let retained_directories: Vec<_> = std::fs::read_dir(&allocations[0])
+            .unwrap()
+            .filter_map(|entry| {
+                let entry = entry.unwrap();
+                entry
+                    .file_type()
+                    .unwrap()
+                    .is_dir()
+                    .then(|| entry.file_name())
+            })
+            .collect();
+        assert_eq!(
+            retained_directories,
+            vec![std::ffi::OsString::from("physical-settlement")],
+            "rollback removes mutable incarnation/materialization state and retains only settlement authority",
+        );
+        let conversation =
+            ConversationId::parse(allocations[0].file_name().unwrap().to_str().unwrap()).unwrap();
+        let session =
+            crate::runtime::identity::SessionId::new("ses_01900000-0000-7000-8000-000000000001");
+        let activations = crate::runtime::subagent::physical_recovery::consumed_activation_ids(
+            &self.product,
+            &session,
+            &conversation,
+        )
+        .unwrap();
+        assert_eq!(
+            activations.len(),
+            1,
+            "exactly one activation identity was consumed"
+        );
         assert!(
-            std::fs::read_dir(&allocations[0])
-                .unwrap()
-                .all(|entry| !entry.unwrap().file_type().unwrap().is_dir()),
-            "rollback removes the staged incarnation and its managed outputs; its no-overwrite reservation remains"
+            crate::runtime::subagent::physical_recovery::prove(
+                &self.product,
+                &session,
+                &conversation,
+                &activations[0],
+            )
+            .unwrap()
+            .is_some(),
+            "the real child/rollback owner preserved physical proof"
         );
         assert!(
             self.durable_events()

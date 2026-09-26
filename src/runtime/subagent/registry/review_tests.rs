@@ -24,7 +24,9 @@ async fn admitting_generation_is_interruptible_and_waitable_before_owner_task_ru
         .agent_snapshot(&first.child_agent_id)
         .unwrap();
     assert_eq!(snapshot.state, AgentState::Admitting);
-    let generation = snapshot.current_activation.unwrap();
+    assert!(snapshot.current_activation.is_none(), "unpersisted ID is not externally authoritative");
+    let generation = plane.registry.state.lock().unwrap().agents[&first.child_agent_id]
+        .resuming.as_ref().unwrap().activation_id.clone();
     let mut wait = Box::pin(plane.registry.wait_agent(&first.child_agent_id));
     assert!(futures_util::poll!(&mut wait).is_pending());
     let mut interrupt = Box::pin(plane.registry.interrupt_agent(&first.child_agent_id));
@@ -105,7 +107,7 @@ async fn resume_success_requires_exact_child_canonical_input_acknowledgement() {
         } else {
             // Control loss at the ambiguous frontier: the parent cannot claim success.
             drop(child);
-            assert!(matches!(send.await, Err(AgentControlError::Admission(_))));
+            assert!(matches!(send.await, Err(AgentControlError::DeliveryUnknown)));
         }
         plane
             .registry
@@ -342,7 +344,7 @@ async fn resume_control_loss_before_delegate_never_reports_input_accepted() {
             CancellationSignal::new(),
         )
         .await;
-    assert!(matches!(result, Err(AgentControlError::Admission(_))));
+    assert!(matches!(result, Err(AgentControlError::DeliveryUnknown)));
     assert_eq!(
         plane
             .registry
@@ -431,4 +433,63 @@ async fn failed_resume_rollback_retains_stopping_generation_and_fails_controls_c
             .await,
         Err(AgentControlError::Settlement)
     ));
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unpublished_memory_reservation_never_exposes_an_unconsumed_activation_id() {
+    for fail_allocation in [false, true] {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let first = start(&plane, &start_spec("initial")).await;
+        child.complete(ChildResultStatus::Succeeded, Some("done")).await;
+        plane.registry.wait_until_settled(&first.subagent_id).await.unwrap();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        plane.registry.state.lock().unwrap().authority_install_hook = Some(hook.clone());
+        let registry = plane.registry.clone();
+        let id = first.child_agent_id.clone();
+        let sending = tokio::spawn(async move {
+            registry.send_message(&id, "unpublished allocation", AgentActivationOrigin::ClientControl, CancellationSignal::new()).await
+        });
+        // Memory arbitration is installed, while the owner is parked before
+        // any durable authority allocation. Public readers see no new ID.
+        hook.wait_until_entered();
+        let snapshot = plane.registry.agent_snapshot(&first.child_agent_id).unwrap();
+        assert_eq!(snapshot.state, AgentState::Admitting);
+        assert!(snapshot.current_activation.is_none());
+        assert!(plane.registry.list_agents(MAX_AGENT_LIST_LIMIT).agents[0].0.current_activation.is_none());
+        let captured = plane.registry.state.lock().unwrap().agents[&first.child_agent_id]
+            .resuming.as_ref().unwrap().activation_id.clone();
+        let mut waiting = Box::pin(plane.registry.wait_agent(&first.child_agent_id));
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        let mut interrupting = Box::pin(plane.registry.interrupt_agent(&first.child_agent_id));
+        assert!(futures_util::poll!(&mut interrupting).is_pending());
+        if fail_allocation {
+            // Refuse allocation before its consumed-ID directory exists.
+            let child_store = super::super::child_conversation_store_path(
+                plane.registry.config.spawn.product_root.root(),
+                &plane.registry.config.spawn.session_id, &first.child_conversation_id,
+            );
+            std::fs::create_dir_all(child_store.parent().unwrap()).unwrap();
+            std::fs::write(child_store.parent().unwrap().join("physical-settlement"), b"blocked allocation").unwrap();
+        }
+        hook.release();
+        assert!(sending.await.unwrap().is_err());
+        if fail_allocation {
+            assert!(matches!(waiting.await, Err(AgentControlError::Settlement)));
+            assert!(matches!(interrupting.await, Err(AgentControlError::Settlement)));
+            assert!(!events(&plane).iter().any(|event| matches!(event,
+                crate::events::types::RuntimeEvent::AgentActivationAdmission { .. })));
+        } else {
+            for result in [waiting.await.unwrap(), interrupting.await.unwrap()] {
+                assert_eq!(result.activation_id, Some(captured.clone()));
+                assert!(result.outcome.is_none());
+            }
+            assert!(super::super::physical_recovery::consumed_activation_ids(
+                &plane.registry.config.spawn.product_root,
+                &plane.registry.config.spawn.session_id, &first.child_conversation_id,
+            ).unwrap().contains(&captured), "every publicly returned ID is durably consumed");
+        }
+        assert_eq!(plane.registry.agent_snapshot(&first.child_agent_id).unwrap().state, AgentState::Inactive);
+    }
 }

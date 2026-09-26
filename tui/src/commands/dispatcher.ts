@@ -174,7 +174,7 @@ export interface DebugDiagnostics {
 
 export class CommandDispatcher {
   #context: DispatcherContext;
-  #inspected = new Map<string, import('../../../protocol/app-server/v25.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v26.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -310,8 +310,11 @@ export class CommandDispatcher {
               ? `${target.agent_id}: admission ${target.activation_id} ended before an activation committed.`
               : `${target.agent_id}: captured activation ${target.activation_id} settled (${target.outcome}).`);
         }
-        case "/jobs":
-          return inspect("Jobs", state.jobs.map(job => `- ${job.job_id} · ${job.tool_name} · ${job.state}`).join("\n") || "No Jobs.");
+        case "/jobs": {
+          const listing = await session.listJobs();
+          const rows = listing.jobs.map(job => `- ${job.job_id} · ${job.tool_name} · ${job.state}`).join("\n") || "No Jobs.";
+          return inspect("Jobs", `${rows}\nReturned ${listing.returned} of ${listing.matched} Jobs (limit ${listing.limit})${listing.truncated ? "; older Jobs omitted" : ""}.`);
+        }
         case "/job-status":
         case "/job-wait":
         case "/job-cancel": {
@@ -486,7 +489,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v25.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v26.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
