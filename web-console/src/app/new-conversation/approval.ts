@@ -1,4 +1,4 @@
-import type { ApprovalMode } from '../../../../protocol/app-server/v23';
+import type { ApprovalMode } from '../../../../protocol/app-server/v25';
 import { admitsSourceMutation, unitOutcome } from '../settings/machines/settings-target';
 import type { SettingsTargetActor } from '../settings/machines/system';
 import { awaitingCommitObservation, requiresReview } from '../settings/machines/unit-transaction';

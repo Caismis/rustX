@@ -6,7 +6,7 @@
 // rustX Todo is the conversation-owned authority and is never cleared locally on
 // input, turn start, Assistant completion, navigation, reconnect or disclosure.
 import { useEffect, useId, useState } from 'react';
-import type { TodoTask } from '../../../../protocol/app-server/v23';
+import type { TodoTask } from '../../../../protocol/app-server/v25';
 import type { TodoDockState } from '../../bindings/composer-context';
 import { IconChecklistOutline14, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import css from './TodoDock.module.css';

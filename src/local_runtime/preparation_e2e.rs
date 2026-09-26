@@ -189,40 +189,49 @@ impl Lab {
         )
         .expect("the child plane implements read");
         SubagentStartSpec {
-            execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-            resolved: ResolvedSubagentSpec {
-                environment: Vec::new(),
-                generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
-                skill_roots: Vec::new(),
+            authority: crate::runtime::subagent::DurableAgentAuthority {
+                execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                resolved: ResolvedSubagentSpec {
+                    environment: Vec::new(),
+                    generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
+                    skill_roots: Vec::new(),
 
-                selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
-                agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
-                definition_digest: serde_json::from_value(serde_json::json!(
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                ))
-                .expect("digest"),
-                execution_deadline: None,
-                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
-                instructions: "frozen child instructions".to_owned(),
-                model: crate::model::frozen::test_frozen_model_spec(
-                    serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
-                ),
-                tools: vec![crate::runtime::subagent::ResolvedSubagentTool::Builtin {
-                    tool_id: definition.id.clone(),
-                    name: definition.name.clone(),
-                    definition,
-                }],
-                skills: Vec::new(),
-                project_instructions: Vec::new(),
-                materialization:
-                    crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
-                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                    selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
+                    agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
+                    definition_digest: serde_json::from_value(serde_json::json!(
+                        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    ))
+                    .expect("digest"),
+                    execution_deadline: None,
+                    workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
+                    instructions: "frozen child instructions".to_owned(),
+                    model: crate::model::frozen::test_frozen_model_spec(
+                        serde_json::from_value(serde_json::json!("local/model"))
+                            .expect("model ref"),
+                    ),
+                    tools: vec![crate::runtime::subagent::ResolvedSubagentTool::Builtin {
+                        tool_id: definition.id.clone(),
+                        name: definition.name.clone(),
+                        definition,
+                    }],
+                    skills: Vec::new(),
+                    project_instructions: Vec::new(),
+                    materialization:
+                        crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(
+                        ),
+                    extensions: crate::extensions::NativeAgentExtensionsDocument::default()
+                        .resolve(),
+                },
+                approval_mode: crate::runtime::ApprovalMode::Policy,
             },
-            approval_mode: crate::runtime::ApprovalMode::Policy,
-            task: "inspect the repository".to_owned(),
-            context: None,
-            tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
-            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+            admission: crate::runtime::subagent::ActivationAdmission {
+                task: "inspect the repository".to_owned(),
+                context: None,
+                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                },
+                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+            },
         }
     }
 

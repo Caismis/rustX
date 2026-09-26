@@ -567,7 +567,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         .to_owned();
     assert!(std::path::Path::new(&output_path).is_absolute());
     let execution_id: rustx::runtime::identity::ToolExecutionId =
-        serde_json::from_value(accepted["execution"]["id"].clone()).unwrap();
+        serde_json::from_value(accepted["job_id"].clone()).unwrap();
     assert!(
         output_path.ends_with(&format!("tasks/{execution_id}.output")),
         "{output_path}"

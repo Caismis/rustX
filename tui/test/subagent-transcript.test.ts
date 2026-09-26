@@ -7,7 +7,7 @@ import type { RuntimeClientTranscriptPage } from "../src/protocol/app-server.ts"
 const page = (id: string, next?: string): RuntimeClientTranscriptPage => ({ entries: [{ cursor: id, item: { type: "message", message: userMessage(id, id) } }], next_cursor: next });
 function controlled(id = "A") {
   const reads: { id: string; before?: string; resolve: (page: RuntimeClientTranscriptPage) => void; reject: (error: Error) => void }[] = [];
-  const reader = new SubagentTranscript({ subagentTranscriptPage: (id, before) => new Promise((resolve, reject) => { reads.push({ id, before, resolve, reject }); }) }, id);
+  const reader = new SubagentTranscript({ agentTranscriptPage: (id, before) => new Promise((resolve, reject) => { reads.push({ id, before, resolve, reject }); }) }, id);
   return { reads, reader };
 }
 test("child selection disposes A before B; late A success or failure cannot update B", async () => {
@@ -47,34 +47,34 @@ test("refresh reads transcript authority; termination cannot invent settlement; 
 test("unavailable history is explicit and clears the obsolete projection", async () => {
   const { reads, reader } = controlled();
   const first = reader.newest(); reads[0]!.resolve(page("10")); await first;
-  const next = reader.refresh(); reads[1]!.reject(new Error("subagent_history_unavailable")); await next;
+  const next = reader.refresh(); reads[1]!.reject(new Error("agent_history_unavailable")); await next;
   assert.equal(reader.page, undefined); assert.match(reader.error!, /Child history unavailable/);
 });
 test("parent detach fences child continuation; reads send exact parent and Subagent only", async () => {
   const h = await harness();
-  const reading = h.session.subagentTranscriptPage("A", "12");
-  const read = await nextRequest(h, "subagent/transcript", 0);
-  assert.deepEqual(read.params, { target: h.target, subagent_id: "A", before: "12", limit: 32 });
+  const reading = h.session.agentTranscriptPage("A", "12");
+  const read = await nextRequest(h, "agent/transcript", 0);
+  assert.deepEqual(read.params, { target: h.target, agent_id: "A", before: "12", limit: 32 });
   const detached = h.session.detach();
   const detach = await nextRequest(h, "session/detach", 0);
   h.transport.respond(detach.id, { type: "detached" }); await detached;
   h.transport.respond(read.id, { type: "transcript", page: page("10") });
   assert.equal(await reading, undefined);
   assert.equal(h.transport.transportCount("session/attach"), 1);
-  for (const method of ["turn/start", "turn/steer", "subagent/cancel", "interaction/respond"] as const) assert.equal(h.transport.transportCount(method), 0);
+  for (const method of ["turn/start", "turn/steer", "agent/interrupt", "interaction/respond"] as const) assert.equal(h.transport.transportCount(method), 0);
   h.client.close();
 });
 test("resync fences old child read; authoritative reread reconstructs without writes", async () => {
   const h = await harness();
   const reader = new SubagentTranscript(h.session, "A");
-  const old = reader.newest(); const read = await nextRequest(h, "subagent/transcript", 0);
+  const old = reader.newest(); const read = await nextRequest(h, "agent/transcript", 0);
   const repair = h.session.resync(); const snap = await nextRequest(h, "session/snapshot", 0);
   h.transport.respond(snap.id, { type: "snapshot", snapshot: snapshot(), cursor: "2" });
   const sub = await nextRequest(h, "session/subscribe", 0); h.transport.respond(sub.id, { type: "subscribed", after_cursor: "2" }); await repair;
-  const fresh = reader.newest(); const next = await nextRequest(h, "subagent/transcript", 1);
+  const fresh = reader.newest(); const next = await nextRequest(h, "agent/transcript", 1);
   h.transport.respond(next.id, { type: "transcript", page: page("20") }); await fresh;
   h.transport.respond(read.id, { type: "transcript", page: page("10") }); await old;
   assert.deepEqual(reader.page, page("20"));
-  assert.deepEqual(h.transport.log.requests.map(r => r.method), ["initialize", "session/attach", "subagent/transcript", "session/snapshot", "session/subscribe", "subagent/transcript"]);
+  assert.deepEqual(h.transport.log.requests.map(r => r.method), ["initialize", "session/attach", "agent/transcript", "session/snapshot", "session/subscribe", "agent/transcript"]);
   reader.dispose(); h.client.close();
 });

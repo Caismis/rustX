@@ -70,6 +70,59 @@ pub struct RuntimeAttachment {
 }
 
 impl RuntimeAttachment {
+    native_control!(job_status, false, id: &crate::runtime::identity::ToolExecutionId);
+    native_control!(job_list, false);
+    native_control!(agent_status, false, id: &crate::runtime::identity::AgentId);
+    native_control!(agent_list, false);
+    native_control!(agent_transcript_page, false, id: &crate::runtime::identity::AgentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
+
+    /// Wait for this exact finite Job's physical settlement.
+    /// # Errors
+    /// Closed attachments and unknown Jobs are rejected.
+    pub async fn job_wait(
+        &self,
+        id: &crate::runtime::identity::ToolExecutionId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?.job_wait(id, false).await
+    }
+    /// Cancel this Job and await physical settlement.
+    /// # Errors
+    /// Read-only attachments and unknown Jobs are rejected.
+    pub async fn job_cancel(
+        &self,
+        id: &crate::runtime::identity::ToolExecutionId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.job_wait(id, true).await
+    }
+    /// Deliver to the active child or atomically admit its next activation.
+    /// # Errors
+    /// Read-only attachments, unknown Agents and stopping Agents are rejected.
+    pub async fn agent_send_message(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        message: String,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.agent_send_message(id, message).await
+    }
+    /// Capture and wait for the activation current at owner admission.
+    /// # Errors
+    /// Closed attachments and unknown Agents are rejected.
+    pub async fn agent_wait(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?.agent_wait(id, false).await
+    }
+    /// Interrupt only the activation current at owner admission.
+    /// # Errors
+    /// Read-only attachments, unknown Agents and admission reservations are rejected.
+    pub async fn agent_interrupt(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.agent_wait(id, true).await
+    }
+
     native_control!(model_get, false);
     native_control!(model_catalog, false);
     native_control!(capability, false);
@@ -77,11 +130,6 @@ impl RuntimeAttachment {
     native_control!(goal_control, true, control: crate::goal::GoalControl);
     native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize);
     native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
-    native_control!(background_status, false, id: &crate::runtime::identity::ToolExecutionId);
-    native_control!(background_cancel, true, id: &crate::runtime::identity::ToolExecutionId);
-    native_control!(subagent_transcript_page, false, id: &crate::runtime::identity::SubagentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
-    native_control!(subagent_status, false, id: &crate::runtime::identity::SubagentId);
-    native_control!(subagent_cancel, true, id: &crate::runtime::identity::SubagentId);
 
     /// Await the native maintenance operation.
     /// # Errors
@@ -267,17 +315,22 @@ impl RuntimeAttachment {
             | RuntimeClientRequest::SessionTreeBranch { .. } => {
                 unreachable!("native Session requests are handled asynchronously")
             }
-            RuntimeClientRequest::BackgroundStatus { execution_id, .. } => {
-                inner.background_status(&execution_id)
-            }
-            RuntimeClientRequest::BackgroundCancel { execution_id, .. } => {
-                inner.background_cancel(&execution_id)
-            }
-            RuntimeClientRequest::SubagentStatus { subagent_id, .. } => {
-                inner.subagent_status(&subagent_id)
-            }
-            RuntimeClientRequest::SubagentCancel { subagent_id, .. } => {
-                inner.subagent_cancel(&subagent_id)
+            RuntimeClientRequest::JobStatus { job_id, .. } => inner.job_status(&job_id),
+            RuntimeClientRequest::JobList { .. } => inner.job_list(),
+            RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
+            RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
+            RuntimeClientRequest::AgentTranscript {
+                agent_id,
+                before,
+                limit,
+                ..
+            } => inner.agent_transcript_page(&agent_id, before, limit),
+            RuntimeClientRequest::JobWait { .. }
+            | RuntimeClientRequest::JobCancel { .. }
+            | RuntimeClientRequest::AgentSendMessage { .. }
+            | RuntimeClientRequest::AgentWait { .. }
+            | RuntimeClientRequest::AgentInterrupt { .. } => {
+                unreachable!("Agent and Job settlement controls are awaited")
             }
             RuntimeClientRequest::SubagentWorkspaceDispose { .. } => {
                 unreachable!("retained workspace disposal is handled asynchronously")
@@ -322,6 +375,34 @@ impl RuntimeAttachment {
             );
         }
 
+        let domain_result = match &request {
+            RuntimeClientRequest::JobWait { job_id, .. } => {
+                Some(inner.job_wait(job_id, false).await)
+            }
+            RuntimeClientRequest::JobCancel { job_id, .. } => {
+                Some(inner.job_wait(job_id, true).await)
+            }
+            RuntimeClientRequest::AgentSendMessage {
+                agent_id, message, ..
+            } => Some(inner.agent_send_message(agent_id, message.clone()).await),
+            RuntimeClientRequest::AgentWait { agent_id, .. } => {
+                Some(inner.agent_wait(agent_id, false).await)
+            }
+            RuntimeClientRequest::AgentInterrupt { agent_id, .. } => {
+                Some(inner.agent_wait(agent_id, true).await)
+            }
+            _ => None,
+        };
+        if let Some(result) = domain_result {
+            return match result {
+                Ok(result) => RuntimeClientResponse {
+                    id,
+                    result: Some(result),
+                    error: None,
+                },
+                Err(error) => Self::error_response(id, error),
+            };
+        }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
                 let result = inner.compact_context().await;

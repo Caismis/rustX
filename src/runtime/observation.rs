@@ -234,6 +234,9 @@ pub(crate) enum ConversationObservation {
     /// #60, reclassified #178). **Reliable**: ordered FIFO, non-lossy —
     /// every identity/lifecycle/terminal transition reaches the consumer
     /// exactly once, in publication order.
+    Agent {
+        snapshot: Box<crate::runtime::subagent::AgentSnapshot>,
+    },
     SubagentLifecycle(SubagentSnapshot),
     /// One reliable retained-workspace resource transition. This is separate
     /// from the logical lifecycle lane: disposing a handoff updates only the
@@ -889,6 +892,7 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::CompactionFailed { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }
         | RuntimeEvent::BackgroundTerminalPublished { .. }
+        | RuntimeEvent::AgentActivationAdmission { .. }
         | RuntimeEvent::SubagentOwnershipCommitted { .. }
         | RuntimeEvent::SubagentTerminalPublished { .. }
         | RuntimeEvent::SubagentTerminalSettled { .. }
@@ -989,12 +993,16 @@ mod tests {
     /// activity revision this suite distinguishes.
     fn subagent_snapshot(subagent_id: &str, revision: u64) -> SubagentSnapshot {
         SubagentSnapshot {
+            ownership: crate::events::types::SubagentOwnershipKind::Normal,
+            parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             subagent_id: SubagentId::new(subagent_id),
             child_agent_id: AgentId::new("agent-child"),
             child_conversation_id: crate::scripted_suites::common::identity::child_conversation_id(
                 subagent_id,
             ),
-            tool_call_id: ToolCallId::new("call-1"),
+            origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                tool_call_id: ToolCallId::new("call-1"),
+            },
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:p1".to_owned(),

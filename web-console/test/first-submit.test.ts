@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { firstSubmitMachine, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { WorkspaceHostError } from '../src/workspaces/host';
-import type { UploadReceipt } from '../../protocol/app-server/v23';
+import type { UploadReceipt } from '../../protocol/app-server/v25';
 function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 const session: CreatedSession = { id: 'native-session', node: 'native-node', conversation: 'native-conversation' };
 const draft: FirstDraft = { workspaceId: 'registered', text: 'Task', files: [], model: { model: 'explicit' } };

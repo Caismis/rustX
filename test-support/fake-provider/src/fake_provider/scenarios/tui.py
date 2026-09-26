@@ -319,3 +319,29 @@ SCENARIOS = {
     "tui_before_start_cancellation": tui_before_start_cancellation,
     "tui_compaction": tui_compaction,
 }
+
+
+def tui_agent_interrupt() -> Scenario:
+    """Native interruption followed by one activation under the same Agent."""
+    return Scenario("tui_agent_interrupt",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL,
+                    body_contains=("TUI_AGENT_PARENT",), tools_include=("subagent",)),
+             Stream(ToolCall("tui-agent-create", "subagent", json.dumps({
+                 "agent": "reviewer", "task": "TUI_AGENT_CHILD: inspect the workspace",
+             })), Finish("tool_calls"))),
+        *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL),
+               Stream(Gate(f"interrupt-initial-{index}"), Text("Initial request complete."), Finish()),
+               allow_disconnect=True) for index in range(2)),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL,
+                    body_contains=("TUI_AGENT_PARENT",)),
+             Stream(Gate("interrupt-parent-notice"), Text("Parent observed interruption."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL,
+                    body_contains=("TUI_AGENT_RESUME",), body_excludes=("TUI_AGENT_PARENT",)),
+             Stream(Gate("interrupt-resumed"), Text("Resumed child report."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL,
+                    body_contains=("TUI_AGENT_PARENT", "Resumed child report.")),
+             Stream(Text("Parent received resumed report."), Finish())),
+    )
+
+
+SCENARIOS["tui_agent_interrupt"] = tui_agent_interrupt

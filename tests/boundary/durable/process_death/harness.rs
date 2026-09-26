@@ -76,7 +76,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     // through `agent.tools.builtin` — which no longer accepts the name at all. The
     // bounded catalog the rest of FND-06 relies on is preserved by composing
     // no Todo extension unless a case asks for one.
-    let builtin_tools = vec!["read", "bash", "execution"];
+    let builtin_tools = vec!["read", "bash", "job_status"];
     toml::to_string_pretty(&serde_json::json!({
         "schema_version": 9,
         "agent_id": "agent-fnd06",

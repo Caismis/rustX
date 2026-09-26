@@ -26,6 +26,17 @@ pub struct WorkspaceBlocker {
     pub resource_id: String,
     pub workspace: WorkspaceSnapshot,
     pub state: WorkspaceBlockerState,
+    pub agent_allocation: Option<crate::runtime::identity::SubagentId>,
+}
+
+/// A clean durable Agent resource frozen by committed Session deletion.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentWorkspaceCleanup {
+    pub conversation_id: ConversationId,
+    pub allocation: crate::runtime::identity::SubagentId,
+    pub workspace: WorkspaceSnapshot,
+    pub handoff: crate::runtime::workspace::WorkspaceHandoff,
 }
 
 /// Final disposal-relevant state; diagnostics and execution history are excluded.
@@ -45,6 +56,7 @@ pub struct DeletionTargetSnapshot {
     nodes: Vec<SessionNode>,
     conversations: Vec<OwnedConversation>,
     workspace_blockers: Vec<WorkspaceBlocker>,
+    agent_workspaces: Vec<AgentWorkspaceCleanup>,
     revision: [u8; 32],
     _authority: OwnershipSnapshot,
 }
@@ -73,25 +85,63 @@ impl DeletionTargetSnapshot {
                 &owned.database,
             )
             .map_err(invalid)?;
-            blockers.extend(read_facts(&store)?.blockers.into_iter().map(
-                |(resource_id, (workspace, state))| WorkspaceBlocker {
-                    conversation_id: owned.conversation_id.clone(),
-                    resource_id,
-                    workspace,
-                    state,
-                },
-            ));
+            let facts = read_facts(&store)?;
+            blockers.extend(
+                facts
+                    .blockers
+                    .into_iter()
+                    .map(|(resource_id, (workspace, state))| WorkspaceBlocker {
+                        conversation_id: owned.conversation_id.clone(),
+                        agent_allocation: facts.agent_owners.get(&resource_id).cloned(),
+                        resource_id,
+                        workspace,
+                        state,
+                    }),
+            );
         }
         blockers.sort_by(|a, b| {
             (&a.conversation_id, &a.resource_id).cmp(&(&b.conversation_id, &b.resource_id))
         });
+        // Observe physical cleanliness before offering Session deletion. The
+        // final disposal repeats identity proof and uses unforced Git removal.
+        let mut agent_workspaces = Vec::new();
+        for blocker in &mut blockers {
+            if let Some(allocation) = &blocker.agent_allocation
+                && !matches!(blocker.state, WorkspaceBlockerState::Unresolved(_))
+            {
+                let inspected = crate::runtime::workspace::WorkspaceManager::inspect_recovered(
+                    &blocker.workspace,
+                );
+                if let Some(handoff) = inspected.handoff() {
+                    blocker.state = WorkspaceBlockerState::Retained {
+                        head_commit: handoff.head_commit.clone(),
+                        dirty: handoff.dirty,
+                    };
+                    if !handoff.dirty && handoff.head_commit == handoff.base_commit {
+                        agent_workspaces.push(AgentWorkspaceCleanup {
+                            conversation_id: blocker.conversation_id.clone(),
+                            allocation: allocation.clone(),
+                            workspace: blocker.workspace.clone(),
+                            handoff: handoff.clone(),
+                        });
+                    }
+                }
+            }
+        }
         let revision =
             ownership_revision(&authority, session_id, &nodes, &conversations, &blockers)?;
+        blockers.retain(|blocker| {
+            !agent_workspaces.iter().any(|resource| {
+                blocker.agent_allocation.as_ref() == Some(&resource.allocation)
+                    && blocker.conversation_id == resource.conversation_id
+            })
+        });
         Ok(Self {
             session_id: session_id.clone(),
             nodes,
             conversations,
             workspace_blockers: blockers,
+            agent_workspaces,
             revision,
             _authority: freeze,
         })
@@ -113,6 +163,10 @@ impl DeletionTargetSnapshot {
     pub fn workspace_blockers(&self) -> &[WorkspaceBlocker] {
         &self.workspace_blockers
     }
+    pub(crate) fn agent_workspaces(&self) -> &[AgentWorkspaceCleanup] {
+        &self.agent_workspaces
+    }
+
     /// Canonical semantic token for target ownership and final blocker state.
     #[must_use]
     pub fn ownership_revision(&self) -> &[u8; 32] {
@@ -125,6 +179,7 @@ fn invalid(error: impl std::fmt::Display) -> std::io::Error {
 }
 
 struct Facts {
+    agent_owners: BTreeMap<String, crate::runtime::identity::SubagentId>,
     blockers: BTreeMap<String, (WorkspaceSnapshot, WorkspaceBlockerState)>,
 }
 
@@ -146,6 +201,11 @@ fn read_facts_while(
     // is a reference to this native fact, never a second disposal authority.
     let mut workflow_owners = BTreeMap::new();
     let mut borrowed_children = BTreeSet::new();
+    let mut agents = BTreeMap::new();
+    let mut pending_admissions = BTreeSet::new();
+    let mut activation_resources = BTreeMap::new();
+    let mut durable_resources = BTreeSet::new();
+    let mut agent_owners = BTreeMap::new();
     let mut cursor = None;
     let through = store.event_high_watermark().map_err(invalid)?;
     while cursor.unwrap_or(0) < through {
@@ -166,15 +226,80 @@ fn read_facts_while(
                 return Err(invalid("foreign ownership envelope"));
             }
             match envelope.event {
+                RuntimeEvent::AgentActivationAdmission {
+                    activation_id,
+                    phase,
+                    ..
+                } => match phase {
+                    crate::events::types::AgentActivationAdmissionPhase::Reserved => {
+                        pending_admissions.insert(activation_id);
+                    }
+                    crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                        physical_settlement_proven: true,
+                    } => {
+                        pending_admissions.remove(&activation_id);
+                    }
+                    crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                        physical_settlement_proven: false,
+                    } => {}
+                },
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id,
+                    child_agent_id,
+                    child_conversation_id,
+                    admitted_authority,
                     workspace,
                     ownership,
                     ..
                 } => {
                     workspace.validate().map_err(invalid)?;
-                    let key = format!("child:{subagent_id}");
-                    if !resources.insert(key.clone()) {
+                    pending_admissions.remove(&subagent_id);
+                    let activation_key = format!("child:{subagent_id}");
+                    let key = if admitted_authority.is_some() {
+                        if ownership != crate::events::types::SubagentOwnershipKind::Normal
+                            || workspace.borrowed_from.is_some()
+                            || agents
+                                .insert(
+                                    child_agent_id.clone(),
+                                    (child_conversation_id.clone(), workspace.clone()),
+                                )
+                                .is_some()
+                        {
+                            return Err(invalid("invalid durable Agent workspace admission"));
+                        }
+                        let key = format!("agent:{child_agent_id}");
+                        durable_resources.insert(key.clone());
+                        agent_owners.insert(key.clone(), subagent_id.clone());
+                        key
+                    } else if let Some((conversation, admitted_workspace)) =
+                        agents.get(&child_agent_id)
+                    {
+                        if conversation != &child_conversation_id
+                            || admitted_workspace != &workspace
+                            || ownership != crate::events::types::SubagentOwnershipKind::Normal
+                        {
+                            return Err(invalid(
+                                "resumed Agent changed admitted workspace authority",
+                            ));
+                        }
+                        let key = format!("agent:{child_agent_id}");
+                        if activation_resources.insert(subagent_id, key).is_some() {
+                            return Err(invalid("duplicate activation ownership"));
+                        }
+                        continue;
+                    } else {
+                        if ownership == crate::events::types::SubagentOwnershipKind::Normal {
+                            return Err(invalid(
+                                "native Agent activation without admitted authority",
+                            ));
+                        }
+                        activation_key
+                    };
+                    if activation_resources
+                        .insert(subagent_id, key.clone())
+                        .is_some()
+                        || !resources.insert(key.clone())
+                    {
                         return Err(invalid("duplicate resource ownership"));
                     }
                     if let Some(run) = &workspace.borrowed_from {
@@ -194,6 +319,14 @@ fn read_facts_while(
                     }
                 }
                 RuntimeEvent::SubagentTerminalPublished {
+                    physical_settlement_proven: false,
+                    ..
+                } => {
+                    return Err(invalid(
+                        "Agent activation terminal has no proven physical settlement",
+                    ));
+                }
+                RuntimeEvent::SubagentTerminalPublished {
                     subagent_id,
                     workspace_resource,
                     ..
@@ -203,17 +336,20 @@ fn read_facts_while(
                     workspace_resource,
                     ..
                 } => {
-                    let key = format!("child:{subagent_id}");
-                    if !resources.contains(&key) {
-                        return Err(invalid("terminal without ownership"));
-                    }
+                    let key = activation_resources
+                        .get(&subagent_id)
+                        .ok_or_else(|| invalid("terminal without ownership"))?;
                     match workspace_resource {
                         SubagentWorkspaceTerminalResource::None => {
-                            blockers.remove(&key);
+                            // Completion releases one activation's borrow. The
+                            // durable Agent still owns the exact workspace.
+                            if !durable_resources.contains(key) {
+                                blockers.remove(key);
+                            }
                         }
                         SubagentWorkspaceTerminalResource::Retained { handoff } => {
                             let (workspace, state) = blockers
-                                .get_mut(&key)
+                                .get_mut(key)
                                 .ok_or_else(|| invalid("retained resource without ownership"))?;
                             validate_handoff(workspace, &handoff)?;
                             *state = WorkspaceBlockerState::Retained {
@@ -225,7 +361,7 @@ fn read_facts_while(
                             reason, ..
                         } => {
                             blockers
-                                .get_mut(&key)
+                                .get_mut(key)
                                 .ok_or_else(|| invalid("unresolved resource without ownership"))?
                                 .1 = WorkspaceBlockerState::Unresolved(reason);
                         }
@@ -236,17 +372,24 @@ fn read_facts_while(
                     settlement,
                     ..
                 } => {
-                    let key = format!("child:{subagent_id}");
-                    if !resources.contains(&key) || borrowed_children.contains(&key) {
+                    let key = activation_resources
+                        .get(&subagent_id)
+                        .ok_or_else(|| invalid("disposal without activation ownership"))?;
+                    if durable_resources.contains(key) {
+                        return Err(invalid(
+                            "activation disposal cannot release a durable Agent workspace",
+                        ));
+                    }
+                    if !resources.contains(key) || borrowed_children.contains(key) {
                         return Err(invalid("disposal without independent child ownership"));
                     }
                     match settlement {
                         SubagentWorkspaceDisposalSettlement::Disposed => {
-                            blockers.remove(&key);
+                            blockers.remove(key);
                         }
                         SubagentWorkspaceDisposalSettlement::WorktreeRemoved => {
                             blockers
-                                .get_mut(&key)
+                                .get_mut(key)
                                 .ok_or_else(|| invalid("partial disposal without resource"))?
                                 .1 = WorkspaceBlockerState::BranchOnly;
                         }
@@ -340,7 +483,15 @@ fn read_facts_while(
             }
         }
     }
-    Ok(Facts { blockers })
+    if !pending_admissions.is_empty() {
+        return Err(invalid(
+            "Agent activation admission has no proven physical settlement",
+        ));
+    }
+    Ok(Facts {
+        agent_owners,
+        blockers,
+    })
 }
 
 // Explicit length-delimited semantic vocabulary. No event envelopes or catalog

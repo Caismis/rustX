@@ -1,6 +1,6 @@
 import type {
   AgentStatusExtensionDocument, GoalExtensionDocument, SourceScope, SourceSettings, TodoExtensionDocument,
-} from '../../../../../protocol/app-server/v23';
+} from '../../../../../protocol/app-server/v25';
 import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';
 import { Advanced, Choice, Toggle } from '../primitives/aria';

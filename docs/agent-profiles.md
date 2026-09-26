@@ -46,7 +46,7 @@ require_clean_parent = true
 | `tools.sources` | MCP identity or `python:<package>` to `"all"`, exact Tool names, or `[]`. Definition alone grants nothing. |
 | `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; default none. Prompt visibility only. |
 | `plugins` | Closed Rust-owned Agent Status, Todo and Goal vocabulary, default off. Each Root Plugin object overlays atomically. |
-| `agents`, `workflows` | Explicit delegation/invocation allowlists. Existing one-shot child scope limits remain enforced. |
+| `agents`, `workflows` | Explicit delegation/invocation allowlists. Child scope limits remain enforced for every activation. |
 | `description`, `instructions` | Agent prose; named reusable profiles require nonempty values. Prose cannot change invocation policy. |
 | `agents_md` | Canonical project guidance and bounded supplemental files. |
 | `timeout_ms`, `worktree` | Named child lifecycle/workspace policy only. Root rejects these fields. |
@@ -82,3 +82,7 @@ bindings, Skill bytes and versions, model decision and policies. It does not rea
 current files or current Root defaults. Subsequent configuration publication cannot mutate
 that child. Cold composition rereads current sources and validates deliberate
 Session model intent; materialized Agent profiles are not Session persistence.
+
+A native child Agent freezes its admitted resolved profile at creation and reuses
+it across later activations. Profile edits/reloads affect new Agents, never an
+existing Agent resumed by `send_message`. See [Jobs and Agents](jobs-and-agents.md).

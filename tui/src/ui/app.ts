@@ -245,7 +245,7 @@ export class RustxTuiApp {
   #subagentListFocused = false;
   #childInspection: { reader: SubagentTranscript; timer: ReturnType<typeof setInterval> } | undefined;
   #reconnectChild: string | undefined;
-  #selectedSubagentId: string | undefined;
+  #selectedAgentId: string | undefined;
   #presentationEpoch = 0;
   #deletion!: SessionDeletionWorkflow;
   #resumePresentation: ResumeSelector | undefined;
@@ -626,15 +626,15 @@ export class RustxTuiApp {
             this.#moveSubagentSelection(1);
             return { consume: true };
           }
-          if (matchesKey(data, "enter") && this.#subagentListFocused && this.#selectedSubagentId !== undefined) {
-            this.#openChildTranscript(this.#selectedSubagentId);
+          if (matchesKey(data, "enter") && this.#subagentListFocused && this.#selectedAgentId !== undefined) {
+            this.#openChildTranscript(this.#selectedAgentId);
             return { consume: true };
           }
           if (matchesKey(data, "i") && this.#subagentListFocused) {
             void this.#inspectSelectedSubagent();
             return { consume: true };
           }
-          if (matchesKey(data, "d") && this.#subagentListFocused && this.#selectedSubagentId !== undefined) {
+          if (matchesKey(data, "d") && this.#subagentListFocused && this.#selectedAgentId !== undefined) {
             this.#confirmDisposeSelectedSubagent();
             return { consume: true };
           }
@@ -830,17 +830,17 @@ export class RustxTuiApp {
     const state = this.#session?.state;
     if (state === undefined) return;
     const selected = cycleSubagentSelection(
-      state.subagents,
-      this.#selectedSubagentId,
+      state.agents,
+      this.#selectedAgentId,
       direction,
     );
     if (selected === undefined) {
       this.#subagentListFocused = false;
-      this.#selectedSubagentId = undefined;
+      this.#selectedAgentId = undefined;
       return;
     }
     this.#subagentListFocused = true;
-    this.#selectedSubagentId = selected;
+    this.#selectedAgentId = selected;
     this.#renderState(state);
   }
 
@@ -852,13 +852,13 @@ export class RustxTuiApp {
     const reader = new SubagentTranscript(session, id);
     const current = () => this.#childInspection?.reader === reader && this.#isCurrentPresentationLease(lease);
     const view = new SubagentTranscriptView(reader,
-      () => session.state.subagents.find(child => child.subagent_id === id),
+      () => session.state.agents.find(child => child.agent_id === id),
       this.#preferences,
       () => { if (current()) this.#closeOverlay(); },
       () => { if (current()) this.#tui.requestRender(); });
     this.#showPopup(view, { width: "90%", heightPercent: 80 });
     reader.onChange = () => { if (current()) this.#tui.requestRender(); };
-    // Poll transcript authority, including terminal children: status is not a
+    // Poll transcript authority, including inactive Agents: status is not a
     // transcript revision and cannot establish the final history boundary.
     const timer = setInterval(() => { void reader.refresh(); }, 1500);
     timer.unref();
@@ -870,7 +870,7 @@ export class RustxTuiApp {
   async #inspectSelectedSubagent(): Promise<void> {
     if (
       !this.#subagentListFocused ||
-      this.#selectedSubagentId === undefined ||
+      this.#selectedAgentId === undefined ||
       this.#finished
     ) {
       return;
@@ -878,9 +878,9 @@ export class RustxTuiApp {
     const lease = this.#presentationLease();
     const attachedSession = lease.session;
     if (attachedSession === undefined) return;
-    const subagentId = this.#selectedSubagentId;
+    const agentId = this.#selectedAgentId;
     try {
-      const subagent = await attachedSession.subagentStatus(subagentId);
+      const subagent = await attachedSession.agentStatus(agentId);
       if (!this.#isCurrentPresentationLease(lease)) return;
       this.#showInspection(
         `Subagent ${subagent.agent}`,
@@ -900,15 +900,15 @@ export class RustxTuiApp {
   #confirmDisposeSelectedSubagent(): void {
     if (
       !this.#subagentListFocused ||
-      this.#selectedSubagentId === undefined ||
+      this.#selectedAgentId === undefined ||
       this.#finished
     ) {
       return;
     }
     const state = this.#session?.state;
     if (state === undefined) return;
-    const selected = state.subagents.find(
-      (subagent) => subagent.subagent_id === this.#selectedSubagentId,
+    const selected = state.agents.find(
+      (subagent) => subagent.agent_id === this.#selectedAgentId,
     );
     if (selected === undefined) {
       this.#showTransient("error", "the selected subagent is no longer known to the runtime");
@@ -924,7 +924,7 @@ export class RustxTuiApp {
       return;
     }
 
-    const subagentId = selected.subagent_id;
+    const subagentId = selected.activation_id;
     const lease = this.#presentationLease();
     const confirmation = new ConfirmationView({
       title: "Dispose retained workspace",
@@ -1054,7 +1054,7 @@ export class RustxTuiApp {
     }
     if (this.#subagentListFocused) {
       this.#subagentListFocused = false;
-      this.#selectedSubagentId = undefined;
+      this.#selectedAgentId = undefined;
       const state = this.#session?.state;
       if (state !== undefined) this.#renderState(state);
       return;
@@ -1536,8 +1536,8 @@ export class RustxTuiApp {
     }
     const calls = [...correlateTools(state).byCallId.keys()];
     if (target === "all") {
-      const executions = state.background.map(
-        (execution) => execution.execution_id,
+      const executions = state.jobs.map(
+        (execution) => execution.job_id,
       );
       const interactions = state.pendingInteractions.map(
         (interaction) => interaction.interaction,
@@ -1646,8 +1646,8 @@ export class RustxTuiApp {
    * no Pi component carries state the projection does not have.
    */
   #renderState(state: PresentationState): void {
-    if (!hasSubagentSelection(state.subagents, this.#selectedSubagentId)) {
-      this.#selectedSubagentId = undefined;
+    if (!hasSubagentSelection(state.agents, this.#selectedAgentId)) {
+      this.#selectedAgentId = undefined;
       this.#subagentListFocused = false;
     }
     // Reconcile the presentation-only interaction focus with the
@@ -1707,7 +1707,7 @@ export class RustxTuiApp {
         state,
         this.#preferences,
         new Date(),
-        this.#subagentListFocused ? this.#selectedSubagentId : undefined,
+        this.#subagentListFocused ? this.#selectedAgentId : undefined,
       ),
       renderInteractionSection(state, this.#preferences, this.#interactionFocus),
     ]) {

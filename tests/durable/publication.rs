@@ -2069,12 +2069,16 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
             "audited-subagent",
             "1",
             RuntimeEvent::SubagentOwnershipCommitted {
+                parent_agent_id: rustx::runtime::identity::AgentId::new("agent-parent"),
+                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: AgentId::new("child-audited"),
                 child_conversation_id: ConversationId::new(
                     "conv_b520d0ec-730a-7133-8d51-7de417e31c5a",
                 ),
-                tool_call_id: call_id,
+                origin: rustx::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: call_id,
+                },
                 agent: "profile".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
@@ -2087,7 +2091,8 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
         subagent.event_id = EventId::new(format!("subagent-committed-event:{subagent_id}"));
         subagent.attempt_id = None;
         subagent.turn_id = None;
-        let rejected = store.append_event(subagent);
+        let (subagent, authority) = crate::agent_authority::admit_agent(subagent);
+        let rejected = store.append_agent_admission(subagent, &authority);
         assert!(
             matches!(
                 rejected,

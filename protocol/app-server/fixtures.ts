@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v23.js';
+import type {ProtocolMessage} from './v25.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -73,7 +73,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 23,
+      "protocol_version": 25,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -90,7 +90,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 23,
+      "protocol_version": 25,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -328,7 +328,7 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
-    "method": "subagent/transcript",
+    "method": "agent/transcript",
     "params": {
       "target": {
         "session_id": "ses_00000000-0000-7000-8000-000000000001",
@@ -336,7 +336,7 @@ export const fixtures = [
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
-      "subagent_id": "subagent-fixture",
+      "agent_id": "agent-fixture",
       "before": "9007199254740993",
       "limit": 32
     }
@@ -484,8 +484,8 @@ export const fixtures = [
       "code": -32000,
       "message": "Operation rejected",
       "data": {
-        "kind": "unknown_subagent",
-        "subagent_id": "subagent-fixture"
+        "kind": "unknown_agent",
+        "agent_id": "agent-fixture"
       }
     }
   },
@@ -496,8 +496,8 @@ export const fixtures = [
       "code": -32000,
       "message": "Operation rejected",
       "data": {
-        "kind": "subagent_history_unavailable",
-        "subagent_id": "subagent-fixture"
+        "kind": "agent_history_unavailable",
+        "agent_id": "agent-fixture"
       }
     }
   },

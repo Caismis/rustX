@@ -53,4 +53,4 @@ export function CheckboxList({ label, values, selected, change }: {
 /** The native Tool identities a policy may be authored for, and the complete
  * set of built-in Tool identities the root Agent may be granted. */
 export const policyTools = ['read', 'write', 'edit', 'glob', 'grep', 'bash'] as const;
-export const nativeTools = [...policyTools, 'ask_user', 'execution'];
+export const nativeTools = [...policyTools, 'ask_user', 'job_list', 'job_status', 'job_wait', 'job_cancel', 'list_agents', 'send_message', 'wait_agent', 'interrupt_agent'];

@@ -1488,38 +1488,35 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
 
     // Dispatch is observed as a runtime registry transition.
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(
-            event.event,
-            RuntimeClientEvent::BackgroundExecutionUpdated { .. }
-        )
+        matches!(event.event, RuntimeClientEvent::JobUpdated { .. })
     })
     .await;
-    let RuntimeClientEvent::BackgroundExecutionUpdated { execution } =
+    let RuntimeClientEvent::JobUpdated { job: execution } =
         &events.last().expect("a dispatch transition").event
     else {
         panic!("background transition");
     };
-    let execution_id = execution.execution_id.clone();
+    let execution_id = execution.job_id.clone();
     assert_eq!(execution.tool_id.as_str(), "tool-bg");
     let mut last = events.last().expect("dispatch").cursor;
 
     // The registry is inspectable by identity, and an unknown identity is
     // the typed semantic error.
-    let RuntimeClientResult::BackgroundStatus { execution } = result(
+    let RuntimeClientResult::Job { job: execution } = result(
         driver
-            .request(RuntimeClientRequest::BackgroundStatus {
+            .request(RuntimeClientRequest::JobStatus {
                 id: RequestId::new(4),
-                execution_id: execution_id.clone(),
+                job_id: execution_id.clone(),
             })
             .await,
     ) else {
         panic!("background_status returns the registry snapshot");
     };
-    assert_eq!(execution.execution_id, execution_id);
+    assert_eq!(execution.job_id, execution_id);
     let response = driver
-        .request(RuntimeClientRequest::BackgroundStatus {
+        .request(RuntimeClientRequest::JobStatus {
             id: RequestId::new(5),
-            execution_id: ToolExecutionId::new("exec_52f6ba2f-c6d4-7c0a-84b7-94d48bbf97a2"),
+            job_id: ToolExecutionId::new("exec_52f6ba2f-c6d4-7c0a-84b7-94d48bbf97a2"),
         })
         .await;
     assert_eq!(
@@ -1529,13 +1526,13 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
         }
     );
 
-    // Cancellation is acceptance: the response carries the registry
-    // snapshot after the request, never the terminal result.
-    let RuntimeClientResult::BackgroundCancelAccepted { .. } = result(
+    // Cancellation waits for physical settlement; the owner also publishes
+    // terminal state proactively on the observation stream.
+    let RuntimeClientResult::Job { .. } = result(
         driver
-            .request(RuntimeClientRequest::BackgroundCancel {
+            .request(RuntimeClientRequest::JobCancel {
                 id: RequestId::new(6),
-                execution_id: execution_id.clone(),
+                job_id: execution_id.clone(),
             })
             .await,
     ) else {
@@ -1546,20 +1543,17 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     // observation stream.
     loop {
         let events = receive_until(&mut *driver, last, |event| {
-            matches!(
-                event.event,
-                RuntimeClientEvent::BackgroundExecutionUpdated { .. }
-            )
+            matches!(event.event, RuntimeClientEvent::JobUpdated { .. })
         })
         .await;
         last = events.last().expect("a transition").cursor;
-        let RuntimeClientEvent::BackgroundExecutionUpdated { execution } =
+        let RuntimeClientEvent::JobUpdated { job: execution } =
             &events.last().expect("a transition").event
         else {
             panic!("background transition");
         };
         if execution.state.is_terminal() {
-            assert_eq!(execution.execution_id, execution_id);
+            assert_eq!(execution.job_id, execution_id);
             assert!(
                 execution.result.is_some(),
                 "a terminal registry record carries its bounded result"

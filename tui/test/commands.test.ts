@@ -152,6 +152,8 @@ describe("command registry", () => {
         "/show-reasoning",
         "/expand",
         "/cancel",
+        "/agents", "/send-message", "/wait-agent", "/interrupt-agent",
+        "/jobs", "/job-status", "/job-wait", "/job-cancel",
         "/quit",
       ],
     );
@@ -1267,29 +1269,20 @@ describe("CommandDispatcher", () => {
     assert.equal(h.transport.log.count("interaction/respond"), 0);
   });
 
-  it("cancels one background execution by its runtime identity", async () => {
+  it("cancels one finite Job by its runtime identity", async () => {
     const h = await harness();
-    const cancelling = h.dispatcher.submit("/cancel exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
-    const cancel = await nextRequest(h, "background/cancel");
-    assert.equal(
-      paramsOf(cancel, "background/cancel").execution_id,
-      "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
-    );
+    const cancelling = h.dispatcher.submit("/job-cancel exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
+    const cancel = await nextRequest(h, "job/cancel");
+    assert.equal(paramsOf(cancel, "job/cancel").job_id, "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
     h.transport.respond(cancel.id, {
-      type: "background",
-      execution: {
-        execution_id: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
-        tool_id: "tool-background",
-        tool_name: "bash",
-        state: "cancelling",
+      type: "job",
+      job: {
+        job_id: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
+        tool_id: "tool-background", tool_name: "bash", state: "cancelled",
       },
     });
-
     const outcome = await cancelling;
-    assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") {
-      assert.match(outcome.text, /acceptance, not settlement/);
-    }
+    assert.equal(outcome.kind, "inspect");
   });
 
   it("surfaces a typed protocol error as an error message", async () => {
