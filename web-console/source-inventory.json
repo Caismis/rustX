@@ -503,7 +503,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
       "destination": "web-console/src/app/trajectory/Trajectory.module.css",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state.",
       "upstream_sha256": "b616ba24e9274a66c63d7027ac7700b9813f640ca41e6910106286d1bbeba925",
       "retained_dependencies": [
         "existing theme tokens"
@@ -518,12 +518,26 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "b9bfead3c2d1b34994bfd00b8a74ba1d25bb95a87eb9407d2581aa33677c3f4c"
+      "local_sha256": "d0b7056fb4a70600c84160d16297f2e71c17ae81672156ade4496742a5d41e5a",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "e9740dcd1b98cfd92b68bfe3d2f1f968623542b7e0ce2c6697be0b3c79180fc5",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryGroupHeader.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "b08362f0a3525131a9764d523c4b6bac5d9a9ee0a3b8aeec4c70253c5cb764e8",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/Trajectory.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../client/trace",
@@ -565,14 +579,32 @@
           "upstream": "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
           "treatment": "inspected for measurable virtual row projection and fold-summary row heights",
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurn.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "f9250599869b4787a15bd99b6ad321a695998d03db8279dfec045ba89db54823",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "11324bd5f472b3467c05e6c933ca1939d822a0ecd9008cff33cfb6be8a159ffd",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryGroupHeader.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "f4a55129feeabd875e4631436395fd2d44f1ab39cf5e39376546c1c3e4e9fee4",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "a71afd2de30e9a6d5cbe7d7c1ccf081ddcce8b1339b40f5b137c31b9dcb26bd9"
+      "local_sha256": "a4598ad4ce7e434222ddbaa8b5d44aa00f58aefae6b5511e4ac303b2af39638e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v23",
@@ -610,9 +642,15 @@
           "upstream": "packages/client/ui-trajectory/src/client/code-program.ts",
           "treatment": "inspected for recorded-source inspection; rustX resolves program source from a native Tool contract on the server instead of a browser tool-name special case",
           "upstream_sha256": "a31b4253ba9c7c2490f942768d060c769ff1b5b4fb653ccf67ab54af1e1593b7"
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "d829de28721f72354c227dcb371ec09799cae20acc6663687b1826d3fec10a84"
+      "local_sha256": "12c7bd2fc308c436055f8dbca6f261cce221d8583b3022dba8a0907ccb531693"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -637,10 +675,9 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryTimeline.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus.",
       "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v23",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Tooltip",
         "./TrajectoryTimeline.module.css",
@@ -657,12 +694,12 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "213e6cfe737cb156acbc81115b5cf50a2defb687a1888eab7dd32b174fb91e1a"
+      "local_sha256": "281ad19901cb38eb8f17db37d9c794f00bf3764e717ec339f3e672689d37ca27"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
       "destination": "web-console/src/app/trajectory/layout.ts",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads.",
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
         "../../../../protocol/app-server/v23"
@@ -677,12 +714,20 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "2f97df9724a2b9ad25b61d8b57aab5d83f8c6ecd0dedc0e50f5388cc7a418cb4"
+      "local_sha256": "380deb8de468524a03cbd3fef636cf225076e41523226de80cb7f1658375e0cb",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "e5760027aee36ab68104cc44bc4259fef229590b1fff6ec9f7c45d4baaa5f8c5",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
       "destination": "web-console/src/app/trajectory/search.ts",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state.",
       "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
       "retained_dependencies": [
         "./layout"
@@ -697,15 +742,24 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "fe9992e86376a43d76288e738a600038a06bcbcad45abe10e4141c9cbd6814dd"
+      "local_sha256": "2ddb81722cd570035dd2303e45c8491902664dc3eb11acf8d206ce67f69b6159",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
+          "treatment": "PR #414 repair: structural labels are context on stable semantic cell search results; shared native owner projection serves Timeline, without sibling-cell expansion."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
       "destination": "web-console/src/app/trajectory/timeline.ts",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v23"
+        "../../../../protocol/app-server/v23",
+        "./layout"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -717,7 +771,15 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3205bcc890a6981fbf2f7e033b228e31f39d2c30ee88d2b4291a9859774621ba"
+      "local_sha256": "17249271a2baf68e9f9f80959ff73d486d1f0ed2422b2f1b78ddbaf846228df1",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
+          "treatment": "PR #414 repair: Turn boundaries use minimum projected member span start after idle compression; empty Turns have no boundary. Native timing remains authoritative."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2383,13 +2445,14 @@
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
       "destination": "web-console/test/trajectory.test.tsx",
-      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
+      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus.",
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
         "../../protocol/app-server/v23",
         "../src/app/trajectory/Trajectory",
         "../src/app/trajectory/layout",
         "../src/app/trajectory/search",
+        "../src/app/trajectory/timeline",
         "../src/client/trace",
         "./trace-fixture",
         "@testing-library/react",
@@ -2413,7 +2476,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "5a9b06e310fb904637f46b35507990e7a7a9f8f06f3d303c6558b13526baf15f"
+      "local_sha256": "ddfacd3c98b36861da414262abab72fb2b3175af2c76ead2e75619fd57d1f848"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2517,13 +2580,14 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryCell.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v23 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v23",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/icons",
-        "./Trajectory.module.css"
+        "./Trajectory.module.css",
+        "./layout"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2536,7 +2600,7 @@
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "additional_sources": [],
-      "local_sha256": "30e0a77405b4c8ec76432bc58c21c9d91d8826a25f6fb8ba6376ba1a34200966"
+      "local_sha256": "5673bf9c2e435d553ddbf70ab48aa0e9150e97412f36b030fd176b76f7335b3d"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3552,6 +3616,78 @@
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "ebd46e6345ba0998315b8810c2faaee47b3c46290e227a999e7cd69a1010d883",
       "treatment": "Behavioral reference only: native Attempt process ownership, exact control boundary, counts and always-open terminal disclosure; no source copied."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryView.tsx",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "a27937dc782642dbfded762466e5f4ce64a12c39d3ccd4840e8fe730e690e5c4",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryCell.tsx",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "d5090f8ec0fd12073f24f34276864c5d3a8b2e0270fbaa9736dac44e52ddd43e",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-record.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "fa86cb5f89c99d677793bb673cf723e199baa681ac25f057e04471d6813ba150",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/trajectory-request-header-definition.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "9b8032aa9d407411026937db2dab709f76b312a3ce33dc553fec663041bca220",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/SystemPromptRow.tsx",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "25172bf4a68dcb6cdaa5164c1b54afe0f1202bc1e7860d835bc84017d3a651fb",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/ContextBody.tsx",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "4f5f29eb0bee911a017f5f25647f1a8806d7ecdbe581250639d52ed57f87282d",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/conversation-nodes/request-prompt.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "dc5407a1e3d0536a83993e9eb55bbf84021ca82a23166c456c04180c812db8be",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/conversation-nodes/README.md",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "9345ec08a6646e8515cb4a9c8d14ae33ad35773f3de4c4bf346534f9c31c0c2c",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/conversation/location-index.ts",
+      "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+      "upstream_sha256": "dd1177a01cb5d09efbd1049d1209bed96232c64221ef44240a7118e839bdecc1",
+      "treatment": "Issue #407: studied only. Native Trace owns grouping, immutable request facts and timing; Harness runtime assembly excluded."
     }
   ],
   "historical_inspection": {

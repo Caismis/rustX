@@ -7,6 +7,7 @@
  * Journal wall spans and dispatch-origin numeric metrics cannot supply that
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
+import type { TrajectoryProjection } from './layout';
 import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v23';
 
 /** Horizontal projection of the overview's domain. */
@@ -38,8 +39,9 @@ export interface TrajectorySpan extends TrajectoryTimeRange {
   generationMs?: number;
 }
 
-/** One Attempt boundary in the active domain. */
+/** One Turn boundary in the active domain. */
 export interface TrajectoryBoundary {
+  nativeAttemptId: string;
   label: string;
   at: number;
 }
@@ -48,6 +50,20 @@ export interface TrajectoryBoundary {
 export interface TrajectoryTimelineModel extends TrajectoryTimeRange {
   spans: readonly TrajectorySpan[];
   boundaries: readonly TrajectoryBoundary[];
+}
+
+/**
+ * Collision-free identity of coordinate meaning, independent of object identity,
+ * display ordinals, labels and lifecycle status. A changed identity retires the
+ * interaction generation, even when the outer numeric domain is unchanged.
+ */
+export function timelineProjectionRevision(model: TrajectoryTimelineModel | null, mode: TrajectoryTimelineMode): string {
+  return JSON.stringify([mode, model === null ? null : [
+    model.start, model.end,
+    model.spans.map(span => [span.id, span.lane, span.start, span.end,
+      span.dispatchAt, span.firstOutputAt, span.lastOutputAt, span.providerTerminalAt]),
+    model.boundaries.map(boundary => [boundary.nativeAttemptId, boundary.at]),
+  ]]);
 }
 
 /** Lanes group related activity, exactly as the Harness overview does. */
@@ -125,16 +141,28 @@ function timingOf(record: TraceRecord) {
  * omitted from the timed projection rather than placed at an invented point.
  */
 export function trajectoryTimeline(
-  records: readonly TraceRecord[],
+  projection: TrajectoryProjection,
   mode: TrajectoryTimelineMode,
-  sectionLabelOf: (record: TraceRecord, index: number) => string | undefined,
 ): TrajectoryTimelineModel | null {
+  const records = projection.sections.flatMap(section => section.kind === 'outside'
+    ? [section.record] : section.groups.flatMap(group => group.records));
   const spans: TrajectorySpan[] = [];
-  const boundaries: TrajectoryBoundary[] = [];
+  // Derive boundaries only after projection (including idle compression).
+  // Membership comes from the shared Turn model, never timestamps or adjacency.
+  const boundaries = (): TrajectoryBoundary[] => {
+    const starts = new Map(spans.map(span => [span.id, span.start]));
+    return projection.sections.flatMap(section => {
+      if (section.kind === 'outside') return [];
+      const positions = section.records.flatMap(record => {
+        const start = starts.get(record.id);
+        return start === undefined ? [] : [start];
+      });
+      return positions.length ? [{ nativeAttemptId: section.nativeAttemptId,
+        label: `Turn ${section.displayOrdinal}`, at: Math.min(...positions) }] : [];
+    });
+  };
   if (mode === 'sequence') {
-    for (const [index, record] of records.entries()) {
-      const boundary = sectionLabelOf(record, index);
-      if (boundary !== undefined) boundaries.push({ label: boundary, at: spans.length });
+    for (const record of records) {
       if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
       const timing = timingOf(record);
       spans.push({
@@ -152,13 +180,11 @@ export function trajectoryTimeline(
       });
     }
     if (spans.length === 0) return null;
-    return { start: 0, end: spans.length, spans, boundaries };
+    return { start: 0, end: spans.length, spans, boundaries: boundaries() };
   }
-  for (const [index, record] of records.entries()) {
+  for (const record of records) {
     const timing = timingOf(record);
     if (timing.startedAt === undefined) continue;
-    const boundary = sectionLabelOf(record, index);
-    if (boundary !== undefined) boundaries.push({ label: boundary, at: timing.startedAt });
     if (record.kind === 'attempt' || record.kind === 'step' || record.kind === 'assistant') continue;
     spans.push({
       id: record.id,
@@ -194,7 +220,6 @@ export function trajectoryTimeline(
         if (span[key] !== undefined) span[key] = project(span[key]);
       }
     }
-    for (const boundary of boundaries) boundary.at = project(boundary.at);
   } else if (mode === 'time') {
     for (const span of spans) {
       span.end = span.start;
@@ -205,7 +230,7 @@ export function trajectoryTimeline(
     start: Math.min(...spans.map(span => span.start)),
     end: Math.max(...spans.map(span => span.end)),
     spans,
-    boundaries,
+    boundaries: boundaries(),
   };
 }
 

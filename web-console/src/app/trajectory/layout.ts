@@ -6,6 +6,7 @@ export interface TrajectorySelection {
   display_key: string;
   owner_record_id: string;
   facet: TrajectoryFacet;
+  cell_type?: 'SystemPromptCell' | 'ContextRow';
   context_message_id?: string;
 }
 interface Origin extends TrajectorySelection {
@@ -13,31 +14,32 @@ interface Origin extends TrajectorySelection {
   label: string;
   preview: string;
 }
-/** A segment anchor controls placement, never detail ownership. Headers stay
- * presentation-only even when the exact native structural record is loaded. */
-interface Segment {
+/** A loaded anchor controls placement, never detail ownership. Headers never
+ * own a detail read; an exact loaded native structural record is exposed only
+ * as its own bounded summary evidence, never borrowed from a member. */
+interface Structure {
   display_key: string;
   attempt_id: string;
-  segment_anchor_record_id: string;
-  segment_record_ids: string[];
+  anchor_record_id: string;
+  record_ids: string[];
   native_record?: TraceRecord;
   label: string;
   preview: string;
 }
 export type StructuralDisplayItem =
-  | (Segment & { type: 'StepHeader'; step_id: string })
-  | (Segment & { type: 'AttemptSectionHeader'; ordinal: number });
+  | (Structure & { type: 'GroupHeader'; kind: 'message' | 'step'; step_id?: string })
+  | (Structure & { type: 'TurnHeader'; ordinal: number });
 /** Only this closed union owns inspectable native records. */
 export type InspectableDisplayItem =
   | (Origin & { type: 'RecordRow' })
-  | (Origin & { type: 'SystemRow' })
+  | (Origin & { type: 'SystemPromptCell' })
   | (Origin & { type: 'ContextRow'; context: TraceContextPresentation })
   | (Origin & { type: 'RequestBoundary' })
   | (Origin & { type: 'CollapsedCallSummary'; executions: readonly TraceRecord[] });
 export type FocusableDisplayItem = InspectableDisplayItem | StructuralDisplayItem;
 export type TrajectoryDisplayItem = FocusableDisplayItem | { type: 'HistoryBoundary'; display_key: string; cursor: string };
 export function isInspectable(item: TrajectoryDisplayItem): item is InspectableDisplayItem {
-  return item.type !== 'HistoryBoundary' && item.type !== 'StepHeader' && item.type !== 'AttemptSectionHeader';
+  return item.type !== 'HistoryBoundary' && item.type !== 'GroupHeader' && item.type !== 'TurnHeader';
 }
 export const displayKey = (...parts: (string | number | null | undefined)[]) => JSON.stringify(parts);
 
@@ -45,17 +47,29 @@ function origin(record: TraceRecord, tag: string, label: string, preview = '', f
   return { record, owner_record_id: record.id, display_key: displayKey(tag, ...parts), facet, label, preview };
 }
 
-/** Relationships have already been classified against complete frozen snapshots. */
-export function systemLabel(record: TraceRecord): { label: string; facet: TrajectoryFacet } | undefined {
+/** Project each native dimension independently. Previews and neighboring requests
+ * cannot establish a relationship or erase a fact from the other dimension. */
+export function systemPresentation(record: TraceRecord): { label: string; facet: TrajectoryFacet } | undefined {
   const request = record.request;
   if (!request) return;
   const prompt = request.system_prompt.state;
   const tools = request.tool_catalog;
-  if (prompt === 'previous_unavailable' || tools === 'previous_unavailable') return { label: 'Previous input unavailable', facet: 'Summary' };
-  if (prompt === 'initial') return { label: 'Initial System Prompt', facet: 'System Prompt' };
-  if (prompt === 'changed' && tools === 'changed') return { label: 'System Prompt and Tools Updated', facet: 'Summary' };
-  if (prompt === 'changed') return { label: 'System Prompt Updated', facet: 'System Prompt' };
-  if (tools === 'changed') return { label: 'Tools Updated', facet: 'Tools' };
+  const promptLabel = {
+    initial: 'Initial System Prompt', changed: 'System Prompt Updated',
+    unchanged: '', previous_unavailable: 'Previous System Prompt unavailable',
+  }[prompt];
+  const toolsLabel = {
+    initial: 'Initial Tools', changed: 'Tools Updated',
+    unchanged: '', previous_unavailable: 'Previous Tool catalog unavailable',
+  }[tools];
+  // These compact names retain the established presentation for complete facts.
+  const label = prompt === 'initial' && tools === 'initial' ? 'Initial System Prompt'
+    : prompt === 'changed' && tools === 'changed' ? 'System Prompt and Tools Updated'
+    : [promptLabel, toolsLabel].filter(Boolean).join(' · ');
+  if (!label) return;
+  const facet = prompt === 'changed' ? 'Diff' : prompt === 'initial' ? 'System Prompt'
+    : tools === 'changed' || tools === 'initial' ? 'Tools' : 'Summary';
+  return { label, facet };
 }
 
 export function recordLabel(record: TraceRecord): string {
@@ -63,49 +77,101 @@ export function recordLabel(record: TraceRecord): string {
   return record.kind.toUpperCase();
 }
 
-/** The caller supplies exactly one native conversation window in durable order. */
-export function trajectoryItems(records: readonly TraceRecord[], cursor?: string | null): TrajectoryDisplayItem[] {
+/** One native Step, or attempt-owned material with no Step. No proximity inference. */
+export interface TrajectoryGroupModel {
+  kind: 'message' | 'step';
+  nativeStepId?: string;
+  label: string;
+  records: TraceRecord[];
+  cells: InspectableDisplayItem[];
+}
+export interface TrajectoryTurnModel {
+  kind: 'turn';
+  nativeAttemptId: string;
+  displayOrdinal: number;
+  records: TraceRecord[];
+  groups: TrajectoryGroupModel[];
+}
+export type TrajectorySection = TrajectoryTurnModel | {
+  kind: 'outside'; record: TraceRecord; cells: InspectableDisplayItem[];
+};
+export interface TrajectoryProjection {
+  sections: TrajectorySection[];
+}
+
+function cellsOf(record: TraceRecord): InspectableDisplayItem[] {
+  if (record.kind === 'attempt' || record.kind === 'step') return [];
+  if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(record), record.preview?.text ?? '', 'Summary', record.id), type: 'RecordRow' }];
+  const request = record.request;
+  const cells: InspectableDisplayItem[] = [];
+  const change = systemPresentation(record);
+  if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? (request.tool_catalog === 'changed' ? 'Frozen Tool catalog changed' : 'Initial frozen Tool catalog') : 'Prompt preview unavailable'), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
+  for (const context of request.context_additions) {
+    cells.push({ ...origin(record, 'context', context.context_kind.replaceAll('_', ' '), context.preview?.text ?? 'Content unavailable', 'Context', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
+  }
+  cells.push({ ...origin(record, 'request-boundary', 'Request', request.model, 'Summary', record.id, request.request_id), type: 'RequestBoundary' });
+  return cells;
+}
+
+/** Exactly one finite, native-owned Turn projection for ledger and overview.
+ * Durable input order orders Turns and Steps, but never establishes ownership.
+ * Interleaved records with the same exact location join the same group. Unscoped
+ * records remain standalone sections, never members of a nearby Turn. */
+export function projectTrajectory(records: readonly TraceRecord[]): TrajectoryProjection {
+  const sections: TrajectorySection[] = [];
+  const turns = new Map<string, TrajectoryTurnModel>();
+  const groups = new Map<string, TrajectoryGroupModel>();
+  for (const record of records) {
+    const { attempt_id: attempt, step_id: step } = record.location;
+    if (attempt == null) {
+      sections.push({ kind: 'outside', record, cells: cellsOf(record) });
+      continue;
+    }
+    let turn = turns.get(attempt);
+    if (!turn) {
+      turn = { kind: 'turn', nativeAttemptId: attempt, displayOrdinal: turns.size + 1, records: [], groups: [] };
+      turns.set(attempt, turn);
+      sections.push(turn);
+    }
+    turn.records.push(record);
+    if (record.kind === 'attempt') continue;
+    const key = displayKey(attempt, step);
+    let group = groups.get(key);
+    if (!group) {
+      group = step == null
+        ? { kind: 'message', label: 'Message', records: [], cells: [] }
+        : { kind: 'step', nativeStepId: step, label: `Step ${turn.groups.filter(group => group.kind === 'step').length + 1}`, records: [], cells: [] };
+      groups.set(key, group);
+      // Attempt-only inputs form the Message group; request-owned prompt/context
+      // cells retain their exact Step, including an initial prompt.
+      if (group.kind === 'message') turn.groups.unshift(group);
+      else turn.groups.push(group);
+    }
+    group.records.push(record);
+    group.cells.push(...cellsOf(record));
+  }
+  return { sections };
+}
+
+/** Flatten only the shared projection, never reconstruct ownership in a renderer. */
+export function trajectoryItems(projection: TrajectoryProjection, cursor?: string | null): TrajectoryDisplayItem[] {
   const items: TrajectoryDisplayItem[] = [];
   if (cursor) items.push({ type: 'HistoryBoundary', display_key: displayKey('history-boundary', cursor), cursor });
-  const ordinals = new Map<string, number>();
-  const nativeAttempts = new Map(records.filter(record => record.kind === 'attempt').map(record => [record.location.attempt_id, record]));
-  const nativeSteps = new Map(records.filter(record => record.kind === 'step').map(record => [displayKey(record.location.attempt_id, record.location.step_id), record]));
-  let attemptSegment: StructuralDisplayItem | undefined;
-  let stepSegment: StructuralDisplayItem | undefined;
-  let previousAttempt: string | null | undefined;
-  let previousStep: string | null | undefined;
-  for (const record of records) {
-    const attempt = record.location.attempt_id;
-    const step = record.location.step_id;
-    const newSection = attempt != null && attempt !== previousAttempt;
-    if (newSection) {
-      if (!ordinals.has(attempt)) ordinals.set(attempt, ordinals.size + 1);
-      const ordinal = ordinals.get(attempt)!;
-      const native = nativeAttempts.get(attempt);
-      attemptSegment = { type: 'AttemptSectionHeader', display_key: displayKey('attempt-section', attempt, record.id), attempt_id: attempt, segment_anchor_record_id: record.id, segment_record_ids: [], ordinal, label: `Attempt ${ordinal}`, preview: '', ...(native ? { native_record: native } : {}) };
-      items.push(attemptSegment);
+  for (const section of projection.sections) {
+    if (section.kind === 'outside') { items.push(...section.cells); continue; }
+    const attempt = section.nativeAttemptId;
+    const native = section.records.find(record => record.kind === 'attempt');
+    items.push({ type: 'TurnHeader', display_key: displayKey('turn', attempt), attempt_id: attempt,
+      anchor_record_id: section.records[0]!.id, record_ids: section.records.map(record => record.id),
+      ordinal: section.displayOrdinal, label: `Turn ${section.displayOrdinal}`, preview: '', ...(native ? { native_record: native } : {}) });
+    for (const group of section.groups) {
+      const native = group.records.find(record => record.kind === 'step');
+      items.push({ type: 'GroupHeader', kind: group.kind, display_key: displayKey('group', attempt, group.nativeStepId), attempt_id: attempt,
+        ...(group.nativeStepId === undefined ? {} : { step_id: group.nativeStepId }),
+        anchor_record_id: group.records[0]!.id, record_ids: group.records.map(record => record.id),
+        label: group.label, preview: '', ...(native ? { native_record: native } : {}) });
+      items.push(...group.cells);
     }
-    if (attempt != null && step != null && (newSection || step !== previousStep)) {
-      const native = nativeSteps.get(displayKey(attempt, step));
-      stepSegment = { type: 'StepHeader', display_key: displayKey('step-segment', attempt, step, record.id), attempt_id: attempt, step_id: step, segment_anchor_record_id: record.id, segment_record_ids: [], label: `Step ${step}`, preview: '', ...(native ? { native_record: native } : {}) };
-      items.push(stepSegment);
-    }
-    if (attempt == null) attemptSegment = undefined;
-    if (attempt == null || step == null) stepSegment = undefined;
-    attemptSegment?.segment_record_ids.push(record.id);
-    stepSegment?.segment_record_ids.push(record.id);
-    previousAttempt = attempt;
-    previousStep = step;
-    if (record.kind === 'attempt' || record.kind === 'step') continue;
-    if (record.kind === 'request' && record.request) {
-      const request = record.request;
-      const change = systemLabel(record);
-      if (change) items.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'Tools' ? 'Frozen Tool catalog changed' : 'Prompt preview unavailable'), change.facet, request.request_id), type: 'SystemRow' });
-      for (const context of request.context_additions) {
-        items.push({ ...origin(record, 'context', context.context_kind.replaceAll('_', ' '), context.preview?.text ?? 'Content unavailable', 'Context', request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
-      }
-      items.push({ ...origin(record, 'request-boundary', 'Request', request.model, 'Summary', request.request_id), type: 'RequestBoundary' });
-    } else items.push({ ...origin(record, 'record', recordLabel(record), record.preview?.text ?? '', 'Summary', record.id), type: 'RecordRow' });
   }
   return items;
 }
@@ -147,16 +213,31 @@ export function callsSummary(owner: TraceRecord, executions: readonly TraceRecor
   return `${owner.calls.length} proposed · ${executions.length} loaded matching executions${[...states].map(([state, count]) => ` · ${count} ${state}`).join('')} · ${executions.filter(record => record.tool?.started).length} started`;
 }
 
+/** Search visibility and timeline dimming share the projection's exact membership.
+ * Structural labels are evidence, never identities used to reconstruct ownership. */
+export function matchedRecordIds(items: readonly TrajectoryDisplayItem[], matches: ReadonlySet<string> | null): ReadonlySet<string> | null {
+  if (matches === null) return null;
+  const owners = new Set<string>();
+  for (const item of items) {
+    if (isInspectable(item) && matches.has(item.display_key)) owners.add(item.owner_record_id);
+  }
+  return owners;
+}
+
 /** Search bypasses both collapse policies. It never performs a read. */
 export function visibleItems(items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], attempts: ReadonlySet<string>, calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
-  if (matches) return items.filter(item => matches.has(item.display_key));
+  if (matches) {
+    const owners = matchedRecordIds(items, matches)!;
+    return items.filter(item => isInspectable(item) ? matches.has(item.display_key)
+      : item.type !== 'HistoryBoundary' && item.record_ids.some(id => owners.has(id)));
+  }
   const matching = matchingCalls(records);
   const hidden = new Set<string>();
   for (const owner of calls) for (const record of matching.get(owner) ?? []) hidden.add(record.id);
   return items.flatMap<TrajectoryDisplayItem>(item => {
     if (item.type === 'HistoryBoundary') return [item];
     const attempt = isInspectable(item) ? item.record.location.attempt_id : item.attempt_id;
-    if (item.type !== 'AttemptSectionHeader' && attempt != null && attempts.has(attempt)) return [];
+    if (item.type !== 'TurnHeader' && attempt != null && attempts.has(attempt)) return [];
     if (item.type === 'RecordRow' && hidden.has(item.owner_record_id)) return [];
     if (item.type === 'RecordRow' && calls.has(item.owner_record_id) && item.record.calls.length) {
       const executions = matching.get(item.owner_record_id) ?? [];
@@ -182,17 +263,16 @@ export function preferredItem(items: readonly TrajectoryDisplayItem[], owner: st
     ?? candidates[0];
 }
 export function selectionOf(item: InspectableDisplayItem): TrajectorySelection {
-  return { display_key: item.display_key, owner_record_id: item.owner_record_id, facet: item.facet, ...(item.context_message_id ? { context_message_id: item.context_message_id } : {}) };
+  return { display_key: item.display_key, owner_record_id: item.owner_record_id, facet: item.facet, ...(item.type === 'SystemPromptCell' || item.type === 'ContextRow' ? { cell_type: item.type } : {}), ...(item.context_message_id ? { context_message_id: item.context_message_id } : {}) };
 }
 
-/** Regrouping can move a segment's anchor, never its native structural identity.
- * Membership selects the containing segment, not another segment of the same Step. */
+/** Ordinals and loaded anchors may change; native structural identity cannot. */
 export function preferredStructure(items: readonly TrajectoryDisplayItem[], previous: StructuralDisplayItem): StructuralDisplayItem | undefined {
   return items.find((item): item is StructuralDisplayItem =>
     item.type === previous.type && !isInspectable(item)
     && item.attempt_id === previous.attempt_id
-    && (item.type !== 'StepHeader' || previous.type !== 'StepHeader' || item.step_id === previous.step_id)
-    && item.segment_record_ids.includes(previous.segment_anchor_record_id));
+    && (item.type !== 'GroupHeader' || previous.type !== 'GroupHeader' || item.step_id === previous.step_id)
+    );
 }
 export function preferredDisplayItem(items: readonly TrajectoryDisplayItem[], previous: FocusableDisplayItem): FocusableDisplayItem | undefined {
   return isInspectable(previous) ? preferredItem(items, previous.owner_record_id, previous) : preferredStructure(items, previous);

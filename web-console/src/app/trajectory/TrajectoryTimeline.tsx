@@ -11,13 +11,13 @@
  * A timed span requires endpoints in its rendered domain. Request Model spans
  * use provider evidence; Journal terminal timing cannot replace a missing bridge.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
-import type { TraceRecord } from '../../../../protocol/app-server/v23';
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import {
   TRAJECTORY_LANES,
   formatDuration,
   formatInstant,
-  trajectoryTimeline,
+  timelineProjectionRevision,
+  type TrajectoryTimelineModel,
   type TrajectoryTimeRange,
   type TrajectoryTimelineMode,
 } from './timeline';
@@ -96,7 +96,7 @@ function EarlierHistoryBoundary({
 
 /** Props for the Trajectory timing overview. */
 export interface TrajectoryTimelineProps {
-  records: readonly TraceRecord[];
+  model: TrajectoryTimelineModel | null;
   mode: TrajectoryTimelineMode;
   range: TrajectoryTimeRange | null;
   selectedId: string | null;
@@ -104,8 +104,6 @@ export interface TrajectoryTimelineProps {
   searchMatches: ReadonlySet<string> | null;
   onRangeChange: (range: TrajectoryTimeRange | null) => void;
   onSelect: (id: string) => void;
-  /** Section boundary label for a record that opens one, else undefined. */
-  boundaryLabel: (record: TraceRecord, index: number) => string | undefined;
   /** True when the Trace cache reports an older page beyond this window. */
   hasEarlierRecords: boolean;
   /** True while that older page is already being fetched. */
@@ -126,15 +124,21 @@ export interface TrajectoryTimelineProps {
  * @param props - loaded records, projection mode, and selection callbacks.
  * @returns the overview element, or an explicit empty state.
  */
-export function TrajectoryTimeline({
-  records,
+export function TrajectoryTimeline(props: TrajectoryTimelineProps) {
+  // React commits the projection and its interaction owner atomically. A press
+  // can finish only in the instance where it began; removed DOM/capture and
+  // refs cannot deliver a P1 gesture to P2. Equivalent projections keep state.
+  return <TimelineInteraction key={timelineProjectionRevision(props.model, props.mode)} {...props} />;
+}
+
+function TimelineInteraction({
+  model,
   mode,
   range,
   selectedId,
   searchMatches,
   onRangeChange,
   onSelect,
-  boundaryLabel,
   hasEarlierRecords,
   loadingEarlier,
   canLoadEarlier,
@@ -146,15 +150,6 @@ export function TrajectoryTimeline({
   const [draft, setDraft] = useState<TrajectoryTimeRange | null>(null);
   const [viewport, setViewport] = useState<TrajectoryTimeRange | null>(null);
   const [hover, setHover] = useState<string | null>(null);
-  const model = useMemo(
-    () => trajectoryTimeline(records, mode, boundaryLabel),
-    [records, mode, boundaryLabel],
-  );
-
-  // A rebuilt domain invalidates a viewport expressed in the old one.
-  const domainKey = model === null ? '' : `${model.start}:${model.end}`;
-  useEffect(() => { setViewport(null); }, [domainKey, mode]);
-
   const domain = viewport ?? (model === null ? null : { start: model.start, end: model.end });
   const span = domain === null ? 0 : Math.max(1e-6, domain.end - domain.start);
 
@@ -307,6 +302,7 @@ export function TrajectoryTimeline({
         {focus !== null && (
           <div
             className={css.focus}
+            data-focus-range=""
             aria-hidden="true"
             style={
               {
@@ -318,7 +314,7 @@ export function TrajectoryTimeline({
         )}
         {model.boundaries.map(boundary => (
           <div
-            key={`${boundary.label}:${boundary.at}`}
+            key={boundary.nativeAttemptId}
             className={css.boundary}
             aria-hidden="true"
             style={{ left: `${percent(boundary.at)}%` } as CSSProperties}
@@ -374,7 +370,12 @@ export function TrajectoryTimeline({
                       onBlur={() => setHover(null)}
                       onPointerEnter={() => setHover(candidate.id)}
                       onPointerLeave={() => setHover(current => (current === candidate.id ? null : current))}
-                      onClick={event => { event.stopPropagation(); onSelect(candidate.id); }}
+                      onClick={event => {
+                        event.stopPropagation();
+                        // Pointer selection is authorized by pointer-down/up in
+                        // this generation. Click alone is only keyboard/AT activation.
+                        if (event.detail === 0) onSelect(candidate.id);
+                      }}
                       style={
                         {
                           left: `${left}%`,

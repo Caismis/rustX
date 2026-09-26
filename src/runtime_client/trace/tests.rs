@@ -3578,6 +3578,46 @@ fn non_admitted_context_provenance_is_rejected_after_durable_request_start() {
     }
 }
 
+/// The current producer resolves one whole predecessor snapshot. Only six pairs
+/// can be emitted here; the wire's independent enums do not encode this narrower
+/// construction invariant, so clients must still preserve each supplied fact.
+#[test]
+fn predecessor_presentation_state_matrix() {
+    use super::summary::PreviousRequest;
+    use TraceSystemPromptState as S;
+    use TraceToolCatalogState as T;
+
+    let store = store("conv_7c1a0b52-3d68-7e41-9a07-2f5b8d6e04c3");
+    start(&store);
+    let current = prepared_request(&store, 0, None, identity_of("1", 0));
+    let mut predecessors = vec![
+        (PreviousRequest::None, S::Initial, T::Initial),
+        (
+            PreviousRequest::Unavailable(current.request_id.clone()),
+            S::PreviousUnavailable,
+            T::PreviousUnavailable,
+        ),
+    ];
+    for (prompt, tools) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut previous = current.clone();
+        if prompt {
+            previous.effective_system_prompt.push_str("different");
+        }
+        if tools {
+            previous.tool_definitions.clear();
+        }
+        predecessors.push((
+            PreviousRequest::Frozen(Box::new(previous)),
+            if prompt { S::Changed } else { S::Unchanged },
+            if tools { T::Changed } else { T::Unchanged },
+        ));
+    }
+    for (previous, prompt, tools) in predecessors {
+        let (presentation, catalog) = previous.presentation(&current);
+        assert_eq!((presentation.state, catalog), (prompt, tools));
+    }
+}
+
 /// T1-01/02/03: both relationships use one exact predecessor, even when the
 /// newest page excludes it. Full frozen values determine equality, not prefixes.
 #[test]

@@ -34,7 +34,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { diffLines } from 'diff';
-import type { TrajectoryFacet, TrajectorySelection } from './layout';
+import type { StructuralDisplayItem, TrajectoryFacet, TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
@@ -373,8 +373,13 @@ function ContextAdditions({
 }
 
 /** The sections available for one record, given what the server projected. */
-function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined): TrajectoryFacet[] {
-  if (record.kind === 'request') return ['Summary', 'System Prompt', 'Diff', 'Context', 'Tools', 'Options', 'Usage', 'Timing', 'Native'];
+function sectionsOf(record: TraceRecord, detail: TraceDetail | undefined, selection: TrajectorySelection): TrajectoryFacet[] {
+  if (record.kind === 'request') {
+    const diff: TrajectoryFacet[] = record.request?.system_prompt.state === 'changed' ? ['Diff'] : [];
+    if (selection.cell_type === 'SystemPromptCell') return [...diff, 'System Prompt', 'Tools', 'Summary', 'Native'];
+    if (selection.cell_type === 'ContextRow') return ['Context', 'Summary', 'Native'];
+    return ['Summary', 'System Prompt', ...diff, 'Context', 'Tools', 'Options', 'Usage', 'Timing', 'Native'];
+  }
   if (record.kind === 'assistant') return ['Summary', 'Content', ...(detail?.messages.some(message => message.blocks.some(block => block.type === 'reasoning')) ? ['Thinking' as const] : []), 'Raw', 'Timing', 'Native'];
   if (record.kind === 'tool') return ['Summary', 'Input', ...(detail?.tool?.source ? ['Code' as const] : []), 'Result', 'Schema', 'Timing', 'Artifacts', 'Native'];
   return ['Summary', ...(detail?.messages.length ? ['Content' as const] : []), 'Timing', 'Artifacts', 'Native'];
@@ -448,14 +453,14 @@ export function TrajectoryInspector({
   useEffect(() => {
     if (record.has_detail && !detail && !loading && !error) onLoadDetail(record.id);
   }, [record.id, record.has_detail, detail, loading, error, onLoadDetail]);
-  const sections = sectionsOf(record, detail);
+  const sections = sectionsOf(record, detail, selection);
   const active = sections.includes(section) ? section : 'Summary';
   const request = detail?.request ?? undefined;
   const tool = detail?.tool ?? undefined;
   const toolState = toolDetailState(detail, loading, error);
   const toolFactFacet = record.kind === 'tool' && ['Input', 'Result', 'Schema'].includes(active);
   const messages = detail?.messages ?? [];
-  const title =
+  const title = selection.cell_type === 'SystemPromptCell' ? 'System Prompt' : selection.cell_type === 'ContextRow' ? 'Context' :
     record.kind === 'request' && record.request
       ? `Request · ${record.request.model}`
       : record.kind === 'tool' && record.tool
@@ -510,7 +515,7 @@ export function TrajectoryInspector({
               <dt>Tools</dt><dd>{record.request.tool_catalog.replaceAll('_', ' ')}</dd>
               <dt>Context introduced</dt><dd>{record.request.context_additions.length}{record.request.context_truncated ? ' · truncated' : ''}</dd>
               {record.request.failure_kind && <><dt>Failure</dt><dd>{record.request.failure_kind}</dd></>}
-              <dt>Historical input</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>View System Prompt</Button> <Button size="sm" onClick={() => onFacet('Tools')}>View Tools</Button></dd>
+              {sections.includes('System Prompt') && <><dt>Historical input</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>View System Prompt</Button> <Button size="sm" onClick={() => onFacet('Tools')}>View Tools</Button></dd></>}
               <dt>Acceptance</dt><dd>Provider completion alone does not prove canonical Assistant acceptance.</dd>
             </>}
             {record.calls.length > 0 && <><dt>Proposed calls</dt><dd>{record.calls.length} · A proposal proves assembly, not execution.</dd></>}
@@ -914,6 +919,75 @@ export function TrajectoryInspector({
         )}
       </InspectorPanel>
       </Tabs>
+    </aside>
+  );
+}
+
+/**
+ * Bounded evidence of one Turn or Step header.
+ *
+ * A header is presentation structure, not a detail owner: this reads only the
+ * exact native Attempt/Step summary record the projection already attached to
+ * it, and issues no detail read. Without that exact record it says so rather
+ * than borrowing identity, lifecycle or timing from a member record.
+ */
+export function TrajectoryStructureInspector({ item, onClose }: { item: StructuralDisplayItem; onClose: () => void }) {
+  const record = item.native_record;
+  const native = item.type === 'TurnHeader' ? 'Attempt' : item.kind === 'step' ? 'Step' : undefined;
+  return (
+    <aside className={css.inspector} aria-label="Trace structure inspector">
+      <header>
+        <strong>{item.label}{native ? ` · native ${native}` : ''}</strong>
+        <Button size="sm" onClick={onClose}>Close structure</Button>
+      </header>
+      <div className={css.inspectorBody}>
+        <p className={css.note}>“{item.label}” is a loaded-window ordinal, not an identity.</p>
+        {record ? (
+          <>
+            <dl className={css.facts}>
+              <dt>Native kind</dt>
+              <dd>{cellLabel[record.kind]}</dd>
+              <dt>State</dt>
+              <dd>{record.state}</dd>
+              <dt>Record</dt>
+              <dd className={css.machine}>{record.id}</dd>
+              <dt>Attempt</dt>
+              <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
+              {record.kind === 'step' && (
+                <>
+                  <dt>Logical Step</dt>
+                  <dd className={css.machine}>{record.location.step_id ?? <Unavailable />}</dd>
+                </>
+              )}
+              {record.native_id && (
+                <>
+                  <dt>Native identity</dt>
+                  <dd className={css.machine}>{record.native_id}</dd>
+                </>
+              )}
+              <dt>Started</dt>
+              <dd className={css.machine}>{formatInstant(record.timing.started_at)}</dd>
+              <dt>Ended</dt>
+              <dd className={css.machine}>{formatInstant(record.timing.ended_at)}</dd>
+              <dt>Duration</dt>
+              <dd>{record.timing.duration_ms == null ? <Unavailable /> : formatDuration(count(record.timing.duration_ms))}</dd>
+              {record.preview?.text && (
+                <>
+                  <dt>Summary</dt>
+                  <dd>{record.preview.text}</dd>
+                </>
+              )}
+            </dl>
+            <Truncated of={record.truncated || record.preview?.truncated} />
+          </>
+        ) : (
+          <p className={css.unavailable}>
+            {native
+              ? `The exact native ${native} record is not loaded at this read cut, so its structural evidence is unavailable.`
+              : 'Message groups Attempt-owned records with no logical Step; it has no native structural record.'}
+          </p>
+        )}
+      </div>
     </aside>
   );
 }
