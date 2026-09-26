@@ -136,11 +136,11 @@ pub struct RuntimeClientSnapshot {
     /// All background executions in execution allocation order, including
     /// terminal records retained by the authoritative registry.
     #[serde(default)]
-    pub jobs: Vec<RuntimeClientJob>,
-    /// Durable child Agents in creation order. Repeated activations replace
-    /// the same Agent row; activation history remains in the Event Journal.
+    pub background: Vec<RuntimeClientBackgroundExecution>,
+    /// All subagent children in subagent ordinal order, including terminal
+    /// records retained by the authoritative registry (Issue #60).
     #[serde(default)]
-    pub agents: Vec<RuntimeClientAgent>,
+    pub subagents: Vec<RuntimeClientSubagent>,
     /// The bounded newest window of composed Agent Status observations, in
     /// runtime composition order (oldest first).
     ///
@@ -826,9 +826,9 @@ pub struct InboundDrainView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct RuntimeClientJob {
+pub struct RuntimeClientBackgroundExecution {
     /// The detached runtime execution identity.
-    pub job_id: ToolExecutionId,
+    pub execution_id: ToolExecutionId,
     /// The canonical tool identity.
     pub tool_id: ToolId,
     /// The model-facing tool name.
@@ -849,7 +849,7 @@ pub struct RuntimeClientJob {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct RuntimeClientAgentWorkspace {
+pub struct RuntimeClientSubagentWorkspace {
     /// Present when the Workflow run, rather than this child, owns the lease.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub borrowed_from: Option<crate::runtime::workflow::WorkflowRunId>,
@@ -910,22 +910,25 @@ pub struct RuntimeClientWorkspaceHandoff {
     pub dirty: bool,
 }
 
-/// One durable child Agent, keyed by `agent_id` across every activation.
+/// The Runtime Client view of one subagent child (Issue #60).
 ///
-/// The registry owns lifecycle arbitration. Journal ownership facts rebuild
-/// identity and activation correlation; canonical child history owns content.
-/// `activation_id` identifies the latest activation, while `current_activation`
-/// is absent when inactive or reserving the next activation. Neither replaces
-/// the stable Agent identity. Activity is bounded observation, never authority.
+/// A read-model materialization of the authoritative registry snapshot:
+/// every field is derived, and the durable ownership/terminal events —
+/// never this view — are the recovery authority.
+///
+/// Since Issue #178 the view also carries the child's live activity
+/// projection (`observation`), its redacted execution profile
+/// (`execution_profile`), and its start time (`started_at`). These are
+/// observation-plane facts: the lifecycle `state` remains the only
+/// authority on whether the child is alive, settling, or settled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct RuntimeClientAgent {
-    pub parent_agent_id: crate::runtime::identity::AgentId,
-    /// The most recently admitted finite activation identity.
-    pub activation_id: crate::runtime::identity::SubagentId,
-    /// The stable child Agent identity and canonical message provenance.
-    pub agent_id: crate::runtime::identity::AgentId,
+pub struct RuntimeClientSubagent {
+    /// The conversation-owned subagent identity.
+    pub subagent_id: crate::runtime::identity::SubagentId,
+    /// The child agent identity (the provenance its answer carries).
+    pub child_agent_id: crate::runtime::identity::AgentId,
     /// The child's own durable conversation identity.
     pub child_conversation_id: ConversationId,
     /// The canonical named-agent identity frozen at start (Issue #144).
@@ -951,9 +954,7 @@ pub struct RuntimeClientAgent {
     /// with it, and no authority decision reads it.
     pub profile_digest: String,
     /// The authoritative lifecycle state.
-    pub state: crate::runtime::subagent::AgentState,
-    pub current_activation: Option<crate::runtime::identity::SubagentId>,
-    pub activation_state: crate::runtime::subagent::SubagentState,
+    pub state: crate::runtime::subagent::SubagentState,
     /// The bounded terminal failure/cancellation diagnostic, once known.
     ///
     /// A successful child's answer content never appears here (Issue
@@ -973,7 +974,7 @@ pub struct RuntimeClientAgent {
     /// When the ownership committed; clients derive elapsed time from it.
     pub started_at: DateTime<Utc>,
     /// The model-independent project workspace facts.
-    pub workspace: RuntimeClientAgentWorkspace,
+    pub workspace: RuntimeClientSubagentWorkspace,
 }
 
 /// The bounded number of composed Agent Status observations one snapshot
@@ -1059,7 +1060,7 @@ pub enum RuntimeClientStatusSection {
     /// The runtime-owned background-execution section.
     BackgroundExecutions {
         /// The active background executions in allocation order.
-        executions: Vec<RuntimeClientJob>,
+        executions: Vec<RuntimeClientBackgroundExecution>,
         /// Active executions omitted by the module-local bound.
         omitted_count: usize,
     },

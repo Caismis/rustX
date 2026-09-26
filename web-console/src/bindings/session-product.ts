@@ -29,7 +29,7 @@ export function deriveSessionProductState(state: Pick<ClientView, 'connection' |
     : view.attachment !== 'attached' ? { action: 'refresh', label: 'Retry connection' } : undefined;
   const uncertain = state.uncertain.some(item => sessionId !== undefined && item.sessionId === sessionId)
     || view?.cancellation?.status === 'uncertain' || view?.modelMutation?.status === 'uncertain'
-    || view?.snapshot?.jobs?.some(tool => tool.state === 'outcome_unknown')
+    || view?.snapshot?.background?.some(tool => tool.state === 'outcome_unknown')
     || view?.snapshot?.attempt?.foreground?.some(tool => tool.state.type === 'settled' && tool.state.result.status.type === 'outcome_unknown')
     || view?.snapshot?.workflows?.runs.some(run => run.state.type === 'settled' && run.state.outcome === 'outcome_unknown');
   if (uncertain) return { status: 'uncertain', label: 'Needs verification', severity: 'warning', recovery,

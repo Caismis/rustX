@@ -320,9 +320,10 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
             panic!("snapshot_get must succeed: {response:?}");
         };
-        let failed = snapshot.agents.iter().any(|subagent| {
-            subagent.activation_state == rustx::runtime::subagent::SubagentState::Failed
-        });
+        let failed = snapshot
+            .subagents
+            .iter()
+            .any(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Failed);
         let notice = snapshot.messages.iter().any(|message| match message {
             rustx::message::types::MessageBlock::User(user) => {
                 matches!(user.source, rustx::message::types::UserSource::Runtime)
@@ -359,10 +360,10 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
     };
 
     // Exactly one child, Failed, carrying the bounded timeout diagnostic.
-    assert_eq!(snapshot.agents.len(), 1, "exactly one child was owned");
-    let subagent = &snapshot.agents[0];
+    assert_eq!(snapshot.subagents.len(), 1, "exactly one child was owned");
+    let subagent = &snapshot.subagents[0];
     assert_eq!(
-        subagent.activation_state,
+        subagent.state,
         rustx::runtime::subagent::SubagentState::Failed
     );
     let detail = subagent.detail.clone().expect("the terminal detail");

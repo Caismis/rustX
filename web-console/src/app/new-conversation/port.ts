@@ -1,6 +1,6 @@
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v25';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v23';
 import type { FirstSubmitPort } from './first-submit';
 import { selectSessionModel } from '../model-preference';
 

@@ -39,7 +39,7 @@ import { invocationLabel } from "../../presentation/invocation.ts";
  *
  * Per-kind panels are keyed by the full routed identity, so several pending
  * interactions — any mix of approvals and questionnaires, from the primary
- * conversation and from supervised agents — coexist without overwriting
+ * conversation and from supervised subagents — coexist without overwriting
  * one another, and a questionnaire draft survives focus moves within the
  * surface. The surface as a whole is disposable: an authoritative resync
  * closes it and the next render rebuilds it from the projection, so no stale

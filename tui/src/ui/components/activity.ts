@@ -41,10 +41,11 @@ import type {
   AnswerSpecification,
   InteractionRef,
   RoutedInteraction,
-  RuntimeClientJob,
-  RuntimeClientAgent,
-  RuntimeClientAgentActivity,
+  RuntimeClientBackgroundExecution,
+  RuntimeClientSubagent,
+  RuntimeClientSubagentActivity,
 } from "../../protocol/app-server.ts";
+import { SUBAGENT_TERMINAL_STATES } from "../../protocol/app-server.ts";
 import type { PresentationState } from "../../presentation/state.ts";
 import { interactionRefLabel } from "../../presentation/interaction-focus.ts";
 import type { ToolCorrelation } from "../../presentation/tools.ts";
@@ -103,15 +104,15 @@ export function renderBackgroundSection(
   state: PresentationState,
   preferences: PresentationPreferences,
 ): string {
-  if (state.jobs.length === 0) {
+  if (state.background.length === 0) {
     return "";
   }
   const active = activeBackground(state).length;
   return [
     role.strong(
-      `Jobs · ${active} active of ${state.jobs.length} known`,
+      `Background · ${active} active of ${state.background.length} known`,
     ),
-    ...state.jobs.map((execution) =>
+    ...state.background.map((execution) =>
       renderBackground(execution, preferences),
     ),
   ].join("\n");
@@ -119,7 +120,7 @@ export function renderBackgroundSection(
 
 /** One background execution card, driven entirely by the runtime lifecycle. */
 export function renderBackground(
-  execution: RuntimeClientJob,
+  execution: RuntimeClientBackgroundExecution,
   preferences: PresentationPreferences,
 ): string {
   const terminal = isBackgroundTerminal(execution.state);
@@ -127,7 +128,7 @@ export function renderBackground(
   const lines = [
     `${glyph} ${role.toolTitle(style.bold(clipText(execution.tool_name, HEADER_BUDGET.maxChars)))} ${role.chrome("·")} ${
       terminal ? role.meta(execution.state) : role.pending(execution.state)
-    } ${role.meta(execution.job_id)}`,
+    } ${role.meta(execution.execution_id)}`,
   ];
   const progress = describeProgress(execution.progress);
   if (progress !== undefined) {
@@ -142,7 +143,7 @@ export function renderBackground(
     const context: ToolRenderContext = {
       expanded: isBackgroundExecutionExpanded(
         preferences,
-        execution.job_id,
+        execution.execution_id,
       ),
       budget: preferences.previewBudget,
     };
@@ -188,12 +189,12 @@ export function renderBackground(
 
 /**
  * The subagent section: one compact row per child known to the parent runtime.
- * Active rows show the disposable observation plane; inactive rows remain
+ * Active rows show the disposable observation plane; terminal rows remain
  * visible as navigation targets for their durable child conversation (Issue
  * #179).
  *
  * This is the observation plane, not a second authority: the lifecycle
- * label and the activity line are both runtime-published facts. Inactive rows
+ * label and the activity line are both runtime-published facts. Terminal rows
  * render lifecycle and identity only: their settlement is conversation
  * content, delivered by the durable terminal inbound publication, and
  * `detail` — diagnostics only since Issue #178 — is never rendered as a
@@ -206,35 +207,35 @@ export function renderSubagentSection(
   state: PresentationState,
   preferences: PresentationPreferences,
   now: Date = new Date(),
-  selectedAgentId?: string,
+  selectedSubagentId?: string,
 ): string {
-  if (state.agents.length === 0) {
+  if (state.subagents.length === 0) {
     return "";
   }
   const active = activeSubagents(state);
-  const retained = state.agents.filter(
+  const retained = state.subagents.filter(
     (subagent) =>
       subagent.workspace != null &&
       subagent.workspace.resource_state !== "none" &&
       subagent.workspace.resource_state !== "disposed",
   ).length;
-  const actions = ["Ctrl+↑↓ select", "Enter conversation", "i details", "/send-message", "/wait-agent", "/interrupt-agent", "Esc Main"];
+  const actions = ["Ctrl+↑↓ select", "Enter conversation", "i details", "Esc Main"];
   if (retained > 0) actions.push("D dispose retained");
   return [
     role.strong(
-      `Agents · ${active.length} active of ${state.agents.length} known · ${actions.join(" · ")}`,
+      `Subagents · ${active.length} active of ${state.subagents.length} known · ${actions.join(" · ")}`,
     ),
-    ...state.agents.map((subagent) => renderSubagent(
+    ...state.subagents.map((subagent) => renderSubagent(
       subagent,
       preferences,
       now,
-      subagent.agent_id === selectedAgentId,
+      subagent.subagent_id === selectedSubagentId,
     )),
   ].join("\n");
 }
 
 /**
- * The authoritative detail of one subagent, as `agent/status` returns it.
+ * The authoritative detail of one subagent, as `subagent/status` returns it.
  *
  * This is a read of the child's projected identity, lifecycle, activity,
  * execution profile and workspace. It is deliberately not an attachment to the
@@ -242,16 +243,13 @@ export function renderSubagentSection(
  * second conversation client here would make this TUI an owner of semantics it
  * is a client of.
  */
-export function renderSubagentDetail(subagent: RuntimeClientAgent): string {
+export function renderSubagentDetail(subagent: RuntimeClientSubagent): string {
   const workspace = subagent.workspace;
   const observation = subagent.observation;
   const profile = subagent.execution_profile;
   const lines = [
     `- agent: \`${subagent.agent}\``,
-    `- Agent ID: \`${subagent.agent_id}\``,
-    `- current activation: ${subagent.current_activation ?? "none"}`,
-    `- latest activation: \`${subagent.activation_id}\` (${subagent.activation_state})`,
-    `- parent Agent: \`${subagent.parent_agent_id}\``,
+    `- subagent: \`${subagent.subagent_id}\``,
     `- child conversation: \`${subagent.child_conversation_id}\``,
     `- state: ${subagent.state}`,
     `- started: ${subagent.started_at}`,
@@ -286,24 +284,23 @@ export function renderSubagentDetail(subagent: RuntimeClientAgent): string {
       lines.push(`- workspace handoff: retained`);
     }
   }
-  return ["### Agent", ...lines].join("\n");
+  return ["### Subagent", ...lines].join("\n");
 }
 
 /** One compact row for a subagent identity and its optional live observation. */
 function renderSubagent(
-  subagent: RuntimeClientAgent,
+  subagent: RuntimeClientSubagent,
   _preferences: PresentationPreferences,
   now: Date,
   selected: boolean,
 ): string {
-  const inactive = subagent.state === "inactive";
-  const glyph = inactive ? role.meta("●") : role.pending("◐");
-  const timing = inactive ? "" : ` ${role.chrome("·")} ${role.meta(formatElapsed(now, subagent.started_at))}`;
+  const terminal = SUBAGENT_TERMINAL_STATES.has(subagent.state);
+  const glyph = terminal ? role.meta("●") : role.pending("◐");
+  const timing = terminal ? "" : ` ${role.chrome("·")} ${role.meta(formatElapsed(now, subagent.started_at))}`;
   const lines = [
-    `${selected ? role.accent("▸") : " "} ${glyph} ${role.toolTitle(style.bold(bounded(subagent.agent)))} ${role.chrome("·")} ${inactive ? role.meta(subagent.state) : role.pending(subagent.state)}${timing} ${role.chrome("·")} ${role.meta(bounded(subagent.agent_id))}`,
+    `${selected ? role.accent("▸") : " "} ${glyph} ${role.toolTitle(style.bold(bounded(subagent.agent)))} ${role.chrome("·")} ${terminal ? role.meta(subagent.state) : role.pending(subagent.state)}${timing} ${role.chrome("·")} ${role.meta(bounded(subagent.child_conversation_id))}`,
   ];
-  lines.push(`  ${role.meta(`conversation ${bounded(subagent.child_conversation_id)} · activation ${subagent.current_activation ?? "none"} · latest ${subagent.activation_id} (${subagent.activation_state})`)}`);
-  if (inactive) {
+  if (terminal) {
     return lines.join("\n");
   }
   const observation = subagent.observation;
@@ -327,7 +324,7 @@ function renderSubagent(
 }
 
 /** The one activity line of a subagent card, from the latest projection. */
-function activityLine(activity: RuntimeClientAgentActivity): string {
+function activityLine(activity: RuntimeClientSubagentActivity): string {
   switch (activity.type) {
     case "awaiting_activity":
       return "awaiting activity";
@@ -383,7 +380,7 @@ function formatElapsed(now: Date, since: string): string {
  * state.
  *
  * Every pending routed interaction — approvals and questionnaires, from the
- * primary conversation and from supervised agents — is independently
+ * primary conversation and from supervised subagents — is independently
  * represented here for as long as the runtime keeps it pending. The section
  * answers nothing: the unified human-input surface (opened automatically, or
  * with Ctrl+G after a dismissal) collects the typed responses, and this list

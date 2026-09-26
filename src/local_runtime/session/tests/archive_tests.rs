@@ -549,16 +549,13 @@ async fn archive_preserves_native_inherited_response_provenance_without_executio
 fn claim_child(parent: &SqliteConversationStore, child: &ConversationId) {
     use crate::runtime::identity::{AgentId, SubagentId};
     let subagent = SubagentId::for_conversation(parent.conversation_id(), 1);
-    let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
-        crate::runtime::subagent::ownership_event(
-            &crate::runtime::identity::AgentId::new("agent-parent"),
+    parent
+        .append_event(crate::runtime::subagent::ownership_event(
             parent.conversation_id(),
             &subagent,
             &AgentId::new("duplicate-owner"),
             child,
-            &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                tool_call_id: ToolCallId::new("duplicate-call"),
-            },
+            &ToolCallId::new("duplicate-call"),
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
             &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
             &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
@@ -568,9 +565,8 @@ fn claim_child(parent: &SqliteConversationStore, child: &ConversationId) {
                 "/authored/workspace",
             )),
             Utc::now(),
-        ),
-    );
-    parent.append_agent_admission(event, &authority).unwrap();
+        ))
+        .unwrap();
 }
 
 fn assert_ownership_rejected_before_archive_capture(root: &std::path::Path, session: &SessionId) {
@@ -915,58 +911,4 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
             "diagnostic_unavailable":"output-storage diagnostic excluded"}),
         ]
     );
-}
-
-#[tokio::test]
-async fn private_agent_authority_never_enters_archive_or_lineage_copy() {
-    let (directory, mut catalog, _) = open_catalog();
-    let (conversation, session, node) = append_history(&catalog, &[user("input", "authored")]);
-    let parent = store_for(&catalog, &session, &conversation);
-    let child = super::deletion_tests::child(directory.path(), &parent, 1, false);
-    let agent = crate::runtime::identity::AgentId::new(format!("agent-{child}"));
-    let database = catalog.database_path(&session, &conversation);
-    let private = rusqlite::Connection::open(database).unwrap();
-    private.execute(
-        "UPDATE agent_authorities SET authority_json=replace(authority_json, 'fixture', 'ARCHIVE_PRIVATE_AUTHORITY_CANARY')",
-        [],
-    ).unwrap();
-    assert_eq!(
-        parent
-            .load_agent_authority(&agent)
-            .unwrap()
-            .resolved
-            .instructions,
-        "ARCHIVE_PRIVATE_AUTHORITY_CANARY"
-    );
-    drop(private);
-    let files = decode(
-        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
-            .unwrap(),
-    )
-    .await;
-    for (name, bytes) in &files {
-        assert!(
-            !String::from_utf8_lossy(bytes).contains("ARCHIVE_PRIVATE_AUTHORITY_CANARY"),
-            "private authority leaked in {name}"
-        );
-        assert!(!name.contains("agent_authorities"));
-    }
-    let source = lineage_at(&parent, &conversation, parent.load_head().unwrap().revision);
-    let cloned = catalog.prepare_clone_session(&state(), &source).unwrap();
-    catalog
-        .publish_session(
-            &cloned,
-            SessionNodeOrigin::Clone {
-                source_session: session,
-                source_node: node,
-                source_surface_revision: source.surface_revision,
-            },
-        )
-        .unwrap();
-    let copied = store_for(&catalog, &cloned.session_id, &cloned.conversation_id);
-    assert!(
-        copied.load_agent_authority(&agent).is_err(),
-        "history copy grants no executable child authority"
-    );
-    assert!(copied.read_events(None, 256).unwrap().events.is_empty());
 }

@@ -77,10 +77,10 @@ is never parsed into state.
 
 - Context compatibility ABI 5: common TaskData placement, native registration,
   shared deferred/request-time proposal vocabulary.
-- SQLite schema 46: producer-scoped contribution heads and generic logical-step
+- SQLite schema 44: producer-scoped contribution heads and generic logical-step
   progress; RequestSnapshot stores `contributions`, not a separate status start.
   No migration or legacy reader is provided.
-- App Server v16 introduced the contribution vocabulary retained in v25:
+- App Server v16 introduced the contribution vocabulary retained in v23:
   Trace additions carry producer identity; request detail carries
   typed accepted contribution metadata. Rust schema, generated TS, protocol
   fixtures, Runtime Client, archive, Trace, TUI, Web, and dev dependencies are

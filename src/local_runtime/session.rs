@@ -6863,5 +6863,5 @@ model = "provider/model"
         assert!(head.revision > SurfaceRevision::new(2));
     }
     mod archive_tests;
-    pub(crate) mod deletion_tests;
+    mod deletion_tests;
 }

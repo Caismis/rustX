@@ -357,7 +357,7 @@ pub struct SubagentEvidence {
     /// The child's own durable conversation identity.
     pub child_conversation_id: ConversationId,
     /// The model-issued tool call that delegated the work.
-    pub origin: crate::runtime::subagent::AgentActivationOrigin,
+    pub tool_call_id: ToolCallId,
     /// The canonical named-agent identity frozen at start (Issue #144).
     pub agent: String,
     /// The deterministic definition digest frozen at start (Issue #144).
@@ -961,18 +961,11 @@ impl RecoveryEvidence {
                 // The terminal publication is absorbing.
                 background.remove(execution_id);
             }
-            RuntimeEvent::AgentActivationAdmission { activation_id, .. } => {
-                if let Some(ordinal) = activation_id.conversation_ordinal(&self.conversation_id) {
-                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
-                }
-            }
             RuntimeEvent::SubagentOwnershipCommitted {
-                admitted_authority: _,
-                parent_agent_id: _,
                 subagent_id,
                 child_agent_id,
                 child_conversation_id,
-                origin,
+                tool_call_id,
                 agent,
                 definition_digest,
                 profile_digest,
@@ -988,7 +981,7 @@ impl RecoveryEvidence {
                         subagent_id: subagent_id.clone(),
                         child_agent_id: child_agent_id.clone(),
                         child_conversation_id: child_conversation_id.clone(),
-                        origin: origin.clone(),
+                        tool_call_id: tool_call_id.clone(),
                         agent: agent.clone(),
                         definition_digest: definition_digest.clone(),
                         profile_digest: profile_digest.clone(),
@@ -2722,17 +2715,13 @@ mod tests {
         };
         let ownership = envelope(
             RuntimeEvent::SubagentOwnershipCommitted {
-                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
-                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
                 child_conversation_id:
                     crate::scripted_suites::common::identity::child_conversation_id(
                         subagent_id.as_str(),
                     ),
-                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                    tool_call_id: ToolCallId::new("call-child"),
-                },
+                tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
@@ -2747,7 +2736,6 @@ mod tests {
                 child_agent_id,
                 message_id: MessageId::new("terminal-child"),
                 state: SubagentTerminalState::Succeeded,
-                physical_settlement_proven: true,
                 workspace_resource: SubagentWorkspaceTerminalResource::Retained {
                     handoff: handoff.clone(),
                 },
@@ -2887,17 +2875,13 @@ mod tests {
         };
         let ownership = envelope(
             RuntimeEvent::SubagentOwnershipCommitted {
-                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
-                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
                 child_conversation_id:
                     crate::scripted_suites::common::identity::child_conversation_id(
                         subagent_id.as_str(),
                     ),
-                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                    tool_call_id: ToolCallId::new("call-child"),
-                },
+                tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),
@@ -2912,7 +2896,6 @@ mod tests {
                 child_agent_id,
                 message_id: MessageId::new("terminal-child"),
                 state: SubagentTerminalState::Failed,
-                physical_settlement_proven: false,
                 workspace_resource: SubagentWorkspaceTerminalResource::PreservedUnresolved {
                     reason: WorkspaceUnresolvedReason::PhysicalSettlement,
                     detail: "final workspace inspection was unavailable".to_owned(),
@@ -2971,17 +2954,13 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
         let ownership = envelope(
             RuntimeEvent::SubagentOwnershipCommitted {
-                parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
-                admitted_authority: None,
                 subagent_id: subagent_id.clone(),
                 child_agent_id: child_agent_id.clone(),
                 child_conversation_id:
                     crate::scripted_suites::common::identity::child_conversation_id(
                         subagent_id.as_str(),
                     ),
-                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                    tool_call_id: ToolCallId::new("call-child"),
-                },
+                tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 profile_digest: "sha256:profile".to_owned(),

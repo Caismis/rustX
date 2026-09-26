@@ -6,41 +6,41 @@
  * message, event, lifecycle fact, or transcript for a child.
  */
 
-import type { RuntimeClientAgent } from "../protocol/app-server.ts";
+import type { RuntimeClientSubagent } from "../protocol/app-server.ts";
 
 /**
  * Selects the next known child in display order, wrapping at either end.
  *
  * A missing current selection starts at the first row for Down and at the
- * last row for Up. The returned AgentId survives every activation, so a resume
- * cannot create a second row or move selection to another child.
+ * last row for Up. The returned value is the subagent identity solely because
+ * that is the stable key already present in the Runtime Client snapshot.
  */
 export function cycleSubagentSelection(
-  agents: readonly RuntimeClientAgent[],
+  subagents: readonly RuntimeClientSubagent[],
   current: string | undefined,
   direction: -1 | 1,
 ): string | undefined {
-  if (agents.length === 0) {
+  if (subagents.length === 0) {
     return undefined;
   }
   const currentIndex = current === undefined
     ? -1
-    : agents.findIndex((subagent) => subagent.agent_id === current);
+    : subagents.findIndex((subagent) => subagent.subagent_id === current);
   if (currentIndex < 0) {
     return direction > 0
-      ? agents[0]!.agent_id
-      : agents[agents.length - 1]!.agent_id;
+      ? subagents[0]!.subagent_id
+      : subagents[subagents.length - 1]!.subagent_id;
   }
-  const nextIndex = (currentIndex + direction + agents.length) % agents.length;
-  return agents[nextIndex]!.agent_id;
+  const nextIndex = (currentIndex + direction + subagents.length) % subagents.length;
+  return subagents[nextIndex]!.subagent_id;
 }
 
 /** Returns whether a selected id still names a row in authoritative state. */
 export function hasSubagentSelection(
-  agents: readonly RuntimeClientAgent[],
+  subagents: readonly RuntimeClientSubagent[],
   selected: string | undefined,
 ): boolean {
-  return selected !== undefined && agents.some(
-    (subagent) => subagent.agent_id === selected,
+  return selected !== undefined && subagents.some(
+    (subagent) => subagent.subagent_id === selected,
   );
 }

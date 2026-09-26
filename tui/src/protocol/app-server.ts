@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v25.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v23.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v25.schema.json
+ * protocol/app-server/v23.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v25.ts       (generated)
+ * protocol/app-server/v23.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundary,
   Success,
-} from "../../../protocol/app-server/v25.ts";
+} from "../../../protocol/app-server/v23.ts";
 
 export type {
   ConfigurationApplication,
@@ -132,7 +132,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v25.ts";
+} from "../../../protocol/app-server/v23.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -277,23 +277,23 @@ export type QuestionnaireAnswer = QuestionnaireAnswerEntry["answer"];
 /** The exact shape of a legal answer to one question. */
 export type AnswerSpecification = QuestionSpecification["answer"];
 
-export type RuntimeClientJob = NonNullable<
-  RuntimeClientSnapshot["jobs"]
+export type RuntimeClientBackgroundExecution = NonNullable<
+  RuntimeClientSnapshot["background"]
 >[number];
-export type BackgroundLifecycle = RuntimeClientJob["state"];
+export type BackgroundLifecycle = RuntimeClientBackgroundExecution["state"];
 
-export type RuntimeClientAgent = NonNullable<
-  RuntimeClientSnapshot["agents"]
+export type RuntimeClientSubagent = NonNullable<
+  RuntimeClientSnapshot["subagents"]
 >[number];
-export type AgentState = RuntimeClientAgent["state"];
-export type RuntimeClientAgentWorkspace = NonNullable<
-  RuntimeClientAgent["workspace"]
+export type SubagentState = RuntimeClientSubagent["state"];
+export type RuntimeClientSubagentWorkspace = NonNullable<
+  RuntimeClientSubagent["workspace"]
 >;
-export type RuntimeClientAgentObservation = NonNullable<
-  RuntimeClientAgent["observation"]
+export type RuntimeClientSubagentObservation = NonNullable<
+  RuntimeClientSubagent["observation"]
 >;
-export type RuntimeClientAgentActivity =
-  RuntimeClientAgentObservation["activity"];
+export type RuntimeClientSubagentActivity =
+  RuntimeClientSubagentObservation["activity"];
 
 export type AgentStatusView = NonNullable<
   RuntimeClientSnapshot["statuses"]
@@ -384,7 +384,7 @@ export type DeletionBlocker = Extract<
   SessionDeleteResult,
   { status: "blocked" }
 >["reason"];
-export type RuntimeClientAgentWorkspaceDisposalOutcome =
+export type RuntimeClientSubagentWorkspaceDisposalOutcome =
   ResultOf<"workspace_disposed">["outcome"];
 
 // ---------------------------------------------------------------------------
@@ -432,6 +432,15 @@ export const BACKGROUND_TERMINAL_STATES: ReadonlySet<BackgroundLifecycle> =
     "outcome_unknown",
   ]);
 
+/** The subagent states the registry will publish no further transition for. */
+export const SUBAGENT_TERMINAL_STATES: ReadonlySet<SubagentState> =
+  new Set<SubagentState>([
+    "succeeded",
+    "failed",
+    "cancelled",
+    "interrupted",
+  ]);
+
 // ---------------------------------------------------------------------------
 // Record classification
 //
@@ -474,12 +483,6 @@ export function describeRpcError(error: RpcError): string {
       return `the App Server reached ${data.kind.replaceAll("_", " ")}`;
     case "server_draining":
       return "the App Server is shutting down and no longer accepts work";
-    case "agent_stopping":
-      return `Agent ${data.agent_id} is settling its activation; retry after it becomes inactive`;
-    case "unknown_agent":
-      return `Agent ${data.agent_id} does not belong to this parent`;
-    case "agent_history_unavailable":
-      return `Agent ${data.agent_id} history is unavailable`;
     case "unknown_subagent":
       return `Subagent ${data.subagent_id} does not belong to this parent`;
     case "subagent_history_unavailable":

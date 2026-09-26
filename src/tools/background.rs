@@ -395,8 +395,8 @@ impl BackgroundLifecycle {
 
 /// The one canonical read-only snapshot of one background execution.
 ///
-/// The snapshot is reused by registry queries, `job_status`,
-/// `job_cancel`, Agent Status projection input, and
+/// The snapshot is reused by registry queries, `execution(status)`,
+/// `execution(cancel)`, Agent Status projection input, and
 /// deterministic tests. It never exposes internal task handles or process
 /// ids.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1892,8 +1892,9 @@ impl ConversationBackgroundRegistry {
     ) -> Option<BackgroundExecutionSnapshot> {
         let mut version = self.state_version.subscribe();
         loop {
-            let snapshot = self.snapshot(execution_id)?;
-            if snapshot.state.is_terminal() {
+            if let Some(snapshot) = self.snapshot(execution_id)
+                && snapshot.state.is_terminal()
+            {
                 return Some(snapshot);
             }
             version.changed().await.ok()?;
@@ -2095,7 +2096,7 @@ fn accepted_result(
         status: ToolExecutionStatus::Success,
         content: vec![ToolResultContent::Json {
             value: serde_json::json!({
-                "job_id": execution_id,
+                "execution": crate::tools::execution::ExecutionHandle::tool(execution_id),
                 "state": "starting",
                 "tool": tool_name,
                 "output_path": output_path.to_string_lossy(),
@@ -2134,7 +2135,7 @@ fn accepted_result(
 /// inside ordinary canonical text. Full oversized output is never dumped
 /// into the inbound message: the bounded canonical text remains
 /// replayable even if the auxiliary output file later disappears, and
-/// detailed inspection remains `job_status`. Genuine
+/// detailed inspection remains `execution(status)`. Genuine
 /// semantic artifact references publish as their own
 /// `UserContentBlock::File` blocks; a textual result never becomes a File
 /// block.

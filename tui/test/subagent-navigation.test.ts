@@ -15,12 +15,12 @@ import {
 import { subagent } from "./support/fixtures.ts";
 
 const rows = [
-  subagent("explore", "sha256:one", "active", {
-    agent_id: "subagent-one",
+  subagent("explore", "sha256:one", "running", {
+    subagent_id: "subagent-one",
     child_conversation_id: "conv_af22913a-c29b-7b6c-921a-e3a34a1ddae6",
   }),
-  subagent("reviewer", "sha256:two", "inactive", {
-    agent_id: "subagent-two",
+  subagent("reviewer", "sha256:two", "succeeded", {
+    subagent_id: "subagent-two",
     child_conversation_id: "conv_73493241-43d1-7f31-b392-e26d4c45ece8",
   }),
 ];

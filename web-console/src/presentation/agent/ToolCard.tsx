@@ -12,7 +12,7 @@ import { SearchTextBlock } from '../primitives/SearchBlock';
 const labels = { copy: 'Copy', copied: 'Copied', collapseAria: 'Collapse output', collapse: 'Collapse', expandAria: (n: number) => `Show ${n} more lines`, expand: (n: number) => `Show ${n} more lines` };
 
 export interface ToolCardView {
- id: string; nativeName?: string; identity?: 'call' | 'job'; title: string; summary: string; state: 'assembled' | 'running' | 'success' | 'failure' | 'cancelled' | 'uncertain' | 'starting' | 'cancelling' | 'publishing_terminal';
+ id: string; nativeName?: string; identity?: 'call' | 'execution'; title: string; summary: string; state: 'assembled' | 'running' | 'success' | 'failure' | 'cancelled' | 'uncertain' | 'starting' | 'cancelling' | 'publishing_terminal';
  variant: 'generic' | 'bash' | 'read' | 'write' | 'edit' | 'search'; input?: string; output?: string;
  artifacts?: ReactNode; path?: string; exitCode?: number | null; truncated?: boolean; diffs?: DiffHunk[];
 }
@@ -22,7 +22,7 @@ export function ToolCard({ tool, children }: { tool: ToolCardView; children?: Re
  const [open, setOpen] = useState(false);
  const Icon = icons[tool.variant];
  const state = tool.state === 'failure' ? 'error' : tool.state === 'cancelled' || tool.state === 'uncertain' ? 'stopped' : tool.state === 'success' ? 'ok' : tool.state;
- return <div className={tree.callRow} data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
+ return <div className={tree.callRow} data-tool-call-id={tool.identity !== 'execution' ? tool.id : undefined} data-execution-id={tool.identity === 'execution' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
  <div className={css.root} data-state={state} data-variant={tool.variant}>
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
  icon={state === 'error' || state === 'stopped' ? <StateDot state={state === 'error' ? 'error' : 'warning'}/> : <Icon size={14}/>}

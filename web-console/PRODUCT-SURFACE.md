@@ -34,9 +34,9 @@ Failure remains retryable, without polling, mutation replay or LLM naming.
 | Queue | Product | Existing dock; concise status | Review/edit pending input |
 | Composer | Product | Preserve WEB-11 | Send/Queue/Steer/Stop and attachments |
 | Runtime activity | Product | Concise progress | Understand ongoing work |
-| Child Agent activity | Product | Stable Agent row, current activation, canonical transcript and message/interrupt/wait controls | Active → Inactive → resumed under the same identity |
-| Job activity | Product | Finite Job status, retained output and wait/cancel controls | Proactive terminal settlement; terminal is final |
+| Subagent activity | Product | Named Agent and progress, no execution IDs | Delegated work visibility |
 | Workflow activity | Product | Named Workflow and steps, no attempt IDs | Workflow progress |
+| Background Tool activity | Product | Tool name and result/progress | Background work visibility |
 | Raw Agent status | Developer Inspector | Execution section | Unstructured native diagnostics |
 | Attachment state / intent / ID | Developer Inspector | Attachment section | Internal controller lifecycle |
 | Runtime incarnation / residency | Developer Inspector | Attachment section | Exact native lifetime evidence |

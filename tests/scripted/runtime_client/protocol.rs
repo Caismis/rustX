@@ -19,9 +19,9 @@ use rustx::runtime::interaction::{
 };
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
-    RuntimeClientAgentWorkspace, RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent,
-    RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
-    RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
+    RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProtocolEvent,
+    RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
+    RuntimeClientSubagentWorkspace, RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
 };
 
 fn request_id(value: u64) -> rustx::runtime_client::RequestId {
@@ -404,7 +404,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 51,
+                supported: 49,
                 requested: 16,
             })
         ),
@@ -413,7 +413,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(24),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 24,
         })
     ));
@@ -423,7 +423,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(38),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 38,
         })
     ));
@@ -431,8 +431,8 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
-            requested: 52,
+            supported: 49,
+            requested: 50,
         })
     ));
     // v44 published a resource diagnostic's field path as its `identity`, so a
@@ -441,7 +441,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(44),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 44,
         })
     ));
@@ -452,7 +452,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(40),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 40,
         })
     ));
@@ -467,7 +467,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_todo_extension,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 28,
         })
     ));
@@ -476,7 +476,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_session_deletion,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 27,
         })
     ));
@@ -488,7 +488,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_profile_digest,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 26,
         })
     ));
@@ -499,7 +499,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_effective_extensions,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 25,
         })
     ));
@@ -507,7 +507,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 7,
         })
     ));
@@ -521,7 +521,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 15,
         })
     ));
@@ -534,7 +534,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 14,
         })
     ));
@@ -547,7 +547,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 13,
         })
     ));
@@ -557,7 +557,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 6,
         })
     ));
@@ -569,7 +569,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 51,
+            supported: 49,
             requested: 12,
         })
     ));
@@ -683,14 +683,14 @@ async fn attachment_raii_drop_detaches() {
 /// one, one of the two fixture assertions fails.
 #[test]
 fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
-    let shared = RuntimeClientAgentWorkspace {
+    let shared = RuntimeClientSubagentWorkspace {
         borrowed_from: None,
         logical_workspace: std::path::PathBuf::from("/repo"),
         isolation: RuntimeClientWorkspaceIsolation::Shared,
         resource_state: rustx::runtime::subagent::SubagentWorkspaceResourceState::None,
         handoff: None,
     };
-    let isolated_subdirectory = RuntimeClientAgentWorkspace {
+    let isolated_subdirectory = RuntimeClientSubagentWorkspace {
         borrowed_from: None,
         logical_workspace: std::path::PathBuf::from("/runtime-root/worktrees/subagent-1/backend"),
         isolation: RuntimeClientWorkspaceIsolation::GitWorktree {
@@ -713,7 +713,7 @@ fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
             dirty: false,
         }),
     };
-    let preserved_unresolved = RuntimeClientAgentWorkspace {
+    let preserved_unresolved = RuntimeClientSubagentWorkspace {
         borrowed_from: None,
         logical_workspace: isolated_subdirectory.logical_workspace.clone(),
         isolation: isolated_subdirectory.isolation.clone(),
@@ -744,7 +744,7 @@ fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
             "{fixture}: the serialized v15 workspace shape drifted from the \
              fixture the TUI mirror is validated against"
         );
-        let decoded: RuntimeClientAgentWorkspace =
+        let decoded: RuntimeClientSubagentWorkspace =
             serde_json::from_str(&expected).expect("deserialize fixture");
         assert_eq!(&decoded, workspace, "{fixture}: fixture round-trip");
     }

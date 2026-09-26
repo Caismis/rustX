@@ -901,16 +901,11 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::TraceDetail { target, .. }
         | Method::Transcript { target, .. }
         | Method::Goal { target, .. }
-        | Method::JobStatus { target, .. }
-        | Method::JobList { target, .. }
-        | Method::JobWait { target, .. }
-        | Method::JobCancel { target, .. }
-        | Method::AgentStatus { target, .. }
-        | Method::AgentList { target, .. }
-        | Method::AgentSendMessage { target, .. }
-        | Method::AgentWait { target, .. }
-        | Method::AgentInterrupt { target, .. }
-        | Method::AgentTranscript { target, .. }
+        | Method::BackgroundStatus { target, .. }
+        | Method::BackgroundCancel { target, .. }
+        | Method::SubagentTranscript { target, .. }
+        | Method::SubagentStatus { target, .. }
+        | Method::SubagentCancel { target, .. }
         | Method::SubagentDispose { target, .. }
         | Method::CompactContext { target, .. }
         | Method::SessionBoundaries { target, .. }
@@ -1021,32 +1016,38 @@ async fn dispatch_runtime(
             limit,
         } => native_result(authority.transcript_page(before, limit)),
         Method::Goal { target: _, control } => native_result(authority.goal_control(control)),
-        Method::JobStatus { job_id, .. } => native_result(authority.job_status(&job_id)),
-        Method::JobList { .. } => native_result(authority.job_list()),
-        Method::JobWait { job_id, .. } => native_result(authority.job_wait(&job_id, false).await),
-        Method::JobCancel { job_id, .. } => native_result(authority.job_wait(&job_id, true).await),
-        Method::AgentStatus { agent_id, .. } => native_result(authority.agent_status(&agent_id)),
-        Method::AgentList { .. } => native_result(authority.agent_list()),
-        Method::AgentSendMessage {
-            agent_id, message, ..
-        } => native_result(authority.agent_send_message(&agent_id, message).await),
-        Method::AgentWait { agent_id, .. } => {
-            native_result(authority.agent_wait(&agent_id, false).await)
-        }
-        Method::AgentInterrupt { agent_id, .. } => {
-            native_result(authority.agent_wait(&agent_id, true).await)
-        }
-        Method::AgentTranscript {
-            agent_id,
+        Method::BackgroundStatus {
+            target: _,
+            execution_id,
+        } => native_result(authority.background_status(&execution_id)),
+        Method::BackgroundCancel {
+            target: _,
+            execution_id,
+        } => native_result(authority.background_cancel(&execution_id)),
+        Method::SubagentTranscript {
+            target: _,
+            subagent_id,
             before,
             limit,
-            ..
-        } => match authority.agent_transcript_page(&agent_id, before, limit) {
+        } => match authority.subagent_transcript_page(&subagent_id, before, limit) {
+            Err(RuntimeClientError::UnknownSubagent { .. }) => {
+                Err(domain(ErrorData::UnknownSubagent { subagent_id }))
+            }
             Err(RuntimeClientError::RuntimeFailure { .. }) => {
-                Err(domain(ErrorData::AgentHistoryUnavailable { agent_id }))
+                Err(domain(ErrorData::SubagentHistoryUnavailable {
+                    subagent_id,
+                }))
             }
             result => native_result(result),
         },
+        Method::SubagentStatus {
+            target: _,
+            subagent_id,
+        } => native_result(authority.subagent_status(&subagent_id)),
+        Method::SubagentCancel {
+            target: _,
+            subagent_id,
+        } => native_result(authority.subagent_cancel(&subagent_id)),
         Method::SubagentDispose {
             target: _,
             subagent_id,
@@ -1162,43 +1163,17 @@ fn native_result(
         RuntimeClientResult::TraceDetail { detail } => MethodResult::TraceDetail { detail },
         RuntimeClientResult::TranscriptPage { page } => MethodResult::Transcript { page },
         RuntimeClientResult::Goal { view } => MethodResult::Goal { view },
-        RuntimeClientResult::Job { job } => MethodResult::Job { job },
-        RuntimeClientResult::Jobs { jobs } => MethodResult::Jobs { jobs },
-        RuntimeClientResult::Agent { agent } => MethodResult::Agent {
-            agent: Box::new(agent),
-        },
-        RuntimeClientResult::Agents {
-            agents,
-            returned,
-            matched,
-            limit,
-            truncated,
-        } => MethodResult::Agents {
-            agents,
-            returned,
-            matched,
-            limit,
-            truncated,
-        },
-        RuntimeClientResult::AgentMessage { accepted } => MethodResult::AgentMessage {
-            agent_id: accepted.agent_id,
-            activation_id: accepted.activation_id,
-            resumed: accepted.resumed,
-        },
-        RuntimeClientResult::AgentWait {
-            agent_id,
-            activation_id,
-            outcome,
-            agent,
-        } => MethodResult::AgentWait {
-            agent_id,
-            activation_id,
-            outcome,
-            agent: Box::new(agent),
+        RuntimeClientResult::BackgroundStatus { execution }
+        | RuntimeClientResult::BackgroundCancelAccepted { execution } => {
+            MethodResult::Background { execution }
+        }
+        RuntimeClientResult::SubagentStatus { subagent }
+        | RuntimeClientResult::SubagentCancelAccepted { subagent } => MethodResult::Subagent {
+            subagent: Box::new(subagent),
         },
         RuntimeClientResult::SubagentWorkspaceDisposed { subagent, outcome } => {
             MethodResult::WorkspaceDisposed {
-                agent: Box::new(subagent),
+                subagent: Box::new(subagent),
                 outcome,
             }
         }
@@ -1225,8 +1200,6 @@ fn native_result(
 }
 fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
-        RuntimeClientError::AgentStopping { agent_id } => ErrorData::AgentStopping { agent_id },
-        RuntimeClientError::UnknownAgent { agent_id } => ErrorData::UnknownAgent { agent_id },
         RuntimeClientError::ConfigurationAdoption { rejection } => {
             ErrorData::ConfigurationAdoption { rejection }
         }
@@ -1275,14 +1248,7 @@ fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError
     })
 }
 fn domain(data: ErrorData) -> RpcError {
-    let message = match &data {
-        ErrorData::AgentStopping { .. } => {
-            "Agent is stopping or admitting an activation; retry after settlement"
-        }
-        ErrorData::UnknownAgent { .. } => "Unknown Agent in this conversation",
-        _ => "Operation rejected",
-    };
-    rpc_error(-32000, message, Some(data))
+    rpc_error(-32000, "Operation rejected", Some(data))
 }
 fn rpc_error(code: i32, message: &str, data: Option<ErrorData>) -> RpcError {
     RpcError {

@@ -43,6 +43,7 @@ impl TraceProjection<'_> {
         &self,
         anchor: &RuntimeEventEnvelope,
     ) -> Result<TraceRecord, ConversationStoreError> {
+        let facts = self.anchor_facts(anchor)?;
         let AnchorFacts {
             id,
             position,
@@ -53,9 +54,6 @@ impl TraceProjection<'_> {
             mut preview,
             calls,
             native_id,
-            agent_id,
-            activation_id,
-            activation_origin,
             originating_tool_call_id,
             message_id,
             attachments,
@@ -63,7 +61,7 @@ impl TraceProjection<'_> {
             request,
             has_detail,
             truncated,
-        } = self.anchor_facts(anchor)?;
+        } = facts;
         // Everything below is presentation-only: the previews that need a
         // Ledger read of their own, the recorded Tool name, and the two
         // request-relative relationships. None of it reaches a lifecycle
@@ -145,9 +143,6 @@ impl TraceProjection<'_> {
             tool,
             calls,
             native_id,
-            agent_id,
-            activation_id,
-            activation_origin,
             originating_tool_call_id,
             message_id,
             attachments,
@@ -340,15 +335,6 @@ pub(super) fn bound_record(record: &mut TraceRecord) {
         .is_some_and(|id| !identity_fits(id.as_str()))
     {
         record.message_id = None;
-        record.truncated = true;
-    }
-    if record
-        .activation_origin
-        .as_ref()
-        .and_then(crate::runtime::subagent::AgentActivationOrigin::tool_call_id)
-        .is_some_and(|id| !identity_fits(id.as_str()))
-    {
-        record.activation_origin = None;
         record.truncated = true;
     }
     if record

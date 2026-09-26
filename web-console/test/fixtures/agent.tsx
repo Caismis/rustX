@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v25';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v23';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

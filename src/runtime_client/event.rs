@@ -23,8 +23,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::snapshot::{
-    AgentStatusView, CapabilityView, RuntimeClientAgent, RuntimeClientContextView,
-    RuntimeClientJob, RuntimeClientResourcesView, RuntimeClientTranscriptCursor,
+    AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution, RuntimeClientContextView,
+    RuntimeClientResourcesView, RuntimeClientSubagent, RuntimeClientTranscriptCursor,
     RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
 };
 use crate::events::types::AttemptLimit;
@@ -401,9 +401,9 @@ pub enum RuntimeClientEvent {
     ///
     /// Background work is conversation-owned: it survives attempt
     /// termination, client detach, and client reconnect.
-    JobUpdated {
+    BackgroundExecutionUpdated {
         /// The canonical registry snapshot after the transition.
-        job: RuntimeClientJob,
+        execution: RuntimeClientBackgroundExecution,
     },
 
     /// One subagent child transitioned in the authoritative conversation
@@ -411,9 +411,9 @@ pub enum RuntimeClientEvent {
     ///
     /// Subagent children are conversation-owned: they survive attempt
     /// termination, client detach, and client reconnect.
-    AgentUpdated {
+    SubagentUpdated {
         /// The canonical registry snapshot after the transition.
-        agent: Box<RuntimeClientAgent>,
+        subagent: Box<RuntimeClientSubagent>,
     },
 
     /// The externally visible capability read model changed (Issue #81).

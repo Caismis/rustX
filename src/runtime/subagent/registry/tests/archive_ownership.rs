@@ -558,10 +558,9 @@ async fn failed_and_cancelled_retained_children_keep_exact_transcript_authority(
         let fixture = ArchivePlane::new();
         make_clean_git_workspace(&fixture.plane);
         let mut spec = start_spec("retained history");
-        spec.authority.resolved.workspace_policy =
-            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let (prepared, child) = fixture.prepare_spec(&spec).await;
         let id = prepared.subagent_id.clone();
         let path = fixture
@@ -628,8 +627,8 @@ async fn failed_and_cancelled_retained_children_keep_exact_transcript_authority(
             }
         );
         assert!(
-            terminal.handoff.is_none() && workspace.join("keep.txt").exists(),
-            "inactive durable Agent retains its workspace without a disposable handoff"
+            terminal.handoff.is_some(),
+            "dirty child workspace is retained"
         );
         assert_eq!(
             fixture

@@ -1,7 +1,60 @@
-//! Creates a durable child Agent with one first activation. The conversation
-//! registry owns identity, frozen authority, workspace and later activations.
-//! This adapter resolves creation authority once; it never decides whether a
-//! later message steers or resumes. Final reports use canonical parent inbound.
+//! The `subagent` runtime intrinsic (Issue #60, renamed to named
+//! attempt-scoped definitions by Issue #144).
+//!
+//! The model-facing surface of the native async one-shot subagent plane:
+//!
+//! ```json
+//! {
+//!   "agent": "explore",
+//!   "task": "...",
+//!   "context": "...",       // optional, bounded
+//!   "override": {           // optional, Issue #258
+//!     "tools":  {"builtin": ["read", "grep", "bash"]},
+//!     "skills": ["rust-review"],
+//!     "plugins": {"agentStatus": {"enabled": true}}
+//!   }
+//! }
+//! ```
+//!
+//! The obsolete `profile` field is gone and is not accepted: the schema
+//! denies unknown fields, so the old contract fails deterministically rather
+//! than being silently reinterpreted.
+//!
+//! The call returns **immediately after the ownership commit** with a
+//! running execution handle — the child runtime works asynchronously and its
+//! final report arrives later through the canonical inbound path: one
+//! runtime-authored terminal notice naming the exact execution handle
+//! (Issue #192), immediately followed by the byte-for-byte child-authored
+//! report. There is no wait/poll mode and no result channel outside the
+//! conversation's own message bus. The returned execution handle (Issue
+//! #162) is the canonical continuation affordance: pass it to the
+//! `execution` intrinsic to inspect or cancel the child.
+//!
+//! # Where the authority comes from
+//!
+//! The registered executor is long-lived, but the *authority* it resolves
+//! against is not: each invocation receives the immutable
+//! `RuntimeResourceSnapshot` owned by the invoking `AgentExecution` through
+//! the crate-private [`ToolExecutionContext`] seam. The executor therefore
+//! never reads mutable runtime-current resources, and never derives child
+//! capabilities from the parent model's active `ToolRegistry`.
+//!
+//! The named definition is the child's **default** execution profile. The
+//! model chooses which named agent runs and may, through `override`, replace
+//! exactly three dimensions of that default — `tools`, `skills`,
+//! `plugins` — validated against the admitted generation. Model, instructions,
+//! timeout, project instructions, workspace policy, approval policy, and
+//! credentials belong to the definition alone and are deliberately not
+//! per-call arguments.
+//!
+//! Root authorizes the named Agent through its explicit allowlist. The child
+//! owns an independent profile; Root Tool and Plugin selections are not ceilings.
+//!
+//! The executor stays a thin adapter over the conversation-owned
+//! [`SubagentRegistry`]: input validation, attempt-scoped resolution, the
+//! two-stage prepare/commit boundary, and the cancellation-race outcome
+//! mapping. All lifecycle, durability, and supervision semantics live in
+//! the registry; all configuration semantics live in the catalog/resolver.
 
 use crate::runtime::subagent::SubagentInvocationOverride;
 use crate::runtime::subagent::catalog::{AgentCatalog, SubagentName};
@@ -21,13 +74,23 @@ use crate::tools::types::{
 use super::input::decode;
 use super::support::{failed_result, success_json};
 
-/// Stable Agent identity and distinct first activation correlation. Reports are
-/// published canonically later, never returned through a parallel result channel.
+/// The deterministic model-facing creation result of an accepted subagent
+/// start (Issue #162, minimized by Issue #192).
+///
+/// The Model-Centric Tool Contract: the result carries only what the model
+/// can act on — the typed execution handle (`kind` `subagent` plus the
+/// subagent id) as the canonical continuation affordance, the lifecycle
+/// state, and the named agent. Runtime provenance (`definition_digest`,
+/// `child_agent_id`, `child_conversation_id`, the delegating tool call,
+/// physical workspace facts) stays in the owning runtime authority: no
+/// valid model decision or control action requires it.
+///
+/// The final child report is **not** part of this result: it arrives later,
+/// exactly once, through the canonical inbound message path.
 pub(crate) fn accepted_result(accepted: &SubagentAccepted) -> ToolExecutionResult {
     success_json(serde_json::json!({
-        "agent_id": accepted.child_agent_id,
-        "activation_id": accepted.subagent_id,
-        "state": "active",
+        "execution": crate::tools::execution::ExecutionHandle::subagent(&accepted.subagent_id),
+        "state": "running",
         "agent": accepted.agent,
     }))
 }
@@ -97,18 +160,20 @@ pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
         id: tool_id(),
         name: SUBAGENT_TOOL_NAME.to_owned(),
         description: format!(
-            "Create a durable child Agent and start its first activation asynchronously. \
-             The result returns a stable agent_id and a distinct activation_id. Use \
-             list_agents for state and topology, send_message for both active delivery and \
-             inactive continuation, wait_agent for the captured activation, and interrupt_agent \
-             to interrupt only current work. A final report arrives proactively through this \
-             conversation, correlated to its Agent and activation.\n\n\
-             Each named agent supplies default instructions, model, Tools, Skills, Plugins, \
-             deadline and workspace policy. The resolved authority is frozen for the Agent's \
-             lifetime, including later activations. An optional override replaces only its \
-             specified tools, skills or plugins dimension; omitted dimensions keep defaults. \
-             Empty selections remove that dimension. Selected capabilities must exist in the \
-             admitted generation and support child runtime execution.\n\n{}",
+            "Delegate a bounded task to a one-shot child agent runtime. The child runs \
+             asynchronously in its own isolated conversation and process; this call returns \
+             as soon as the child is durably started, together with the execution handle you \
+             can pass to the execution tool to inspect or cancel the child. The child's final \
+             report arrives later as a new message, immediately preceded by a runtime message \
+             that names the exact execution handle it belongs to; do not retry or poll \
+             for it.\n\nEach named agent defines the child's default instructions, model, \
+             tools, Skills, and Plugins. Omit \"override\" to run those defaults exactly. \
+             Use \"override\" only to specialize this one child: each field you include \
+             REPLACES that whole dimension rather than adding to it, and each field you omit \
+             keeps the agent's default. \"tools\": {{}} means no tools, \"skills\": [] means \
+             no Skills, and \"plugins\": {{}} means no Plugins. Selected Tools must exist in the admitted generation; \
+             Plugins must support one-shot child execution. The agent's instructions, model, \
+             timeout, and workspace policy can never be overridden.\n\n{}",
             render_agent_routing(catalog)
         ),
         input_schema: input_schema::<SubagentInput>(),
@@ -211,23 +276,17 @@ impl ToolExecutor for SubagentExecutor {
                     Err(error) => return failed_result(error.to_string()),
                 };
                 let spec = SubagentStartSpec {
-                    authority: crate::runtime::subagent::DurableAgentAuthority {
-                        execution_policy: subagent_context.execution_policy(),
-                        resolved,
-                        approval_mode: subagent_context.approval_mode(),
-                    },
-                    admission: crate::runtime::subagent::ActivationAdmission {
-                        task: input.task,
-                        context: input.context,
-                        origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                            tool_call_id: invocation
-                                .id
-                                .canonical_call_id()
-                                .expect("Agent-owned invocation")
-                                .clone(),
-                        },
-                        terminal: SubagentTerminalMode::Normal,
-                    },
+                    execution_policy: subagent_context.execution_policy(),
+                    resolved,
+                    approval_mode: subagent_context.approval_mode(),
+                    task: input.task,
+                    context: input.context,
+                    tool_call_id: invocation
+                        .id
+                        .canonical_call_id()
+                        .expect("Agent-owned invocation")
+                        .clone(),
+                    terminal: SubagentTerminalMode::Normal,
                 };
                 // One attempt-derived cancellation authority owns the whole
                 // pre-commit lifecycle: preparation (identity, spawn, startup
@@ -405,18 +464,18 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({
-                "agent_id": accepted.child_agent_id,
-                "activation_id": "conversation-1-subagent-2",
-                "state": "active",
+                "execution": {"kind": "subagent", "id": "conversation-1-subagent-2"},
+                "state": "running",
                 "agent": "explore",
             }),
-            "the creation result separates durable Agent and activation identities"
+            "the creation result is exactly the handle, the state, and the named agent"
         );
         let serialized = serde_json::to_string(&value).expect("serializes");
         for removed in [
             "definition_digest",
             "sha256:d1",
             "child_agent_id",
+            "agent-child",
             "child_conversation_id",
             "tool_call_id",
             "workspace",

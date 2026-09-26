@@ -183,32 +183,3 @@ def web_harness_convergence() -> Scenario:
 
 
 SCENARIOS["web_harness_convergence"] = web_harness_convergence
-
-
-def web_agent_continuation() -> Scenario:
-    """Hold real native parent/child requests, then interrupt and resume the child.
-
-    Parent continuation and first child request can arrive in either order.
-    The browser observes recorded input to release the correct provider gate;
-    all Agent identity, cancellation, settlement, and continuation is native.
-    """
-    return Scenario(
-        "web_agent_continuation",
-        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
-                    body_contains=("WEB_AGENT_PARENT",), tools_include=("subagent",)),
-             Stream(ToolCall("web-agent-create", "subagent", json.dumps({
-                 "agent": "reviewer", "task": "WEB_AGENT_CHILD: review the workspace",
-             })), Finish("tool_calls"))),
-        *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model"),
-               Stream(Gate(f"agent-initial-{index}"), Text("Initial request completed."), Finish()),
-               allow_disconnect=True) for index in range(2)),
-        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
-                    body_contains=("WEB_AGENT_RESUME",), body_excludes=("WEB_AGENT_PARENT",)),
-             Stream(Gate("agent-resumed"), Text("Resumed canonical child report."), Finish())),
-        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
-                    body_contains=("WEB_AGENT_PARENT", "Resumed canonical child report.")),
-             Stream(Text("Parent received the resumed child report."), Finish())),
-    )
-
-
-SCENARIOS["web_agent_continuation"] = web_agent_continuation

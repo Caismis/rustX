@@ -38,7 +38,7 @@ root-only scope, and the drain frontier.
 Canonical `ProductRoot` is the sole authority for rustX-owned product storage
 paths. Session, Conversation and child allocations are derived from that identity
 before any private path is authored. Equivalent root aliases converge; symlinks
-below the product root remain invalid private identities. Subagent IPC v28 carries
+below the product root remain invalid private identities. Subagent IPC v22 carries
 canonical product identity plus child Conversation identity and an incarnation
 name, never a second absolute private runtime root. Inspection uses the same
 identity-derived allocation. Embedded workspace managers may remain independent;
@@ -167,7 +167,7 @@ froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
 descriptor introduced by Issue #131. Version 12 added the complete
 canonical-message-coupled Agent Status emission facts, bounded latest-emission
-heads, and the Todo-specific durable progress sequence. Current schema 46
+heads, and the Todo-specific durable progress sequence. Current schema 44
 replaces these with producer-scoped contribution receipts, generic logical-step
 progress, and typed accepted RequestSnapshot contributions; no old reader remains. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool
@@ -1508,7 +1508,7 @@ pending, the overlay focuses the lexicographically-smallest questionnaire
 explicit commands can address approval or attempt identities. The TUI renders
 both from authoritative projection state, sends typed responses through the
 Runtime Client, and never suppresses or auto-answers them locally. Subagent
-children project through `AgentUpdated` events and `snapshot.agents`;
+children project through `SubagentUpdated` events and `snapshot.subagents`;
 since Issue #178 each entry also carries the child's latest-value live
 activity `observation`, its redacted `execution_profile`, and `started_at`.
 The TUI renders these as diagnostics from projection state and owns no
@@ -1785,13 +1785,13 @@ Message Ledger          = adopted canonical conversational facts
 
 ## Subagent ownership (Issue #60)
 
-A native Subagent is a durable child Agent identity. Each activation uses a
-separate OS process running the real rustX semantic stack headlessly, supervised
-by the owning conversation's `SubagentRegistry`. The plane composes the durable,
+A subagent is a conversation-owned, one-shot child runtime: a separate OS
+process running the real rustX semantic stack headlessly, supervised by the
+owning conversation's `SubagentRegistry`. The plane composes the durable,
 process, and message contracts above; it does not invent new ones.
 
-The finite activation state machine is explicit: `Prepared` is private and has no
-durable ownership; ownership commit opens `Running`; admission closure opens `Stopping`; explicit cancellation
+The live logical state machine is explicit: `Prepared` is private and has no
+durable ownership; ownership commit opens `Running`; explicit cancellation
 opens `Cancelling`; physical settlement opens non-terminal
 `PublishingTerminal`; durable terminal acceptance closes the lifecycle as
 `Succeeded`, `Failed`, `Cancelled`, or `Interrupted`. A live child process or
@@ -1800,8 +1800,7 @@ unknown, not a model failure. Recovery uses the same canonical terminal
 vocabulary when it reconciles a committed child whose process disappeared
 before restart.
 
-- **Identity is logical, never physical.** `AgentId` names the durable child;
-  `SubagentId` is a finite activation identity with a
+- **Identity is logical, never physical.** `SubagentId` is a
   conversation-scoped ordinal (`{conversation}-subagent-{n}`) allocated by
   the registry and reseeded above the durable watermark at recovery. A PID
   is never identity: process reattachment across restarts is impossible by
@@ -1862,17 +1861,24 @@ before restart.
   commits. A successful report is always preceded — in the same durable
   transaction — by exactly one Runtime-authored terminal notice
   (`subagent-{id}-terminal-notice`, correlation
-  `subagent-terminal-notice:{id}`) naming the stable AgentId and exact
-  activation ID, plus the named profile. Repeated activations of one Agent
-  publish distinct report correlations while retaining the same child
-  conversation and canonical history. No model-facing generic execution handle
-  is involved.
+  `subagent-terminal-notice:{id}`) naming the typed execution handle
+  (`{"kind":"subagent","id":"<subagent-id>"}`) the parent's `subagent`
+  creation result returned, plus the named agent (Issue #192). This is
+  the parent-model correlation projection: two concurrent children of one
+  named agent produce two notice/report pairs whose handles are exactly
+  the creation handles, so the parent model can attribute every report to
+  its execution without any internal child identity crossing the model
+  boundary. The control channel (one `UnixStream` pair on the child's fd
+  0) carries only the bounded typed control plane —
+  Hello/Delegate/Cancel in,
+  Ready/StartupError/Result/Diagnostic out, length-prefixed frames bounded
+  at 1 MiB — and never appends to any conversation.
 - **The Subagent Final Report Principle (Issue #192).** The successful
   semantic result is the child's complete final assistant report — never
   its intermediate messages, tool calls, tool results, reasoning, history,
   or live observation, and never a generated summary or transcript
   reconstruction. The child knows this because the runtime owns the rule:
-  every native child Agent's `AgentProfile` System authority is the
+  every normal one-shot child's `AgentProfile` System authority is the
   definition's user-authored instruction document composed with the
   runtime-owned final-report handoff instruction at the child composition
   boundary, so user-authored Agent TOML instructions need not repeat it and no
@@ -1886,7 +1892,7 @@ before restart.
   `subagent-terminal-notice:{id}`) in the same durable transaction,
   ordered before the report, so the terminal report remains the last item
   of the publication. The notice carries exactly the model-actionable
-  runtime facts of the publication — the durable Agent ID, finite activation
+  runtime facts of the publication — the typed execution handle
   correlation and the named agent — and, when terminal settlement retained
   changed isolated work, that retained semantic fact is folded into the
   same one notice rather than spawning a second message; a
@@ -2022,9 +2028,8 @@ The observation plane adds live activity visibility without creating a
 second authority:
 
 - **Lifecycle and activity are orthogonal dimensions.** The closed
-  `AgentState` (Admitting/Active/Stopping/Inactive) and finite activation `SubagentState`
-  remain distinct authoritative facts. Activity never decides whether a child
-  can accept input, resume, or settle. `SubagentActivity`
+  seven-state `SubagentState` lifecycle remains the sole authority on
+  whether a child is alive, settling, or settled. `SubagentActivity`
   (`awaiting_activity`, `model`, `retrying_model`, `tool`, `compacting`,
   `waiting`) is a live-only projection of what the child is observably
   doing right now. It is never a lifecycle state, no lifecycle transition
@@ -2042,7 +2047,7 @@ second authority:
   carries everything except `Activity` onto the fd 0 control stream, while
   one disposable latest-value watch slot is drained by a dedicated
   observation writer onto the fd 1 observation stream (subagent IPC
-  version 28, frame kind 107). Reliable control traffic and disposable
+  version 9, frame kind 107). Reliable control traffic and disposable
   observation traffic therefore have independent backpressure domains: a
   stalled observation writer stalls only itself and can never delay a
   terminal `Result`, a containment `AnchorReleased`, or any other reliable
@@ -2062,7 +2067,7 @@ second authority:
   a queued activity snapshot of the same subagent) and `ToolProgress`
   keyed by tool call (a settlement push evicts the queued progress of
   that call). At the Runtime Client boundary the projection surfaces
-  through `AgentUpdated` events and `snapshot.agents`.
+  through `SubagentUpdated` events and `snapshot.subagents`.
 - **Only superseded observations are coalescible.** Lifecycle,
   cancellation, and terminal publication stay reliable and exactly-once;
   activity delivery is latest-value: a watch overwrite or a replay-ring
@@ -2104,44 +2109,269 @@ second authority:
   before the restart. Activity is not execution history and must never be
   treated as recoverable.
 
-## Continuable Agent message and activation arbitration (#411)
+## Subagent in-flight steering (Issue #193)
 
-The native model-facing Agent has one durable `AgentId`, one child ConversationId
-and zero or one current finite activation (`SubagentId`). `subagent` creates it;
-`list_agents`, `send_message`, `wait_agent` and `interrupt_agent` are distinct
-Agent-domain controls. They are not Job operations or action-tagged execution
-routing. [Jobs and continuable Agents](jobs-and-agents.md) is the current contract.
+A steer is **additional parent-authored semantic conversation input to an
+already-running child**. It does not change the child's identity, authority,
+process incarnation, lifecycle, or terminal model. The path is:
 
-The registry mutex is the common arbitration boundary for Active delivery,
-Inactive resume reservation, child admission closure, cancellation and terminal
-transitions. Active means admission remains open. `SealRequested` acquires that
-same owner boundary and changes Active to Stopping before `SealGranted`; the
-process driver routes previously admitted FIFO guidance before granting the seal.
-The child commits input through its canonical durable inbound inbox and drains it
-at the next legal Agent Loop boundary. A send that loses closure sees Stopping,
-never a hidden queue that restarts the Agent after settlement.
+```text
+execution(steer)            model-facing control plane: schema, explicit
+                            action dispatch, target-kind validation, and the
+                            minimal acknowledgement projection
+  |
+  v
+SubagentRegistry::steer     the subagent/conversation authority: ownership
+                            (a Workflow-owned AgentRun is refused outright),
+                            whether this child may still be offered guidance,
+                            and the registry-mutex arbitration of the steer
+                            ticket against cancellation intent and terminal
+                            authority — at the Issue #204 boundary the
+                            `execution(steer)` operation composes the
+                            registry's own phases (admission, child answer,
+                            commit) around the tool cancellation
+  |
+  v
+child durable inbound       ConversationRuntime::submit_parent_guidance under
+                            the ONE child coordinator lock: the durable
+                            acceptance linearization point
+  |
+  v
+ordinary child Agent Loop   the ordinary safe-boundary inbound drain and the
+                            ordinary next model turn
+```
 
-Inactive admission reserves one next activation; preparation is transient
-Admitting and cannot create two live activations. The reserved input and frozen
-Agent authority enter the same child conversation. A failed preparation releases
-the reservation. Later activation IDs are distinct from the Agent and all prior
-activations. Configuration reload or resource reconciliation cannot re-author an admitted Agent.
+It is deliberately **not** `execution -> process driver -> a steer process
+command`. There is no `DriverCommand::Steer`; the process driver keeps
+exactly its physical responsibilities — spawn, cancellation signalling and
+escalation, reaping, physical settlement — plus pure transport routing of
+child-bound frames some semantic authority already authored
+(`DriverCommand::Route`). It never authors, validates, orders, interprets,
+or persists a routed payload, and it owns no conversation state of either
+side.
 
-Interrupt captures one current activation, commits cancellation through the
-shared physical-settlement substrate and returns the durable Agent to Inactive.
-Wait captures one activation under the owner lock and never retargets to a later
-resume. Inactive returns immediately. Admitting captures that reservation and
-waits through commit or conclusive rollback; failed physical rollback reports a
-settlement error. Interrupt can cancel that same reserved admission generation.
-Neither a wait nor a control acknowledgement provides another final-report
-channel. Canonical inbound publishes each activation's report exactly once.
+- **Steering is semantic conversation input, not process control.** The
+  guidance enters the existing child conversation through exactly the same
+  durable inbound path as the delegation itself — the same coordinator lock,
+  the same durable acceptance, the same `InboundSequence` domain, the same
+  ordinary safe-boundary adoption. No second subagent invocation, child
+  process, conversation, registry record, result channel, terminal
+  lifecycle, resume/restart mechanism, or Agent Loop is created.
+- **Frozen child authority is never re-derived.** `SubagentRegistry::steer`
+  accepts only a `SubagentId` and a bounded message: there is no resolver,
+  no definition, and no launch specification anywhere on the path, and the
+  wire envelope has no model, tools, skills, instructions, workspace, or
+  definition field at all. A runtime resource/capability generation that
+  reloads while a child runs therefore cannot re-author it; a later steer
+  still enters the same child conversation under its original frozen
+  authority.
+- **v1 steering interrupts nothing.** A steer never interrupts the child's
+  in-flight provider request, its partial generation, or its executing tool
+  call, and there is no partial-generation rollback, steer-specific tool
+  cancellation, or steer-specific provider interruption. The guidance
+  becomes semantically visible at the next ordinary Agent Loop boundary
+  where newly accepted conversation input can participate in a model turn.
+- **`accepted` has exactly one meaning.** It means *the parent-authored
+  guidance was durably committed into this child's own conversation inbound
+  inbox, and no cancellation intent had committed for this child up to that
+  point*. It does not mean the child model has observed it, that anything in
+  flight was interrupted, that the requested behavioral change happened, or
+  that another child turn finished — and it does not promise observation
+  against a *later* cancellation or physical child loss. A steer that cannot
+  be accepted is a bounded deterministic failure — unknown child, malformed
+  target, empty or oversized message, `kind = tool` + `action = steer`, a
+  Workflow-owned child, a terminal child, a committed cancellation intent, or
+  a child-side refusal — never silence and never `accepted` without both
+  commits.
+- **Acceptance order is durable order.** Multiple accepted steers are
+  observed in exactly their acceptance order, because acceptance *is* the
+  child's durable Pending Inbound Inbox commit and the ordinary safe-boundary
+  drain adopts that sequence domain in order. No scheduler ordering is
+  involved, and no new mailbox or scheduler framework exists.
+- **The registry mutex is the one steer/cancel arbitration authority.**
+  Transport ordering is not a semantic commit, so nothing relies on the
+  reliable control lane being FIFO. Instead a steer holds a **ticket** on its
+  registry record, and every ticket carries an explicit phase: a steer whose
+  child decision is still unknown to the registry is
+  `AwaitingChildDecision`, while a steer whose child-side `Accepted` answer
+  has already reached the registry — but whose parent acknowledgement commit
+  is still owed — is `ChildAcceptedPendingParentCommit`. The ticket is armed
+  inside the same critical section that hands the envelope to the driver
+  (the steer **effect frontier**), it is cleared by the same critical
+  section that commits `Running -> Cancelling`, and the steer's commit
+  consumes it. That single mutex therefore totally orders admission,
+  cancellation-intent commit, steer commit, and terminal-authority commit.
+- **Every steer ticket has one owner and exactly one terminal disposition.**
+  Admission returns a small RAII guard (`GuidanceTicket`) that owns the
+  ticket for exactly as long as the steer future lives — or, at the Issue
+  #204 boundary, exactly as long as the `execution(steer)` operation that
+  composes the registry's phases around the tool cancellation — and the
+  ticket is removed by exactly one of four disposals, all under the same
+  registry mutex in a short in-memory section with no async work: the
+  steer's own commit; the guard's `Drop`, when the steer operation is
+  abandoned before it commits (the Issue #204 settlement plane drops it
+  after classifying the cancelled steer as unresolved, and any teardown
+  that drops the operation does the same); the cancellation linearization
+  point, which clears every ticket **in either phase** (a committed
+  cancellation intent is absorbing and supersedes even an already-accepted,
+  not-yet-acknowledged steer); and the terminal-authority commit, which
+  clears every remaining ticket **in either phase**, so a terminal subagent
+  record never retains live steering arbitration state. Clearing a ticket is
+  registry **lifecycle cleanup** — it never erases an acceptance (below). An
+  abandoned caller therefore never leaves arbitration state behind, ticket
+  state is bounded by the number of live steer callers rather than by any
+  claim about a child lifetime, and a terminal subagent record never retains
+  live steering arbitration state. The guard holds only the shared registry
+  state — never a driver, deadline, mailbox, or process handle — and its
+  `Drop` removes exactly its own ticket; it never changes a lifecycle,
+  never synthesizes a cancellation, and never duplicates the cancellation or
+  terminal authority.
+- **Child durable acceptance is not parent acknowledgement scheduling.** The
+  child commits acceptance into its own conversation under its own
+  coordinator lock, ahead of its terminal seal, and answers `Accepted` over
+  the control lane; the parent driver resolves the steer waiter with that
+  answer. From that instant the accepted fact is committed in the child and
+  carried by the steer caller into its commit. A later **natural** terminal
+  commit — which can only settle the child *after* the driver already read
+  that answer, because the frames share one FIFO lane and the terminal
+  publication is downstream of the child's seal — may clean up the ticket
+  (the registry lifecycle state), but it must not transform the acceptance
+  into a refusal merely because the parent steer future was not yet
+  scheduled to publish its acknowledgement. The commit therefore classifies
+  the steer from the caller-held child outcome and the record's committed
+  cancellation fact, never from whether the ticket still exists: a natural
+  terminal's cleanup can never destroy the information required to classify
+  an already-accepted steer. A child that never answered `Accepted` before
+  terminal settlement is never optimistically treated as accepted — its
+  caller observes a refusal or the dropped driver waiter and reports the
+  child-side refusal.
+- **Cancellation always wins the race.** Any cancellation intent that commits
+  before a steer's commit — and therefore any cancellation that commits
+  before the child's durable acceptance, which strictly precedes that commit
+  — makes the steer deterministically unacceptable. A steer submitted after a
+  committed cancellation intent is refused outright by the same mutex. The
+  refusal is honest rather than optimistic: a refused steer's envelope may
+  physically have reached the child, but the cancellation that refused it is
+  absorbing, so the child's terminal is the cancellation's and no answer
+  derived from that guidance is ever published. This applies to an
+  already-accepted, not-yet-acknowledged steer exactly as to an unresolved
+  one: a cancellation that commits before the steer's acknowledgement commit
+  invalidates it (later explicit subagent cancellation supersedes accepted
+  but unobserved guidance).
+- **Cancellation after an accepted steer is still authoritative.** A steer
+  that committed before any cancellation stays `accepted: true`, and a later
+  cancellation may still terminate the child with the guidance unobserved.
+  The acknowledgement deliberately claims nothing stronger; the runtime never
+  delays or weakens a cancellation to give accepted guidance a turn.
+- **The child conversation's terminal seal is the terminal linearization
+  point for guidance, and it fails closed.** The seal commits only when the
+  runtime *positively proves* that nothing can still carry accepted guidance
+  into a model turn: no admitted attempt is unobserved by the child driver,
+  no attempt is live, and the durable pending inbox is **proven** empty. A
+  durable read failure is not a proof of emptiness: it commits the runtime's
+  absorbing `DurabilityFailed` fact (durable operation
+  `parent_guidance_seal`, non-transient by construction) and the child
+  reports a failed terminal instead of the answer it could not justify.
+  Because the seal and the durable acceptance share the one coordinator lock,
+  a guidance accepted before the seal is necessarily visible to it — the seal
+  then reports `Open`, the ordinary coordinator admits the turn that observes
+  it, and only that turn's outcome is reported — and a guidance arriving
+  after the seal is necessarily refused. The parent's terminal authority is
+  strictly downstream of that seal, because the terminal candidate is built
+  from the child's `Result` frame and the child sends it only after sealing.
+  A **naturally completing** steerable child therefore cannot publish an
+  answer that predates an accepted steer. The seal is steering-specific
+  terminal machinery: only a steerable normal asynchronous subagent child
+  ever consults it. A Workflow-owned `AgentRun` is structurally not
+  steerable (below), so it never enters the seal protocol at all — its
+  natural completion is its terminal through the ordinary Workflow output
+  path, and a seal durable-probe failure can never change a valid Workflow
+  output settlement into a failure. The isolation is decided from the
+  child's frozen terminal mode, never from incidental timing.
+- **Physical loss makes no promise either.** A child that dies, is orphaned,
+  or loses its control plane may end with accepted guidance unobserved. The
+  contract is stated as what was committed, never as what will be seen.
+- **Workflow-owned children are never steerable.** A child whose terminal
+  mode is `WorkflowOutput` is an `AgentRun` of a compiled Workflow program:
+  its profile, task, bound inputs, and frozen output schema are authored by
+  the `WorkflowRuntime`, so the generic control plane must not author into
+  that conversation. `SubagentRegistry::steer` refuses it deterministically —
+  in the domain authority itself, not only at the model-facing layer, and
+  from the ownership fact alone, ahead of every lifecycle branch, so no
+  `Guidance` frame is ever written. Because generic steering is structurally
+  unavailable to a Workflow-owned child, the parent-guidance acceptance and
+  sealing machinery has **no semantic effect** on its lifecycle or terminal
+  result: such a child does not participate in the generic parent-guidance
+  terminal-seal protocol (the seal is a steering-specific terminal
+  verification, and a child that can never accept generic guidance must not
+  gain a new failure surface from it). Cancel symmetry is not steer
+  symmetry: cancel is lifecycle control the parent runtime owns for every
+  child it supervises, and Workflow cancellation and Workflow output-schema
+  validation are unchanged. Any future Workflow steering belongs on the
+  `WorkflowRuntime -> AgentRun -> child conversation` path, never as a
+  capability inherited from a shared registry implementation.
+- **No resurrection.** `Cancelling -> Running`, `Cancelled -> Running`, and
+  `Succeeded -> Running` remain impossible. Terminal states stay absorbing,
+  and a refused steer changes no state at all.
+- **One-shot semantics are unchanged.** Exactly one logical child, one child
+  identity, one child conversation, one process incarnation, one registry
+  record, one terminal settlement. The successful final answer still arrives
+  exactly once through the canonical child -> parent inbound publication of
+  the Issue #192 contract; `execution(steer)` is a control acknowledgement
+  and never a final-answer transport, and it exposes no child transcript,
+  history, result, or live observation.
 
-Guidance tickets remain bounded, owned and cleaned under registry synchronization.
-Child durable acceptance is independent of parent acknowledgement scheduling:
-natural settlement cannot erase a committed acceptance. Explicit cancellation
-and physical loss retain their honest outcomes; acceptance does not promise a
-successful model turn after interruption. Workflow-owned finite AgentRuns remain
-outside native Agent messaging because WorkflowRuntime owns their input/output.
+## `execution(steer)` in the Issue #204 Tool lifecycle
+
+`execution(steer)` is itself a foreground `ToolCall`, so it participates
+honestly in the generic Tool cancellation/settlement lifecycle (Issue #204):
+when the tool's [`ExecutionCancellation`] fires (attempt cancellation or the
+Agent-Loop-owned deadline), the owning lifecycle stops polling the completion
+plane and awaits ONLY the executor's settlement plane, which takes exclusive
+ownership of the steer operation and drives it to a classified end. The
+operation's classification is defined against the steer **effect frontier**
+— the registry admission critical section that hands the guidance envelope
+past the parent steer boundary to the child driver:
+
+```text
+before the steer effect frontier:
+    cancellation can prove no steer effect occurred
+
+after the frontier, child decision unknown:
+    cancellation cannot prove whether the child may later durably accept
+
+after ChildGuidanceOutcome::Accepted:
+    the semantic effect is known to have committed
+```
+
+- **Cancellation before the frontier is a confirmed no-effect cancellation.**
+  The steer operation checks the tool cancellation before it runs admission,
+  so when the request has already fired, no envelope exists anywhere and no
+  ticket is ever armed; the settlement reports the confirmed cancellation.
+- **Cancellation after the frontier, child undecided, is honest
+  outcome-unknown.** The already-routed envelope may still be durably
+  accepted by the child, so the settlement reports `Unconfirmed` — promptly,
+  with every rustX-owned local execution ownership of the call settled (the
+  operation's own ticket guard removed its ticket under the registry mutex),
+  and with **no dependence on the settlement control-plane guard**
+  ([`TOOL_SETTLEMENT_CONTROL_GUARD`] is only the last-resort detector of a
+  broken executor contract, never the normal termination path).
+- **A child decision that reaches the operation is the physical completion.**
+  The operation's select is biased toward the child's answer: a committed
+  child decision is evidence, while the tool cancellation is a request, so
+  the decision wins the tie and the settlement reports it confirmed — a
+  completed accepted/refused steer survives the tool cancellation exactly as
+  Issue #204 keeps any known completion that won the physical race.
+- **Tool-call cancellation is not subagent cancellation.** Cancelling the
+  `execution(steer)` ToolCall never calls `SubagentRegistry::cancel`: the
+  user cancelled the steering operation, not the child execution. The single
+  subagent cancellation authority remains the explicit `execution(cancel)`
+  action; the child subagent keeps running under its own lifecycle, no
+  `Cancel` frame is synthesized, and a later steer through the same running
+  child works normally.
+
+[`ExecutionCancellation`]: ../src/runtime/cancellation.rs
+[`TOOL_SETTLEMENT_CONTROL_GUARD`]: ../src/tools/deadline.rs
 
 ## Named Agent admission
 
@@ -2308,18 +2538,18 @@ ownership commits. Global invocation policies remain global, not profile prose.
   `SubagentStartError::Cancelled`, burns no durable ownership fact, and
   consumes no capacity.
 - **Semantic child identity and physical spawn incarnation are separate.**
-  Finite activation ownership and recovery evidence use `SubagentId`;
-  durable Agent projections use the separate stable `AgentId`. A crash before
+  Durable/canonical ownership, recovery evidence, and Runtime Client
+  projections use the semantic `SubagentId`. A crash before
   `SubagentOwnershipCommitted` may make that semantic identity reusable after
   restart, but every staged spawn first creates a fresh, exclusively-created
   physical incarnation directory beneath
-  the owned child Conversation allocation. The physical token is independent of
+  `runtime_root/subagents/<SubagentId>/`. The physical token is independent of
   the durable ordinal and is not user-visible semantic state.
-- **Activation-local mutable state is incarnation-private.**
+- **All mutable child-local state is incarnation-private.**
   The exact physical incarnation path is the `SubagentChildSpec.runtime_root`
   passed to the child and is the root for artifacts, diagnostics, and Skill
-  copies. Canonical history remains in the stable child Conversation store
-  across activations. A stale old incarnation may remain on disk while its process settles, but a
+  copies. A
+  stale old incarnation may remain on disk while its process settles, but a
   later reuse of the same semantic `SubagentId` receives a different sibling
   path, so the old writer cannot contaminate the new child.
 - **Physical-root cleanup follows the one child lifecycle owner.**
@@ -2412,10 +2642,9 @@ ownership commits. Global invocation policies remain global, not profile prose.
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 28 and there is no compatibility decoding.** A
+- **The subagent IPC version is 22 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
-  anything. Version 28 includes canonical delegation acceptance and acknowledged
-  admission reopening. Version 22 removed the independently authored absolute child runtime
+  anything. Version 22 removes the independently authored absolute child runtime
   path: the child derives its private allocation from canonical `ProductRoot`,
   child `ConversationId`, and incarnation identity. Version 21 introduced
   canonical product-root identity for child lifecycle participation (Issue #254).
@@ -2666,7 +2895,7 @@ the launch-boundary policy inheritance.
   retry, timeout, tool-cancellation, terminal publication, and unresolved
   output carryover in its own ordinary `ConversationRuntime`/Agent Loop.
   Retry state, publication audit, and pending Carryover are conversation-
-  local; a failed child activation exposes no partial model output to its
+  local; a failed one-shot child exposes no partial model output to its
   parent.
 - **Cancellation during retry backoff uses ordinary child cancellation.**
   Parent cancellation or runtime drain commits one first-winner
@@ -2699,7 +2928,7 @@ the launch-boundary policy inheritance.
   conversation never gains a carryover pointer and no parent model request
   ever contains child carryover content.
 - **Failed children expose no partial output — structurally.** A
-  retry-exhausted child activation reports only the bounded runtime-authored
+  retry-exhausted one-shot child reports only the bounded runtime-authored
   failure diagnostic. The parent-facing notice cannot contain partial
   assistant text, reasoning excerpts, proposed tool-call arguments,
   audit payload, or carryover projections, because the terminal-candidate
@@ -3395,7 +3624,8 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   them.
 - The registry is a validity boundary: duplicate ids, duplicate model-facing
   names, empty identities, invalid or non-root JSON Schema, reserved
-  property collisions, invalid policy combinations, and background-capable control Tool registrations are rejected. A canonical call whose id
+  property collisions, invalid policy combinations, and background-capable
+  `execution` registrations are rejected. A canonical call whose id
   and name disagree is a contract violation, never an id-first fallback.
 - The native executor implementation and its execution-ownership policy are
   independent: each ordinary native tool (Read/Write/Edit/Glob/Grep/Bash)
@@ -3404,7 +3634,7 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
   defaults are intentional per-tool values in the
   [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). Only
-  the Job and Agent control Tools are intentionally fixed
+  the runtime intrinsic `execution` is intentionally fixed
   (foreground-only, sequential) and is outside the configurable set.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, apply tool-owned business-argument normalization,
@@ -4220,13 +4450,95 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   No unit conversion exists anywhere below it: the executor, supervisor,
   process-group lifecycle, cancellation, timeout settlement, descendant
   termination, and output capture keep their existing native representation.
-- Finite background Jobs expose `job_list`, `job_status`, `job_wait` and
-  `job_cancel`; durable native Agents expose `subagent`, `list_agents`,
-  `send_message`, `wait_agent` and `interrupt_agent`. Separate registries own
-  separate domains, with shared lower-level cancellation/settlement machinery.
-  Listings are bounded and conversation-scoped. Jobs never resume; Agents may
-  resume under the same identity with a fresh activation. No generic
-  model-facing execution handle, kind discriminator or action mega-tool exists.
+- `execution` is the single model-facing observation, discovery, and
+  cancellation control plane for conversation-owned asynchronous
+  executions (Issues #162 and #180). Every model-visible creation result —
+  a detached background tool dispatch and a subagent start — returns a
+  typed execution handle (`kind` + `id`), and `execution(status|cancel)`
+  dispatches an explicit
+  `kind = tool` target only to `ConversationBackgroundRegistry` and a
+  `kind = subagent` target only to `SubagentRegistry`. The subagent
+  creation result is exactly the handle, the running state, and the named
+  agent (Issue #192): the registry's acceptance value carries the
+  committed runtime facts, and the `subagent` intrinsic alone projects
+  them into the model-facing result — no definition digest, child
+  agent/conversation identity, delegating tool call, or workspace fact
+  crosses the creation boundary. The intrinsic owns
+  no lifecycle state and no cancellation implementation: the domain
+  registries remain the sole authorities for lifecycle, cancellation,
+  durability, settlement, and terminal publication, and subagent
+  cancellation never reaches around `SubagentRegistry` to the child
+  process driver. The kind is never inferred from an id string, no
+  registry fall-through exists, and a cross-conversation id stays
+  indistinguishable from an unknown id at the owning domain boundary.
+  The intrinsic participates in the common tool execution plane; it is not an
+  ordinary native tool. Its contract and
+  runtime semantics are outside the ordinary-native-tool contract
+  alignment, and it is never moved, renamed, or re-schema'd to make the
+  native tool directory look uniform.
+- **The `execution` subagent response is the minimal control contract,
+  never a result channel** (Issue #192's Model-Centric Tool Contract: a
+  model-facing field exists only when a valid model decision or control
+  action requires it). The intrinsic obtains the authoritative
+  `SubagentSnapshot` from the registry and projects it into the
+  model-facing `SubagentExecutionSnapshot`: the typed execution handle,
+  the named agent, the lifecycle state, `publication_abandoned`, the
+  committed cancellation reason when one exists (a deadline expiry stays
+  distinguishable from an explicit cancellation), and — when terminal
+  settlement retained changed isolated work — the semantic
+  `isolated_changes_retained` fact, never a path or ref. Everything else
+  the authoritative snapshot carries — child agent/conversation
+  correlation, the delegating tool call, the definition digest, physical
+  workspace facts, the execution profile, the observation plane, the
+  diagnostics-only internal `detail`, `started_at` — stays below the model
+  boundary in the rich runtime authority that the Runtime Client, TUI,
+  recovery, and internal diagnostics consume. The projection is derived
+  from the registry's authoritative read model at response time; it is
+  not a second lifecycle record or authority, and in every lifecycle state
+  including `PublishingTerminal` the canonical inbound child-agent message
+  is the **only** child-result delivery channel, observing a child never
+  enlarges parent model context, and `execution(status|cancel)` never
+  exposes the answer.
+- **`execution(list)` is bounded conversation-scoped discovery, never a
+  second execution authority** (Issue #180). The input contract is
+  action-tagged: `status`/`cancel` require a `target` and reject a
+  `filter`, `list` accepts an optional `filter` and rejects a `target`,
+  and unknown fields are rejected at every level. Each owning registry
+  produces its own authoritative bounded listing, in a read-model type
+  that domain itself owns (`BackgroundExecutionListing`,
+  `SubagentListing`) — which records exist, in which order, which match
+  `active_only` under that domain's own lifecycle classification, and how
+  many matched before its caller's materialization bound — and the
+  intrinsic only converts, merges, bounds, and reports. The dependency
+  runs one way only: the model-facing control plane names both domain
+  authorities, and no domain authority names the control plane or its
+  response bound. `MAX_LISTED_EXECUTIONS` stays a control-plane response
+  policy and is never a domain invariant. Discovery is
+  conversation-scoped **by construction**: the intrinsic holds only the
+  registries its conversation owns, so a foreign execution is unreachable
+  rather than filtered, and stays indistinguishable from absence even when
+  the two conversations allocated structurally identical ids. The `kind`
+  filter selects which authority is consulted at all, so it can never fall
+  through into the other domain. The merged order is each domain's records
+  most-recently-allocated first *within that domain*, alternating between
+  the domains starting with `tool`, truncated to the single global
+  `MAX_LISTED_EXECUTIONS` bound with explicit
+  `returned`/`matched`/`truncated`/`limit` metadata; no per-domain quota
+  exists, ordering never depends on timestamps, and an identical request
+  against unchanged registries returns identical entries and metadata. The
+  merged listing is deterministic but never globally most-recent-first —
+  the domains share no ordinal or clock — and neither the model-facing
+  tool description nor this contract claims otherwise. Listing is
+  observation only: it mutates no lifecycle, cancellation, settlement,
+  terminal notification, capacity accounting, ordering, or — for
+  subagents — observation-plane revision or latest value. A listing entry
+  carries the typed handle, the owning domain's own lifecycle state, and
+  bounded identity facts only: never a detached tool
+  `result`/`progress`, never a subagent `detail`, never answer content, and
+  never child history, so `list` can no more become a result channel than
+  `status` can. Issue #178's live activity projection stays out of the
+  model-facing listing for the same reason `execution(status)` drops it —
+  observing a child never enlarges parent model context.
 - Model-facing output is bounded by named limits. Text overflow is not an
   artifact (Issue #86): native Bash and MCP logical results (a managed
   Python tool's results included — Python tools are MCP tools) all
@@ -5716,7 +6028,7 @@ semantic normalization boundary. The frozen invariants:
 - **Runtime Client protocol v15 exposes retained-workspace disposal as a
   separate resource lifecycle.** The request names only a terminal
   `SubagentId`; it never carries an arbitrary path or Git ref and is not
-  available through model-facing Agent control Tools. The post-terminal
+  available through the model-facing `execution` intrinsic. The post-terminal
   resource state is explicit: `None`, `Retained`, `PreservedUnresolved`,
   `DisposalInProgress`, `WorktreeRemoved`, or `Disposed`. A `Retained`
   resource first requires the complete current ownership proof, then a durable
@@ -5779,8 +6091,7 @@ semantic normalization boundary. The frozen invariants:
   observation-plane fact. Version 10 added subagent workspace facts and
   preserved handoff metadata; version 9 added `interrupted` to the closed
   `SubagentState` vocabulary. Rust serialization and the maintained TUI
-  mirror describe the same states and projections. Runtime Client v48 separately
-  projects durable `AgentState` and finite activation `SubagentState`. Superseded versions are
+  mirror describe the same states and projections. Superseded versions are
   not decoded compatibly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
@@ -7320,7 +7631,7 @@ remain client-local and never appear in export RPC parameters. See
 ## Exact read-only Subagent history
 
 Parent AttachmentTarget → addressed live parent runtime → native SubagentRegistry
-→ exact AgentId → owned child Conversation is the only child transcript
+→ exact SubagentId → owned child Conversation is the only child transcript
 lookup chain exposed by App Server. Conversation IDs alone confer no authority.
 Existing-only read access cannot create a child Session or recover/start a child.
 Canonical content and completed-response facts come from the child's durable

@@ -65,12 +65,12 @@ import {
   type InteractionResponse,
   type ModelCatalogView,
   type Notification,
-  type RuntimeClientJob,
+  type RuntimeClientBackgroundExecution,
   type RuntimeClientContextView,
   type RuntimeClientCursor,
   type RuntimeClientSnapshot,
-  type RuntimeClientAgent,
-  type RuntimeClientAgentWorkspaceDisposalOutcome,
+  type RuntimeClientSubagent,
+  type RuntimeClientSubagentWorkspaceDisposalOutcome,
   type RuntimeClientTranscriptCursor,
   type RuntimeClientTranscriptPage,
   type SessionModelConfig,
@@ -78,7 +78,6 @@ import {
   type SessionNodeId,
   type SessionUserMessageBoundary,
   type SubagentId,
-  type AgentId,
   type SurfaceRevision,
   type ToolExecutionId,
   type UserInputBlock,
@@ -369,16 +368,16 @@ export class AppServerSession {
   }
 
   /** A read is valid only in the exact parent attachment/presentation epoch. */
-  async agentTranscriptPage(
-    agentId: AgentId,
+  async subagentTranscriptPage(
+    subagentId: SubagentId,
     before?: RuntimeClientTranscriptCursor,
   ): Promise<RuntimeClientTranscriptPage | undefined> {
     if (this.#released || this.#serverClosed) return undefined;
     const epoch = this.#epoch;
     const target = this.#target;
     try {
-      const result = await this.#client.call("agent/transcript", {
-        target, agent_id: agentId, before: before ?? null,
+      const result = await this.#client.call("subagent/transcript", {
+        target, subagent_id: subagentId, before: before ?? null,
         limit: TRANSCRIPT_PROJECTION_PAGE_LIMIT,
       }, "transcript");
       if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
@@ -523,55 +522,66 @@ export class AppServerSession {
   }
 
   // -------------------------------------------------------------------------
-  // Finite Jobs and durable Agents
+  // Background and subagents
   // -------------------------------------------------------------------------
 
   /**
-   * Cancels one finite Job through the runtime physical-settlement contract.
+   * Requests cancellation of one background execution.
+   *
+   * The returned registry snapshot is *acceptance*. The terminal fact arrives
+   * later on the event stream, and only the runtime decides it.
    */
-  async cancelJob(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
-    const result = await this.#client.call("job/cancel", { target: this.#target, job_id: jobId }, "job");
-    return result.job;
+  async cancelBackground(
+    executionId: ToolExecutionId,
+  ): Promise<RuntimeClientBackgroundExecution> {
+    const accepted = await this.#client.call(
+      "background/cancel",
+      { target: this.#target, execution_id: executionId },
+      "background",
+    );
+    return accepted.execution;
   }
 
-  async jobStatus(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
-    const result = await this.#client.call("job/status", { target: this.#target, job_id: jobId }, "job");
-    return result.job;
+  async backgroundStatus(
+    executionId: ToolExecutionId,
+  ): Promise<RuntimeClientBackgroundExecution> {
+    const status = await this.#client.call(
+      "background/status",
+      { target: this.#target, execution_id: executionId },
+      "background",
+    );
+    return status.execution;
   }
 
-  async waitJob(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
-    const result = await this.#client.call("job/wait", { target: this.#target, job_id: jobId }, "job");
-    return result.job;
+  async subagentStatus(subagentId: SubagentId): Promise<RuntimeClientSubagent> {
+    const status = await this.#client.call(
+      "subagent/status",
+      { target: this.#target, subagent_id: subagentId },
+      "subagent",
+    );
+    return status.subagent;
   }
 
-  async agentStatus(agentId: AgentId): Promise<RuntimeClientAgent> {
-    const result = await this.#client.call("agent/status", { target: this.#target, agent_id: agentId }, "agent");
-    return result.agent;
-  }
-
-  async sendMessage(agentId: AgentId, message: string) {
-    return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message }, "agent_message");
-  }
-
-  async waitAgent(agentId: AgentId) {
-    return this.#client.call("agent/wait", { target: this.#target, agent_id: agentId }, "agent_wait");
-  }
-
-  async interruptAgent(agentId: AgentId) {
-    return this.#client.call("agent/interrupt", { target: this.#target, agent_id: agentId }, "agent_wait");
+  async cancelSubagent(subagentId: SubagentId): Promise<RuntimeClientSubagent> {
+    const accepted = await this.#client.call(
+      "subagent/cancel",
+      { target: this.#target, subagent_id: subagentId },
+      "subagent",
+    );
+    return accepted.subagent;
   }
 
   /** Disposes one retained subagent workspace through the runtime authority. */
   async disposeSubagent(subagentId: SubagentId): Promise<{
-    agent: RuntimeClientAgent;
-    outcome: RuntimeClientAgentWorkspaceDisposalOutcome;
+    subagent: RuntimeClientSubagent;
+    outcome: RuntimeClientSubagentWorkspaceDisposalOutcome;
   }> {
     const disposed = await this.#client.call(
       "subagent/disposeWorkspace",
       { target: this.#target, subagent_id: subagentId },
       "workspace_disposed",
     );
-    return { agent: disposed.agent, outcome: disposed.outcome };
+    return { subagent: disposed.subagent, outcome: disposed.outcome };
   }
 
   // -------------------------------------------------------------------------

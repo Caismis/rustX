@@ -1085,7 +1085,7 @@ async fn ext256_a_composed_agent_status_extension_preserves_time_and_background_
             );
         }
         assert_eq!(
-            rendered.contains("Background jobs:"),
+            rendered.contains("Background executions:"),
             expect_background,
             "the Background contributor honors its own configuration: {rendered:?}"
         );
@@ -1097,7 +1097,7 @@ async fn ext256_a_composed_agent_status_extension_preserves_time_and_background_
         }
         if expect_time && expect_background {
             assert!(
-                rendered.find("Current time:") < rendered.find("Background jobs:"),
+                rendered.find("Current time:") < rendered.find("Background executions:"),
                 "semantic contributor order stays Time then Background: {rendered:?}"
             );
         }

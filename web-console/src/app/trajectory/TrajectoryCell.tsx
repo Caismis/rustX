@@ -4,7 +4,7 @@ import type {
   TraceKind,
   TraceRecord,
   TraceSystemPromptState,
-} from '../../../../protocol/app-server/v25';
+} from '../../../../protocol/app-server/v23';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import css from './Trajectory.module.css';
@@ -13,7 +13,7 @@ import css from './Trajectory.module.css';
 export const cellLabel: Record<TraceKind, string> = {
   user: 'User', assistant: 'Assistant', tool: 'Tool', compaction: 'Compaction',
   attempt: 'Attempt', step: 'Step', request: 'Request',
-  background: 'Job', subagent: 'Agent activation', workflow: 'Workflow', interaction: 'Interaction',
+  background: 'Background', subagent: 'Subagent', workflow: 'Workflow', interaction: 'Interaction',
 };
 
 /**
@@ -25,8 +25,8 @@ export const cellLabel: Record<TraceKind, string> = {
  * word instead of relying on a hover Tooltip that a touch reader never gets.
  */
 export const cellNarrowLabel: Partial<Record<TraceKind, string>> = {
-  background: 'JOB',
-  subagent: 'ACTIVATION',
+  background: 'BG',
+  subagent: 'SUBAGENT',
   workflow: 'WORKFLOW',
   interaction: 'INTERACT',
 };

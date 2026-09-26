@@ -39,6 +39,7 @@ use crate::runtime::identity::MessageId;
 use crate::tools::background::BackgroundExecutionSnapshot;
 #[cfg(test)]
 use crate::tools::background::ConversationBackgroundRegistry;
+use crate::tools::execution::ExecutionKind;
 use crate::tools::todo::{TodoStatus, TodoStatusPresentation, TodoStatusTask};
 
 // Agent Status is a *consumer* of the Todo extension, never an owner of it
@@ -1396,13 +1397,15 @@ fn render_sections(sections: &[AgentStatusSection]) -> String {
                 if !lines.is_empty() {
                     lines.push(String::new());
                 }
-                lines.push("Background jobs:".to_owned());
+                lines.push("Background executions:".to_owned());
                 for execution in executions {
-                    // The finite Job identity is directly actionable through
-                    // job_status, job_wait and job_cancel.
+                    // The identity vocabulary matches the model-facing
+                    // execution handle (Issue #162): explicit kind plus id,
+                    // so the model can construct an execution request
+                    // without guessing a namespace.
                     let mut line = format!(
                         "- {} {} | {} | {}",
-                        "job",
+                        ExecutionKind::Tool.name(),
                         execution.execution_id.as_str(),
                         execution.tool_name,
                         execution.state.name()
@@ -2476,7 +2479,7 @@ mod tests {
                 "status-time",
                 generated_at,
                 &[AgentStatusModuleId::Time],
-                "Timezone: fake\nCurrent time: fake\nBackground jobs: fake",
+                "Timezone: fake\nCurrent time: fake\nBackground executions: fake",
             ),
             plain_surface_message("message-1"),
             status_surface_message(
@@ -2960,7 +2963,9 @@ mod tests {
         let rendered = render_agent_status(&status);
         assert!(
             rendered.find("Current time:").expect("time line")
-                < rendered.find("Background jobs:").expect("background line")
+                < rendered
+                    .find("Background executions:")
+                    .expect("background line")
         );
 
         let mut time_disabled = engine(AgentStatusConfig {

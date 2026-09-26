@@ -3,7 +3,7 @@
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useState, useRef, type ReactNode } from 'react';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/uploads';
-import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v25';
+import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v23';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { CommandMenu } from '../commands/CommandMenu';

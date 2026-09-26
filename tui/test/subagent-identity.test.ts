@@ -6,7 +6,7 @@
  *
  * The mirror is a compile-time contract, so these cases are deliberately a
  * mix: `tsc --noEmit` proves the shape (a `profile` field would not compile
- * against `RuntimeClientAgent`), and the runtime assertions prove the
+ * against `RuntimeClientSubagent`), and the runtime assertions prove the
  * reducer actually carries both identity fields through.
  */
 
@@ -22,16 +22,19 @@ import {
 } from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
+  it("negotiates the current protocol version", () => {
+  });
+
   it("carries both identity digests from the snapshot", () => {
     const state = replaceFromSnapshot(
       {
         ...snapshot(),
-        agents: [subagent("explore", "sha256:d1")],
+        subagents: [subagent("explore", "sha256:d1")],
       },
       runtimeCursor(1),
     );
-    assert.equal(state.agents.length, 1);
-    const [child] = state.agents;
+    assert.equal(state.subagents.length, 1);
+    const [child] = state.subagents;
     assert.ok(child);
     assert.equal(child.agent, "explore");
     // Two separate identities (Issue #258): the source definition the child
@@ -57,8 +60,8 @@ describe("subagent identity", () => {
     const state = replaceFromSnapshot(
       {
         ...snapshot(),
-        agents: [
-          subagent("explore", "sha256:d1", "active", {
+        subagents: [
+          subagent("explore", "sha256:d1", "running", {
             observation,
             execution_profile: {
               model: "alpha/model-a",
@@ -70,7 +73,7 @@ describe("subagent identity", () => {
       },
       runtimeCursor(1),
     );
-    const [child] = state.agents;
+    const [child] = state.subagents;
     assert.ok(child);
     assert.deepEqual(child.observation, observation);
     assert.equal(child.started_at, "2026-09-02T10:00:00Z");
@@ -81,9 +84,9 @@ describe("subagent identity", () => {
     });
   });
 
-  it("carries the whole observation through a agent_updated upsert", () => {
+  it("carries the whole observation through a subagent_updated upsert", () => {
     let state = replaceFromSnapshot(
-      { ...snapshot(), agents: [subagent("explore", "sha256:d1")] },
+      { ...snapshot(), subagents: [subagent("explore", "sha256:d1")] },
       runtimeCursor(1),
     );
     const observation = subagentObservation(
@@ -93,12 +96,12 @@ describe("subagent identity", () => {
     state = reduce(state, {
       cursor: runtimeCursor(2),
       event: {
-        type: "agent_updated",
-        agent: subagent("explore", "sha256:d1", "active", { observation }),
+        type: "subagent_updated",
+        subagent: subagent("explore", "sha256:d1", "running", { observation }),
       },
     });
-    assert.equal(state.agents.length, 1);
-    assert.deepEqual(state.agents[0]?.observation, observation);
+    assert.equal(state.subagents.length, 1);
+    assert.deepEqual(state.subagents[0]?.observation, observation);
   });
 
   it("keeps a running child bound to the digest it started with", () => {
@@ -106,20 +109,20 @@ describe("subagent identity", () => {
     // about *this* child still carries its own digest, so a client can never
     // conclude the running child now has the new definition.
     let state = replaceFromSnapshot(
-      { ...snapshot(), agents: [subagent("explore", "sha256:d1")] },
+      { ...snapshot(), subagents: [subagent("explore", "sha256:d1")] },
       runtimeCursor(1),
     );
     state = reduce(state, {
       cursor: runtimeCursor(2),
       event: {
-        type: "agent_updated",
-        agent: subagent("explore", "sha256:d1", "inactive"),
+        type: "subagent_updated",
+        subagent: subagent("explore", "sha256:d1", "succeeded"),
       },
     });
-    assert.equal(state.agents.length, 1);
-    const [child] = state.agents;
+    assert.equal(state.subagents.length, 1);
+    const [child] = state.subagents;
     assert.ok(child);
-    assert.equal(child.state, "inactive");
+    assert.equal(child.state, "succeeded");
     assert.equal(child.definition_digest, "sha256:d1");
   });
 
@@ -127,25 +130,22 @@ describe("subagent identity", () => {
     let state = replaceFromSnapshot(
       {
         ...snapshot(),
-        agents: [subagent("worker", "sha256:d1", "inactive", { activation_state: "interrupted" })],
+        subagents: [subagent("worker", "sha256:d1", "interrupted")],
       },
       runtimeCursor(1),
     );
-    assert.equal(state.agents[0]?.state, "inactive");
-    assert.equal(state.agents[0]?.activation_state, "interrupted");
+    assert.equal(state.subagents[0]?.state, "interrupted");
 
     state = reduce(state, {
       cursor: runtimeCursor(2),
       event: {
-        type: "agent_updated",
-        agent: subagent("worker", "sha256:d1", "inactive", {
+        type: "subagent_updated",
+        subagent: subagent("worker", "sha256:d1", "interrupted", {
           detail: "child outcome unknown",
-          activation_state: "interrupted",
         }),
       },
     });
-    assert.equal(state.agents[0]?.state, "inactive");
-    assert.equal(state.agents[0]?.activation_state, "interrupted");
-    assert.equal(state.agents[0]?.detail, "child outcome unknown");
+    assert.equal(state.subagents[0]?.state, "interrupted");
+    assert.equal(state.subagents[0]?.detail, "child outcome unknown");
   });
 });
