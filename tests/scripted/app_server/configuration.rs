@@ -4150,3 +4150,204 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
     }))
     .await;
 }
+
+/// #419: creation is the only initial-model owner. Validate/persist before ACK,
+/// without composing a runtime, then freeze that selection at first admission.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue419_initial_model_commit_readback_admission_and_later_switch() {
+    Box::pin(bounded(async {
+        for explicit in [false, true] {
+            let f = Fixture::with_session_count(None, 0).await;
+            let selection = crate::model::session::SessionModelConfig::of(
+                crate::model::catalog::ModelRef::parse(if explicit {
+                    "local/b"
+                } else {
+                    "local/a"
+                })
+                .unwrap(),
+            );
+            let created = f
+                .manager
+                .create_session(SessionPersistentState {
+                    cwd: f.workspaces[0].clone(),
+                    model: explicit.then(|| selection.clone()),
+                })
+                .await
+                .unwrap();
+            assert!(created.durability_diagnostic.is_none());
+            assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+            assert!(f.provider.request_bodies().is_empty());
+            let persisted =
+                std::fs::read_to_string(f.archive_root.join("sessions/catalog.json")).unwrap();
+            assert!(persisted.contains(&selection.model.to_string()));
+            assert_eq!(
+                f.manager
+                    .sessions
+                    .read_settings(&created.session.id)
+                    .await
+                    .unwrap()
+                    .1
+                    .model,
+                Some(selection.clone())
+            );
+            let managed = f.manager.load(&created.session.id, None).await.unwrap();
+            let runtime = f
+                .manager
+                .configuration_runtime(&created.session.id)
+                .unwrap();
+            assert_eq!(runtime.model_view().configured, selection);
+            runtime.submit_inbound(input("request-A")).unwrap();
+            f.gates[0].wait_entered().await;
+            let before = managed.client().snapshot().unwrap().0;
+            assert_eq!(
+                before
+                    .attempt
+                    .as_ref()
+                    .unwrap()
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .primary
+                    .model,
+                selection.model
+            );
+            let later = crate::model::session::SessionModelConfig::of(
+                crate::model::catalog::ModelRef::parse(if explicit {
+                    "local/a"
+                } else {
+                    "local/b"
+                })
+                .unwrap(),
+            );
+            assert!(
+                f.manager
+                    .set_model(&created.session.id, later.clone())
+                    .await
+                    .is_err(),
+                "ordinary model mutation preserves the running Attempt's admission fence"
+            );
+            let after = managed.client().snapshot().unwrap().0;
+            assert_eq!(before.attempt.unwrap().model, after.attempt.unwrap().model);
+            let settlement = runtime.settlement_signal();
+            f.gates[0].release();
+            settlement.notified().await;
+            f.manager
+                .set_model(&created.session.id, later.clone())
+                .await
+                .unwrap();
+            assert_eq!(runtime.model_view().configured, later);
+            f.manager
+                .unload(&created.session.active_conversation_id)
+                .await
+                .unwrap();
+        }
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue419_omitted_intent_uses_native_default_at_creation_not_draft_projection() {
+    use crate::local_runtime::configuration::settings::{SessionModelsView, SourceTarget};
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = SourceTarget::Workspace {
+            directory: f.workspaces[0].clone(),
+        };
+        let projected = f.manager.source_settings(&target, None).await.unwrap();
+        let Some(SessionModelsView::Available { default_model, .. }) = projected.session_models
+        else {
+            panic!()
+        };
+        assert_eq!(default_model.model.to_string(), "local/a");
+        let path = f
+            .manager
+            .source_settings(&SourceTarget::User, None)
+            .await
+            .unwrap()
+            .user
+            .path;
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        document["agent"]["model"]["model"] = "local/b".into();
+        std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+        f.manager.reconcile_configuration(&target).await.unwrap();
+        source_settled(&f, &target).await;
+        let created = f
+            .manager
+            .create_session(SessionPersistentState {
+                cwd: f.workspaces[0].clone(),
+                model: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            f.manager
+                .sessions
+                .read_settings(&created.session.id)
+                .await
+                .unwrap()
+                .1
+                .model
+                .unwrap()
+                .model
+                .to_string(),
+            "local/b"
+        );
+        let runtime = f.manager.load(&created.session.id, None).await.unwrap();
+        let native = f
+            .manager
+            .configuration_runtime(&created.session.id)
+            .unwrap();
+        native.submit_inbound(input("request-A")).unwrap();
+        f.gates[0].wait_entered().await;
+        assert_eq!(
+            runtime
+                .client()
+                .snapshot()
+                .unwrap()
+                .0
+                .attempt
+                .unwrap()
+                .model
+                .unwrap()
+                .primary
+                .model
+                .to_string(),
+            "local/b"
+        );
+        let settlement = native.settlement_signal();
+        f.gates[0].release();
+        settlement.notified().await;
+        f.manager
+            .unload(&created.session.active_conversation_id)
+            .await
+            .unwrap();
+    }))
+    .await;
+}
+
+#[tokio::test]
+async fn issue419_rejected_explicit_model_does_not_publish_or_substitute() {
+    let f = Fixture::with_session_count(None, 0).await;
+    let result = f
+        .manager
+        .create_session(SessionPersistentState {
+            cwd: f.workspaces[0].clone(),
+            model: Some(crate::model::session::SessionModelConfig::of(
+                crate::model::catalog::ModelRef::parse("local/missing").unwrap(),
+            )),
+        })
+        .await;
+    assert!(result.is_err());
+    assert!(
+        f.manager
+            .sessions
+            .list_sessions(None, 0, 32)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+    assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
+    assert!(f.provider.request_bodies().is_empty());
+}

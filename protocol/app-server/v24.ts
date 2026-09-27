@@ -2587,6 +2587,10 @@ export type Notification1 =
       method: 'session/summaryInvalidated';
       params: {
         session_id: SessionId;
+        /**
+         * A visible new Session requires a fresh catalog page independently of attachment.
+         */
+        catalog_changed: boolean;
       };
     };
 /**
@@ -3391,6 +3395,10 @@ export interface PresentationCapabilities {
  */
 export interface SessionPersistentState {
   cwd: string;
+  /**
+   * Explicit initial selection. Omission delegates to the native configuration
+   * owner at creation; clients must not copy a projected default into this field.
+   */
   model?: SessionModelConfig | null;
 }
 /**

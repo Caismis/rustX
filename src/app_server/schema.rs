@@ -34,6 +34,28 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     let mut fixtures = vec![
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("create-with-initial-model".into()),
+            call: Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState {
+                    cwd: "/workspace".into(),
+                    model: Some(crate::model::session::SessionModelConfig::of(
+                        crate::model::catalog::ModelRef::parse("provider/selected").unwrap(),
+                    )),
+                },
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("create-with-native-default".into()),
+            call: Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState {
+                    cwd: "/workspace".into(),
+                    model: None,
+                },
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-session-summary".into()),
             call: Method::SessionSummary {
                 session_id: target.session_id.clone(),
@@ -613,9 +635,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v23.schema.json", "v23.ts"]);
+        assert_eq!(generations, ["v24.schema.json", "v24.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v23.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v24.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

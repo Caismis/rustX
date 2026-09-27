@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 23;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -189,6 +189,8 @@ pub enum Method {
         offset: usize,
         limit: usize,
     },
+    /// Commit Session identity and validated initial settings without composing a runtime.
+    /// An acknowledged identity remains committed when `durability_diagnostic` is present.
     #[serde(rename = "session/create")]
     SessionCreate { settings: SessionPersistentState },
     #[serde(rename = "session/read")]
@@ -607,13 +609,17 @@ pub enum NotificationMethod {
     /// because observing metadata must never require holding a runtime
     /// attachment.
     ///
-    /// The concrete cause today is the asynchronous display-projection
-    /// publication: the Session's first ordinary root-lineage user message is
+    /// Creation publishes catalog membership; asynchronous display-projection
+    /// publication refreshes metadata: the Session's first ordinary root-lineage user message is
     /// committed canonically first, and its derived `preview` is committed to
     /// the catalog afterwards, so a client that read `session/summary` in
     /// between legitimately cached `preview: null`.
     #[serde(rename = "session/summaryInvalidated")]
-    SummaryInvalidated { session_id: SessionId },
+    SummaryInvalidated {
+        session_id: SessionId,
+        /// A visible new Session requires a fresh catalog page independently of attachment.
+        catalog_changed: bool,
+    },
 }
 
 /// Complete public wire surface used by schema and client generation.
