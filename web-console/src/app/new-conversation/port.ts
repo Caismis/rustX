@@ -1,44 +1,48 @@
+import { modelPreferences } from '../model-preference';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v26';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v27';
 import type { FirstSubmitPort } from './first-submit';
-import { selectSessionModel } from '../model-preference';
 
-export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean): FirstSubmitPort {
+export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, opened: (id: string) => (() => boolean) | void): FirstSubmitPort {
   const { generation, authorityRevision, endpoint } = client.getSnapshot();
   let target: AttachmentTarget | undefined;
+  let navigation = navigationCurrent;
   const current = () => {
     const state = client.getSnapshot();
-    return navigationCurrent() && state.endpoint === endpoint && state.connection === 'connected' && state.generation === generation && state.authorityRevision === authorityRevision
+    return navigation() && state.endpoint === endpoint && state.connection === 'connected' && state.generation === generation && state.authorityRevision === authorityRevision
       && (!target || sameTarget(state.views[target.session_id]?.target, target));
   };
   const requireCurrent = () => { if (!current()) throw new Error('New Conversation authority changed. Inspect Sessions; do not replay.'); };
   return {
     current,
-    async create(draft) {
+    async create(draft, acknowledged) {
       if (!endpoint || !draft.workspaceId) throw new Error('Choose a registered Workspace first.');
       const { cwd } = await host.resolveWorkspace(draft.workspaceId, endpoint);
       requireCurrent();
-      const result = await client.request({ method: 'session/create', params: { settings: { cwd } } }, 'session_transition');
+      const result = await client.request({ method: 'session/create', params: { settings: { cwd, ...(draft.model ? { model: draft.model } : {}) } } }, 'session_transition', result => {
+        acknowledged({ id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined });
+        const state = client.getSnapshot();
+        if (draft.model && state.endpoint === endpoint && state.authorityRevision === authorityRevision) modelPreferences().select(endpoint, draft.model);
+      }, current);
       return { id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined };
     },
+    handoff(session) {
+      const state = client.getSnapshot();
+      if (!navigation() || state.endpoint !== endpoint || state.authorityRevision !== authorityRevision) throw new Error('Navigation authority changed. No operation was replayed.');
+      client.restoreViews([session.id]);
+      // Only this authorized transition may replace the captured route fence.
+      navigation = opened(session.id) ?? navigation;
+    },
     async attach(session) {
-      await client.attach(session.id, session.node, current);
-      requireCurrent(); target = client.target(session.id);
+      await client.attach(session.id, session.node, current, attached => { target = attached; });
+      requireCurrent();
+      if (!target) throw new Error('Created Session was not attached.');
       if (target.conversation_id !== session.conversation) throw new Error('Created Session attached a different Conversation.');
-      await client.listSessions();
+      // Attach consumes the established native model/configuration. No second
+      // selection, provider probe, model repair or catalog refresh owns startup.
     },
-    async model(session, intent) {
-      await selectSessionModel(client, session.id, intent); requireCurrent();
-      await client.repairAgentModel(session.id); requireCurrent();
-      const observed = client.getSnapshot().views[session.id];
-      if (observed?.modelMutation || observed?.snapshot?.model?.configured.model !== intent.model
-        || observed.snapshot.model.effective.model !== intent.model
-        || (intent.reasoningProfile !== undefined && observed.snapshot.model.effective.reasoningProfile !== intent.reasoningProfile)) {
-        throw new Error('Requested Session model has not been observed. No turn was started.');
-      }
-    },
-    async upload(session, file) { const [uploaded] = await client.upload(session.id, [file]); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
-    async send(session, draft, receipts) { await client.send(session.id, draft.text, receipts); },
+    async upload(session, file, acknowledged) { const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
+    async send(session, draft, receipts, acknowledged) { await client.send(session.id, draft.text, receipts, 'send', acknowledged, current); },
   };
 }

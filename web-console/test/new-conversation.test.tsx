@@ -1,14 +1,18 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationComposer } from '../src/app/new-conversation/ConversationComposer';
-import { NavigationEpoch } from '../src/app/commands/native';
+import { NavigationEpoch } from '../src/client/navigation';
 import { RpcFailure } from '../src/client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v26';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v27';
 import { cfg3Source } from './cfg3-data';
-import { Server } from './fixture';
+import { Server, snapshot } from './fixture';
+import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
 let server: Server;
-afterEach(() => { cleanup(); server?.client.disconnect(); });
+// These catalog tests model a browser without a saved preference. The real
+// preference/creation interaction is covered by the production browser fixture.
+beforeEach(() => { vi.spyOn(modelPreferences(), 'read').mockImplementation(new NewSessionModelPreference().read); });
+afterEach(() => { cleanup(); server?.client.disconnect(); vi.restoreAllMocks(); });
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true };
 function nativeModel(model: string, profiles: string[] = [], defaultReasoningProfile?: string): CatalogModelView {
   return { model, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities,
@@ -77,11 +81,12 @@ it('confirmed create survives a transport replacement: it opens the exact commit
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   const request = await server.waitFor('session/create', 1);
   // Deliver the acknowledgement first; the transport replacement then occurs
-  // before XState starts its next, separately fenced continuation.
+  // before the client owner starts its next, separately fenced continuation.
   await act(async () => { server.reply(request); await Promise.resolve(); server.socket.close(); });
-  await waitFor(() => expect(opened).toHaveBeenCalledWith('native-committed', expect.stringContaining('Authority changed')));
+  await waitFor(() => expect(opened).toHaveBeenCalledWith('native-committed'));
   expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'session/upload', 'turn/start'].includes(r.request.method))).toHaveLength(0);
   expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
+  server.snapshots.set('native-committed', snapshot('native-committed'));
   await act(async () => server.connect());
   expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
   expect(opened).toHaveBeenCalledTimes(1);
@@ -93,7 +98,7 @@ it('a replaced New Conversation navigation cannot open a Session committed by it
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   const request = await server.waitFor('session/create', 1);
-  await act(async () => { server.reply(request); navigation.invalidate(); });
+  await act(async () => { navigation.invalidate(); server.reply(request); });
   expect(screen.getByRole('alert').textContent).toContain('Session native-committed was created');
   expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'turn/start'].includes(r.request.method))).toHaveLength(0);
   expect(opened).not.toHaveBeenCalled(); // obsolete navigation cannot take over a newer route
@@ -123,10 +128,12 @@ it('a model choice is draft Session intent: nothing is written, created or start
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);
   expect(methods().filter(method => ['session/create', 'session/setModel', 'configuration/sourceWrite', 'turn/start'].includes(method))).toEqual([]);
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
-  server.held.add('session/setModel');
+  server.held.add('session/attach');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  const request = await server.waitFor('session/setModel', 1);
-  expect(request.params).toEqual({ target: server.target('A'), config: { model: 'fixture/native', reasoningProfile: 'low' } });
+  const request = await server.waitFor('session/create', 1);
+  expect(request.params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', reasoningProfile: 'low' } } });
+  await server.waitFor('session/attach', 1);
+  expect(methods()).not.toContain('session/setModel');
   expect(methods()).not.toContain('turn/start');
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);
 });

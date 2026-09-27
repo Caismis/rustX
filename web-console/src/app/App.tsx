@@ -1,3 +1,4 @@
+import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
 import { message } from '../locale/translation';
 import { useTranslation, useNotice } from '../locale/react';
 import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
@@ -13,9 +14,8 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v26';
+import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v27';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
-import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock } from '../bindings/composer-context';
@@ -74,7 +74,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [focus, setFocus] = useState<{ sessionId?: string; workspaceId?: string; generation?: number }>({ sessionId: initialViews[0] });
   const selected = focus.sessionId;
   const workspace = focus.generation === state.generation && state.connection === 'connected' ? focus.workspaceId : undefined;
-  const [navigation] = useState(() => new NavigationEpoch());
+  const navigation = client.navigation;
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
@@ -110,6 +110,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const invokeCommand = (request: CommandRequest | { id: 'new' }) => {
     const currentState = client.getSnapshot();
     const view = selected ? currentState.views[selected] : undefined;
+    if (view && client.firstSubmissions.session(view.id) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(view.id)!.phase)) return;
     if (!view || currentState.connection !== 'connected' || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.modelMutation || view.snapshot?.shutting_down || view.snapshot?.durability_failure) return;
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
@@ -136,7 +137,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     setOpenViews(preferences.openViews); setFocus({ sessionId: preferences.openViews[0] });
     if (preferences.openViews[0]) setCenter({ kind: 'session', sessionId: preferences.openViews[0] });
     if (client.getSnapshot().connection === 'connected') for (const id of preferences.openViews) {
-      if (!client.getSnapshot().views[id]?.target) void client.attach(id).catch(() => {});
+      if (!client.getSnapshot().views[id]?.target && (!client.firstSubmissions.session(id) || ['admitted', 'discarded'].includes(client.firstSubmissions.session(id)!.phase))) void client.attach(id).catch(() => {});
     }
   }, [client, endpoint, preferences]);
   useEffect(() => {
@@ -149,7 +150,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // classified, its Workspace is explicitly empty rather than inherited.
   const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean; commitDraft?: boolean } = {}) => {
     if (!options.preserveDraft && !options.commitDraft) setDraftBinding(value => value + 1);
-    navigation.invalidate(); const current = navigation.capture();
+    // Remount/classification of the same pending Conversation is observation,
+    // not a new route gesture. Explicit route changes still retire its fence.
+    if (!(options.preserveDraft && id === selected && id && client.firstSubmissions.session(id))) navigation.invalidate();
+    const current = navigation.capture();
     const generation = state.generation;
     setCenter(id ? { kind: 'session', sessionId: id } : { kind: 'new-conversation' });
     setCommand(undefined); if (!options.preserveDraft) setRestored(undefined); setFocus({ sessionId: id });
@@ -231,6 +235,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         if (result && result.status !== 'deleted' && result.status !== 'not_found') setError(sessionDeletionNotice(result));
       })}>{item.recoveringDeletion ? tx('common:app.recovering-deletion') : tx('common:app.retry-deletion-recovery')}</Button>
     </section>)}
+    <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
     {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>{tx('common:app.dismiss-notice')}</Button></div>}
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-inspect-global-other-sessi')}</div>}
     {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(tx, state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
@@ -260,7 +265,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
         onCommand={id => invokeCommand({ id })}
-        opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); }}/>
+        opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); return navigation.capture(); }}/>
 
       </section>
       {commandOpen && <CommandPanel key={`${command.generation}:${command.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.sessionId} current={() => command.current() && client.getSnapshot().generation === command.generation}

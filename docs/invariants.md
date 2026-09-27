@@ -7147,14 +7147,21 @@ never bytes.
   The Session metadata owner records a post-commit invalidation *after* the
   Catalog visibility point — including the visible-but-durability-uncertain
   outcome, which is a real visible change — and never before it. The App
-  Server translates that into `session/summaryInvalidated { session_id }`,
-  addressed by Session identity rather than by attachment target, so a branch
+  Server translates that into `session/summaryInvalidated { session_id, catalog_changed }`,
+  with false for display metadata and true for native catalog membership changes.
+  Coalescing metadata changes cannot erase an undelivered membership change.
+  The notification is addressed by Session identity rather than by attachment target, so a branch
   view and an unattached listed row both converge without a new runtime
   attachment, another User turn, a manual refresh, a rename, or a reconnect.
   The invalidation requests authoritative rereading; it is not a value, not a
   cross-store atomicity claim, and not stronger durability than the commit
   established. Recording it never blocks on a client and never holds the
   Catalog mutex for delivery.
+
+  The integrated App Server v27 contract preserves this catalog owner alongside
+  finite Jobs, durable Agents and bounded client request lanes; see the
+  [PR #416 integration audit](pr-416-main-integration.md).
+
 - **Display-projection repair is Session-owned and root-lineage-based**,
   independent of which graph node is being composed: both App Server runtime
   composition and interactive startup repair a missing projection from the

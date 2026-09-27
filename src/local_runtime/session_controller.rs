@@ -120,7 +120,8 @@ pub struct SessionController {
     #[cfg(test)]
     pub(crate) create_preparation_wait: Arc<tokio::sync::Notify>,
     #[cfg(test)]
-    create_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
+    pub(crate) create_gate:
+        Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     #[cfg(test)]
     cleanup_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     #[cfg(test)]
@@ -421,6 +422,16 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
     ) -> Result<SessionTransitionResult, SessionError> {
+        self.create_session_with_binding(settings, None).await
+    }
+
+    /// Install the captured process authority before publishing listable identity.
+    /// No await separates installation, publication and pre-visibility rollback.
+    pub(crate) async fn create_session_with_binding(
+        &self,
+        settings: SessionPersistentState,
+        binding: Option<super::configuration::AdmittedSessionConfig>,
+    ) -> Result<SessionTransitionResult, SessionError> {
         if !settings.cwd.is_absolute() {
             return Err(SessionError::Catalog {
                 detail: "Session cwd must be absolute".into(),
@@ -468,6 +479,15 @@ impl SessionController {
         })?;
         let prepared = prepared?;
         let mut catalog = self.catalog.lock().await;
+        // Keep provisional bindings private from configuration coordination as
+        // well as attachment until the catalog visibility decision is complete.
+        let mut bindings = self
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings");
+        if let Some(binding) = binding {
+            bindings.insert(prepared.session_id.clone(), binding);
+        }
         let (session, durability_diagnostic) =
             match catalog.publish_session(&prepared, super::session::SessionNodeOrigin::New) {
                 Ok(session) => (session, None),
@@ -475,7 +495,10 @@ impl SessionController {
                     catalog.snapshot(&prepared.session_id)?,
                     Some(error.to_string()),
                 ),
-                Err(error) => return Err(error),
+                Err(error) => {
+                    bindings.remove(&prepared.session_id);
+                    return Err(error);
+                }
             };
         Ok(SessionTransitionResult {
             session,
@@ -1999,6 +2022,15 @@ mod tests {
             ),
             "deletion wins at its own visibility point"
         );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded + 1,
+            "deletion announces its membership visibility exactly once"
+        );
+        assert_eq!(
+            invalidations.next_after(recorded),
+            Some((recorded + 1, session.id.clone(), true))
+        );
         gate.release();
         assert_eq!(
             repairing.await.unwrap().unwrap(),
@@ -2011,8 +2043,8 @@ mod tests {
         ));
         assert_eq!(
             invalidations.recorded(),
-            recorded,
-            "a publication that never became visible announces nothing"
+            recorded + 1,
+            "the resumed repair adds nothing to deletion's membership invalidation"
         );
     }
 }

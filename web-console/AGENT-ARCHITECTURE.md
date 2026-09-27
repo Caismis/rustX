@@ -4,7 +4,7 @@ Current conversation/composer ownership is specified by
 [WEB-16](../docs/issue-406/conversation-surface.md), referencing Harness
 `477b4f420553e8a52c2fbccc464d7561b239c443`. The notes below record earlier
 layers; the resident composer, turn-local running state and Turn tails replace
-their earlier lifecycle/status ownership. App Server is now v26 / Runtime Client
+their earlier lifecycle/status ownership. App Server is now v27 / Runtime Client
 v51, with native whole-conversation Turn/Step statistics and authored model seed.
 
 Base: `204f7ccc8fbaf4bc1b6842e02e8d0d68f19d5837`.
@@ -59,12 +59,16 @@ turn folding or inferred subcall nesting is supported.
 
 `App` owns an explicit New Conversation / Session center route. The shared
 Harness-derived composer accepts browser File drafts before Session creation;
-`firstSubmitMachine` owns the one creation/application/upload/send sequence.
+`AppServerClient.firstSubmissions` owns creation and the Session-scoped continuation.
+Native create ACK transfers intent before immediate navigation; component remounts
+only observe. Attach/readiness gates upload/admission. Admission consumes the draft.
+Catalog refresh is independent; initial model intent is native creation state.
+See [startup ownership](../docs/issue-419/ownership.md) for fences and failure lifetimes.
 `firstSubmitPort` fences endpoint, connection generation, authority revision,
 navigation and the exact native attachment. Settings target actors are shared
 with the permission seat; no configuration coordinator lives in the composer.
 
-App Server v26 / Runtime Client v51 publishes one native `turn_process` summary
+App Server v27 / Runtime Client v51 publishes one native `turn_process` summary
 on exact Assistant/Tool members for running, completed and unsuccessful Attempts.
 Control identity, cursor, counts and clock come from native evidence; failed and
 stopped Turns always remain open. CompletedResponseView still owns successful

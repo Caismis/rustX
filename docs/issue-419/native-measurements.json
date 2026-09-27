@@ -1,0 +1,42 @@
+{
+  "before": [
+    {
+      "sample": 1,
+      "session_id": "ses_01a0e11c-9012-7621-a29c-52ef8f59fb18",
+      "create_ms": 70.76,
+      "cold_load_ready_ms": 228.284
+    },
+    {
+      "sample": 2,
+      "session_id": "ses_01a0e11c-9143-7180-87cf-72b391725069",
+      "create_ms": 67.453,
+      "cold_load_ready_ms": 49.059
+    },
+    {
+      "sample": 3,
+      "session_id": "ses_01a0e11c-91be-7291-add0-2f61bc4c59a4",
+      "create_ms": 65.965,
+      "cold_load_ready_ms": 44.875
+    }
+  ],
+  "after": [
+    {
+      "sample": 1,
+      "session_id": "ses_01a0e11e-a085-7cf1-8628-ddcc483c5855",
+      "create_ms": 72.543,
+      "cold_load_ready_ms": 229.325
+    },
+    {
+      "sample": 2,
+      "session_id": "ses_01a0e11e-a1b6-78a3-9d80-303b120b7c68",
+      "create_ms": 66.43,
+      "cold_load_ready_ms": 44.406
+    },
+    {
+      "sample": 3,
+      "session_id": "ses_01a0e11e-a22d-7a41-8052-dc214bbdc8b4",
+      "create_ms": 65.715,
+      "cold_load_ready_ms": 45.076
+    }
+  ]
+}

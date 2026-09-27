@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v26';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v27';
 import { OutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 const servers: Server[] = [];
@@ -79,4 +79,26 @@ it.each(['close', 'error'] as const)('socket %s settles operations once without 
   expect(s.client.getSnapshot()).toBe(current);
   for (const method of methods) expect(s.requests.filter(row => row.request.method === method)).toHaveLength(1);
   expect(s.client.getSnapshot().uncertain.map(row => row.method)).toEqual(methods.slice(2));
+});
+
+it('full wait and RPC lanes preserve controls and retired startup dispatch ownership', async () => {
+  const s = await connected(); s.held.add('agent/wait'); s.held.add('session/settings');
+  const waits = Array.from({ length: 4 }, () => s.client.request(operation(s, 'agent/wait'), 'agent_wait'));
+  const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  let current = true;
+  const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
+  const rejected = expect(admission).rejects.toThrow('before dispatch');
+  await expect(s.client.request(operation(s, 'agent/wait'), 'agent_wait')).rejects.toThrow('wait capacity');
+  for (const control of ['agent/interrupt', 'job/cancel'] as const) {
+    s.handlers.set(control, () => result(control));
+    await expect(s.client.request(operation(s, control), result(control).type)).resolves.toEqual(result(control));
+  }
+  current = false;
+  for (const item of s.requests.filter(item => item.request.method === 'session/settings').slice(-8)) s.reply(item.request);
+  await Promise.all([...reads, rejected]);
+  expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  for (const item of s.requests.filter(item => item.request.method === 'agent/wait')) s.socket.success(item.request, result('agent/wait'));
+  await Promise.all(waits);
 });

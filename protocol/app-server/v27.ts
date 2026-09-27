@@ -2710,6 +2710,11 @@ export type Notification1 =
       method: 'session/summaryInvalidated';
       params: {
         session_id: SessionId;
+        /**
+         * Membership may have changed; reread the catalog and invalidate the named summary.
+         * False invalidates only the named Session's display metadata.
+         */
+        catalog_changed: boolean;
       };
     };
 /**
@@ -3514,6 +3519,10 @@ export interface PresentationCapabilities {
  */
 export interface SessionPersistentState {
   cwd: string;
+  /**
+   * Explicit initial selection. Omission delegates to the native configuration
+   * owner at creation; clients must not copy a projected default into this field.
+   */
   model?: SessionModelConfig | null;
 }
 /**

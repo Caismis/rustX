@@ -117,7 +117,12 @@ boundary chooser and `session/fork`; TypeScript never clones Session/history sta
 Create and `/new` resolve the selected Host registration to an explicit cwd before
 `session/create`. NavigationEpoch and connection generations fence resolution,
 creation, attachment and Fork continuations. Supersession never cancels an operation
-already committed on the server; the result remains discoverable through the list.
+already committed on the server. For first submission, decoded creation ACK
+publishes a client-owned Session continuation before navigation. The Conversation
+uses the native identity directly, before catalog refresh; attach/readiness gates
+upload and admission. Unrelated navigation prevents further dispatch, retains
+acknowledged facts and pending input, and never hijacks a newer route. See
+[startup ownership](../docs/issue-419/ownership.md).
 
 ## Configuration authority
 

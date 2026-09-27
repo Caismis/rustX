@@ -1,105 +1,97 @@
-import { createActor, waitFor } from 'xstate';
 import { expect, it, vi } from 'vitest';
-import { firstSubmitMachine, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
+import { FirstSubmissions, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import { WorkspaceHostError } from '../src/workspaces/host';
-import type { UploadReceipt } from '../../protocol/app-server/v26';
+import type { UploadReceipt } from '../../protocol/app-server/v27';
 function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 const session: CreatedSession = { id: 'native-session', node: 'native-node', conversation: 'native-conversation' };
 const draft: FirstDraft = { workspaceId: 'registered', text: 'Task', files: [], model: { model: 'explicit' } };
+const receipt = { batch_id: 'batch', token: 'token', session_id: session.id } as UploadReceipt;
 function fixture(overrides: Partial<FirstSubmitPort> = {}) {
-  const port: FirstSubmitPort = { current: () => true, create: vi.fn(async () => session), attach: vi.fn(async () => {}), model: vi.fn(async () => {}), upload: vi.fn(async () => ({ batch_id: 'batch', token: 'token' } as UploadReceipt)), send: vi.fn(async () => {}), ...overrides };
-  const actor = createActor(firstSubmitMachine).start(); return { actor, port };
+  const owner = new FirstSubmissions();
+  const port: FirstSubmitPort = { current: () => true, create: vi.fn(async () => session), handoff: vi.fn(), attach: vi.fn(async () => {}), upload: vi.fn(async () => receipt), send: vi.fn(async () => {}), ...overrides };
+  return { owner, port, start: (input = draft) => owner.submit('draft', input, port) };
 }
-it('opening and missing authorized Workspace create nothing; repeated submit creates exactly one native Session', async () => {
-  const creation = gate<CreatedSession>(); const { actor, port } = fixture({ create: vi.fn(() => creation.promise) });
-  expect(port.create).not.toHaveBeenCalled(); actor.send({ type: 'SUBMIT', port, draft: { ...draft, workspaceId: '' } }); expect(port.create).not.toHaveBeenCalled();
-  actor.send({ type: 'SUBMIT', port, draft }); actor.send({ type: 'SUBMIT', port, draft: { ...draft, workspaceId: 'other' } });
-  expect(port.create).toHaveBeenCalledTimes(1); expect(actor.getSnapshot().context.draft?.workspaceId).toBe('registered');
-  creation.resolve(session); await waitFor(actor, s => s.matches('session')); expect(port.send).toHaveBeenCalledTimes(1); actor.stop();
+it('installs the Session owner before navigation, attach, upload and admission; observers never dispatch', async () => {
+  const attach = gate<void>(), entered = gate<void>();
+  const { owner, port, start } = fixture({ attach: vi.fn(() => { entered.resolve(); return attach.promise; }) });
+  port.handoff = vi.fn(() => { expect(owner.session(session.id)?.draft.text).toBe('Task'); expect(port.attach).not.toHaveBeenCalled(); });
+  const work = start(); await entered.promise;
+  expect(owner.session(session.id)?.phase).toBe('attaching');
+  expect(port.send).not.toHaveBeenCalled(); expect(port.upload).not.toHaveBeenCalled();
+  for (let i = 0; i < 5; i++) { const remove = owner.subscribe(() => {}); owner.session(session.id); remove(); await start(); }
+  expect(port.create).toHaveBeenCalledTimes(1); expect(port.handoff).toHaveBeenCalledTimes(1);
+  attach.resolve(); expect(await work).toBe(true); expect(port.send).toHaveBeenCalledTimes(1);
 });
-it('explicit model observation fences every upload and the first turn', async () => {
-  const model = gate<void>(); const { actor, port } = fixture({ model: vi.fn(() => model.promise) });
-  actor.send({ type: 'SUBMIT', port, draft: { ...draft, files: [new File(['x'], 'x')] } }); await waitFor(actor, s => s.matches('applying_session_model'));
-  expect(port.model).toHaveBeenCalledWith(session, draft.model); expect(port.upload).not.toHaveBeenCalled(); expect(port.send).not.toHaveBeenCalled();
-  model.resolve(); await waitFor(actor, s => s.matches('session')); expect(port.send).toHaveBeenCalledTimes(1); actor.stop();
+it.each(['attach', 'upload', 'send'] as const)('retains the Session and original intent after %s failure without replay', async phase => {
+  const { owner, port, start } = fixture({ [phase]: vi.fn(async () => { throw new Error('rejected'); }) });
+  const input = { ...draft, files: [new File(['a'], 'a')] };
+  expect(await start(input)).toBe(false); const state = owner.session(session.id)!;
+  expect(state.phase).toBe('failed'); expect(state.draft).toEqual(input);
+  expect(await start(input)).toBe(false); expect(port.create).toHaveBeenCalledTimes(1); expect(port[phase]).toHaveBeenCalledTimes(1);
+  owner.discard(state); expect(owner.session(session.id)?.draft.files).toEqual([]);
 });
-it.each(['attach', 'model', 'send'] as const)('confirmed Session survives %s failure with no automatic mutation replay', async phase => {
-  const failed = vi.fn(async () => { throw new Error('Outcome uncertain'); }); const { actor, port } = fixture({ [phase]: failed });
-  actor.send({ type: 'SUBMIT', port, draft }); await waitFor(actor, s => s.matches('failed'));
-  expect(actor.getSnapshot().context.session).toEqual(session); actor.send({ type: 'SUBMIT', port, draft }); expect(port.create).toHaveBeenCalledTimes(1); expect(failed).toHaveBeenCalledTimes(1);
-  if (phase !== 'send') expect(port.send).not.toHaveBeenCalled(); actor.stop();
+it.each(['create', 'upload', 'send'] as const)('lost %s response stays uncertain through observation; no retry edge', async phase => {
+  const { owner, port, start } = fixture({ [phase]: vi.fn(async () => { throw new OutcomeUncertain(); }) });
+  await start({ ...draft, files: [new File(['a'], 'a')] });
+  expect(owner.draft('draft')?.phase).toBe('uncertain');
+  const unsubscribe = owner.subscribe(() => {}); unsubscribe(); await start();
+  expect(port[phase]).toHaveBeenCalledTimes(1);
 });
-it('individual upload acknowledgements survive a later failed upload', async () => {
-  const receipt = { batch_id: 'committed', token: 'receipt' } as UploadReceipt;
-  const upload = vi.fn().mockResolvedValueOnce(receipt).mockRejectedValueOnce(new Error('uncertain'));
-  const { actor, port } = fixture({ upload }); actor.send({ type: 'SUBMIT', port, draft: { ...draft, files: [new File(['a'], 'a'), new File(['b'], 'b')] } });
-  await waitFor(actor, s => s.matches('failed')); expect(actor.getSnapshot().context.receipts).toEqual([receipt]); expect(port.send).not.toHaveBeenCalled(); expect(upload).toHaveBeenCalledTimes(2); actor.stop();
+it('known creation rejection is editable and only a fresh explicit gesture retries', async () => {
+  const { owner, port, start } = fixture({ create: vi.fn().mockRejectedValueOnce(new RpcFailure({ code: -1, message: 'invalid' })).mockResolvedValueOnce(session) });
+  await start(); expect(owner.draft('draft')?.phase).toBe('rejected'); expect(port.attach).not.toHaveBeenCalled();
+  await start(); expect(port.create).toHaveBeenCalledTimes(2); expect(port.send).toHaveBeenCalledTimes(1);
 });
-it.each(['creating_session', 'applying_session_model', 'submitting_turn'] as const)('retired authority fences a pending %s completion', async phase => {
-  const pending = gate<CreatedSession>();
-  const { actor, port } = fixture(phase === 'creating_session' ? { create: () => pending.promise } : phase === 'applying_session_model' ? { model: async () => { await pending.promise; } } : { send: async () => { await pending.promise; } });
-  actor.send({ type: 'SUBMIT', port, draft }); await waitFor(actor, s => s.matches(phase)); actor.send({ type: 'RETIRE' }); pending.resolve(session);
-  await pending.promise; expect(actor.getSnapshot().matches('retired')).toBe(true); if (phase !== 'submitting_turn') expect(port.send).not.toHaveBeenCalled(); actor.stop();
+it('captures create ACK before a subsequent authority error; never hijacks a newer route', async () => {
+  const { owner, port, start } = fixture({ create: async (_, acknowledged) => { acknowledged(session); throw Error('transport retired after ACK'); } });
+  await start(); expect(owner.session(session.id)?.session).toEqual(session);
+  expect(owner.session(session.id)?.phase).toBe('failed'); expect(port.handoff).toHaveBeenCalledTimes(1);
 });
-it.each(['create', 'model', 'upload', 'send'] as const)('authority replacement fences %s completion even before navigation retires the actor', async phase => {
-  let generation = 1;
-  const pending = gate<CreatedSession>();
-  const completion = vi.fn(async () => { await pending.promise; return phase === 'create' ? session : { batch_id: 'committed', token: 'receipt' }; });
-  const { actor, port } = fixture({ current: () => generation === 1, [phase]: completion });
-  actor.send({ type: 'SUBMIT', port, draft: { ...draft, files: [new File(['native'], 'native.txt')] } });
-  await waitFor(actor, () => completion.mock.calls.length === 1);
-  generation = 2; pending.resolve(session);
-  await waitFor(actor, state => state.matches('failed'));
-  expect(completion).toHaveBeenCalledTimes(1);
-  if (phase !== 'send') expect(port.send).not.toHaveBeenCalled();
-  actor.send({ type: 'SUBMIT', port, draft }); expect(completion).toHaveBeenCalledTimes(1);
-  actor.stop();
+it('acknowledged creation carrying a durability diagnostic navigates but stops attachment', async () => {
+  const { owner, port, start } = fixture({ create: async () => ({ ...session, diagnostic: 'durability' }) });
+  await start(); expect(port.handoff).toHaveBeenCalledTimes(1); expect(port.attach).not.toHaveBeenCalled();
+  expect(owner.session(session.id)?.session?.diagnostic).toBe('durability');
 });
-
-it.each([
-  new WorkspaceHostError('Workspace revoked'),
-  new RpcFailure({ code: -32000, message: 'Creation rejected' }),
-])('known pre-commit rejection preserves an editable draft and only explicit SUBMIT retries: %s', async error => {
-  const create = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(session);
-  const { actor, port } = fixture({ create });
-  actor.send({ type: 'SUBMIT', port, draft });
-  await waitFor(actor, s => s.matches('drafting') && s.context.error === error);
-  expect(actor.getSnapshot().context.draft).toEqual(draft);
-  expect(actor.getSnapshot().context.session).toBeUndefined();
-  expect(create).toHaveBeenCalledTimes(1); expect(port.attach).not.toHaveBeenCalled();
-  const corrected = { ...draft, workspaceId: 'corrected', text: 'Corrected task' };
-  actor.send({ type: 'SUBMIT', port, draft: corrected });
-  await waitFor(actor, s => s.matches('session'));
-  expect(create).toHaveBeenCalledTimes(2); expect(create).toHaveBeenLastCalledWith(corrected);
-  expect(actor.getSnapshot().context.error).toBeUndefined(); actor.stop();
+it('ordered files and partial receipts survive fencing after a confirmed upload', async () => {
+  const files = [new File(['a'], 'a'), new File(['b'], 'b')]; let live = true;
+  const { owner, port, start } = fixture({ current: () => live, upload: vi.fn(async (_, file, acknowledged) => { expect(file).toBe(files[0]); acknowledged(receipt); live = false; throw Error('retired after ACK'); }) });
+  await start({ ...draft, files });
+  expect(owner.session(session.id)?.receipts).toEqual([receipt]); expect(owner.session(session.id)?.draft.files).toEqual(files);
+  expect(port.upload).toHaveBeenCalledTimes(1); expect(port.send).not.toHaveBeenCalled();
 });
-it.each([new OutcomeUncertain(), new WorkspaceHostError('Unknown outcome', undefined, true)])('uncertain creation cannot be replayed by SUBMIT: %s', async error => {
-  const { actor, port } = fixture({ create: vi.fn(async () => { throw error; }) });
-  actor.send({ type: 'SUBMIT', port, draft }); await waitFor(actor, s => s.matches('uncertain_creation'));
-  expect(actor.getSnapshot().context.session).toBeUndefined();
-  expect(actor.getSnapshot().context.draft).toEqual(draft);
-  actor.send({ type: 'SUBMIT', port, draft });
-  expect(port.create).toHaveBeenCalledTimes(1); expect(port.attach).not.toHaveBeenCalled(); actor.stop();
+it('admission ACK consumes intent even when the transport retires before promise settlement', async () => {
+  const { owner, start } = fixture({ send: async (_, __, ___, acknowledged) => { acknowledged(); throw Error('retired after ACK'); } });
+  expect(await start({ ...draft, files: [new File(['a'], 'a')] })).toBe(true);
+  expect(owner.session(session.id)?.phase).toBe('admitted'); expect(owner.session(session.id)?.draft.files).toEqual([]); expect(owner.session(session.id)?.draft.text).toBe('');
 });
-it('records a confirmed create before the authority fence can stop attachment', async () => {
-  const creation = gate<CreatedSession>(); let current = true;
-  const { actor, port } = fixture({ current: () => current, create: vi.fn(() => creation.promise) });
-  actor.send({ type: 'SUBMIT', port, draft });
-  creation.resolve(session); current = false;
-  await waitFor(actor, s => s.matches('failed'));
-  expect(actor.getSnapshot().context.session).toEqual(session);
-  for (const effect of [port.attach, port.model, port.upload, port.send]) expect(effect).not.toHaveBeenCalled();
-  current = true; actor.send({ type: 'SUBMIT', port, draft });
-  expect(port.create).toHaveBeenCalledTimes(1); expect(actor.getSnapshot().context.session).toEqual(session); actor.stop();
+it('final disposal fences outstanding work, releases retained state and subscriptions', async () => {
+  const creation = gate<CreatedSession>(); const { owner, port, start } = fixture({ create: () => creation.promise });
+  const observe = vi.fn(); owner.subscribe(observe); const work = start(); owner.dispose(); creation.resolve(session); await work;
+  expect(port.handoff).not.toHaveBeenCalled(); expect(owner.draft('draft')).toBeUndefined(); expect(observe).toHaveBeenCalledTimes(1);
 });
-it('each submission binds the authority current at its own gesture; a replaced one never blocks a later draft', async () => {
-  let generation = 1;
-  const replaced: FirstSubmitPort = { current: () => generation === 1, create: vi.fn(async () => session), attach: vi.fn(), model: vi.fn(), upload: vi.fn(), send: vi.fn() };
-  const { actor, port } = fixture({ current: () => generation === 2 });
-  generation = 2;
-  actor.send({ type: 'SUBMIT', port: replaced, draft });
-  expect(actor.getSnapshot().matches('drafting')).toBe(true); expect(replaced.create).not.toHaveBeenCalled();
-  actor.send({ type: 'SUBMIT', port, draft }); await waitFor(actor, s => s.matches('session'));
-  expect(port.create).toHaveBeenCalledTimes(1); expect(port.send).toHaveBeenCalledTimes(1); actor.stop();
+it('a second upload rejection preserves the first receipt, all Files, and their order', async () => {
+  const files = [new File(['a'], 'a'), new File(['b'], 'b')];
+  const { owner, port, start } = fixture({ upload: vi.fn().mockResolvedValueOnce(receipt).mockRejectedValueOnce(new Error('second rejected')) });
+  await start({ ...draft, files });
+  expect(owner.session(session.id)?.receipts).toEqual([receipt]);
+  expect(owner.session(session.id)?.draft.files).toEqual(files);
+  expect(port.upload).toHaveBeenCalledTimes(2); expect(port.send).not.toHaveBeenCalled();
+  expect(owner.session(session.id)?.uploadIndex).toBe(1);
+});
+it('a replaced authority cannot expose old Session or draft state under reused identities', async () => {
+  const attach = gate<void>(), entered = gate<void>(); let current = true;
+  const { owner, port, start } = fixture({ current: () => current, attach: async () => { entered.resolve(); await attach.promise; } });
+  const work = start(); await entered.promise; const known = owner.session(session.id)!;
+  owner.retireAuthority(); current = false; attach.resolve(); await work;
+  expect(owner.session(session.id)).toBeUndefined(); expect(owner.draft('draft')).toBeUndefined();
+  expect(known.session).toEqual(session); expect(port.send).not.toHaveBeenCalled();
+});
+it('retired input remains inspectable until explicit discard and stale observers cannot discard a newer operation', async () => {
+  const { owner, start } = fixture({ create: async () => { throw Error('rejected'); } });
+  await start(); const old = owner.draft('draft')!;
+  await start({ ...draft, text: 'new input' });
+  owner.discard(old); expect(owner.draft('draft')?.draft.text).toBe('new input');
+  owner.retireAuthority(); const detached = owner.detachedSnapshot()[0];
+  expect(detached.draft.text).toBe('new input'); owner.discard(detached);
+  expect(owner.detachedSnapshot()).toEqual([]);
 });

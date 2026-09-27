@@ -238,8 +238,8 @@ export class AppServerSession {
       return true;
     }
     if (notification.method === "session/summaryInvalidated") {
-      // Durable Session display metadata changed (Issue #386). The TUI holds
-      // no cached Session summary: `/resume` reads the catalog afresh every
+      // Both explicit catalog_changed values are valid. The TUI holds
+      // no live catalog/summary cache: `/resume` reads the catalog afresh every
       // time it opens, so there is nothing here to repair. The notification is
       // accepted and declined — never folded into the conversation projection,
       // and never treated as invalid protocol input.

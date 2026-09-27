@@ -935,7 +935,7 @@ These are behavioral references for whole-Turn ownership, control placement,
 counts and always-open stopped/failed disclosure. No additional upstream source
 was copied. The existing adapted TurnProcess presentation is unchanged. Native
 Journal projection and cursor-based Web composition are rustX-authored. Generated
-App Server v23 imports and their local hashes/import closures move together.
+App Server v24 imports and their local hashes/import closures move together.
 
 ## Issue #407 — Turn/Step projection and System Prompt cells
 
@@ -1025,11 +1025,18 @@ Current source review used DeepSeek Harness commit
 separate finite Job output/control patterns inform rustX-authored ActivityCards.
 The old one-shot/continuable mode branch is deliberately not adopted.
 
-Reviewed local inventory changes update App Server imports to v26 and ToolCard's
+Reviewed local inventory changes update App Server imports to v27 and ToolCard's
 identity discriminator to finite `job`, including its `data-job-id` marker.
 Existing Tool dispatch, primitives, styling, licenses and pinned upstream hashes
 are retained. Inventory local hashes and import closure reflect those edits.
 
 Review corrections retain native Admitting state and typed creation/message/client/
 Workflow activation provenance. Current local hashes and import closures track
-App Server v26; the preceding #409 v24 record describes its historical audit.
+App Server v27; the preceding #409 v27 record describes its historical audit.
+## Issue #419
+
+Client-lifetime first-submit ownership and localized pending presentation are
+independent rustX work using the existing Harness-derived composer and primitives.
+Local hashes/import closures are refreshed; every upstream revision is unchanged.
+Codex startup source was inspected for ownership patterns at
+`985cf47a4eb6084b2ff6b30ebdb1216acda85bb4`; no source was copied or vendored.

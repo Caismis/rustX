@@ -3,7 +3,7 @@ import { Fragment, useState } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { turnProcesses } from '../../bindings/turn-process';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v26';
+import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v27';
 import { conversation, json } from '../../bindings/projection';
 import { agentStatusPlacement, isAgentStatusContext, statusesAt } from '../../bindings/agent-status';
 import { Button } from '../../presentation/primitives/Button';

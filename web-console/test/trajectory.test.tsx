@@ -11,7 +11,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v26';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v27';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -57,7 +57,7 @@ function dragTimeline(from: number, to: number) {
 const timelineFocusOf = () => Object.fromEntries([...document.querySelectorAll<HTMLElement>('[data-owner]')].map(el => [el.dataset.owner, el.dataset.timelineFocus]));
 const focusOverlay = () => document.querySelector<HTMLElement>('[data-focus-range]');
 
-// v23 exposes two independent enums: cover their full Cartesian product,
+// v24 exposes two independent enums: cover their full Cartesian product,
 // including combinations today's all-or-nothing snapshot producer cannot emit.
 const inputMatrix = [
   ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],

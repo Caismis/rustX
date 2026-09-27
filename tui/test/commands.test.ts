@@ -1568,3 +1568,28 @@ it("manual runtime unload is not a product command", async () => {
   assert.equal(h.transport.log.count("session/delete"), 0);
   assert.equal(h.transport.log.count("session/unload"), 0);
 });
+
+it("a replacement attachment does not inherit an old Agent-message submission fence", async t => {
+  const h = await harness(); t.after(() => h.client.close());
+  const old = h.dispatcher.submit('/send-message agent-child old guidance');
+  const first = await nextRequest(h, 'agent/sendMessage', 0);
+  const detaching = h.host.detach(h.session.sessionId);
+  const detach = await nextRequest(h, 'session/detach', 0);
+  h.transport.respond(detach.id, { type: 'detached' });
+  await detaching;
+  const attaching = h.host.attach(h.session.sessionId);
+  const attach = await nextRequest(h, 'session/attach', 1);
+  const replacementTarget = { ...h.target, attachment_id: 'replacement' };
+  h.transport.respond(attach.id, { type: 'attached', target: replacementTarget, snapshot: snapshot(), cursor: runtimeCursor(0) });
+  const replacement = await attaching;
+  h.dispatcher.setSession(replacement);
+  const next = h.dispatcher.submit('/send-message agent-child new guidance');
+  const second = await nextRequest(h, 'agent/sendMessage', 1);
+  assert.deepEqual(paramsOf(second, "agent/sendMessage").target, replacementTarget);
+  h.transport.respond(first.id, { type: 'agent_message', agent_id: 'agent-child', activation_id: 'old', resumed: false });
+  await old;
+  await h.dispatcher.submit('/send-message agent-child new guidance');
+  assert.equal(h.transport.log.count('agent/sendMessage'), 2, 'old completion cannot release the replacement fence');
+  h.transport.respond(second.id, { type: 'agent_message', agent_id: 'agent-child', activation_id: 'new', resumed: false });
+  await next;
+});

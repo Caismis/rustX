@@ -1,0 +1,10 @@
+.notice {
+  width: calc(100% - 48px);
+  max-width: var(--dsh-composer-card-max-width);
+  margin: 8px auto 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.notice pre { white-space: pre-wrap; }

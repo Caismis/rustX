@@ -34,6 +34,28 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     let mut fixtures = vec![
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("create-with-initial-model".into()),
+            call: Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState {
+                    cwd: "/workspace".into(),
+                    model: Some(crate::model::session::SessionModelConfig::of(
+                        crate::model::catalog::ModelRef::parse("provider/selected").unwrap(),
+                    )),
+                },
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("create-with-native-default".into()),
+            call: Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState {
+                    cwd: "/workspace".into(),
+                    model: None,
+                },
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-session-summary".into()),
             call: Method::SessionSummary {
                 session_id: target.session_id.clone(),
@@ -150,6 +172,20 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     model: None,
                     execution_settings: None,
                 }),
+            },
+        }),
+        ProtocolMessage::Notification(Notification {
+            jsonrpc: JsonRpcVersion::V2,
+            notification: NotificationMethod::SummaryInvalidated {
+                session_id: target.session_id.clone(),
+                catalog_changed: false,
+            },
+        }),
+        ProtocolMessage::Notification(Notification {
+            jsonrpc: JsonRpcVersion::V2,
+            notification: NotificationMethod::SummaryInvalidated {
+                session_id: target.session_id.clone(),
+                catalog_changed: true,
             },
         }),
         ProtocolMessage::Notification(Notification {
@@ -630,9 +666,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v26.schema.json", "v26.ts"]);
+        assert_eq!(generations, ["v27.schema.json", "v27.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v26.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v27.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

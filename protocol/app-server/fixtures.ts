@@ -1,6 +1,33 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v26.js';
+import type {ProtocolMessage} from './v27.js';
 export const fixtures = [
+  {
+    "jsonrpc": "2.0",
+    "id": "create-with-initial-model",
+    "method": "session/create",
+    "params": {
+      "settings": {
+        "cwd": "/workspace",
+        "model": {
+          "model": "provider/selected",
+          "requestParams": {},
+          "summaryModel": {
+            "mode": "session"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "create-with-native-default",
+    "method": "session/create",
+    "params": {
+      "settings": {
+        "cwd": "/workspace"
+      }
+    }
+  },
   {
     "jsonrpc": "2.0",
     "id": "exact-session-summary",
@@ -73,7 +100,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 26,
+      "protocol_version": 27,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -90,7 +117,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 26,
+      "protocol_version": 27,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -169,6 +196,22 @@ export const fixtures = [
         "model": null,
         "execution_settings": null
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/summaryInvalidated",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "catalog_changed": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/summaryInvalidated",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "catalog_changed": true
     }
   },
   {

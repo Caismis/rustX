@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v26 envelope and method vocabulary.
+//! Rust authority for the App Server v27 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 26;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 27;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -208,6 +208,8 @@ pub enum Method {
         offset: usize,
         limit: usize,
     },
+    /// Commit Session identity and validated initial settings without composing a runtime.
+    /// An acknowledged identity remains committed when `durability_diagnostic` is present.
     #[serde(rename = "session/create")]
     SessionCreate { settings: SessionPersistentState },
     #[serde(rename = "session/read")]
@@ -663,9 +665,8 @@ pub enum NotificationMethod {
     },
     #[serde(rename = "session/closed")]
     Closed { target: AttachmentTarget },
-    /// This Session's durable display metadata changed on the server after the
-    /// client may already have read it; read `session/summary` again
-    /// (Issue #386).
+    /// Invalidate the named Session summary. When `catalog_changed` is true,
+    /// membership may also have changed; reread `session/list` from native authority.
     ///
     /// It is an *invalidation*, not a value: it carries no metadata, makes no
     /// durability claim beyond the catalog commit that produced it, and is not
@@ -676,13 +677,19 @@ pub enum NotificationMethod {
     /// because observing metadata must never require holding a runtime
     /// attachment.
     ///
-    /// The concrete cause today is the asynchronous display-projection
-    /// publication: the Session's first ordinary root-lineage user message is
+    /// Creation, copies and deletion invalidate catalog membership at visibility;
+    /// asynchronous display-projection
+    /// publication refreshes metadata: the Session's first ordinary root-lineage user message is
     /// committed canonically first, and its derived `preview` is committed to
     /// the catalog afterwards, so a client that read `session/summary` in
     /// between legitimately cached `preview: null`.
     #[serde(rename = "session/summaryInvalidated")]
-    SummaryInvalidated { session_id: SessionId },
+    SummaryInvalidated {
+        session_id: SessionId,
+        /// Membership may have changed; reread the catalog and invalidate the named summary.
+        /// False invalidates only the named Session's display metadata.
+        catalog_changed: bool,
+    },
 }
 
 /// Complete public wire surface used by schema and client generation.
