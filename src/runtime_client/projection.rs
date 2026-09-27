@@ -210,6 +210,10 @@ enum ForegroundSettlement {
 /// the projection folds the coordinator's commits in order.
 pub(crate) struct RuntimeClientProjection {
     journal_through: u64,
+    read_domains_dirty: bool,
+    read_failure: Option<String>,
+    defer_settlements: bool,
+    settlements: Vec<RuntimeClientEvent>,
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
     /// Set when the cursor space is exhausted: publishing stops and
@@ -244,6 +248,10 @@ impl RuntimeClientProjection {
     ) -> Self {
         Self {
             journal_through: 0,
+            read_domains_dirty: false,
+            read_failure: None,
+            defer_settlements: false,
+            settlements: Vec::new(),
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
@@ -479,6 +487,10 @@ impl RuntimeClientProjection {
         if self.exhausted {
             return;
         }
+        if let ConversationObservation::Published { observation, .. } = observation {
+            self.apply(*observation);
+            return;
+        }
         if let ConversationObservation::JournalBatch {
             through,
             observations,
@@ -490,6 +502,7 @@ impl RuntimeClientProjection {
             }
             if let Some(through) = through {
                 self.journal_through = through;
+                self.read_domains_dirty = true;
             } else {
                 self.exhausted = true;
             }
@@ -497,6 +510,13 @@ impl RuntimeClientProjection {
                 self.publish(RuntimeClientEvent::TraceChanged);
             }
             return;
+        }
+        if !matches!(
+            observation,
+            ConversationObservation::Publication { .. }
+                | ConversationObservation::PublicationOpened { .. }
+        ) {
+            self.read_domains_dirty = true;
         }
         let published = self.fold(observation);
         #[cfg(test)]
@@ -1044,6 +1064,7 @@ impl RuntimeClientProjection {
             PublicationPayload::ProposedToolCallCompleted { block_index, call } => {
                 self.set_assembled(call);
                 vec![RuntimeClientEvent::ToolCallAssembled {
+                    arguments_json: call.arguments.to_string(),
                     attempt_id: attempt_id.clone(),
                     message_id,
                     block_index: *block_index,
@@ -1657,7 +1678,22 @@ impl RuntimeClientProjection {
 
     /// Allocate the client cursor, retain the bounded replay entry and wake
     /// subscribers. No subscriber owns an event queue or blocks publication.
+    pub(crate) fn begin_read_model_cut(&mut self) {
+        self.defer_settlements = true;
+    }
+
+    pub(crate) fn finish_read_model_cut(&mut self) {
+        self.defer_settlements = false;
+        for event in std::mem::take(&mut self.settlements) {
+            self.publish(event);
+        }
+    }
+
     fn publish(&mut self, event: RuntimeClientEvent) {
+        if self.defer_settlements && matches!(event, RuntimeClientEvent::AttemptSettled { .. }) {
+            self.settlements.push(event);
+            return;
+        }
         let next = self.cursor.get().checked_add(1);
         let Some(next_value) = next else {
             // Explicit exhaustion: the cursor never wraps, publication
@@ -1668,7 +1704,11 @@ impl RuntimeClientProjection {
             return;
         };
         self.cursor = RuntimeClientCursor::new(next_value);
-        let bytes = if matches!(&event, RuntimeClientEvent::WorkflowsUpdated { .. }) {
+        let bytes = if matches!(
+            &event,
+            RuntimeClientEvent::WorkflowsUpdated { .. }
+                | RuntimeClientEvent::ReadDomainsUpdated { .. }
+        ) {
             serde_json::to_vec(&event)
                 .expect("client event serialization")
                 .len()
@@ -1698,6 +1738,61 @@ impl RuntimeClientProjection {
         }
     }
 
+    /// Refresh only native durable read domains, under the same publication lock.
+    /// Publication suffixes do not dirty these domains or perform durable reads.
+    pub(crate) fn reconcile_read_domains(&mut self, store: &dyn crate::durable::ConversationStore) {
+        self.read_domains(store, true);
+    }
+
+    fn read_domains(&mut self, store: &dyn crate::durable::ConversationStore, publish: bool) {
+        if !self.read_domains_dirty || self.exhausted {
+            return;
+        }
+        let read = (|| {
+            let page = store
+                .load_transcript_page(None, crate::durable::TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?;
+            let mut page = super::snapshot::transcript_page_view(page)
+                .map_err(crate::durable::ConversationStoreError::InvalidReference)?;
+            super::response::decorate_through(store, &mut page, self.journal_through)?;
+            let occupancy = crate::context::occupancy::read(store, self.journal_through)?;
+            Ok::<_, crate::durable::ConversationStoreError>((page, occupancy))
+        })();
+        let (transcript, occupancy) = match read {
+            Ok(value) => value,
+            Err(error) => {
+                self.read_failure = Some(error.to_string());
+                self.wake_subscribers();
+                return;
+            }
+        };
+        self.read_failure = None;
+        self.read_domains_dirty = false;
+        if self.snapshot.transcript != transcript
+            || self.snapshot.context.last_request_occupancy != occupancy
+        {
+            self.snapshot.transcript = transcript.clone();
+            self.snapshot
+                .context
+                .last_request_occupancy
+                .clone_from(&occupancy);
+            if publish {
+                self.publish(RuntimeClientEvent::ReadDomainsUpdated {
+                    transcript,
+                    occupancy,
+                    todos: self.snapshot.todos.clone(),
+                });
+            }
+        }
+    }
+
+    pub(crate) fn initialize_read_domains(
+        &mut self,
+        store: &dyn crate::durable::ConversationStore,
+    ) {
+        self.read_domains_dirty = true;
+        self.read_domains(store, false);
+    }
+
     /// The snapshot and its cursor, linearized together.
     ///
     /// # Errors
@@ -1713,6 +1808,11 @@ impl RuntimeClientProjection {
         self.probe_snapshot_enter();
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        if let Some(message) = &self.read_failure {
+            return Err(RuntimeClientError::RuntimeFailure {
+                message: message.clone(),
+            });
         }
         Ok((self.snapshot.clone(), self.cursor))
     }
@@ -1819,6 +1919,12 @@ impl RuntimeClientProjection {
             return SubscriberPoll::Closed;
         };
         let consumed = subscriber.consumed;
+        if self.read_failure.is_some() {
+            return SubscriberPoll::Lagged {
+                after_cursor: consumed,
+                earliest_serviceable: self.cursor,
+            };
+        }
         if consumed >= self.cursor {
             return SubscriberPoll::Pending;
         }
@@ -1884,6 +1990,11 @@ impl RuntimeClientProjection {
     ) -> Result<&RuntimeClientSnapshot, RuntimeClientError> {
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        if let Some(message) = &self.read_failure {
+            return Err(RuntimeClientError::RuntimeFailure {
+                message: message.clone(),
+            });
         }
         Ok(&self.snapshot)
     }

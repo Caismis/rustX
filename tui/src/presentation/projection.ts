@@ -225,12 +225,7 @@ export function replaceFromSnapshot(
  * Fresh facts win by exact durable identity AND cursor. Only immutable entries
  * strictly before the new window can survive outside it; gaps require replacement.
  */
-export function refreshFromSnapshot(
-  state: PresentationState,
-  snapshot: RuntimeClientSnapshot,
-  cursor: RuntimeClientCursor,
-): PresentationState {
-  const fresh = replaceFromSnapshot(snapshot, cursor);
+function mergeNativeTranscript(state: PresentationState, fresh: PresentationState): PresentationState {
   const incoming = fresh.transcript.filter(isDurableTranscriptEntry);
   const previous = state.transcript.filter(isDurableTranscriptEntry);
   if (!incoming.some(entry => previous.some(old => old.key === entry.key && old.cursor === entry.cursor))) return fresh;
@@ -289,6 +284,15 @@ export function reduce(
   const next = { ...state, cursor: protocolEvent.cursor };
 
   switch (event.type) {
+    case "read_domains_updated": {
+      const fresh = mergeNativeTranscript(state, { ...next,
+        transcript: orderTranscript([...(event.transcript.entries ?? []).map(transcriptEntryFromWire), ...state.transcript.filter(entry => entry.kind === 'streaming')]),
+        transcriptNextCursor: event.transcript.next_cursor ?? undefined,
+        statistics: event.transcript.statistics,
+      });
+      return { ...fresh, context: { ...state.context, last_request_occupancy: event.occupancy },
+        todos: event.todos == null ? undefined : parseSnapshot(event.todos) };
+    }
     case "goal_changed":
       return { ...next, goal: event.view };
     case "workflows_updated":
@@ -504,7 +508,7 @@ export function reduce(
     }
 
     case "tool_call_assembled": {
-      const assembled = JSON.stringify(event.call.arguments);
+      const assembled = event.arguments_json;
       withStreaming(next, state, event.message_id, (message) => ({
         ...message,
         blocks: message.blocks.map((block) =>

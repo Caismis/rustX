@@ -334,9 +334,11 @@ Inactive durable inspection instead captures its own SQLite frontier; it has no
 live publication boundary and receives no live lifecycle overlay: a durable start
 alone remains incomplete. Paging cursors remain Trace-specific in both cases.
 Exact positive lifecycle evidence applies regardless of anchor age. For loaded
-records outside the newest tail, `session/snapshot` accepts at most 512 opaque
-`trace_records` positions and returns `snapshot.trace_updates`, resolved at the
-**same snapshot cut**. These bounded typed patches carry lifecycle/timing, safe
+records outside the newest tail, `session/trace` accepts at most 512 opaque
+`records` positions and returns `page.updates`, resolved at the same represented
+read cut. Explicit `session/snapshot` reconciliation can also return those repairs
+via `trace_records` / `snapshot.trace_updates`; normal Session events require no
+full snapshot. These bounded typed patches carry lifecycle/timing, safe
 request usage/failure details and canonical artifact references (at most 1 KiB
 per update; oversized optional references are omitted with `truncated`); no arbitrary
 payload or raw event is exposed. Background execution ID, Subagent ID, structured

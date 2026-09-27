@@ -273,11 +273,12 @@ pub(crate) struct ClientState {
 
 impl ClientState {
     /// One read-model synchronization step shared by requests and the worker.
-    fn repair(
+    fn repair_semantics(
         &mut self,
         pending: &PendingObservations,
         workflows: Option<&crate::runtime::workflow::read_model::WorkflowReadModel>,
     ) {
+        self.projection.begin_read_model_cut();
         self.apply_pending(pending);
         if let Some(workflows) = workflows
             && !pending.has_unpublished()
@@ -369,6 +370,8 @@ pub(crate) struct ClientInner {
     /// Whether the projection worker task was spawned.
     worker_started: AtomicBool,
     worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Joins only the synchronous Store read, never a parked semantic fold.
+    store_reads: Arc<Mutex<()>>,
     #[cfg(test)]
     trace_cut_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
@@ -392,6 +395,9 @@ impl InteractionPublicationAuthority for RootInteractionPublicationAuthority {
 /// which is the projection worker's terminal condition.
 impl Drop for ClientInner {
     fn drop(&mut self) {
+        // Join an in-progress synchronous read cut before releasing storage.
+        // The idle worker holds only a weak Store reference.
+        let _cut = self.store_reads.lock().expect("projection Store read lock");
         self.pending.close();
     }
 }
@@ -405,12 +411,16 @@ impl ClientInner {
             .state
             .lock()
             .expect("runtime client host lock poisoned");
-        guard.repair(
+        guard.repair_semantics(
             &self.pending,
             self.runtime
                 .as_ref()
                 .map(|runtime| runtime.tool_runtime().workflows()),
         );
+        if !self.pending.has_unpublished() {
+            guard.projection.reconcile_read_domains(self.store.as_ref());
+        }
+        guard.projection.finish_read_model_cut();
         guard
     }
 
@@ -443,24 +453,6 @@ impl ClientInner {
     /// Admission follows runtime binding, never external attachment presence.
     pub(crate) fn admits_interaction_publication(&self) -> bool {
         self.runtime.is_some() && !self.read_only
-    }
-
-    /// Refreshes the bounded transcript bootstrap page from the durable
-    /// authority. The projection retains only this read result; it never
-    /// owns transcript bodies or an unbounded historical collection.
-    fn refresh_transcript_page(&self, state: &mut ClientState) -> Result<(), RuntimeClientError> {
-        let page = self
-            .store
-            .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
-            .map_err(|error| RuntimeClientError::RuntimeFailure {
-                message: format!("durable transcript bootstrap failed: {error}"),
-            })?;
-        let page =
-            transcript_page_view(page).map_err(|message| RuntimeClientError::RuntimeFailure {
-                message: format!("durable transcript bootstrap is invalid: {message}"),
-            })?;
-        state.projection.set_transcript_page(page);
-        Ok(())
     }
 
     /// Rebuilds a read-only projection from the durable authorities. This is
@@ -519,6 +511,8 @@ impl ClientInner {
             return;
         }
         let state = self.state.clone();
+        let store = Arc::downgrade(&self.store);
+        let store_reads = Arc::clone(&self.store_reads);
         let pending = Arc::clone(&self.pending);
         let workflow_state = self
             .runtime
@@ -538,13 +532,24 @@ impl ClientInner {
                         }
                     } => {},
                 }
+                let mut guard = state.lock().expect("runtime client host lock poisoned");
                 if pending.is_closed() {
                     break;
                 }
-                state
-                    .lock()
-                    .expect("runtime client host lock poisoned")
-                    .repair(&pending, workflow_state.as_ref());
+                guard.repair_semantics(&pending, workflow_state.as_ref());
+                {
+                    let _read = store_reads.lock().expect("projection Store read lock");
+                    if pending.is_closed() {
+                        break;
+                    }
+                    let Some(store) = store.upgrade() else {
+                        break;
+                    };
+                    if !pending.has_unpublished() {
+                        guard.projection.reconcile_read_domains(store.as_ref());
+                    }
+                }
+                guard.projection.finish_read_model_cut();
             }
             #[cfg(test)]
             pending.signal_worker_exit();
@@ -640,8 +645,6 @@ impl ClientInner {
         }
         if self.read_only {
             self.refresh_durable_projection(&mut state)?;
-        } else {
-            self.refresh_transcript_page(&mut state)?;
         }
         let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
         let next_attachment_seq = state
@@ -1000,8 +1003,6 @@ impl ClientInner {
         let mut state = self.lock_snapshot_state()?;
         if self.read_only {
             self.refresh_durable_projection(&mut state)?;
-        } else {
-            self.refresh_transcript_page(&mut state)?;
         }
         let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
         drop(state);
@@ -1068,6 +1069,7 @@ impl ClientInner {
         &self,
         before: Option<super::trace::TraceCursor>,
         limit: usize,
+        records: Vec<super::trace::TraceCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_session_runtime_live()?;
         if limit == 0 || limit > super::trace::TRACE_PAGE_LIMIT {
@@ -1101,6 +1103,11 @@ impl ClientInner {
         if self.runtime.is_some() {
             super::trace::repair_records(&mut page.records, &current);
         }
+        page.updates = super::trace::TraceProjection::through(self.store.as_ref(), through)
+            .refresh(&records, self.runtime.as_ref().map(|_| &current))
+            .map_err(|_| RuntimeClientError::InvalidRequest {
+                message: "Invalid Trace refresh".into(),
+            })?;
         Ok(RuntimeClientResult::TracePage { page })
     }
 
@@ -1992,6 +1999,7 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
+            store_reads: Arc::new(Mutex::new(())),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
         });
@@ -2091,6 +2099,7 @@ impl RuntimeClientHost {
             replay_limit,
         );
         projection.bootstrap(&seed);
+        projection.initialize_read_domains(store.as_ref());
         // The effective native Agent Extension composition of the runtime
         // this host is bound to (Issue #256). It is read from the runtime's
         // own materialized extension owners, so a root host projects the
@@ -2121,6 +2130,7 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
+            store_reads: Arc::new(Mutex::new(())),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
         });
@@ -4036,6 +4046,149 @@ mod tests {
         ));
     }
 
+    /// Captures real native authority on both sides of a contiguous stream.
+    /// The TypeScript regression consumes this wire capture; its expected state
+    /// is produced only by an independent native snapshot read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // One end-to-end capture keeps the independent authorities visible.
+    async fn incremental_projection_independent_snapshot_capture() {
+        use crate::app_server::protocol::{
+            AttachmentTarget, JsonRpcVersion, MethodResult, Notification, NotificationMethod,
+            RequestId as WireId, Response, Success,
+        };
+        let (tool, _started, release) = ParkingBackgroundTool::new();
+        release.send_replace(true);
+        let definition = ToolDefinition {
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            ..tool.definition.clone()
+        };
+        let mut tools = ToolRegistry::new();
+        tools.register(definition.clone(), Arc::new(tool)).unwrap();
+        let call_id = ToolCallId::new("capture-call");
+        let script = vec![
+            GatedStep::Emit(ModelEvent::Started),
+            GatedStep::Emit(ModelEvent::ReasoningDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "reasoning".into(),
+            }),
+            GatedStep::Emit(ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(1),
+                text: "first ".into(),
+            }),
+            GatedStep::Emit(ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(1),
+                text: "second".into(),
+            }),
+            GatedStep::Emit(ModelEvent::RefusalDelta {
+                block_index: ContentBlockIndex::new(2),
+                text: "refusal".into(),
+            }),
+            GatedStep::Emit(ModelEvent::ToolCallStarted {
+                block_index: ContentBlockIndex::new(3),
+                call: crate::tools::types::ToolCallStart {
+                    id: call_id.clone(),
+                    tool_id: definition.id.clone(),
+                    name: definition.name.clone(),
+                },
+            }),
+            GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+                block_index: ContentBlockIndex::new(3),
+                call_id: call_id.clone(),
+                arguments_delta: "{".into(),
+            }),
+            GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+                block_index: ContentBlockIndex::new(3),
+                call_id: call_id.clone(),
+                arguments_delta: "}".into(),
+            }),
+            GatedStep::Emit(ModelEvent::ToolCallCompleted {
+                block_index: ContentBlockIndex::new(3),
+                call: ToolCall {
+                    id: call_id,
+                    tool_id: definition.id,
+                    name: definition.name,
+                    arguments: serde_json::json!({}),
+                },
+            }),
+            GatedStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ];
+        let (_, fixture) =
+            host_fixture(vec![script, one_turn_stop()], tools, status_engine()).await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let (initial, c) = fixture.host.snapshot().unwrap();
+        let subscription = attachment.subscribe_events(c).unwrap();
+        fixture
+            .host
+            .submit_inbound(submit_content("projection equivalence"))
+            .unwrap();
+        let mut events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        let (expected, n) = fixture.host.snapshot().unwrap();
+        while events.last().is_none_or(|event| event.cursor < n) {
+            let EventDelivery::Event(event) = subscription.next().await else {
+                panic!("contiguous event");
+            };
+            events.push(event);
+        }
+        let mut cursor = c.get();
+        for event in &events {
+            cursor += 1;
+            assert_eq!(event.cursor.get(), cursor);
+        }
+        assert_eq!(cursor, n.get());
+        assert!(expected.transcript.statistics.is_some());
+        assert!(
+            expected
+                .transcript
+                .entries
+                .iter()
+                .any(|entry| entry.completed_response.is_some())
+        );
+        let snapshot = |value, cursor| {
+            serde_json::to_value(Response::Success(Box::new(Success {
+                jsonrpc: JsonRpcVersion::V2,
+                id: WireId::String("capture".into()),
+                result: MethodResult::Snapshot {
+                    snapshot: Box::new(value),
+                    cursor,
+                },
+            })))
+            .unwrap()
+        };
+        let target = AttachmentTarget {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000420",
+            ),
+            conversation_id: initial.conversation_id.clone(),
+            runtime_incarnation: serde_json::from_str("1").unwrap(),
+            attachment_id: attachment.attachment_id().clone(),
+        };
+        let wire: Vec<_> = events
+            .into_iter()
+            .map(|event| Notification {
+                jsonrpc: JsonRpcVersion::V2,
+                notification: NotificationMethod::Event {
+                    target: target.clone(),
+                    cursor: event.cursor,
+                    event: Box::new(event.event),
+                },
+            })
+            .collect();
+        if let Ok(path) = std::env::var("RUSTX_PROJECTION_CAPTURE") {
+            std::fs::write(path, serde_json::to_string_pretty(&serde_json::json!({
+                "initial": snapshot(initial, c), "events": wire, "expected": snapshot(expected, n),
+            })).unwrap()).unwrap();
+        }
+    }
+
     /// Submitting while idle admits and runs the attempt through the
     /// conversation runtime's single admission path; the admission response
     /// is accepted, not finished; the attempt settles and the canonical
@@ -5540,7 +5693,7 @@ mod tests {
         assert_eq!(before.trace, baseline.trace);
         assert!(matches!(subscription.try_next(), EventDelivery::Pending));
         // Historical reads have their own frontier, but never fold the queue or move C.
-        let _ = inner.trace_page(None, 32).unwrap();
+        let _ = inner.trace_page(None, 32, Vec::new()).unwrap();
         assert_eq!(host_projection_snapshot(&inner).1, cursor);
         inner.pending.push(ConversationObservation::Published {
             journal_sequence: committed.sequence,
@@ -5654,7 +5807,7 @@ mod tests {
         );
         assert_eq!(during_terminal.trace_updates[0].timing.duration_ms, None);
         let RuntimeClientResult::TracePage { page: historical } =
-            inner.trace_page(None, 32).unwrap()
+            inner.trace_page(None, 32, Vec::new()).unwrap()
         else {
             panic!("Trace page")
         };

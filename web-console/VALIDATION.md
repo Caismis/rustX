@@ -1,3 +1,10 @@
+# Current incremental projection gates (#420)
+
+Current architecture and acceptance mapping: [CHAT.md](CHAT.md) and
+[Issue 420 evidence](../docs/issue-420/README.md). Ordinary events fold native facts;
+streaming and settlement no longer imply snapshot rereads. The historical issue
+reports below describe their original delivery cuts, not a compatibility mode.
+
 # Historical Web validation records (before CFG3)
 
 This file preserves dated evidence from earlier Web issues. Its configuration,
@@ -289,7 +296,7 @@ The attachment-lifecycle review correction and its fresh validation are recorded
 in [REVIEW-301.md](REVIEW-301.md). The initial implementation record below predates
 that correction.
 
-Recorded 2026-09-14 on Linux, Node v24.20.0, pnpm 11.13.1, Cargo 1.95.0 and
+Recorded 2026-09-14 on Linux, Node v25.20.0, pnpm 11.13.1, Cargo 1.95.0 and
 uv 0.11.12. This records executed checks, not a claim of manual browser coverage.
 
 ## Base and ownership audit

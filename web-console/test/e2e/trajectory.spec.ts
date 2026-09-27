@@ -1,3 +1,4 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 
@@ -6,7 +7,7 @@ for (const width of [1440, 390]) {
     test(`T1-13/15 semantic ledger, facets and keyboard ${width} ${theme}`, async ({ page }) => {
       const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
       await page.setViewportSize({ width, height: 844 });
-      await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+      await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
       if (theme === 'dark') await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
       const ledger = page.getByRole('table', { name: 'Trace ledger' });
       await expect(page).toHaveTitle('Trajectory presentation contracts');
@@ -38,7 +39,7 @@ for (const width of [1440, 390]) {
 
 test('T1-13 library drag, keyboard separator, double-click reset and narrow Ledger on wide viewport', async ({ page }) => {
   await page.setViewportSize({ width: 1050, height: 844 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
   await page.locator('[data-display-type="RequestBoundary"][data-owner="trace:9"]').click();
   const panel = page.locator('#inspector[data-panel]');
   const separator = page.getByRole('separator');
@@ -58,7 +59,7 @@ test('T1-13 library drag, keyboard separator, double-click reset and narrow Ledg
 });
 
 test('T1-08/09/15 Calls warnings, independent background, search and truncated failed Request Diff', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
   const ledger = page.getByRole('table', { name: 'Trace ledger' });
   await page.getByRole('toolbar', { name: 'Trajectory controls' }).getByRole('button', { name: 'Collapse Calls' }).click();
   await expect(ledger.locator('[data-display-type="CollapsedCallSummary"]')).toContainText('2 proposed · 1 loaded matching executions · 1 failed');
@@ -81,7 +82,7 @@ test('T1-08/09/15 Calls warnings, independent background, search and truncated f
 
 for (const scenario of ['long', 'threshold']) {
   test(`T1-10/11 semantic prepend and tail isolation ${scenario}`, async ({ page }) => {
-    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?${scenario}`);
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?${scenario}`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     const expected = scenario === 'long' ? 480 : 90;
     await expect(page.locator('[data-native-count]')).toHaveAttribute('data-native-count', String(expected));
@@ -113,7 +114,7 @@ for (const scenario of ['long', 'threshold']) {
 
 for (const kind of ['request', 'tool']) {
   test(`T1-04/06/10 structural ${kind} anchor stays structural through threshold prepend`, async ({ page }) => {
-    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?threshold&structure${kind === 'tool' ? '&tool' : ''}`);
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?threshold&structure${kind === 'tool' ? '&tool' : ''}`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const segment = ledger.locator('[data-display-type="GroupHeader"][data-anchor="trace:100"]');
@@ -156,7 +157,7 @@ for (const kind of ['request', 'tool']) {
 }
 
 test('T1-04 Calls summary keeps its display identity until explicit expansion', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
   const ledger = page.getByRole('table', { name: 'Trace ledger' });
   await page.getByRole('toolbar').getByRole('button', { name: 'Collapse Calls' }).click();
   const summary = ledger.locator('[data-display-type="CollapsedCallSummary"][data-owner="trace:4"]');
@@ -178,7 +179,7 @@ test('T1-04 Calls summary keeps its display identity until explicit expansion', 
 for (const width of [1440, 390]) {
   test(`407: native identity survives renumbering, search and timeline navigation at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?renumber');
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?renumber`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     const selected = ledger.locator('[data-display-type="SystemPromptCell"][data-owner="trace:3"]');
     await selected.click();
@@ -212,7 +213,7 @@ for (const width of [1440, 390]) {
 }
 
 test('407: virtual sticky Turn and drag focus retain native ownership through prepend', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?long&renumber');
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?long&renumber`);
   const ledger = page.getByRole('table', { name: 'Trace ledger' });
   await ledger.evaluate(el => { el.scrollTop = 1000; el.dispatchEvent(new Event('scroll')); });
   const header = ledger.locator('[data-display-type="TurnHeader"]');
@@ -245,7 +246,7 @@ test('407: virtual sticky Turn and drag focus retain native ownership through pr
 for (const width of [1440, 390]) {
   test(`407: Timeline gesture and viewport cannot cross a Trace epoch at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?long');
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?long`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     const epoch = page.locator('[data-trace-epoch]');
     const canvas = page.getByLabel('Timeline navigation: arrow keys pan, Escape clears focus');
@@ -292,7 +293,7 @@ for (const width of [1440, 390]) {
 for (const width of [1440, 390]) {
   test(`407: exact native Turn/Step evidence is inspectable by keyboard without detail reads at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html');
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     const inspector = page.getByRole('complementary', { name: 'Trace structure inspector' });
     const fact = (label: string) => inspector.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::dd[1]');
@@ -320,7 +321,7 @@ for (const width of [1440, 390]) {
 
 for (const kind of ['request', 'tool']) {
   test(`407: selected ${kind} cell and detail retain focus across virtual threshold`, async ({ page }) => {
-    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?threshold${kind === 'tool' ? '&tool' : ''}`);
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?threshold${kind === 'tool' ? '&tool' : ''}`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const row = ledger.locator(`[data-display-type="${kind === 'tool' ? 'RecordRow' : 'RequestBoundary'}"][data-owner="trace:100"]`);
@@ -339,7 +340,7 @@ for (const kind of ['request', 'tool']) {
 for (const width of [1440, 390]) {
   test(`structural search shares native Timeline membership and restores folded Turns at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?structural-search');
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?structural-search`);
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     await ledger.getByRole('button', { name: 'Fold Turn 1' }).click();
     await ledger.getByRole('button', { name: 'Fold Turn 2' }).click();
@@ -370,7 +371,7 @@ for (const width of [1440, 390]) {
 for (const width of [1440, 390]) {
   test(`407: a real held drag cannot cross same-epoch prepend at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto('http://127.0.0.1:5174/test/fixtures/trajectory.html?renumber');
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?renumber`);
     const canvas = page.getByLabel('Timeline navigation: arrow keys pan, Escape clears focus');
     const box = (await canvas.boundingBox())!;
     const epoch = await page.locator('[data-trace-epoch]').getAttribute('data-trace-epoch');
@@ -405,7 +406,7 @@ for (const dimension of ['prompt', 'tools']) {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    await page.goto(`http://127.0.0.1:5174/test/fixtures/trajectory.html?mixed=${dimension}`);
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?mixed=${dimension}`);
     await expect(page).toHaveTitle('Trajectory presentation contracts');
     const cell = page.locator('[data-display-type="SystemPromptCell"]');
     await expect(cell).toContainText(dimension === 'prompt' ? 'System Prompt Updated' : 'Tools Updated');

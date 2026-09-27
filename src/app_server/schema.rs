@@ -219,6 +219,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             after_cursor: crate::runtime_client::RuntimeClientCursor::new(EXACT),
         },
         Method::Trace {
+            records: Vec::new(),
             target: target.clone(),
             before: Some(
                 serde_json::from_str("\"trace:9007199254740993\"").expect("Trace cursor fixture"),
@@ -635,9 +636,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v24.schema.json", "v24.ts"]);
+        assert_eq!(generations, ["v25.schema.json", "v25.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v24.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v25.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

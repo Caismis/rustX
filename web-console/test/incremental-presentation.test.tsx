@@ -1,0 +1,49 @@
+import { Profiler } from 'react';
+import { act, cleanup, render, fireEvent } from '@testing-library/react';
+import { afterEach, expect, it } from 'vitest';
+import { Server } from './fixture';
+import { ConversationLive } from '../src/app/agent/ConversationLive';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v25';
+const servers: Server[] = [];
+afterEach(() => { cleanup(); for (const s of servers) s.client.disconnect(); servers.length = 0; });
+const emit = (s: Server, event: RuntimeClientEvent) => {
+  s.cursor++;
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: s.target('A'), cursor: String(s.cursor), event } });
+};
+it('native message id keeps both row and Assistant element through canonical correction', async () => {
+  const s = new Server(); servers.push(s); await s.attached('A');
+  const ui = render(<ConversationLive client={s.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/>);
+  await act(async () => {
+    emit(s, { type: 'attempt_started', attempt_id: 'a' });
+    emit(s, { type: 'assistant_message_started', attempt_id: 'a', message_id: 'm' });
+  });
+  await act(async () => { emit(s, { type: 'assistant_reasoning_delta', attempt_id: 'a', message_id: 'm', block_index: 0, delta: 'reasoning stays expanded' }); });
+  const reasoning = ui.container.querySelector('[data-variant="think"]')!;
+  fireEvent.click(reasoning.querySelector('[role="button"]')!);
+  expect(reasoning.getAttribute('data-expanded')).toBe('true');
+  const row = ui.container.querySelector('[data-chat-anchor-key="message:m"]');
+  const assistant = ui.container.querySelector('[aria-label="Streaming response"]');
+  expect(row).toBeTruthy(); expect(assistant).toBeTruthy();
+  for (let i = 0; i < 20; i++) await act(async () => { emit(s, { type: 'assistant_text_delta', attempt_id: 'a', message_id: 'm', block_index: 1, delta: 'old' }); });
+  await act(async () => { emit(s, { type: 'message_committed', attempt_id: 'a', transcript_cursor: '1', message: { id: 'm', role: 'assistant', content: [{ type: 'reasoning', text: 'reasoning stays expanded' }, { type: 'text', text: 'native final correction' }] } }); });
+  expect(ui.container.querySelectorAll('[data-chat-anchor-key="message:m"]')).toHaveLength(1);
+  expect(ui.container.querySelector('[data-chat-anchor-key="message:m"]')).toBe(row);
+  expect(ui.container.querySelector('[aria-label="Assistant response"]')).toBe(assistant);
+  expect(ui.container.querySelector('[data-variant="think"]')).toBe(reasoning);
+  expect(reasoning.getAttribute('data-expanded')).toBe('true');
+  expect(row?.textContent).toContain('native final correction'); expect(row?.textContent).not.toContain('oldold');
+  expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight).toBeUndefined();
+});
+it('Trace, summary and Goal updates preserve transcript references and React commits; controls remain observable', async () => {
+  const s = new Server(); servers.push(s); await s.attached('A');
+  s.handlers.set('session/trace', () => ({ type: 'trace', page: { records: [] } }));
+  let commits = 0;
+  render(<Profiler id="chat" onRender={() => commits++}><ConversationLive client={s.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></Profiler>);
+  const before = s.client.getSnapshot().views.A.snapshot!, count = commits;
+  await act(async () => { emit(s, { type: 'trace_changed' }); emit(s, { type: 'goal_changed', view: { current: null } }); await s.client.readSessionSummary('A'); });
+  const after = s.client.getSnapshot().views.A.snapshot!;
+  expect(after.messages).toBe(before.messages); expect(after.transcript).toBe(before.transcript);
+  expect(commits).toBe(count);
+  await act(async () => { emit(s, { type: 'runtime_shutdown' }); });
+  expect(commits).toBe(count + 1);
+});

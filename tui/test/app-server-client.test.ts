@@ -103,8 +103,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 24);
-    assert.equal(params.protocol_version, 24);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 25);
+    assert.equal(params.protocol_version, 25);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -140,7 +140,7 @@ describe("initialization", () => {
       protocol_version: 6,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 6, this client speaks 24/);
+    await assert.rejects(pending, /negotiated protocol 6, this client speaks 25/);
   });
 });
 
@@ -365,12 +365,8 @@ describe("Session routing and stale fencing", () => {
     const session = await attached(client, transport, target());
     // "10" < "5" lexicographically and 10 > 5 numerically. A client comparing
     // text would silently drop every event past cursor 9.
-    session.applyNotification(
-      notification("session/event", {
-        target: session.target,
-        cursor: runtimeCursor(10),
-        event: { type: "runtime_shutdown" },
-      }),
+    for (let cursor = 6; cursor <= 10; cursor++) session.applyNotification(
+      notification("session/event", { target: session.target, cursor: runtimeCursor(cursor), event: { type: "runtime_shutdown" } }),
     );
     assert.equal(session.state.runtimeShutdown, true);
     assert.equal(session.state.cursor, "10");
@@ -586,18 +582,17 @@ describe("typed results", () => {
   });
 });
 
-it("a newer repair fences an older snapshot even when responses arrive out of order", async () => {
+it("overlapping repair requests share one authoritative acquisition", async () => {
   const { client, transport } = await initialized();
   const session = await attached(client, transport);
   const older = session.resync();
   const newer = session.resync();
-  const requests = await transport.log.awaitMethod("session/snapshot", 2);
-  transport.respond(requests[1]!.id, { type: "snapshot", snapshot: snapshot(), cursor: "20" });
-  const subscribe = (await transport.log.awaitMethod("session/subscribe"))[0]!;
-  transport.respond(subscribe.id, { type: "subscribed", after_cursor: "20" });
-  await newer;
-  transport.respond(requests[0]!.id, { type: "snapshot", snapshot: snapshot({ shutting_down: true }), cursor: "10" });
-  await older;
+  const [request] = await transport.log.awaitMethod("session/snapshot");
+  assert.equal(transport.log.count("session/snapshot"), 1);
+  transport.respond(request!.id, { type: "snapshot", snapshot: snapshot(), cursor: "20" });
+  const [subscribe] = await transport.log.awaitMethod("session/subscribe");
+  transport.respond(subscribe!.id, { type: "subscribed", after_cursor: "20" });
+  await Promise.all([older, newer]);
   assert.equal(session.state.cursor, "20");
   assert.equal(session.state.runtimeShutdown, false);
   assert.equal(transport.log.count("session/subscribe"), 1);

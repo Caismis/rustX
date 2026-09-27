@@ -1,10 +1,10 @@
 import { useTranslation } from '../../locale/react';
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v24';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v25';
 import { json } from '../../bindings/projection';
 import { SubagentCard, WorkflowCard, workflowKey } from '../components/ActivityCards';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { ToolArtifacts } from '../components/Artifact';
-export function RuntimeFacts({ snapshot }: { snapshot: RuntimeClientSnapshot }) {
+export function RuntimeFacts({ snapshot }: { snapshot: Pick<RuntimeClientSnapshot, 'subagents' | 'background' | 'workflows'> }) {
   const tx = useTranslation();
   const children = snapshot.subagents ?? [];
   const background = snapshot.background ?? [];

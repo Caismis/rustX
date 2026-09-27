@@ -604,7 +604,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 24, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 25, requested: 12 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -1600,10 +1600,10 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
                 }).collect()}).await;
         f.gates[0].wait_entered().await;
         let before = call(&connection, 901, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
-        let read = call(&connection, 902, Method::Trace { target: target.clone(), before: None, limit: 32 }).await;
+        let read = call(&connection, 902, Method::Trace { records: Vec::new(), target: target.clone(), before: None, limit: 32 }).await;
         let MethodResult::Trace { page } = read else { panic!("Trace page"); };
         assert!(page.records.iter().any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request));
-        assert!(matches!(rejected(&connection, Method::Trace { target: target.clone(), before: None, limit: 0 }).await, ErrorData::InvalidParams));
+        assert!(matches!(rejected(&connection, Method::Trace { records: Vec::new(), target: target.clone(), before: None, limit: 0 }).await, ErrorData::InvalidParams));
         let after = call(&connection, 903, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
         assert_eq!(before, after, "Trace reads change no live cursor, inbound, interactions, attempt, surface or transcript");
         connection.close();

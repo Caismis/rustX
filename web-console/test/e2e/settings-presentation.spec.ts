@@ -1,3 +1,4 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 /** Settings visual convergence and browser acceptance (#393).
  *
  * Every reference below is a real rendered state of the deterministic Settings
@@ -10,7 +11,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { choose, closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
-const fixture = 'http://127.0.0.1:5174/test/fixtures/settings.html';
+const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
 const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
 const longProvider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
 const longModel = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-exceptionally-long-identity';
