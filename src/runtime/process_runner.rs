@@ -58,9 +58,9 @@
 //!
 //! # Test seams
 //!
-//! [`RunnerTestControl`] is a `#[cfg(test)]`-only seam bundle mirroring the
-//! M5 Bash seams; in non-test builds it is an uninhabited shell, so no
-//! production behavior is affected.
+//! [`RunnerTestControl`] owns private fixture configuration, separate from command data.
+//! Fault injection is compiled only in tests; external diagnostic fixtures
+//! explicitly supply the bounded trace/gate capability.
 
 use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
@@ -117,8 +117,8 @@ pub(crate) struct SupervisedCommandSpec {
     pub command: String,
     /// The explicit working directory of the supervisor unit.
     pub cwd: PathBuf,
-    /// The full explicit child environment (`env_clear()` + these entries).
-    pub environment: Vec<(String, String)>,
+    /// Only the executed command receives these entries; never the supervisor.
+    pub command_environment: Vec<(String, String)>,
     /// The finite invocation deadline; `None` means no deadline.
     pub timeout: Option<Duration>,
     /// The runtime cancellation signal owning the invocation.
@@ -620,8 +620,9 @@ pub(crate) use crate::runtime::supervised_unit::{
 
 /// The test-only control seams of one owned invocation.
 ///
-/// In non-test builds this type is an empty shell, so no production
-/// behavior is affected. The seams exist so in-crate regressions can
+/// In non-test builds only the explicit external diagnostic fixture capability
+/// remains; ordinary tool environment data can never construct this control.
+/// The seams exist so in-crate regressions can
 /// observe the exact shell-exit boundary, deterministically inject
 /// supervisor setup / wait / signal / command-spawn failures, model the
 /// ownership release transition, record every process-group signal attempt,
@@ -630,6 +631,7 @@ pub(crate) use crate::runtime::supervised_unit::{
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
 #[derive(Clone)]
 pub(crate) struct RunnerTestControl {
+    pub(crate) diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
     #[cfg(test)]
     pub(crate) pause_at_shell_exit: bool,
     #[cfg(test)]
@@ -680,6 +682,8 @@ impl RunnerTestControl {
     #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self {
+            diagnostics:
+                crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
             pause_at_shell_exit: false,
             lifecycle: RunnerLifecycleHook::new(),
             nested_authority: None,
@@ -699,12 +703,15 @@ impl RunnerTestControl {
         }
     }
 
-    /// A control bundle without failures (non-test build: fieldless shell).
+    /// A control bundle with external diagnostics disabled.
     #[cfg_attr(not(test), allow(dead_code))] // test-only seams
     #[must_use]
     #[cfg(not(test))]
     pub(crate) fn new() -> Self {
-        Self {}
+        Self {
+            diagnostics:
+                crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
+        }
     }
 
     #[cfg(test)]
@@ -841,12 +848,14 @@ impl SupervisedCommandRunner {
         let mut supervisor = tokio::process::Command::new(supervisor_binary());
         supervisor.current_dir(&spec.cwd);
         supervisor.env_clear();
-        for (key, value) in &spec.environment {
-            supervisor.env(key, value);
+        supervisor.env(
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+            serde_json::to_string(&spec.command_environment)
+                .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+        );
+        if let Some(control) = &control {
+            control.diagnostics.configure(&mut supervisor);
         }
-        // Private continuation authority comes only from the typed descriptor
-        // below; caller environment cannot install or replay it.
-        supervisor.env_remove("RUSTX_PHYSICAL_CONTINUATION");
         supervisor.env(SUPERVISOR_ROLE_ENV, ROLE_OUTER);
         supervisor.env(COMMAND_ENV, &spec.command);
         #[cfg(test)]
@@ -921,15 +930,10 @@ impl SupervisedCommandRunner {
                 settled: None,
                 exit_status: None,
                 terminate_sent: false,
-                trace: spec
-                    .environment
-                    .iter()
-                    .find(|(key, _)| {
-                        key == crate::tools::native::bash_supervisor::diagnostics::TRACE_ENV
-                    })
-                    .map(|(_, path)| {
-                        crate::tools::native::bash_supervisor::diagnostics::Trace::new(path)
-                    }),
+                trace: control
+                    .as_ref()
+                    .and_then(|control| control.diagnostics.trace.as_ref())
+                    .map(crate::tools::native::bash_supervisor::diagnostics::Trace::new),
                 terminate_deadline: None,
                 terminal_event_held: false,
                 anchor_gate: crate::runtime::nested_containment::AnchorGate::Idle,
@@ -1631,7 +1635,10 @@ mod tests {
         SupervisedCommandSpec {
             command: command.to_owned(),
             cwd: std::env::temp_dir(),
-            environment: vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())],
+            command_environment: vec![(
+                "PATH".to_owned(),
+                "/usr/local/bin:/usr/bin:/bin".to_owned(),
+            )],
             timeout: Some(Duration::from_secs(30)),
             cancellation,
         }
@@ -1863,7 +1870,7 @@ mod tests {
                         SupervisedCommandSpec {
                             command: format!("touch {}", marker.display()),
                             cwd: std::env::temp_dir(),
-                            environment: vec![(
+                            command_environment: vec![(
                                 "PATH".to_owned(),
                                 "/usr/local/bin:/usr/bin:/bin".to_owned(),
                             )],
@@ -1928,7 +1935,7 @@ mod tests {
                         SupervisedCommandSpec {
                             command: format!("touch {}", marker.display()),
                             cwd: std::env::temp_dir(),
-                            environment: vec![(
+                            command_environment: vec![(
                                 "PATH".to_owned(),
                                 "/usr/local/bin:/usr/bin:/bin".to_owned(),
                             )],
@@ -1979,7 +1986,7 @@ mod tests {
                 SupervisedCommandSpec {
                     command: format!("touch {}", marker.display()),
                     cwd: std::env::temp_dir(),
-                    environment: vec![(
+                    command_environment: vec![(
                         "PATH".to_owned(),
                         "/usr/local/bin:/usr/bin:/bin".to_owned(),
                     )],
@@ -2072,7 +2079,7 @@ mod tests {
                 SupervisedCommandSpec {
                     command: "printf runner-result".to_owned(),
                     cwd: std::env::temp_dir(),
-                    environment: vec![(
+                    command_environment: vec![(
                         "PATH".to_owned(),
                         "/usr/local/bin:/usr/bin:/bin".to_owned(),
                     )],

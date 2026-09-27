@@ -142,6 +142,20 @@ impl SettlementCell {
 #[cfg(unix)]
 #[derive(Clone)]
 pub(crate) struct InteractiveTestControl {
+    #[cfg(test)]
+    outer_fail: Option<String>,
+    #[cfg(test)]
+    fail_signal: Option<String>,
+    #[cfg(test)]
+    anchor_pid_file: Option<String>,
+    #[cfg(test)]
+    inner_exit_before_connect: Option<String>,
+    #[cfg(test)]
+    fail_setsid: Option<String>,
+    #[cfg(test)]
+    inner_stall_before_anchor: Option<String>,
+    #[cfg(test)]
+    fail_pre_anchor_reap: Option<String>,
     /// Forces the emergency containment of a lost unit to report
     /// [`EmergencyContainment::AnchorUnavailable`].
     #[cfg(test)]
@@ -166,6 +180,13 @@ impl InteractiveTestControl {
     #[cfg(test)]
     fn new() -> Self {
         Self {
+            outer_fail: None,
+            fail_signal: None,
+            anchor_pid_file: None,
+            inner_exit_before_connect: None,
+            fail_setsid: None,
+            inner_stall_before_anchor: None,
+            fail_pre_anchor_reap: None,
             force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             force_accept_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             observed_events: Arc::new(Mutex::new(Vec::new())),
@@ -178,6 +199,52 @@ impl InteractiveTestControl {
     #[cfg(not(test))]
     fn new() -> Self {
         Self {}
+    }
+
+    #[cfg(test)]
+    fn configure_supervisor(&self, supervisor: &mut tokio::process::Command) {
+        if let Some(value) = &self.outer_fail {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::OUTER_FAIL_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.fail_signal {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::FAIL_SIGNAL_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.anchor_pid_file {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::ANCHOR_PID_FILE_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.inner_exit_before_connect {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::INNER_EXIT_BEFORE_CONNECT_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.fail_setsid {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::FAIL_SETSID_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.inner_stall_before_anchor {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.fail_pre_anchor_reap {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
+                value,
+            );
+        }
     }
 
     /// The observed supervisor events, in arrival order.
@@ -323,9 +390,12 @@ impl SupervisedInteractiveProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        for (key, value) in &environment {
-            supervisor.env(key, value);
-        }
+        supervisor.env(
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+            serde_json::to_string(&environment).map_err(|error| error.to_string())?,
+        );
+        #[cfg(test)]
+        test_control.configure_supervisor(&mut supervisor);
         supervisor.env(RUSTX_CONTROL_ENV, &socket_path);
         let mut child = supervisor
             .spawn()
@@ -908,20 +978,34 @@ mod interactive_tests {
         fn spawn(
             &self,
             script: &str,
-            extra_env: Vec<(String, String)>,
+            supervisor_controls: Vec<(String, String)>,
         ) -> Result<SupervisedInteractiveProcess, String> {
-            self.spawn_with_control(script, extra_env, InteractiveTestControl::new())
+            self.spawn_with_control(script, supervisor_controls, InteractiveTestControl::new())
         }
 
         fn spawn_with_control(
             &self,
             script: &str,
-            extra_env: Vec<(String, String)>,
-            control: InteractiveTestControl,
+            supervisor_controls: Vec<(String, String)>,
+            mut control: InteractiveTestControl,
         ) -> Result<SupervisedInteractiveProcess, String> {
-            let mut environment =
-                vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
-            environment.extend(extra_env);
+            let environment = vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
+            for (key, value) in supervisor_controls {
+                match key.as_str() {
+                    OUTER_FAIL_ENV => control.outer_fail = Some(value),
+                    FAIL_SIGNAL_ENV => control.fail_signal = Some(value),
+                    ANCHOR_PID_FILE_ENV => control.anchor_pid_file = Some(value),
+                    INNER_EXIT_BEFORE_CONNECT_ENV => {
+                        control.inner_exit_before_connect = Some(value);
+                    }
+                    FAIL_SETSID_ENV => control.fail_setsid = Some(value),
+                    INNER_STALL_BEFORE_ANCHOR_ENV => {
+                        control.inner_stall_before_anchor = Some(value);
+                    }
+                    FAIL_PRE_ANCHOR_REAP_ENV => control.fail_pre_anchor_reap = Some(value),
+                    _ => panic!("unknown fixture control: {key}"),
+                }
+            }
             let spec = InteractiveProcessSpec {
                 program: PathBuf::from("/bin/sh"),
                 args: vec!["-c".to_owned(), script.to_owned()],
@@ -1106,6 +1190,59 @@ mod interactive_tests {
         ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
             .iter()
             .any(|path| Path::new(path).is_file())
+    }
+
+    #[tokio::test]
+    async fn command_environment_cannot_configure_interactive_supervisor() {
+        use crate::tools::environment::ToolEnvironment;
+        use std::fmt::Write;
+        use tokio::io::AsyncReadExt;
+        let fixture = Fixture::new();
+        let keys = [
+            "RUSTX_INTERACTIVE_CONTROL",
+            "RUSTX_INTERACTIVE_INNER_CONTROL",
+            "RUSTX_TEST_INTERACTIVE_OUTER_FAIL",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SERVER_SPAWN",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SIGNAL",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SIGTERM",
+            "RUSTX_INTERACTIVE_ANCHOR_PID_FILE",
+            "RUSTX_TEST_INTERACTIVE_INNER_EXIT_BEFORE_CONNECT",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SETSID",
+            "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR",
+            "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP",
+            "RUSTX_COMMAND_ENVIRONMENT",
+            "RUSTX_PHYSICAL_CONTINUATION",
+        ];
+        let environment = ToolEnvironment::from_authorized(
+            keys.iter()
+                .map(|key| ((*key).to_owned(), "user-value".to_owned())),
+        )
+        .unwrap();
+        let mut script = String::new();
+        for key in keys {
+            write!(script, "test \"${key}\" = user-value || exit 9; ").unwrap();
+        }
+        script.push_str("printf isolated");
+        let mut process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
+            program: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), script],
+            cwd: fixture.dir.path().to_path_buf(),
+            environment: environment.child_environment(fixture.dir.path()),
+        })
+        .unwrap();
+        let mut output = String::new();
+        process
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        published_settlement(&process, "isolated server must settle")
+            .await
+            .unwrap();
+        assert_eq!(output, "isolated");
+        assert!(!fixture.path("user-value").exists());
     }
 
     /// Normal server shutdown: `request_shutdown` runs the TERM sequence and

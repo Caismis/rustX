@@ -7,6 +7,11 @@
 //! process secrets are absent unless explicitly provided to the tool
 //! environment. This is deliberately not a production secrets manager.
 //!
+//! `ToolEnvironment` configures only the executed tool process. It never configures
+//! supervisor ownership, cancellation, settlement, tracing, fault injection, or
+//! physical authority. Internal-looking names remain ordinary child data; private
+//! supervisor configuration travels through a separate runtime-owned channel.
+//!
 //! # Reserved runtime-owned keys
 //!
 //! The runtime owns the baseline keys (`PATH`, `HOME`, `LANG`, `LC_ALL`)

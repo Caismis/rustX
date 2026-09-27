@@ -577,7 +577,10 @@ mod global_authority_tests {
             crate::runtime::process_runner::SupervisedCommandSpec {
                 command: format!("touch {}", marker.display()),
                 cwd: std::env::temp_dir(),
-                environment: vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())],
+                command_environment: vec![(
+                    "PATH".to_owned(),
+                    "/usr/local/bin:/usr/bin:/bin".to_owned(),
+                )],
                 timeout: Some(std::time::Duration::from_secs(30)),
                 cancellation: crate::runtime::cancellation::CancellationSignal::new(),
             },

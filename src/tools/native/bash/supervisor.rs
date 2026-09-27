@@ -837,6 +837,13 @@ fn run_inner() -> i32 {
             let _ = std::fs::rename(pending, path);
         }
     }
+    let command_environment = match crate::runtime::supervised_unit::command_environment() {
+        Ok(environment) => environment,
+        Err(error) => {
+            let _ = stream.write_preownership_failure(&error);
+            return INNER_EXIT_NORMAL;
+        }
+    };
     let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
     if stream
         .write_frame(MSG_ANCHOR_READY, &self_pid.to_le_bytes())
@@ -886,8 +893,8 @@ fn run_inner() -> i32 {
         .arg("-c")
         .arg(&shell_command)
         .stdin(Stdio::null())
-        .env_remove(diagnostics::TRACE_ENV)
-        .env_remove(diagnostics::TERM_GATE_ENV)
+        .env_clear()
+        .envs(command_environment)
         .spawn()
     {
         Ok(child) => child,
@@ -1340,6 +1347,10 @@ mod anchor_reaping_tests {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/bin:/bin"]]"#,
+            )
             .env(COMMAND_ENV, command)
             .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
             .env(OUTER_BARRIER_DIR_ENV, barrier_dir)
@@ -1366,6 +1377,10 @@ mod anchor_reaping_tests {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/bin:/bin"]]"#,
+            )
             .env(COMMAND_ENV, command)
             .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
             .stdin(Stdio::from(std::os::unix::io::OwnedFd::from(stream_b)))
@@ -1693,6 +1708,10 @@ mod anchor_reaping_tests {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
         let mut outer = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/bin:/bin"]]"#,
+            )
             .env(COMMAND_ENV, &command)
             .env(ANCHOR_PID_FILE_ENV, &anchor_pid_file)
             .env(OUTER_BARRIER_DIR_ENV, &barrier_dir)

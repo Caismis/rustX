@@ -1254,11 +1254,16 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
         return INNER_EXIT_NORMAL;
     }
+    let environment = match crate::runtime::supervised_unit::command_environment() {
+        Ok(environment) => environment,
+        Err(error) => {
+            let _ = write_frame(&mut control, MSG_PROCESS_CONTROL_FAILURE, error.as_bytes());
+            let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
+            return INNER_EXIT_NORMAL;
+        }
+    };
     let mut command = Command::new(program);
-    command
-        .args(&arguments[1..])
-        .env_remove(RUSTX_CONTROL_ENV)
-        .env_remove(INNER_CONTROL_ENV);
+    command.args(&arguments[1..]).env_clear().envs(environment);
     let server = match command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -1644,7 +1649,10 @@ mod coalesced_gate_tests {
             ))
             .current_dir(fixture.path())
             .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/local/bin:/usr/bin:/bin"]]"#,
+            )
             .env(RUSTX_CONTROL_ENV, &socket)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1710,7 +1718,10 @@ mod coalesced_gate_tests {
             .arg("exec sleep 600")
             .current_dir(fixture.path())
             .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/local/bin:/usr/bin:/bin"]]"#,
+            )
             .env(INNER_CONTROL_ENV, &socket)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

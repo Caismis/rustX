@@ -47,6 +47,16 @@ use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 
+/// Opaque command data transported through supervisors, never installed in them.
+pub(crate) const COMMAND_ENVIRONMENT_ENV: &str = "RUSTX_COMMAND_ENVIRONMENT";
+
+/// Decode the explicit environment at the final child spawn boundary only.
+pub(crate) fn command_environment() -> Result<Vec<(String, String)>, String> {
+    let encoded = std::env::var(COMMAND_ENVIRONMENT_ENV)
+        .map_err(|error| format!("missing command environment: {error}"))?;
+    serde_json::from_str(&encoded).map_err(|error| format!("invalid command environment: {error}"))
+}
+
 /// The nix Unix stream used by the supervisor control channels. The
 /// `socket` feature of `nix` is not enabled for the whole crate; the
 /// interactive supervisor unit binds/accepts with `std::os::unix::net`

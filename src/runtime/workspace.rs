@@ -3056,7 +3056,7 @@ async fn supervised_workspace_git(
     let spec = SupervisedCommandSpec {
         command,
         cwd: cwd.to_path_buf(),
-        environment: std::env::vars().collect(),
+        command_environment: std::env::vars().collect(),
         timeout: None,
         cancellation: cancellation.cloned().unwrap_or_default(),
     };

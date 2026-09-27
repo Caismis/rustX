@@ -89,7 +89,11 @@ failure occurrence, terminal publication/observation and direct-child reap.
 Each runner/supervisor is bounded to 32 entries. Records contain no command,
 environment values or output. The optional trace is not read by production
 ownership logic. The dedicated supervisors own their recorder; the parallel Rust
-test process uses an invocation-local recorder. No trace descriptor is passed to the command. Trace and gate environment keys are removed before launching Bash.
+test process uses an invocation-local recorder. No trace descriptor or private control environment is passed to the command.
+The explicit diagnostic fixture supplies trace/gate controls through
+`RunnerTestControl`; ordinary same-named ToolEnvironment entries remain visible
+to Bash without enabling supervisor diagnostics (see
+[environment ownership](pr-416-supervisor-environment-ownership.md)).
 Self-KILL cannot report its return, so its record explicitly has no result; the
 outer independently reports its fallback syscall result and physical proof.
 The grace deadline uses the syscall-completion instant, so trace I/O cannot

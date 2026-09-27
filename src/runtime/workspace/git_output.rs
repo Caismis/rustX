@@ -49,7 +49,7 @@ mod tests {
         let spec = SupervisedCommandSpec {
             command: "printf x >> effect; printf stdout; printf stderr >&2".into(),
             cwd: directory.path().into(),
-            environment: std::env::vars().collect(),
+            command_environment: std::env::vars().collect(),
             timeout: None,
             cancellation: crate::runtime::cancellation::CancellationSignal::new(),
         };

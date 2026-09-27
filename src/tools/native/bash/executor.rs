@@ -15,7 +15,6 @@ use super::capture::{
 use super::input::BashInput;
 #[cfg(all(test, target_os = "linux"))]
 use crate::runtime::process_runner::RunnerLifecycleHook as BashLifecycleHook;
-#[cfg(test)]
 use crate::runtime::process_runner::RunnerTestControl;
 use crate::runtime::process_runner::{
     ProcessOutcomeIntent, RunnerSpawnError, SupervisedCommandRunner, SupervisedCommandSpec,
@@ -36,7 +35,6 @@ use crate::tools::types::{
 
 /// The native Bash executor.
 pub struct BashTool {
-    #[cfg(test)]
     control: Option<BashTestControl>,
 }
 
@@ -44,9 +42,28 @@ impl BashTool {
     /// A Bash executor without test seams.
     #[must_use]
     pub fn new() -> Self {
+        Self { control: None }
+    }
+
+    /// Explicit internal fixture entry point for external process regressions.
+    /// No runtime tool configuration selects this constructor.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_diagnostic_fixture(
+        diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
+    ) -> Self {
+        let mut runner = RunnerTestControl::new();
+        runner.diagnostics = diagnostics;
         Self {
-            #[cfg(test)]
-            control: None,
+            control: Some(BashTestControl {
+                runner,
+                #[cfg(test)]
+                capture_hold: None,
+                #[cfg(test)]
+                background_appends: tokio::sync::watch::channel(0).0,
+                #[cfg(test)]
+                spill_started: tokio::sync::watch::channel(false).0,
+            }),
         }
     }
 
@@ -80,16 +97,9 @@ impl ToolExecutor for BashTool {
         // future: the settlement plane drives that same operation to its
         // proven terminal end.
         let cancellation = context.cancellation.clone();
-        #[cfg(test)]
         let control = self.control.clone();
-        #[cfg(test)]
-        return ToolExecutionHandle::settled_by_operation(
-            Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await }),
-            cancellation,
-        );
-        #[cfg(not(test))]
         ToolExecutionHandle::settled_by_operation(
-            Box::pin(async move { run_bash(&invocation, &context, None).await }),
+            Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await }),
             cancellation,
         )
     }
@@ -102,9 +112,8 @@ impl ToolExecutor for BashTool {
 
 /// The test-only control seams of one Bash invocation.
 ///
-/// In non-test builds this type is an empty shell: `BashTool` never holds a
-/// control instance and `run_bash` always receives `None`, so no production
-/// behavior is affected. The seams exist so in-crate regressions can
+/// Production construction leaves this absent. External diagnostic fixtures
+/// explicitly supply only the runner trace/gate capability. In-crate regressions can
 /// observe the exact shell-exit boundary, deterministically inject
 /// supervisor setup / wait / signal / bash-spawn failures, model the
 /// ownership release transition, record every process-group signal attempt,
@@ -117,7 +126,6 @@ impl ToolExecutor for BashTool {
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
 #[derive(Clone)]
 pub(crate) struct BashTestControl {
-    #[cfg(test)]
     runner: RunnerTestControl,
     #[cfg(test)]
     capture_hold: Option<CaptureHold>,
@@ -509,14 +517,11 @@ async fn run_bash_unix(
     // containment, and the direct-child reap) lives in the shared internal
     // supervised command runner; this tool owns the capture and the
     // canonical result formatting.
-    #[cfg(test)]
-    let runner_control = control.map(BashTestControl::runner_control);
-    #[cfg(not(test))]
-    let runner_control = None;
+    let runner_control = control.map(|control| control.runner.clone());
     let spec = SupervisedCommandSpec {
         command: command.to_owned(),
         cwd: context.workspace.root().to_path_buf(),
-        environment: context
+        command_environment: context
             .environment
             .child_environment(context.workspace.root()),
         timeout,

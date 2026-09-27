@@ -1022,7 +1022,7 @@ async fn probe_runtime_identity(
                     SupervisedCommandSpec {
                         command: command.clone(),
                         cwd,
-                        environment,
+                        command_environment: environment,
                         timeout: Some(PYTHON_TOOL_PROBE_TIMEOUT),
                         // The caller's lifecycle authority, never a fresh
                         // detached signal: a settled preparation physically
@@ -1261,7 +1261,7 @@ async fn stage_and_build(
                 SupervisedCommandSpec {
                     command: command.clone(),
                     cwd: staging.to_path_buf(),
-                    environment: environment_entries,
+                    command_environment: environment_entries,
                     timeout: Some(PYTHON_TOOL_UV_TIMEOUT),
                     // The build-owner domain's lifecycle authority: its
                     // cancellation physically cancels this uv unit, and the

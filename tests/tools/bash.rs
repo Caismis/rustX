@@ -22,6 +22,25 @@ use rustx::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolResultContent,
 };
 
+fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
+    use rustx::tools::native::bash_supervisor::diagnostics::{FixtureControl, fixture_executor};
+    let mut fixture = native_fixture();
+    let mut registry = rustx::tools::executor::ToolRegistry::new();
+    for definition in fixture.registry.definitions() {
+        let executor = if definition.name == "bash" {
+            fixture_executor(FixtureControl {
+                trace: Some(trace.to_path_buf()),
+                before_term_socket: None,
+            })
+        } else {
+            fixture.registry.executor(&definition.id)
+        };
+        registry.register(definition, executor).unwrap();
+    }
+    fixture.registry = registry;
+    fixture
+}
+
 fn json_content(result: &ToolExecutionResult) -> serde_json::Value {
     for content in &result.content {
         if let ToolResultContent::Json { value } = content {
@@ -213,11 +232,10 @@ async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
 
 #[tokio::test]
 async fn bash_kill_escalates_when_term_is_ignored() {
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, TRACE_ENV};
+    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event};
     let dir = tempfile::tempdir().unwrap();
     let trace = dir.path().join("signals");
-    let fixture =
-        native_fixture_with_environment(vec![(TRACE_ENV.into(), trace.display().to_string())]);
+    let fixture = fixture_with_trace(&trace);
     let result = run_tool(
         &fixture,
         "bash",
@@ -380,11 +398,9 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
 #[tokio::test]
 async fn bash_background_cancellation_uses_the_same_process_group_path() {
     use rustx::tools::background::BackgroundLifecycle;
-    use rustx::tools::native::bash_supervisor::diagnostics::TRACE_ENV;
     let trace_dir = tempfile::tempdir().unwrap();
     let trace = trace_dir.path().join("supervision.jsonl");
-    let fixture =
-        native_fixture_with_environment(vec![(TRACE_ENV.into(), trace.display().to_string())]);
+    let fixture = fixture_with_trace(&trace);
     let workspace = fixture.runtime.workspace().root().to_path_buf();
     let ready = workspace.join("bg-trap-ready.marker");
     let marker = workspace.join("bg-term-received.marker");
@@ -1374,7 +1390,7 @@ async fn background_cancel_records_term_before_trap_and_physical_terminal() {
 async fn background_cancel_at_native_gate() {
     use rustx::tools::background::BackgroundLifecycle;
     use rustx::tools::native::bash_supervisor::diagnostics::{
-        Entry, Event, TERM_GATE_ENV, TRACE_ENV,
+        Entry, Event, FixtureControl, fixture_executor,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // Bounded native socket namespace, independent of macOS TMPDIR length.
@@ -1386,8 +1402,14 @@ async fn background_cancel_at_native_gate() {
     let socket = dir.path().join("gate");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let fixture = native_fixture_with_environment(vec![
-        (TRACE_ENV.into(), trace.display().to_string()),
-        (TERM_GATE_ENV.into(), socket.display().to_string()),
+        (
+            "RUSTX_TEST_SUPERVISION_TRACE".into(),
+            dir.path().join("untrusted-trace").display().to_string(),
+        ),
+        (
+            "RUSTX_TEST_BEFORE_TERM_SOCKET".into(),
+            "user-visible-value".into(),
+        ),
     ]);
     let root = fixture.runtime.workspace().root();
     let ready_path = root.join("ready");
@@ -1405,9 +1427,10 @@ async fn background_cancel_at_native_gate() {
         ready_path.display()
     );
     let registry = fixture.runtime.background();
-    let executor = fixture
-        .registry
-        .executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
+    let executor = fixture_executor(FixtureControl {
+        trace: Some(trace.clone()),
+        before_term_socket: Some(socket),
+    });
     let invocation = ToolInvocation {
         id: rustx::tools::types::ToolInvocationId::Agent {
             call_id: rustx::runtime::identity::ToolCallId::new("gated-term"),
@@ -1501,6 +1524,7 @@ async fn background_cancel_at_native_gate() {
             .any(|e| matches!(e.event, Event::GraceExpired)),
         "{evidence}"
     );
+    assert!(!dir.path().join("untrusted-trace").exists());
     let shell = index(|e| matches!(e, Event::ShellExited { .. }));
     for (i, entry) in entries.iter().enumerate() {
         if matches!(
@@ -1513,4 +1537,97 @@ async fn background_cancel_at_native_gate() {
             assert!(i > shell, "{evidence}");
         }
     }
+}
+
+#[tokio::test]
+async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        use rustx::tools::native::bash_supervisor::diagnostics::TERM_GATE_ENV;
+        let dir = tempfile::Builder::new().prefix("rx-env-").tempdir_in("/tmp").unwrap();
+        let socket = dir.path().join("gate");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let fixture = native_fixture_with_environment(vec![
+            (TERM_GATE_ENV.into(), socket.display().to_string()),
+            ("RUSTX_TEST_FAIL_SIGNAL".into(), "1".into()),
+            ("RUSTX_TEST_FORCE_ANCHOR_LOSS".into(), "1".into()),
+            ("RUSTX_TEST_FAIL_CONTAINMENT".into(), "1".into()),
+        ]);
+        let root = fixture.runtime.workspace().root();
+        let ready_path = root.join("ready");
+        let entered_path = root.join("entered");
+        let ready = SignalPipe::new(&ready_path);
+        let entered = SignalPipe::new(&entered_path);
+        let cancellation = CancellationSignal::new();
+        let controller = async {
+            ready.read().await;
+            cancellation.cancel();
+            entered.read().await;
+        };
+        // The readiness byte also proves the same-named value reached Bash.
+        let command = format!(
+            "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = '{}' || exit 7; trap 'printf T > {}; exit 0' TERM; printf R > {}; while :; do :; done",
+            socket.display(), entered_path.display(), ready_path.display()
+        );
+        let (result, ()) = tokio::join!(run_tool_with_cancellation(&fixture, "bash", serde_json::json!({"command": command}), cancellation.clone()), controller);
+        assert!(matches!(result.status, ToolExecutionStatus::Cancelled { .. }), "{result:?}");
+        // Physical settlement closes the observation interval. Any connection
+        // attempted before TERM would still be queued, even if its peer exited.
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }).await.expect("ordinary environment cancellation must settle");
+}
+
+#[tokio::test]
+async fn ordinary_environment_cannot_enable_supervisor_controls() {
+    use rustx::tools::native::bash_supervisor::diagnostics::TRACE_ENV;
+    use std::fmt::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let trace = dir.path().join("trace");
+    let anchor = dir.path().join("anchor");
+    let keys = [
+        "RUSTX_SUPERVISOR_ROLE",
+        "RUSTX_SUPERVISOR_COMMAND",
+        "RUSTX_TEST_FAIL_SIGNAL",
+        "RUSTX_TEST_FAIL_WAIT",
+        "RUSTX_TEST_FAIL_BASH_SPAWN",
+        "RUSTX_TEST_FAIL_SIGTERM_HANDLER",
+        "RUSTX_TEST_FORCE_ANCHOR_LOSS",
+        "RUSTX_TEST_OUTER_BARRIER_DIR",
+        "RUSTX_TEST_FAIL_CONTAINMENT",
+        "RUSTX_PHYSICAL_CONTINUATION",
+        "RUSTX_COMMAND_ENVIRONMENT",
+    ];
+    let mut environment: Vec<_> = keys
+        .iter()
+        .map(|key| ((*key).into(), "user-visible-value".into()))
+        .collect();
+    environment.push((TRACE_ENV.into(), trace.display().to_string()));
+    environment.push((
+        "RUSTX_SUPERVISOR_ANCHOR_PID_FILE".into(),
+        anchor.display().to_string(),
+    ));
+    environment.push((
+        "RUSTX_TEST_BEFORE_TERM_SOCKET".into(),
+        "user-visible-value".into(),
+    ));
+    let fixture = native_fixture_with_environment(environment);
+    let mut command = String::new();
+    for key in keys {
+        write!(command, "test \"${key}\" = user-visible-value || exit 9; ").unwrap();
+    }
+    command.push_str(
+        "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = user-visible-value || exit 10; printf isolated",
+    );
+    let result = run_tool(&fixture, "bash", serde_json::json!({"command": command})).await;
+    assert_eq!(result.status, ToolExecutionStatus::Success, "{result:?}");
+    assert_eq!(json_content(&result)["exit_code"], 0);
+    assert_eq!(json_content(&result)["stdout"], "isolated");
+    assert!(
+        !trace.exists(),
+        "ordinary command data enabled supervisor tracing"
+    );
+    assert!(
+        !anchor.exists(),
+        "ordinary command data enabled supervisor observability"
+    );
 }

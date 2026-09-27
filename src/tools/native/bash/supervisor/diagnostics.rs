@@ -112,3 +112,32 @@ pub(crate) fn record(event: Event) {
         trace.record(event);
     }
 }
+
+/// Trusted fixture capability, supplied explicitly by the test executor factory.
+/// This is never constructed from ToolEnvironment or ambient environment.
+#[doc(hidden)]
+#[derive(Clone, Default)]
+pub struct FixtureControl {
+    pub trace: Option<PathBuf>,
+    pub before_term_socket: Option<PathBuf>,
+}
+
+impl FixtureControl {
+    pub(crate) fn configure(&self, supervisor: &mut tokio::process::Command) {
+        if let Some(path) = &self.trace {
+            supervisor.env(TRACE_ENV, path);
+        }
+        if let Some(path) = &self.before_term_socket {
+            supervisor.env(TERM_GATE_ENV, path);
+        }
+    }
+}
+
+/// Constructs the explicitly trusted executor used by external regression fixtures.
+#[doc(hidden)]
+#[must_use]
+pub fn fixture_executor(
+    control: FixtureControl,
+) -> std::sync::Arc<dyn crate::tools::executor::ToolExecutor> {
+    std::sync::Arc::new(crate::tools::native::bash::BashTool::with_diagnostic_fixture(control))
+}
