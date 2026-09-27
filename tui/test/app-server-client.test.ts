@@ -40,7 +40,7 @@ import {
   paramsOf,
   tick,
 } from "./support/app-server-peer.ts";
-import { runtimeCursor, snapshot } from "./support/fixtures.ts";
+import { backgroundExecution, subagent, runtimeCursor, snapshot } from "./support/fixtures.ts";
 
 const CAPABILITIES = {
   multi_session: true,
@@ -706,3 +706,71 @@ describe("generated-contract ingress", () => {
 // @ts-expect-error A future method requires its own response-loss decision.
 const futurePolicy: Record<MethodName | "future/mutation", ResponseLossClass> = METHOD_RESPONSE_LOSS_CLASS;
 void futurePolicy;
+
+describe("bounded request ownership", () => {
+  it("full mixed wait capacity reserves interruption, cancellation and inspection slots", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const waits = Array.from({ length: 4 }, (_, i) => i % 2 === 0
+      ? client.call("agent/wait", { target: target(), agent_id: `agent-${i}` }, "agent_wait")
+      : client.call("job/wait", { target: target(), job_id: `job-${i}` }, "job"));
+    for (const pending of waits) void pending.catch(() => {});
+    await Promise.all([transport.log.awaitMethod("agent/wait", 2), transport.log.awaitMethod("job/wait", 2)]);
+    const excess = client.call("agent/wait", { target: target(), agent_id: "excess" }, "agent_wait");
+    void excess.catch(() => {});
+    await tick();
+    assert.equal(transport.log.count("agent/wait") + transport.log.count("job/wait"), 4, "excess observation never crosses transport");
+    await assert.rejects(excess, /wait capacity/);
+    const interrupt = client.call("agent/interrupt", { target: target(), agent_id: "agent-0" }, "agent_wait");
+    const cancel = client.call("job/cancel", { target: target(), job_id: "job-1" }, "job");
+    const inspect = client.call("agent/list", { target: target() }, "agents");
+    const [interruptRequest] = await transport.log.awaitMethod("agent/interrupt");
+    const [cancelRequest] = await transport.log.awaitMethod("job/cancel");
+    const [inspectRequest] = await transport.log.awaitMethod("agent/list");
+    const agent = subagent("reviewer", "profile", "inactive");
+    transport.respond(interruptRequest!.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: "cancelled", agent });
+    transport.respond(cancelRequest!.id, { type: "job", job: backgroundExecution("exec_c8536561-1a50-7edc-a396-b3a459465efb", "cancelled") });
+    transport.respond(inspectRequest!.id, { type: "agents", agents: [agent], returned: 1, matched: 1, limit: 10, truncated: false });
+    await Promise.all([interrupt, cancel, inspect]);
+    assert.equal(client.closed, undefined); assert.equal(transport.disposed, false);
+    assert.equal(client.pendingCount, 4);
+    const results = waits.map(p => p.catch(error => error));
+    transport.fail("input_eof");
+    const lost = await Promise.all(results);
+    assert.ok(lost[0] instanceof UncertainOutcomeError, "lost Agent wait cannot recapture a later activation");
+    assert.ok(lost[1] instanceof TransportClosedError);
+    const next = await initialized(); t.after(() => next.client.close());
+    assert.deepEqual(next.transport.log.requests.map(r => r.method), ["initialize"]);
+    assert.equal(transport.log.count("agent/wait") + transport.log.count("job/wait"), 4, "no replay or implicit domain cancellation");
+  });
+  it("all lanes stay within the server budget and release capacity only on classified outcomes", async t => {
+    const { client, transport } = await initialized(); t.after(() => client.close());
+    const pending: Promise<unknown>[] = [];
+    for (let i = 0; i < 4; i++) pending.push(client.call("job/wait", { target: target(), job_id: `job-${i}` }, "job"));
+    for (let i = 0; i < 2; i++) pending.push(client.call("agent/sendMessage", { target: target(), agent_id: `agent-${i}`, message: "guidance" }, "agent_message"));
+    for (let i = 0; i < 8; i++) pending.push(client.call("agent/list", { target: target() }, "agents"));
+    for (let i = 0; i < 2; i++) pending.push(client.call("job/cancel", { target: target(), job_id: `job-${i}` }, "job"));
+    const settled = Promise.allSettled(pending);
+    await transport.log.awaitRequests(17); // initialize plus the finite 16 request budget
+    assert.equal(client.pendingCount, 16);
+    await assert.rejects(client.call("job/wait", { target: target(), job_id: "extra" }, "job"), /wait capacity/);
+    await assert.rejects(client.call("agent/sendMessage", { target: target(), agent_id: "extra", message: "draft" }, "agent_message"), /admission capacity/);
+    await assert.rejects(client.call("agent/list", { target: target() }, "agents"), /rpc capacity/);
+    await assert.rejects(client.call("job/cancel", { target: target(), job_id: "extra" }, "job"), /control capacity/);
+    assert.equal(transport.log.requests.length, 17);
+    const [request] = await transport.log.awaitMethod("job/wait");
+    transport.respond(request!.id, { type: "job", job: backgroundExecution("exec_c8536561-1a50-7edc-a396-b3a459465efb", "succeeded") });
+    await pending[0];
+    const next = client.call("job/wait", { target: target(), job_id: "next" }, "job");
+    const nextSettled = next.catch(error => error);
+    await transport.log.awaitMethod("job/wait", 5);
+    assert.equal(client.pendingCount, 16);
+    assert.equal(client.closed, undefined);
+    transport.fail("input_eof");
+    const results = await settled;
+    assert.equal(results[0]!.status, "fulfilled");
+    assert.equal(results.filter(result => result.status === "rejected").length, 15);
+    assert.ok(await nextSettled instanceof TransportClosedError);
+    assert.equal(transport.log.requests.length, 18, "response loss never replays or cancels domain work");
+  });
+
+});

@@ -1900,14 +1900,23 @@ async fn quiescence_watchdog_cannot_bypass_process_terminality() {
 async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
     let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
-    let shell_pid_file = root.join("shell.pid");
     let anchor_pid_file = root.join("anchor.pid");
-    // The fixture freezes its own supervisor: bash's parent is the
-    // inner supervisor (the invocation's anchor). `sleep 30` keeps the
-    // owned group alive while the anchor is stopped.
+    let ready = root.join("ready");
+    let hold = root.join("hold");
+    for fifo in [&ready, &hold] {
+        nix::unistd::mkfifo(
+            fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+    }
+    let notification = tokio::task::spawn_blocking(move || std::fs::read(ready).unwrap());
+    // The FIFO handshake establishes a live owned command before the test
+    // freezes its anchor. Opening the second FIFO blocks until containment.
     let command = format!(
-        "echo $$ > {}; kill -STOP $PPID; sleep 30",
-        shell_pid_file.display()
+        "printf ready > '{}'; cat '{}'",
+        root.join("ready").display(),
+        hold.display()
     );
     let cancellation = CancellationSignal::new();
     let cancelling = cancellation.clone();
@@ -1920,13 +1929,17 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
         workspace.clone(),
         None,
     ));
-    for _ in 0..1000 {
-        if shell_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+    assert_eq!(notification.await.unwrap(), b"ready");
+    let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(anchor_pid),
+        nix::sys::signal::Signal::SIGSTOP,
+    )
+    .unwrap();
     cancelling.cancel();
     let result = tokio::time::timeout(Duration::from_secs(20), task)
         .await

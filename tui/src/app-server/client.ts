@@ -207,6 +207,20 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
+/** At most sixteen requests cross one connection. Observation and admission
+ * cannot occupy the capacity reserved for lifecycle control and inspection.
+ * Rejection is local, before id allocation/send; no lane queues or replays work. */
+const REQUEST_CAPACITY = { wait: 4, admission: 2, control: 2, rpc: 8 } as const;
+function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
+  switch (method) {
+    case "agent/wait": case "job/wait": return "wait";
+    case "agent/sendMessage": return "admission";
+    case "agent/interrupt": case "job/cancel": case "turn/cancel":
+    case "interaction/respond": case "interaction/cancel": return "control";
+    default: return "rpc";
+  }
+}
+
 type NotificationListener = (notification: Notification) => void;
 type CloseListener = (error: TransportClosedError) => void;
 
@@ -332,6 +346,11 @@ export class AppServerClient {
       // for a peer that will never answer. Nothing was sent, so nothing is
       // uncertain.
       return Promise.reject(this.#closed);
+    }
+
+    const lane = requestLane(method);
+    if ([...this.#pending.values()].filter(request => requestLane(request.method) === lane).length >= REQUEST_CAPACITY[lane]) {
+      return Promise.reject(new Error(`Client ${lane} capacity reached. Request not sent; inspect current operations before retrying.`));
     }
 
     const id = this.#nextRequestId;

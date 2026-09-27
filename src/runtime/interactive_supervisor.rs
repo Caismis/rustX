@@ -422,10 +422,9 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                     }
                 }
                 if anchor == AnchorState::Running {
-                    match waitid(
-                        Id::Pid(Pid::from_raw(inner_pid)),
-                        WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED,
-                    ) {
+                    match crate::runtime::process_wait::observe_stopped_child(Pid::from_raw(
+                        inner_pid,
+                    )) {
                         Ok(WaitStatus::Stopped(..)) => {
                             let _ =
                                 nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL);

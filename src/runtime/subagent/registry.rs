@@ -8893,7 +8893,10 @@ mod tests {
             .await
             .expect("settled");
         assert_eq!(settled.state, SubagentState::Cancelled);
-        assert!(settled.settlement.publication != SubagentPublication::Abandoned);
+        assert_ne!(
+            settled.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         #[cfg(unix)]
         assert!(
             matches!(
@@ -9141,7 +9144,10 @@ mod tests {
             .wait_until_settled(&accepted.subagent_id)
             .await
             .expect("abandoned resolves the wait");
-        assert!(settled.settlement.publication == SubagentPublication::Abandoned);
+        assert_eq!(
+            settled.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         assert_eq!(settled.state, SubagentState::PublishingTerminal);
         assert!(matches!(
             plane.registry.wait_agent(&accepted.child_agent_id).await,
@@ -9198,7 +9204,10 @@ mod tests {
             .await
             .expect("publication abandoned");
         assert_eq!(abandoned.state, SubagentState::PublishingTerminal);
-        assert!(abandoned.settlement.publication == SubagentPublication::Abandoned);
+        assert_eq!(
+            abandoned.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         let diagnostic = abandoned.detail.clone().expect("stable diagnostic");
         assert!(diagnostic.contains("physical settlement was not proven"));
         assert!(!diagnostic.contains("success must stay private"));
@@ -9214,7 +9223,10 @@ mod tests {
             .snapshot(&accepted.subagent_id)
             .expect("settled snapshot");
         assert_eq!(settled.state, SubagentState::Failed);
-        assert!(settled.settlement.publication != SubagentPublication::Abandoned);
+        assert_ne!(
+            settled.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         assert_eq!(settled.detail.as_deref(), Some(diagnostic.as_str()));
         assert_eq!(
             events(&plane)
@@ -9251,7 +9263,10 @@ mod tests {
             .await
             .expect("abandoned publication is observable");
         assert_eq!(unresolved.state, SubagentState::PublishingTerminal);
-        assert!(unresolved.settlement.publication == SubagentPublication::Abandoned);
+        assert_eq!(
+            unresolved.settlement.publication,
+            SubagentPublication::Abandoned
+        );
 
         let _second_child = stage_exit0(&plane);
         let second_prepared = plane

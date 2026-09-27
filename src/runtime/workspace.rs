@@ -4240,7 +4240,7 @@ mod tests {
             )
             .unwrap();
         }
-        let binary_name = std::ffi::OsString::from_vec(b"non-UTF8-\xff-$(touch NEVER)".to_vec());
+        let binary_name = std::ffi::OsString::from("opaque-雪-$(touch NEVER)");
         std::fs::write(repository.path().join(&binary_name), []).unwrap();
         let args = vec!["ls-files".into(), "--others".into(), "-z".into()];
         let ordinary = manager
@@ -4276,6 +4276,7 @@ mod tests {
         let mut expected = binary_name.into_vec();
         expected.push(0);
         assert_eq!(exact.stdout, expected);
+        assert_supervised_opaque_payloads(&manager, repository.path(), &owner).await;
         assert!(!repository.path().join("NEVER").exists());
         drop(owner);
         assert!(
@@ -4283,6 +4284,61 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    async fn assert_supervised_opaque_payloads(
+        manager: &WorkspaceManager,
+        repository: &std::path::Path,
+        owner: &std::sync::Arc<crate::runtime::subagent::physical_recovery::ParentPhysicalLease>,
+    ) {
+        use std::os::unix::ffi::OsStringExt;
+        // Opaque non-UTF8 argument bytes are config payload, never a filesystem name.
+        let value = b"non-UTF8-\xff-$(touch NEVER)";
+        let mut config = b"test.payload=".to_vec();
+        config.extend_from_slice(value);
+        let opaque = super::with_physical_settlement_authority(
+            Some(owner.clone()),
+            manager.git_raw(
+                repository,
+                vec![
+                    "-c".into(),
+                    std::ffi::OsString::from_vec(config),
+                    "config".into(),
+                    "--null".into(),
+                    "--get".into(),
+                    "test.payload".into(),
+                ],
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        let mut expected = value.to_vec();
+        expected.push(0);
+        assert_eq!(opaque.stdout, expected);
+        // Large binary contents are also preserved, independently of path identities.
+        let bytes: Vec<u8> = (0..=255).cycle().take(128 * 1024).collect();
+        std::fs::write(repository.join("payload.bin"), &bytes).unwrap();
+        let object = manager
+            .git_raw(
+                repository,
+                vec!["hash-object".into(), "-w".into(), "payload.bin".into()],
+                None,
+            )
+            .await
+            .unwrap();
+        let object_id = std::str::from_utf8(&object.stdout).unwrap().trim();
+        let binary = super::with_physical_settlement_authority(
+            Some(owner.clone()),
+            manager.git_raw(
+                repository,
+                vec!["cat-file".into(), "blob".into(), object_id.into()],
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(binary.stdout, bytes);
     }
 
     #[cfg(target_os = "macos")]

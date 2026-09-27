@@ -197,6 +197,18 @@ Starting projects the owner's Admitting and terminal-unproven projects Unavailab
 Wait and interrupt both return `agent_wait`: captured activation/outcome plus the
 latest Agent snapshot.
 
+The TUI command dispatcher owns one pending Agent message submission per
+attachment. Repeated Enter while its preserved draft awaits an outcome sends
+nothing. Classified failure retains the draft without replay; success clears only
+the unchanged submitted draft. Other controls remain usable.
+
+Both typed clients bound outstanding observations separately from control traffic.
+The TUI admits at most four waits, two Agent message admissions, two controls, and
+eight ordinary RPCs per connection (the server's sixteen-request budget). Excess
+requests fail locally before transmission; no queue or timeout recaptures a later
+activation. Closing a waiter never implicitly cancels domain work. Real connection
+loss classifies every transmitted request once, without replay.
+
 Recovery uses durable `physical_settlement_proven`, not terminal naming. A live
 Interrupted outcome with proven containment remains resumable after reopen.
 Crash reconciliation initially records unproven settlement and fails closed;

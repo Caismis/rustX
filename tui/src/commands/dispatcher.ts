@@ -174,6 +174,9 @@ export interface DebugDiagnostics {
 
 export class CommandDispatcher {
   #context: DispatcherContext;
+  // A retained command is one submission until its response is classified.
+  // Other controls and commands (including on a replacement attachment) remain usable.
+  readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
   #inspected = new Map<string, import('../../../protocol/app-server/v26.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
@@ -289,7 +292,13 @@ export class CommandDispatcher {
         case "/send-message": {
           const split = argument.indexOf(" ");
           if (split < 1 || !argument.slice(split + 1).trim()) return usage("/send-message <agent-id> <message>");
-          await session.sendMessage(argument.slice(0, split), argument.slice(split + 1).trim());
+          if (this.#agentMessageSubmissions.has(session)) return transient("error", "An Agent message submission is still awaiting its outcome. Not sent again.");
+          this.#agentMessageSubmissions.add(session);
+          try {
+            await session.sendMessage(argument.slice(0, split), argument.slice(split + 1).trim());
+          } finally {
+            this.#agentMessageSubmissions.delete(session);
+          }
           return transient("info", "Message admitted by the Agent runtime.");
         }
         case "/wait-agent": {

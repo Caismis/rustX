@@ -11543,9 +11543,9 @@ mod tests {
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
-        assert!(
-            unresolved.settlement.publication
-                == crate::runtime::subagent::SubagentPublication::Abandoned
+        assert_eq!(
+            unresolved.settlement.publication,
+            crate::runtime::subagent::SubagentPublication::Abandoned
         );
         // Issue #178: the successful answer never rides the live read
         // model, not even while its publication is unresolved; the
@@ -11975,9 +11975,9 @@ mod tests {
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
-        assert!(
-            unresolved.settlement.publication
-                == crate::runtime::subagent::SubagentPublication::Abandoned
+        assert_eq!(
+            unresolved.settlement.publication,
+            crate::runtime::subagent::SubagentPublication::Abandoned
         );
         // Issue #178: the successful answer never rides the live read
         // model; the unresolved candidate is observable through its

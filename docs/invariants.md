@@ -7372,10 +7372,14 @@ missing terminal Text fails explicitly. Neither earlier narration nor refusal-
 discarded provisional text supplies a substitute. Workflow output-latch success
 and late-cancellation ordering are independent of ordinary answer extraction.
 
-Domain wait/admission/settlement lifetime is not Web transport failure. Typed
+Domain wait/admission/settlement lifetime is not transport failure. Typed
 method policy leaves those responses pending within separate finite capacities;
 ordinary RPCs stay bounded, controls and inspection remain available, real response
 loss stays explicit, and abandoned waits never cancel or automatically replay.
+The TUI owns one pending explicit Agent message submission per attachment;
+retaining its draft never authorizes a second request. Late results cannot clear
+new typing. Its request coordinator reserves finite, separate wait/admission/
+control/RPC capacities totaling the server's connection bound.
 
 ## Recovered activation containment proof
 
@@ -7388,6 +7392,15 @@ unavailability and later-open reconciliation, never invented settlement.
 `SubagentPhysicalSettlementProven` discharges the physical obligation without
 rewriting Interrupted, canonical content, activation provenance or accepted input.
 Receipt evidence is retained through the durable commit and until Session deletion.
+A concurrent reconciliation pass cannot discharge another pass's exact claim.
+Native lease release is necessary but idle requires the owning pass's durable
+proof and in-memory settlement cut; shutdown joins that reconciliation owner.
+
+Stopped-supervisor observation uses waitid's WSTOPPED with WNOWAIT, including on
+Darwin where WUNTRACED is a different waitpid-only flag. The observer never reaps
+terminal status owned by the dedicated result collector. Filesystem identities
+remain valid platform paths; binary output and non-path argument payloads remain
+opaque bytes through supervised collection.
 
 Recovered reserved generations participate in the same proof owner. Unproven
 rollback is an open resource obligation; only later exact native proof may commit

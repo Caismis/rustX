@@ -113,11 +113,24 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
         Err(AgentControlError::Settlement)
     ));
     assert_eq!(recovered.all_snapshots().len(), 1);
+    let (entered, entry) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::sync_channel(0);
+    recovered.state.lock().unwrap().recovery_probe_hook = Some(Box::new(move || {
+        entered.send(()).unwrap();
+        released.recv().unwrap();
+    }));
+    // The startup reconciler owns the exact claim before native proof becomes available.
+    entry.await.unwrap();
+    assert!(recovered.state.try_lock().is_ok());
     drop(lease);
     drop(crate::runtime::subagent::physical_recovery::prove_after_release(
         &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &admitted.subagent_id,
     ).unwrap().expect("the exact inherited lease is released"));
     recovered.reconcile_recovered_settlements();
+    assert_eq!(recovered.with_goal_idle(|| true), None, "native proof alone has not crossed the durable/in-memory settlement cut");
+    assert_eq!(events(&plane).iter().filter(|event| matches!(event, crate::events::types::RuntimeEvent::SubagentPhysicalSettlementProven { subagent_id, .. } if *subagent_id == admitted.subagent_id)).count(), 0);
+    release.send(()).unwrap();
+    recovered.wait_recovery_reconciliation().await;
     assert_eq!(recovered.with_goal_idle(|| true), Some(true));
     let (agent, activation) = recovered
         .agent_snapshot_with_activation(&admitted.child_agent_id)
@@ -134,20 +147,7 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
         .clone();
     workspace.acquire(&CancellationSignal::new()).await.unwrap().settle();
     assert_eq!(events(&plane).iter().filter(|event| matches!(event, crate::events::types::RuntimeEvent::SubagentPhysicalSettlementProven { subagent_id, .. } if *subagent_id == admitted.subagent_id)).count(), 1);
-    let retry = crate::runtime::subagent::physical_settlement_event(
-        &plane.conversation_id,
-        &admitted.subagent_id,
-        &admitted.child_agent_id,
-        Utc::now(),
-    );
-    let first_receipt = plane.store.append_event(retry.clone()).unwrap();
-    let mut later = retry;
-    later.timestamp += chrono::Duration::seconds(1);
-    assert_eq!(
-        plane.store.append_event(later).unwrap(),
-        first_receipt,
-        "a lost durable acknowledgement retries the exact committed receipt"
-    );
+    assert_physical_receipt_retry_is_idempotent(&plane, &admitted);
     let reopened = SubagentRegistry::new(plane.registry.config.clone());
     reopened.restore_agents(plane.store.as_ref()).unwrap();
     assert_eq!(reopened.with_goal_idle(|| true), Some(true));
@@ -289,7 +289,7 @@ async fn agent411_crash_reconciliation_cannot_invent_physical_resume_proof() {
             .wait_until_settled(&accepted.subagent_id)
             .await
             .unwrap();
-        assert!(abandoned.settlement.publication == SubagentPublication::Abandoned);
+        assert_eq!(abandoned.settlement.publication, SubagentPublication::Abandoned);
         let evidence =
             crate::runtime::recovery::RecoveryEvidence::reconstruct(plane.store.as_ref()).unwrap();
         crate::runtime::recovery::RecoveryPlan::classify(&evidence)
@@ -746,4 +746,21 @@ async fn published_initialization_error_retains_live_registry_obligation_until_e
     assert_eq!(plane.registry.with_goal_idle(|| true), Some(true));
     assert_eq!(reopened.with_goal_idle(|| true), Some(true));
     assert!(events(&plane).is_empty());
+}
+
+fn assert_physical_receipt_retry_is_idempotent(plane: &TestPlane, admitted: &SubagentAccepted) {
+    let retry = crate::runtime::subagent::physical_settlement_event(
+        &plane.conversation_id,
+        &admitted.subagent_id,
+        &admitted.child_agent_id,
+        Utc::now(),
+    );
+    let first_receipt = plane.store.append_event(retry.clone()).unwrap();
+    let mut later = retry;
+    later.timestamp += chrono::Duration::seconds(1);
+    assert_eq!(
+        plane.store.append_event(later).unwrap(),
+        first_receipt,
+        "a lost durable acknowledgement retries the exact committed receipt"
+    );
 }

@@ -1,5 +1,7 @@
 # PR #416: activation publication, terminal answers, and Web request lifetime
 
+Follow-up: [TUI admission and native portability](pr-416-tui-portability.md).
+
 Repair worktree: `/home/caismis/Documents/codes/rustX-issue-411`.
 Branch: `issue-411-jobs-continuable-subagents`. Starting HEAD and fetched PR head:
 `0a9df8b84fe906976b34d872b41a503aaf45f5ee`. Fetched main, PR base and merge base:

@@ -146,7 +146,7 @@
 //! | Call site | Matches | Observes/consumes | Owner |
 //! |---|---|---|---|
 //! | outer dedicated anchor wait (`waitid(Pid(inner), WNOWAIT \| WEXITED \| WNOHANG)`) | only the inner anchor | observes only (`WNOWAIT`) | outer dedicated path; `ECHILD` = invariant violation, never terminal |
-//! | outer frozen-anchor wait (`waitid(Pid(inner), WUNTRACED \| WNOHANG)`) | only the inner anchor | observes/consumes the stop event | outer dedicated path |
+//! | outer frozen-anchor wait (`waitid(Pid(inner), WSTOPPED \| WNOHANG \| WNOWAIT)`) | only the inner anchor | observes without consuming the stop event | outer dedicated path |
 //! | outer group gate (`waitid(PGid(inner), WEXITED \| WNOHANG)`) | every outer child in the invocation group, including the anchor | consumes | outer gate; `ECHILD` = canonical terminal event (the anchor's only reaper release); on macOS this is only a terminal event because the fallback containment signal was already issued while the anchor was retained |
 //! | inner reaping hygiene (`waitpid(-1, WNOHANG)`) | every child of the inner (bash and adopted in-group descendants) | consumes | inner supervisor; no child of the inner is ever an anchor, so this never consumes another owner's identity |
 //! | inner group gate (`waitid(PGid(self), WEXITED \| WNOHANG)`) | every inner child in the invocation group | consumes | inner supervisor; `ECHILD` = `INNER_EXIT_NORMAL` on Linux, `INNER_EXIT_CONTAINMENT` on macOS |
@@ -551,10 +551,9 @@ fn run_outer() -> i32 {
                 // behind a dead control chain; the inner's death then
                 // follows the normal abnormal-exit containment path.
                 if !inner_frozen {
-                    match waitid(
-                        Id::Pid(Pid::from_raw(inner_pid)),
-                        WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED,
-                    ) {
+                    match crate::runtime::process_wait::observe_stopped_child(Pid::from_raw(
+                        inner_pid,
+                    )) {
                         Ok(WaitStatus::Stopped(..)) => {
                             inner_frozen = true;
                             match nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL)
