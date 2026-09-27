@@ -70,31 +70,14 @@ first occurrence as a fixture accident. That was wrong; it had the same cause.
 
 ## Committed Session recovery ownership
 
-The navigation-lifetime correction above deliberately did not make a
-submission's transport port durable. `FirstSubmitPort.current()` is still the
-authority for native continuation only: attach, model observation, upload and
-send must stop when its endpoint, generation, authority or target fence is
-replaced.
-
-That is not the authority for presentation of an acknowledged `session/create`.
-Successful create stores the exact `CreatedSession` in `firstSubmitMachine`
-before the next continuation fence is evaluated. From that commit point, a
-transport replacement may stop the old continuation, but it cannot erase the
-native Session identity. `NewConversation` therefore transfers a committed
-Session through its current navigation-epoch callback, rather than through the
-obsolete submission port:
-
-```text
-submission continuation authority != committed Session presentation authority
-FirstSubmitPort.current()           != current New Conversation navigation epoch
-```
-
-If the route is still current, recovery opens that exact native Session after a
-confirmed create even when attach is fenced by a dropped connection. The App's
-normal Session route can then attach or reread under the new generation; no
-create or other native mutation is replayed. If a newer navigation invalidates
-the old epoch first, the old route cannot open or steal focus, while the native
-Session remains discoverable from authoritative Session state.
+The earlier composer-owned lifecycle has been replaced by
+[#419's client-owned continuation](../issue-419/ownership.md).
+`FirstSubmitPort.current()` still fences endpoint, generation, authority,
+navigation and exact attachment. The decoded create ACK first records identity
+and publishes the Session-scoped operation, then transfers navigation. Runtime
+readiness gates uploads/admission, never Conversation visibility. Unrelated
+navigation prevents focus theft and further dispatch without erasing committed
+facts. Remount/reconnect observes retained intent and cannot replay it.
 
 ## Deterministic proof
 
@@ -107,8 +90,8 @@ Session remains discoverable from authoritative Session state.
   - Choices are exactly the native catalog in native order, and a
     configuration-only model is absent.
   - Native reasoning profiles and default are shown as published.
-  - A selection writes nothing and creates nothing. After Send, `session/setModel`
-    carries the exact intent while the turn waits.
+  - A selection writes nothing and creates nothing. After Send, `session/create.settings.model`
+    carries explicit intent; a display-only default is omitted.
   - Read failure and native unavailability offer no choice and never reach
     `session/create`.
   - An obsolete Workspace read cannot replace the current Workspace's catalog.
@@ -118,12 +101,12 @@ Session remains discoverable from authoritative Session state.
 - `first-submit.test.ts`: a replaced authority's SUBMIT is refused, and a later
   SUBMIT on the current authority proceeds.
 - `new-conversation.test.tsx`: a create acknowledgement followed by a transport
-  replacement opens the exact committed ID while attach/model/upload/send stay
+  replacement opens the exact committed ID while attach/upload/send stay
   fenced and create remains single-shot; reconnect does not replay create. A
   replacement navigation epoch prevents the older route from opening its
   committed Session.
 
-## Validation commands
+## Historical #402 validation commands
 
 | Command | Final result |
 | --- | --- |

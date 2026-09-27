@@ -7,7 +7,7 @@ import { useClientSelector, sameValue, type ShellView } from '../client/selector
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { activeAttempt } from '../bindings/projection';
 import { deriveSessionProductState } from '../bindings/session-product';
-import { NavigationEpoch } from '../app/commands/native';
+import { NavigationEpoch } from '../client/navigation';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
 import { Modal } from '../presentation/primitives/Modal';

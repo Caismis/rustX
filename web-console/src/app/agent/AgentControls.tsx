@@ -1,7 +1,7 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState } from 'react';
-import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v23';
+import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v24';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Button } from '../../presentation/primitives/Button';
@@ -11,7 +11,7 @@ import { selectSessionModel } from '../model-preference';
 
 /** Replaceable read cache scoped to one native attachment. Mutations never update
  * displayed selection; only a subsequent authoritative read unlocks controls. */
-export function AgentControls({ client, view, draft }: { client: AppServerClient; view?: SessionView; draft?: { source?: SourceSettings; intent?: SessionModelConfig; choose: (selection: SessionModelConfig) => void; disabled: boolean } }) {
+export function AgentControls({ client, view, draft, blocked: pending = false }: { client: AppServerClient; view?: SessionView; blocked?: boolean; draft?: { source?: SourceSettings; intent?: SessionModelConfig; choose: (selection: SessionModelConfig) => void; disabled: boolean } }) {
   const tx = useTranslation();
  const [catalog, setCatalog] = useState<ModelCatalogView>();
  const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [blocked, setBlocked] = useState(true);
@@ -38,7 +38,7 @@ export function AgentControls({ client, view, draft }: { client: AppServerClient
    return () => { ++epoch.current; };
  }, [target?.attachment_id, generation, attached, view?.snapshot?.resources?.revision]);
  const mutate = async (operation: () => Promise<unknown>) => {
-   if (guard.current || blocked || busy || !attached) return;
+   if (pending || guard.current || blocked || busy || !attached) return;
    const at = epoch.current; guard.current = true; setBusy(true); setBlocked(true); setError('');
    try { await operation(); if (current(at)) await read(at); }
    catch (cause) { if (epoch.current === at) setError(isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) })); }
@@ -47,7 +47,7 @@ export function AgentControls({ client, view, draft }: { client: AppServerClient
  const model = view?.snapshot?.model;
  const choices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : catalog;
  const draftError = draft?.source?.session_models?.kind === 'unavailable' ? draft.source.session_models.diagnostic : undefined;
- const disabled = !attached || busy;
+ const disabled = pending || !attached || busy;
  return <div className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={catalogChoices(choices)}
    current={draft ? draft.intent?.model : model?.configured.model} profile={(draft ? draft.intent?.reasoningProfile : model?.effective.reasoningProfile) ?? undefined} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : blocked} error={draft ? draftError : error} load={draft ? () => {} : load}
    choose={(selected, profile) => { if (!catalogAdmits(choices, selected, profile)) return;

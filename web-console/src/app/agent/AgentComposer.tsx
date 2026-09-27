@@ -1,3 +1,4 @@
+import type { FirstSubmission } from '../new-conversation/first-submit';
 import { message, displayText, type DisplayText } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
@@ -5,7 +6,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useEffect, useState, useRef, type ReactNode } from 'react';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/uploads';
-import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v23';
+import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v24';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { CommandMenu } from '../commands/CommandMenu';
@@ -18,8 +19,8 @@ import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ binding = 'default', disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled }: {
-  binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
+export function AgentComposer({ binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled }: {
+  firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[]) => Promise<boolean>; cancellationAvailable?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
@@ -30,7 +31,15 @@ export function AgentComposer({ binding = 'default', disabled, submitDisabled = 
   const [restoreSupported, setRestoreSupported] = useState(() => editableContent(initialContent));
   disabled = disabled || !restoreSupported;
   type DraftFile = { id: number; file: File; status: 'draft' | 'uploading' | 'complete' | 'failed' | 'uncertain'; receipt?: UploadReceipt; error?: DisplayText };
-  const [files, setFiles] = useState<DraftFile[]>([]);
+  const retainedFiles = (submission: FirstSubmission): DraftFile[] => submission.draft.files.map((file, id) => {
+    const receipt = submission.receipts[id];
+    const transferring = id === submission.uploadIndex;
+    const status = receipt ? 'complete' : transferring && submission.phase === 'uploading' ? 'uploading'
+      : transferring && submission.failedPhase === 'uploading' && submission.phase === 'uncertain' ? 'uncertain'
+      : transferring && submission.failedPhase === 'uploading' && submission.phase === 'failed' ? 'failed' : 'draft';
+    return { file, id, status, receipt, error: status === 'failed' ? message('common:startup.upload-failed') : undefined };
+  });
+  const [files, setFiles] = useState<DraftFile[]>(() => firstSubmission ? retainedFiles(firstSubmission) : []);
   const nextId = useRef(0);
   const transferring = useRef(false);
   const [error, setError] = useNotice();
@@ -63,9 +72,16 @@ export function AgentComposer({ binding = 'default', disabled, submitDisabled = 
         ? { ...file, status: isOutcomeUncertain(cause) ? 'uncertain' : 'failed', error: String(cause) } : file));
     }).finally(() => { if (draftBinding.current === owner) transferring.current = false; });
   };
-  const [draft, setDraft] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : '');
+  const [draft, setDraft] = useState(() => firstSubmission?.draft.text ?? (restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''));
   const draftBinding = useRef(binding);
   const restoredInput = useRef(initialContent);
+  const retained = firstSubmission && !['rejected', 'discarded', 'admitted'].includes(firstSubmission.phase) ? firstSubmission : undefined;
+  const retainedInput = useRef(retained);
+  if (retained && (retainedInput.current !== retained || draft !== retained.draft.text)) {
+    retainedInput.current = retained;
+    setDraft(retained.draft.text);
+    setFiles(retainedFiles(retained));
+  }
   const invocation = useRef<{ id: CommandId; draft: string } | undefined>(undefined);
   useEffect(() => {
     const invoked = invocation.current;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v23';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v24';
 import { interactionKey, OutcomeUncertain } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './fixture';
@@ -12,7 +12,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 23 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 24 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -359,4 +359,19 @@ it('T12 native configuration notifications reject stale versions independently p
   expect(s.client.getSnapshot().configuration?.A).toEqual(application);
   expect(s.client.getSnapshot().configuration?.B?.version).toBe('2');
   expect(s.requests.filter(({ request }) => ['configuration/sourceWrite', 'configuration/reconcile', 'session/adoptConfiguration'].includes(request.method))).toHaveLength(0);
+});
+
+it('first-submit authority retirement drops a capacity-queued admission before dispatch', async () => {
+  const s = server(); await s.attached('A'); s.held.add('session/settings');
+  const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  let current = true;
+  const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
+  const rejected = expect(admission).rejects.toThrow('before dispatch');
+  expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
+  current = false;
+  for (const item of s.requests.filter(item => item.request.method === 'session/settings').slice(-8)) s.reply(item.request);
+  await Promise.all([...reads, rejected]);
+  expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(s.client.getSnapshot().views.A.inboundRequests).toBe(0);
 });

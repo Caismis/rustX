@@ -29,23 +29,15 @@ Main exposed App Server 20, Runtime Client 46 and SQLite schema 43.
   optional Session model intent. It does not create a Session on opening or
   Workspace selection. Host catalog/resolve/adopt remain the only Workspace
   authority; no arbitrary path field was added.
-- `firstSubmitMachine` is XState: drafting → creating_session → attaching_session
-  → optional applying_session_model → individually uploading_attachments →
-  submitting_turn → session. Known pre-commit rejection returns to editable drafting; only a new explicit submission retries. Uncertain creation and committed-Session failures have no replay transition.
-- A confirmed `session/create` is the Session commit point. Its real native IDs
-  survive later failures; the UI opens that Session with an accurate failure.
-  An uncertain create leaves no fabricated identity and tells the user to inspect
-  native Sessions before another attempt.
-- Explicit model intent uses the existing Session mutation owner, then an
-  authoritative snapshot reread. Both configured and effective model (and explicit
-  reasoning profile) must match before upload/send. Workspace default configuration
-  is untouched.
-- Each acknowledged upload receipt is recorded individually. Later upload/send
-  failure does not roll back prior receipts or Session creation. Uncertain
-  mutations are never retried automatically; native reread/reconnect is recovery.
-- Every step checks endpoint, connection generation, authority revision,
-  navigation epoch and, once attached, exact native attachment target. Stopped
-  XState promise actors cannot publish into replacement routes.
+- Startup ownership was replaced by [#419](../issue-419/ownership.md).
+  `AppServerClient.firstSubmissions` owns create → Session handoff → attach/readiness
+  → ordered uploads → admission. Create ACK publishes the continuation before
+  immediate Conversation navigation. Component retirement cannot abandon it.
+- Explicit model intent is part of native creation; omission preserves the native
+  default owner. There is no post-create model initialization or repair mutation.
+- ACK facts survive later navigation/transport fences. Pending input and receipts
+  remain recoverable until admission or explicit discard. No uncertain mutation
+  is automatically retried; mounting or reconnecting cannot restart submission.
 - The permission seat uses the same Settings target and Unit transaction actors
   as Settings, through Product Host registered Workspace identity and exact source
   revision/CAS. Only `policy` and `full_access` are displayed. Source intent,

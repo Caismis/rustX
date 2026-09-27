@@ -9,11 +9,12 @@ import { commands, discoveryQuery, parseCommand, available } from '../src/app/co
 import { activeAttempt, executionIdle, lineageSwitchSafe } from '../src/bindings/projection';
 import { matchCommands } from '../src/app/commands/matching';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import { CommandSession, NavigationEpoch } from '../src/app/commands/native';
+import { NavigationEpoch } from '../src/client/navigation';
+import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v23';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v24';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -412,7 +413,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['session/create', 'context/compact'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
     const { scope, fixture } = await subject(); server.held.add(method);
-    const work = method === 'session/create' ? firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current).create({ workspaceId: 'wA', text: 'hello', files: [] }) : scope.compact();
+    const work = method === 'session/create' ? firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}) : scope.compact();
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();
@@ -422,7 +423,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it('a new Session committed after navigation does not acquire a child attachment', async () => {
     const { scope, navigation, fixture } = await subject(); server.held.add('session/create');
-    const work = firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current).create({ workspaceId: 'wA', text: 'hello', files: [] }), request = await server.waitFor('session/create', 1);
+    const work = firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
     const response = server.commit(request); navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toMatchObject({ id: fixture.committed[0].session.id }); expect(fixture.committed).toHaveLength(1);
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);

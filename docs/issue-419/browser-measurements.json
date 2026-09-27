@@ -1,0 +1,1020 @@
+{
+  "before": [
+    {
+      "sample": 1,
+      "identities": {
+        "created": {
+          "id": "ses_01a0e136-4119-7f32-806a-b94f9d94543e",
+          "name": null,
+          "created_at": "2026-09-27T04:53:44.349968723Z",
+          "updated_at": "2026-09-27T04:53:44.349968723Z",
+          "active_node": "node_01a0e136-4119-7f32-806a-b95ed5c1791e",
+          "active_conversation_id": "conv_01a0e136-4119-7f32-806a-b965885f37be",
+          "node_count": 1
+        },
+        "attached": {
+          "session_id": "ses_01a0e136-4119-7f32-806a-b94f9d94543e",
+          "conversation_id": "conv_01a0e136-4119-7f32-806a-b965885f37be",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        }
+      },
+      "rpcIds": [
+        {
+          "id": "0:4",
+          "method": "session/create"
+        },
+        {
+          "id": "0:5",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:6",
+          "method": "session/attach"
+        },
+        {
+          "id": "0:7",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:8",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:9",
+          "method": "session/list"
+        },
+        {
+          "id": "0:10",
+          "method": "session/setModel"
+        },
+        {
+          "id": "0:11",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:12",
+          "method": "turn/start"
+        },
+        {
+          "id": "0:13",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:14",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:15",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:16",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:17",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:18",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:19",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:20",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:21",
+          "method": "session/configuration"
+        }
+      ],
+      "times": {
+        "T0": 1213.9000000059605,
+        "T1": 1225.2000000178814,
+        "T2": 1227.300000011921,
+        "T3": 1357.5,
+        "T4": 1370.0999999940395,
+        "T6": 1632.4000000059605,
+        "T7": 1632.4000000059605,
+        "T8": 1670.5,
+        "T9": 1672.9000000059605,
+        "visible": 1687.2000000178814,
+        "T10": 1708,
+        "outputVisible": 1763.9000000059605
+      },
+      "requests": [
+        "session/create",
+        "session/settings",
+        "session/attach",
+        "session/settings",
+        "session/summary",
+        "session/list",
+        "session/setModel",
+        "session/snapshot",
+        "turn/start",
+        "session/settings",
+        "session/configuration",
+        "session/snapshot",
+        "session/summary",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration"
+      ],
+      "startupRequests": [
+        "session/create",
+        "session/settings",
+        "session/attach",
+        "session/settings",
+        "session/summary",
+        "session/list",
+        "session/setModel",
+        "session/snapshot",
+        "turn/start"
+      ],
+      "providerTimings": [
+        {
+          "request_id": "request:51:conv_01a0e136-4119-7f32-806a-b965885f37be-attempt-0:1:1:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "3",
+              "first_output_ms": "7",
+              "last_output_ms": "8",
+              "terminal_ms": "9"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "2",
+            "terminal_ms": "6",
+            "output_tokens_per_second": null
+          }
+        },
+        {
+          "request_id": "request:51:conv_01a0e136-4119-7f32-806a-b965885f37be-attempt-0:1:2:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "7",
+              "first_output_ms": "12",
+              "last_output_ms": "12",
+              "terminal_ms": "12"
+            },
+            "ttft_ms": "5",
+            "generation_ms": "0",
+            "terminal_ms": "5",
+            "output_tokens_per_second": null
+          }
+        }
+      ]
+    },
+    {
+      "sample": 2,
+      "identities": {
+        "created": {
+          "id": "ses_01a0e136-4a13-7c11-bcf7-60fddd9a6d0b",
+          "name": null,
+          "created_at": "2026-09-27T04:53:46.648175788Z",
+          "updated_at": "2026-09-27T04:53:46.648175788Z",
+          "active_node": "node_01a0e136-4a13-7c11-bcf7-610eebaadcdd",
+          "active_conversation_id": "conv_01a0e136-4a13-7c11-bcf7-6117245ca37c",
+          "node_count": 1
+        },
+        "attached": {
+          "session_id": "ses_01a0e136-4a13-7c11-bcf7-60fddd9a6d0b",
+          "conversation_id": "conv_01a0e136-4a13-7c11-bcf7-6117245ca37c",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        }
+      },
+      "rpcIds": [
+        {
+          "id": "0:4",
+          "method": "session/create"
+        },
+        {
+          "id": "0:5",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:6",
+          "method": "session/attach"
+        },
+        {
+          "id": "0:7",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:8",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:9",
+          "method": "session/list"
+        },
+        {
+          "id": "0:10",
+          "method": "session/setModel"
+        },
+        {
+          "id": "0:11",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:12",
+          "method": "turn/start"
+        },
+        {
+          "id": "0:13",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:14",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:15",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:16",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:17",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:18",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:19",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:20",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:21",
+          "method": "session/configuration"
+        }
+      ],
+      "times": {
+        "T0": 1196.7999999821186,
+        "T1": 1210.7999999821186,
+        "T2": 1212.0999999940395,
+        "T3": 1341.3999999761581,
+        "T4": 1349.7999999821186,
+        "T6": 1607.8999999761581,
+        "T7": 1607.8999999761581,
+        "T8": 1636.8999999761581,
+        "T9": 1638.699999988079,
+        "visible": 1650.5999999940395,
+        "T10": 1705.3999999761581,
+        "outputVisible": 1741.199999988079
+      },
+      "requests": [
+        "session/create",
+        "session/settings",
+        "session/attach",
+        "session/settings",
+        "session/summary",
+        "session/list",
+        "session/setModel",
+        "session/snapshot",
+        "turn/start",
+        "session/settings",
+        "session/configuration",
+        "session/snapshot",
+        "session/summary",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration"
+      ],
+      "startupRequests": [
+        "session/create",
+        "session/settings",
+        "session/attach",
+        "session/settings",
+        "session/summary",
+        "session/list",
+        "session/setModel",
+        "session/snapshot",
+        "turn/start"
+      ],
+      "providerTimings": [
+        {
+          "request_id": "request:51:conv_01a0e136-4a13-7c11-bcf7-6117245ca37c-attempt-0:1:1:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "4",
+              "first_output_ms": "8",
+              "last_output_ms": "10",
+              "terminal_ms": "10"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "2",
+            "terminal_ms": "6",
+            "output_tokens_per_second": null
+          }
+        },
+        {
+          "request_id": "request:51:conv_01a0e136-4a13-7c11-bcf7-6117245ca37c-attempt-0:1:2:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "7",
+              "first_output_ms": "11",
+              "last_output_ms": "11",
+              "terminal_ms": "11"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "0",
+            "terminal_ms": "4",
+            "output_tokens_per_second": null
+          }
+        }
+      ]
+    },
+    {
+      "sample": 3,
+      "identities": {
+        "created": {
+          "id": "ses_01a0e136-528d-7402-b5b5-038acec59211",
+          "name": null,
+          "created_at": "2026-09-27T04:53:48.817743082Z",
+          "updated_at": "2026-09-27T04:53:48.817743082Z",
+          "active_node": "node_01a0e136-528d-7402-b5b5-0390504e753b",
+          "active_conversation_id": "conv_01a0e136-528d-7402-b5b5-03a4d944bd21",
+          "node_count": 1
+        },
+        "attached": {
+          "session_id": "ses_01a0e136-528d-7402-b5b5-038acec59211",
+          "conversation_id": "conv_01a0e136-528d-7402-b5b5-03a4d944bd21",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        }
+      },
+      "rpcIds": [
+        {
+          "id": "0:4",
+          "method": "session/create"
+        },
+        {
+          "id": "0:5",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:6",
+          "method": "session/attach"
+        },
+        {
+          "id": "0:7",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:8",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:9",
+          "method": "session/list"
+        },
+        {
+          "id": "0:10",
+          "method": "session/setModel"
+        },
+        {
+          "id": "0:11",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:12",
+          "method": "turn/start"
+        },
+        {
+          "id": "0:13",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:14",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:15",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:16",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:17",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:18",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:19",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:20",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:21",
+          "method": "session/configuration"
+        }
+      ],
+      "times": {
+        "T0": 1098,
+        "T1": 1113,
+        "T2": 1114.6000000238419,
+        "T3": 1244.9000000059605,
+        "T4": 1255.800000011921,
+        "T6": 1516.6000000238419,
+        "T7": 1516.6000000238419,
+        "T8": 1549.2000000178814,
+        "T9": 1551.2000000178814,
+        "visible": 1563.5,
+        "T10": 1610.1000000238419,
+        "outputVisible": 1642.4000000059605
+      },
+      "requests": [
+        "session/create",
+        "session/settings",
+        "session/attach",
+        "session/settings",
+        "session/summary",
+        "session/list",
+        "session/setModel",
+        "session/snapshot",
+        "turn/start",
+        "session/settings",
+        "session/configuration",
+        "session/snapshot",
+        "session/summary",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration"
+      ],
+      "startupRequests": [
+        "session/create",
+        "session/settings",
+        "session/attach",
+        "session/settings",
+        "session/summary",
+        "session/list",
+        "session/setModel",
+        "session/snapshot",
+        "turn/start"
+      ],
+      "providerTimings": [
+        {
+          "request_id": "request:51:conv_01a0e136-528d-7402-b5b5-03a4d944bd21-attempt-0:1:1:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "4",
+              "first_output_ms": "8",
+              "last_output_ms": "10",
+              "terminal_ms": "10"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "2",
+            "terminal_ms": "6",
+            "output_tokens_per_second": null
+          }
+        },
+        {
+          "request_id": "request:51:conv_01a0e136-528d-7402-b5b5-03a4d944bd21-attempt-0:1:2:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "7",
+              "first_output_ms": "11",
+              "last_output_ms": "11",
+              "terminal_ms": "11"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "0",
+            "terminal_ms": "4",
+            "output_tokens_per_second": null
+          }
+        }
+      ]
+    }
+  ],
+  "after": [
+    {
+      "sample": 1,
+      "identities": {
+        "created": {
+          "id": "ses_01a0e136-56b4-7c71-ab34-8aac3bebc618",
+          "name": null,
+          "created_at": "2026-09-27T04:53:49.881230971Z",
+          "updated_at": "2026-09-27T04:53:49.881230971Z",
+          "active_node": "node_01a0e136-56b4-7c71-ab34-8abb49f31621",
+          "active_conversation_id": "conv_01a0e136-56b4-7c71-ab34-8acb372074de",
+          "node_count": 1
+        },
+        "attached": {
+          "session_id": "ses_01a0e136-56b4-7c71-ab34-8aac3bebc618",
+          "conversation_id": "conv_01a0e136-56b4-7c71-ab34-8acb372074de",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        }
+      },
+      "rpcIds": [
+        {
+          "id": "0:4",
+          "method": "session/create"
+        },
+        {
+          "id": "0:5",
+          "method": "session/list"
+        },
+        {
+          "id": "0:6",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:7",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:8",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:9",
+          "method": "session/attach"
+        },
+        {
+          "id": "0:10",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:11",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:12",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:13",
+          "method": "turn/start"
+        },
+        {
+          "id": "0:14",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:15",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:16",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:17",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:18",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:19",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:20",
+          "method": "session/configuration"
+        }
+      ],
+      "times": {
+        "T0": 1248.199999988079,
+        "T1": 1259.4000000059605,
+        "T2": 1260.5999999940395,
+        "T3": 1408,
+        "visible": 1416.5,
+        "T4": 1439.699999988079,
+        "T6": 1697.4000000059605,
+        "T7": 1697.4000000059605,
+        "T8": 1747.5999999940395,
+        "T9": 1752.4000000059605,
+        "T10": 1798.7999999821186,
+        "outputVisible": 1876.5
+      },
+      "requests": [
+        "session/create",
+        "session/list",
+        "session/settings",
+        "session/configuration",
+        "session/settings",
+        "session/attach",
+        "session/configuration",
+        "session/settings",
+        "session/summary",
+        "turn/start",
+        "session/snapshot",
+        "session/summary",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration"
+      ],
+      "startupRequests": [
+        "session/create",
+        "session/list",
+        "session/settings",
+        "session/configuration",
+        "session/settings",
+        "session/attach",
+        "session/configuration",
+        "session/settings",
+        "session/summary",
+        "turn/start"
+      ],
+      "providerTimings": [
+        {
+          "request_id": "request:51:conv_01a0e136-56b4-7c71-ab34-8acb372074de-attempt-0:1:1:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "5",
+              "first_output_ms": "9",
+              "last_output_ms": "11",
+              "terminal_ms": "11"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "2",
+            "terminal_ms": "6",
+            "output_tokens_per_second": null
+          }
+        },
+        {
+          "request_id": "request:51:conv_01a0e136-56b4-7c71-ab34-8acb372074de-attempt-0:1:2:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "6",
+              "first_output_ms": "10",
+              "last_output_ms": "10",
+              "terminal_ms": "10"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "0",
+            "terminal_ms": "4",
+            "output_tokens_per_second": null
+          }
+        }
+      ]
+    },
+    {
+      "sample": 2,
+      "identities": {
+        "created": {
+          "id": "ses_01a0e136-5f8a-7931-b2ce-941889653815",
+          "name": null,
+          "created_at": "2026-09-27T04:53:52.143504729Z",
+          "updated_at": "2026-09-27T04:53:52.143504729Z",
+          "active_node": "node_01a0e136-5f8a-7931-b2ce-94297d52b3d2",
+          "active_conversation_id": "conv_01a0e136-5f8a-7931-b2ce-94394fd97953",
+          "node_count": 1
+        },
+        "attached": {
+          "session_id": "ses_01a0e136-5f8a-7931-b2ce-941889653815",
+          "conversation_id": "conv_01a0e136-5f8a-7931-b2ce-94394fd97953",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        }
+      },
+      "rpcIds": [
+        {
+          "id": "0:4",
+          "method": "session/create"
+        },
+        {
+          "id": "0:5",
+          "method": "session/list"
+        },
+        {
+          "id": "0:6",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:7",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:8",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:9",
+          "method": "session/attach"
+        },
+        {
+          "id": "0:10",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:11",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:12",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:13",
+          "method": "turn/start"
+        },
+        {
+          "id": "0:14",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:15",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:16",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:17",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:18",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:19",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:20",
+          "method": "session/configuration"
+        }
+      ],
+      "times": {
+        "T0": 1171.199999988079,
+        "T1": 1178.2999999821186,
+        "T2": 1178.5999999940395,
+        "T3": 1326.5,
+        "visible": 1334.699999988079,
+        "T4": 1356.7999999821186,
+        "T6": 1618.199999988079,
+        "T7": 1618.199999988079,
+        "T8": 1665.199999988079,
+        "T9": 1670.199999988079,
+        "T10": 1719,
+        "outputVisible": 1767.7999999821186
+      },
+      "requests": [
+        "session/create",
+        "session/list",
+        "session/settings",
+        "session/configuration",
+        "session/settings",
+        "session/attach",
+        "session/configuration",
+        "session/settings",
+        "session/summary",
+        "turn/start",
+        "session/snapshot",
+        "session/summary",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration"
+      ],
+      "startupRequests": [
+        "session/create",
+        "session/list",
+        "session/settings",
+        "session/configuration",
+        "session/settings",
+        "session/attach",
+        "session/configuration",
+        "session/settings",
+        "session/summary",
+        "turn/start"
+      ],
+      "providerTimings": [
+        {
+          "request_id": "request:51:conv_01a0e136-5f8a-7931-b2ce-94394fd97953-attempt-0:1:1:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "4",
+              "first_output_ms": "8",
+              "last_output_ms": "10",
+              "terminal_ms": "10"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "2",
+            "terminal_ms": "6",
+            "output_tokens_per_second": null
+          }
+        },
+        {
+          "request_id": "request:51:conv_01a0e136-5f8a-7931-b2ce-94394fd97953-attempt-0:1:2:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "7",
+              "first_output_ms": "11",
+              "last_output_ms": "11",
+              "terminal_ms": "11"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "0",
+            "terminal_ms": "4",
+            "output_tokens_per_second": null
+          }
+        }
+      ]
+    },
+    {
+      "sample": 3,
+      "identities": {
+        "created": {
+          "id": "ses_01a0e136-6806-7b83-b74c-2917b65afa60",
+          "name": null,
+          "created_at": "2026-09-27T04:53:54.315378436Z",
+          "updated_at": "2026-09-27T04:53:54.315378436Z",
+          "active_node": "node_01a0e136-6806-7b83-b74c-2924f05945f5",
+          "active_conversation_id": "conv_01a0e136-6806-7b83-b74c-293692bb4b75",
+          "node_count": 1
+        },
+        "attached": {
+          "session_id": "ses_01a0e136-6806-7b83-b74c-2917b65afa60",
+          "conversation_id": "conv_01a0e136-6806-7b83-b74c-293692bb4b75",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        }
+      },
+      "rpcIds": [
+        {
+          "id": "0:4",
+          "method": "session/create"
+        },
+        {
+          "id": "0:5",
+          "method": "session/list"
+        },
+        {
+          "id": "0:6",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:7",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:8",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:9",
+          "method": "session/attach"
+        },
+        {
+          "id": "0:10",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:11",
+          "method": "session/settings"
+        },
+        {
+          "id": "0:12",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:13",
+          "method": "turn/start"
+        },
+        {
+          "id": "0:14",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:15",
+          "method": "session/summary"
+        },
+        {
+          "id": "0:16",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:17",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:18",
+          "method": "session/configuration"
+        },
+        {
+          "id": "0:19",
+          "method": "session/snapshot"
+        },
+        {
+          "id": "0:20",
+          "method": "session/configuration"
+        }
+      ],
+      "times": {
+        "T0": 1070.5,
+        "T1": 1079.7000000178814,
+        "T2": 1081.4000000059605,
+        "T3": 1228.7000000178814,
+        "visible": 1237.2000000178814,
+        "T4": 1256.5,
+        "T6": 1517.300000011921,
+        "T7": 1517.300000011921,
+        "T8": 1565.800000011921,
+        "T9": 1569.300000011921,
+        "T10": 1622.800000011921,
+        "outputVisible": 1647.300000011921
+      },
+      "requests": [
+        "session/create",
+        "session/list",
+        "session/settings",
+        "session/configuration",
+        "session/settings",
+        "session/attach",
+        "session/configuration",
+        "session/settings",
+        "session/summary",
+        "turn/start",
+        "session/snapshot",
+        "session/summary",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration",
+        "session/snapshot",
+        "session/configuration"
+      ],
+      "startupRequests": [
+        "session/create",
+        "session/list",
+        "session/settings",
+        "session/configuration",
+        "session/settings",
+        "session/attach",
+        "session/configuration",
+        "session/settings",
+        "session/summary",
+        "turn/start"
+      ],
+      "providerTimings": [
+        {
+          "request_id": "request:51:conv_01a0e136-6806-7b83-b74c-293692bb4b75-attempt-0:1:1:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "4",
+              "first_output_ms": "8",
+              "last_output_ms": "10",
+              "terminal_ms": "10"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "2",
+            "terminal_ms": "6",
+            "output_tokens_per_second": null
+          }
+        },
+        {
+          "request_id": "request:51:conv_01a0e136-6806-7b83-b74c-293692bb4b75-attempt-0:1:2:0",
+          "generation": {
+            "timeline": {
+              "dispatch_ms": "6",
+              "first_output_ms": "10",
+              "last_output_ms": "10",
+              "terminal_ms": "10"
+            },
+            "ttft_ms": "4",
+            "generation_ms": "0",
+            "terminal_ms": "4",
+            "output_tokens_per_second": null
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,15 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "startup.detached": "Retained first input outside this Conversation",
+  "startup.detached-receipts": "{count} uploads were confirmed on that connection. No input will be replayed.",
+  "startup.attaching": "Preparing this Conversation. Your first input has not been sent.",
+  "startup.uploading": "Uploading attachments. Your first input has not been sent.",
+  "startup.admitting": "Submitting your first input. Acceptance is not yet confirmed.",
+  "startup.uncertain": "The outcome is uncertain. Your input is retained; nothing will be replayed.",
+  "startup.attach-failed": "Conversation startup failed. Your first input is retained.",
+  "startup.upload-failed": "Attachment upload failed. Your input and confirmed uploads are retained.",
+  "startup.admission-failed": "Your first input was not accepted. It is retained for inspection.",
+
   "state.incomplete": "incomplete",
   "state.settling": "settling",
   "state.limited": "limited",
@@ -160,6 +170,16 @@ export const en = {
 } as const;
 export type CommonKey = keyof typeof en;
 export const zh = {
+  "startup.detached": "此对话之外已保留的首条输入",
+  "startup.detached-receipts": "该连接已确认 {count} 个上传。不会自动重发输入。",
+  "startup.attaching": "正在准备此对话。首条输入尚未发送。",
+  "startup.uploading": "正在上传附件。首条输入尚未发送。",
+  "startup.admitting": "正在提交首条输入，尚未确认接收。",
+  "startup.uncertain": "结果不确定。输入已保留，不会自动重发。",
+  "startup.attach-failed": "对话启动失败。首条输入已保留。",
+  "startup.upload-failed": "附件上传失败。输入及已确认的上传已保留。",
+  "startup.admission-failed": "首条输入未被接收，已保留供检查。",
+
   "state.incomplete": "未完成",
   "state.settling": "正在结算",
   "state.limited": "已达限制",
