@@ -58,6 +58,9 @@ impl TraceCursor {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TracePage {
+    /// Current-cut repairs for explicitly requested loaded identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub updates: Vec<TraceLifecycle>,
     pub records: Vec<TraceRecord>,
     pub next_cursor: Option<TraceCursor>,
 }

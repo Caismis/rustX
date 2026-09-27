@@ -21,7 +21,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   const todo = page.getByRole('region', { name: 'To-dos' });
   const goal = page.getByRole('region', { name: 'Goal' });
   const queue = page.getByRole('region', { name: 'Queue' });
-  const revision = async () => Number(wire.responses.filter(row => row.result?.snapshot?.goal?.current).at(-1)?.result.snapshot.goal.current.reference.revision);
+  const revision = async () => Number(wire.notifications.filter(row => row.params?.event?.type === 'goal_changed').at(-1)?.params.event.view.current?.reference.revision ?? wire.responses.filter(row => row.result?.snapshot?.goal?.current).at(-1)?.result.snapshot.goal.current.reference.revision);
   const aligned = async (docks: Locator[]) => {
     // ResizeObserver and the Harness grid transition settle independently of
     // the viewport call. Observe the geometry contract, never sleep for it.

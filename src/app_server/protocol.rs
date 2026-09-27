@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 24;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -103,6 +103,8 @@ pub enum Method {
     #[serde(rename = "session/trace")]
     Trace {
         target: AttachmentTarget,
+        #[serde(default)]
+        records: Vec<crate::runtime_client::trace::TraceCursor>,
         before: Option<crate::runtime_client::trace::TraceCursor>,
         limit: usize,
     },

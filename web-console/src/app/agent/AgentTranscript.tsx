@@ -1,16 +1,15 @@
 import { useTranslation } from '../../locale/react';
-import { Fragment, useState } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { turnProcesses } from '../../bindings/turn-process';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v24';
+import type { RuntimeClientSnapshot, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v25';
 import { conversation, json } from '../../bindings/projection';
 import { agentStatusPlacement, isAgentStatusContext, statusesAt } from '../../bindings/agent-status';
 import { Button } from '../../presentation/primitives/Button';
-import { AssistantMessage } from '../../presentation/agent/Message';
 import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
-import { Content, Message } from './Message';
+import { Message } from './Message';
 import { entryIdentity, HISTORY_LIMIT, type TranscriptCache } from '../../client/transcript';
 import type { HistoryAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
@@ -21,7 +20,15 @@ import css from '../../presentation/agent/Chat.module.css';
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
  * annotation anchored there still renders in place — as an annotation-only slot. */
 const hasBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type !== 'message' || entry.item.message.role !== 'tool';
-export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: RuntimeClientSnapshot; history?: TranscriptCache; loadEarlier?: () => void; latest?: () => void; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
+function MessageSeat({ id, hidden, owner, reveal, prefix, suffix, bodyHidden, message, tools, actions, blocks, streaming, reasoningHidden, other }: {
+  id: string; hidden?: boolean; owner?: string; reveal?: string; prefix?: ReactNode; suffix?: ReactNode; bodyHidden?: boolean;
+  message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
+}) {
+  return <div hidden={hidden} data-chat-anchor-key={id} data-turn-process-owner={owner} data-response-reveal={reveal}>
+    {prefix}<div hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
+  </div>;
+}
+export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; latest?: () => void; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
   const tx = useTranslation();
   const { messages, streaming } = conversation(snapshot);
   const entries = history?.page.entries ?? snapshot.transcript.entries ?? [];
@@ -45,12 +52,20 @@ export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHist
   // Agent Status has its own anchored annotation, so its canonical Context message
   // must not reappear here as ordinary chat or as purported current context.
   const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isAgentStatusContext(message));
+  const liveProcess = snapshot.attempt && snapshot.attempt.phase.type !== 'settled' && !entries.some(entry => entry.turn_process?.conversation_id === snapshot.conversation_id && entry.turn_process.attempt_id === snapshot.attempt!.attempt_id) && !entries.some(entry => entry.completed_response?.origin.conversation_id === snapshot.conversation_id && entry.completed_response.origin.attempt_id === snapshot.attempt!.attempt_id) && <TurnProcess id={JSON.stringify([snapshot.conversation_id, snapshot.attempt.attempt_id])} open tools={snapshot.attempt.foreground?.length ?? 0} messages={0}
+      running
+      start={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.started_at : undefined}
+      end={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.ended_at ?? undefined : undefined}/>;
   return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {history?.page.next_cursor != null && <Button disabled={history.loading || entries.length >= HISTORY_LIMIT} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
-    {entries.length >= HISTORY_LIMIT && <p>{tx('agent:agent-transcript.history-window-is-full')}{' '}<Button onClick={latest}>{tx('agent:agent-transcript.return-to-latest')}</Button></p>}
+    {entries.length >= HISTORY_LIMIT && <p>{tx('agent:agent-transcript.history-window-is-full')}{' '}<Button data-chat-latest onClick={latest}>{tx('agent:agent-transcript.return-to-latest')}</Button></p>}
     {history?.error && <p role="alert">{history.error}</p>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
-    {turnPresentation(entries).map(node => {
+    {[...turnPresentation(entries), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
+      if (node.kind === 'live-process') return <Fragment key="live-process">{liveProcess}</Fragment>;
+      if (node.kind === 'streaming') return <MessageSeat key={`message:${node.streaming.message_id}`} id={`message:${node.streaming.message_id}`}
+        message={{ role: 'assistant', id: node.streaming.message_id, content: [] }} blocks={node.streaming.blocks ?? []} streaming
+        tools={snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id)}/>;
       if (node.kind === 'process') return <TurnProcess key={node.key} id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} running={node.process.outcome === 'running'} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}/>;
       const entry = node.entry;
@@ -63,37 +78,31 @@ export function AgentTranscript({ snapshot, history, loadEarlier, latest, onHist
       const statusOwner = (status: typeof statuses[number]) => process.attempts.get(JSON.stringify([snapshot.conversation_id, status.attempt_id]));
       const visibleStatus = statuses.some(status => { const owner = statusOwner(status); return !owner || process.groups.get(owner)?.owner.outcome !== 'completed' || expanded.has(owner); });
       const body = hasBody(entry);
-      const displayed = final && entry.item.type === 'message' && entry.item.message.role === 'assistant'
-        ? { ...entry.item.message, content: entry.item.message.content.filter(b => b.type !== 'reasoning') } : entry.item.type === 'message' ? entry.item.message : undefined;
       const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor;
       const statusSeat = statuses.some(status => { const owner = statusOwner(status); const seat = owner ? process.groups.get(owner)?.seat : undefined; return seat?.kind === 'status' && seat.statusId === status.status_message_id; });
       if (!body && !statuses.length && !entrySeat) return null;
-      return <Fragment key={entryIdentity(entry)}><div hidden={(!body || !!group && !processOpen && !final) && !entrySeat && !statusSeat && !visibleStatus} key={entryIdentity(entry)} data-chat-anchor-key={entryIdentity(entry)} data-turn-process-owner={key} data-response-reveal={entry === latestResponse || entry === latestUser ? 'always' : 'hover'}>
+      return <MessageSeat key={entryIdentity(entry)} id={entryIdentity(entry)} hidden={(!body || !!group && !processOpen && !final) && !entrySeat && !statusSeat && !visibleStatus} owner={key} reveal={entry === latestResponse || entry === latestUser ? 'always' : 'hover'}
+        prefix={<>
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(JSON.stringify([entry.completed_response.origin.conversation_id, entry.completed_response.origin.attempt_id])) ?? '') && <TurnProcess id={JSON.stringify([entry.completed_response.origin.conversation_id, entry.completed_response.origin.attempt_id])} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>}
-        {final && processOpen && entry.item.type === 'message' && entry.item.message.role === 'assistant' && <Content blocks={entry.item.message.content.filter(b => b.type === 'reasoning')} markdown/>}
-        <div hidden={!final && !processOpen}>
-        {body && (entry.item.type === 'message' ? <Message message={displayed!} actions={entry.item.type === 'message' && entry.item.message.role === 'user' && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className={tailCss.actions} aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={entry.item.message.timestamp}/><CopyMessage text={entry.item.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>} tools={(entry.tool_calls ?? []).map(tool => tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.message_id === tool.message_id && live.block_index === tool.block_index && live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool)} /> : <details>
+        </>} bodyHidden={!final && !processOpen}
+        message={body && entry.item.type === 'message' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
+        actions={entry.item.type === 'message' && entry.item.message.role === 'user' && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className={tailCss.actions} aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={entry.item.message.timestamp}/><CopyMessage text={entry.item.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>}
+        tools={(entry.tool_calls ?? []).map(tool => tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.message_id === tool.message_id && live.block_index === tool.block_index && live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool)}
+        other={body && (entry.item.type === 'message' ? null : <details>
           <summary>{entry.item.type === 'publication_audit' ? tx('agent:agent-transcript.assistant-recovery-details') : tx('agent:agent-transcript.historical-interaction-details')}</summary>
           <pre>{json(entry.item)}</pre>
         </details>)}
-        </div>
-        {statuses.map(status => {
+        suffix={<>{statuses.map(status => {
           // Keep the native anchor, while sharing its exact completed Attempt's
           // disclosure. Never borrow the adjacent row's ownership for a status.
           const owner = statusOwner(status);
           const seat = owner ? process.groups.get(owner)?.seat : undefined;
           return <div key={status.status_message_id}>{seat?.kind === 'status' && seat.statusId === status.status_message_id && disclosure(owner!)}<div hidden={!!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner)}><AgentStatusAnnotation status={status}/></div></div>;
-        })}
-      </div>
-
-      </Fragment>;
+        })}</>}/>;
     })}
     {!!currentContext.length && <details><summary>{tx('agent:agent-transcript.current-context')}</summary>{currentContext.map(message => <Message key={message.id} message={message} />)}</details>}
-    {snapshot.attempt && snapshot.attempt.phase.type !== 'settled' && !entries.some(entry => entry.turn_process?.conversation_id === snapshot.conversation_id && entry.turn_process.attempt_id === snapshot.attempt!.attempt_id) && !entries.some(entry => entry.completed_response?.origin.conversation_id === snapshot.conversation_id && entry.completed_response.origin.attempt_id === snapshot.attempt!.attempt_id) && <TurnProcess id={JSON.stringify([snapshot.conversation_id, snapshot.attempt.attempt_id])} open tools={snapshot.attempt.foreground?.length ?? 0} messages={0}
-      running
-      start={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.started_at : undefined}
-      end={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.ended_at ?? undefined : undefined}/>}
-    {streaming && !durableIds.has(streaming.message_id) && <div data-chat-anchor-key={`message:${streaming.message_id}`}><AssistantMessage label={tx('agent:agent-transcript.streaming-response')}><Content blocks={streaming.blocks ?? []} markdown streaming tools={snapshot.attempt?.foreground?.filter(tool => tool.message_id === streaming.message_id)}/></AssistantMessage></div>}
+
+
   </div>;
 }

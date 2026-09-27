@@ -3012,9 +3012,31 @@ async fn goal351_runtime_client_projection_same_cursor_controls_and_replay() {
         .await
         .unwrap()
         .unwrap();
-    let (baseline, cursor) = host.snapshot().unwrap();
+    let (baseline, _) = host.snapshot().unwrap();
     assert_eq!(baseline.goal, Some(rustx::goal::GoalView { current: None }));
-    let subscription = attachment.subscribe_events(cursor).unwrap();
+    let subscription = attachment
+        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
+        .unwrap();
+    // Freeze Goal observations only after the independent request-start read
+    // domain has published its captured cut. Snapshot completion does not join it.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let rustx::runtime_client::EventDelivery::Event(event) = subscription.next().await
+            else {
+                panic!("read-domain publication");
+            };
+            if let rustx::runtime_client::RuntimeClientEvent::ReadDomainsUpdated {
+                transcript, ..
+            } = event.event
+                && transcript == baseline.transcript
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("request-start materialization");
+    let (baseline, cursor) = host.snapshot().unwrap();
     let inner = host.weak_inner().upgrade().unwrap();
     inner.park_projection_worker();
     let created = inner

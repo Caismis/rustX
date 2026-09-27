@@ -1466,6 +1466,18 @@ async fn scenario_body(root: &Path, scenario: &str) {
             park_owning(child).await;
         }
         SESSION_PROJECTION => {
+            // This catalog-atomicity fixture promises exactly one canonical
+            // user boundary. Disable the unrelated optional Agent Status
+            // contribution rather than racing its model-start commit against
+            // the independently frozen catalog publisher.
+            let path = lab_paths(root).config;
+            let mut document: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            document["agent"]["plugins"]["agent_status"]["enabled"] = toml::Value::Boolean(false);
+            crate::launch_fixture::write_document(
+                &path,
+                &toml::to_string_pretty(&document).unwrap(),
+            );
             // The model parks forever, so the only durable facts this child
             // can ever commit are the canonical first boundary and — through
             // the armed one-shot publisher — the Session's display

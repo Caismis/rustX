@@ -1,10 +1,11 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect } from '@playwright/test';
 for (const width of [1440, 390]) {
   test(`managed output is plain recorded information at ${width}px`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewportSize({ width, height: 1000 });
-    await page.goto('http://127.0.0.1:5174/test/fixtures/managed-output.html');
+    await page.goto(`${fixtureOrigin}/test/fixtures/managed-output.html`);
     await expect(page).toHaveTitle('Managed output inspection');
     const inspector = page.getByLabel('Trace record inspector');
     await inspector.getByRole('tab', { name: 'Result' }).click();

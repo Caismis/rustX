@@ -1,11 +1,68 @@
+# Incremental Session projection and Chat ownership (#420)
+
+`protocol/app-server/projection.ts` folds native events below React. The connection
+owner validates the complete Session/Conversation/incarnation/attachment target and
+connection generation, compares exact decimal cursors, ignores consumed cursors and
+requires the next cursor to be exactly one greater. No provider-specific state or
+mutation replay exists in this fold.
+
+Native `read_domains_updated` publishes the bounded decorated transcript, statistics,
+context occupancy and Todo view when durable observations change these domains.
+Publication suffixes do not dirty these domains. Native projection/cursor publication
+remains under the host lock, but blocking Store reads run outside it and install
+only after their revision/frontier fence validates. Attempt settlement ends execution
+independently of downstream durable enrichment. Trace remains a separate read capability.
+Only `trace_changed` triggers a Trace repair; `read_domains_updated` does not. `session/trace.records` requests bounded
+lifecycle repairs returned as `page.updates`, so older loaded records do not require
+a Session snapshot. `tool_call_assembled.arguments_json` preserves native JSON number
+spelling exactly instead of asking JavaScript to reserialize provider arguments.
+
+Initial attachment carries a snapshot plus cursor. Snapshot recovery discards unsafe
+incremental continuation; the native bounded replay owns events arriving during the
+read. After installing C, subscribe after C and consume C+1 onward. Events at/below C
+are no-ops. Acquisition-time resync retains the required subscribe and marks the old
+continuation untrusted; attachment returns to `attached` after that subscribe succeeds.
+Repeated resync coalesces; read failures leave controls
+stale. Replacement clears acquisition work and existing exact target/generation fences
+reject late replies. Explicit readback operations never replay a write.
+
+Canonical commits replace the message's provisional content, using the same
+`MessageSeat` and `Message` component in one keyed sibling list. Suffixes cannot
+recreate a retired in-flight message. Multiple messages in one Attempt retain their
+own native identities.
+
+ChatViewport has one automatic scroll assignment, in its queued RAF callback.
+React pre-mutation capture and ResizeObserver only capture/dirty layout. Multiple
+commits preserve the original reading anchor until the frame. Tail following uses
+the existing 24px threshold. Actual user movement updates intent synchronously;
+a queued frame reads that newer intent. Programmatic writes and browser clamping
+are attributed against the last written position. Prepending enters reading mode
+even for a formerly short transcript. Reading mode tracks the first visible native
+row, with bounded next/previous-row and clamped-offset fallbacks. Image/Markdown/
+reasoning growth and shrink pass through the same observer/frame. Explicit latest
+or a natural user return to the tail restores following. Unmount cancels the frame.
+Trajectory retains its own interaction and virtualization owner.
+
+Subscriptions are responsible for transcript/history and exact action guards,
+activity, Goal/Todo/queue, totals, and Trace separately. Immutable unchanged fields
+retain references. Goal/queue controls observe their own native read-domain identity;
+other token updates cannot release a control's readback fence.
+
+TUI already folded events into a terminal-specific presentation model. Its ordinary
+settlement snapshot loop is removed; native read-domain facts enrich the existing
+history adapter. Cursor gaps and coalesced recovery now use the same protocol
+contract. Its terminal renderer and normalized state are deliberately retained.
+No new state-store package or compatibility decoder was introduced.
+
 # Agent Conversation ownership and resource bounds
 
 rustX owns canonical messages and history. The browser renders two authoritative
 read products and retains only replaceable read caches:
 
 - `session/attach`, `session/snapshot`, `session/subscribe`: current/live projection.
-  Notifications coalesce into a dirty bit and trigger authoritative replacement.
-  No client event log, event fold or locally assembled Assistant survives repair.
+  Contiguous notifications advance the native read model through the deterministic
+  client fold. Initialization, recovery and explicit reconciliation replace from
+  authority; transient state never survives an authoritative replacement.
 - `session/transcript { before, limit }`: older durable transcript pages. The wire
   field is `before`; it is the exclusive `RuntimeClientTranscriptCursor` returned
   as `next_cursor`. This never updates `RuntimeClientCursor`, used for live reads
@@ -110,9 +167,9 @@ context kinds are unaffected, and the Inspector keeps the raw window, including
 `rendered`, under **Agent Status history**.
 
 The browser owns no status retention. The window, its bound and its eviction are the
-runtime's; the client has no event fold (a `session/event` invalidates, a
-`session/snapshot` replaces), so cold attach, live observation and resync converge on
-the same identity, placement and order by construction.
+runtime's. The client folds `agent_status_composed`, including its exact native
+eviction identity. Cold attach and recovery install the native bounded window;
+ordinary events advance it without a snapshot reread.
 
 ## Paging and reconnect
 
@@ -129,11 +186,11 @@ latest explicitly replaces the window before more paging.
 Older responses require the same connection generation, complete attachment
 target and window epoch. Ordinary overlapping live refresh does not advance that
 epoch, allowing live append while history is pending. Reconnect, reattach and
-resync discard history and invalidate in-flight reads. There is no event replay
-repair and no timestamp or lexical-ID ordering.
+resync discard unsafe history and invalidate in-flight reads. Native bounded replay
+joins the acquired snapshot cursor; timestamps and lexical IDs never order events.
 
 `ChatViewport` measures stable row keys before React mutates the DOM. Prepending
-keeps that row's viewport offset and enters history reading. ResizeObserver
+keeps that row's viewport offset and enters history reading. ResizeObserver marks the frame dirty; its single commit
 restores the same anchor after image/Markdown/layout growth. Only a reader at the
 bottom follows new output; programmatic scroll delivery and shrink clamps do not
 reassign that ownership. No timeout or sleep determines layout correctness.
@@ -251,8 +308,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v24 (`rustx.app-server.v24` and generated
-`protocol/app-server/v24.ts` / `v24.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v25 (`rustx.app-server.v25` and generated
+`protocol/app-server/v25.ts` / `v25.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -332,7 +389,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v24, Runtime Client v49, SQLite v44, and Session catalog v12, with no
+App Server v25, Runtime Client v50, SQLite v44, and Session catalog v12, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -393,7 +450,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v24 / Runtime Client v49 project one `turn_process` owner on exact
+App Server v25 / Runtime Client v50 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

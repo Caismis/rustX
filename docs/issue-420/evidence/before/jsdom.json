@@ -1,0 +1,9 @@
+{
+  "fixture": "200-long-reasoning-tool-v3",
+  "snapshots": 209,
+  "commits": 419,
+  "automaticWrites": 2413,
+  "bottomWrites": 1207,
+  "anchorWrites": 1213,
+  "rowReplacements": 1
+}

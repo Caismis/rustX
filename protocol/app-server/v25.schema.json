@@ -134,6 +134,13 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
+                "records": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/TraceCursor"
+                  },
+                  "default": []
+                },
                 "before": {
                   "anyOf": [
                     {
@@ -6952,6 +6959,13 @@
       "description": "One finite page of bounded summary records, oldest first.",
       "type": "object",
       "properties": {
+        "updates": {
+          "description": "Current-cut repairs for explicitly requested loaded identities.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceLifecycle"
+          }
+        },
         "records": {
           "type": "array",
           "items": {
@@ -6974,23 +6988,12 @@
         "records"
       ]
     },
-    "TraceRecord": {
-      "description": "One bounded pageable ledger record.",
+    "TraceLifecycle": {
+      "description": "Refresh of an already loaded record, resolved at the server's snapshot cut.\n\nOnly mutable lifecycle facts travel here. Immutable historical input is\nnever repeated, because it cannot have changed.",
       "type": "object",
       "properties": {
         "id": {
-          "description": "Stable native Trace identity. Selection and detail reads use it, and\nit survives paging, prepending and reconnect for the same record.",
           "type": "string"
-        },
-        "position": {
-          "description": "Ordering boundary of this read model; not an event cursor.",
-          "$ref": "#/$defs/TraceCursor"
-        },
-        "location": {
-          "$ref": "#/$defs/TraceLocation"
-        },
-        "kind": {
-          "$ref": "#/$defs/TraceKind"
         },
         "state": {
           "$ref": "#/$defs/TraceState"
@@ -6998,21 +7001,10 @@
         "timing": {
           "$ref": "#/$defs/TraceTiming"
         },
-        "preview": {
-          "description": "One-line content preview, so a ledger row carries meaning rather than\nan identity alone.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TracePreview"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "request": {
           "anyOf": [
             {
-              "$ref": "#/$defs/TraceRequestSummary"
+              "$ref": "#/$defs/TraceRequestOutcome"
             },
             {
               "type": "null"
@@ -7022,32 +7014,7 @@
         "tool": {
           "anyOf": [
             {
-              "$ref": "#/$defs/TraceToolSummary"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "calls": {
-          "description": "Canonical `ToolCall` proposals of an Assistant record, in block order.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TraceToolCall"
-          }
-        },
-        "native_id": {
-          "description": "Exact native detached execution / Subagent / Workflow / interaction ID.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "originating_tool_call_id": {
-          "description": "The exact outer `ToolCall` this Tool-owned domain record belongs to,\ncopied from the native start fact. It is presentation and navigation\ncorrelation only: it confers no lifecycle, ownership, settlement or\ncancellation authority, and it is never resolved from a Tool name, a\ntimestamp, row adjacency or the loaded page.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolCallId"
+              "$ref": "#/$defs/TraceToolOutcomeUpdate"
             },
             {
               "type": "null"
@@ -7055,7 +7022,6 @@
           ]
         },
         "message_id": {
-          "description": "Canonical accepted message; publication without acceptance is absent.",
           "anyOf": [
             {
               "$ref": "#/$defs/MessageId"
@@ -7071,10 +7037,6 @@
             "$ref": "#/$defs/TraceArtifact"
           }
         },
-        "has_detail": {
-          "description": "Whether this record has heavy detail available for inspection.",
-          "type": "boolean"
-        },
         "truncated": {
           "type": "boolean"
         }
@@ -7082,71 +7044,10 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "position",
-        "location",
-        "kind",
         "state",
         "timing",
-        "calls",
         "attachments",
-        "has_detail",
         "truncated"
-      ]
-    },
-    "TraceLocation": {
-      "description": "Server-resolved native grouping of one record.\n\n`TurnId` is the logical model step inside an Attempt. An actual request\nretry never allocates a new step, so retries of one step group together.",
-      "type": "object",
-      "properties": {
-        "attempt_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AttemptId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "step_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TurnId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "TurnId": {
-      "description": "Identifies one turn within an attempt.",
-      "type": "string"
-    },
-    "TraceKind": {
-      "description": "The closed record vocabulary of the ledger.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "attempt",
-            "step",
-            "request",
-            "assistant",
-            "tool",
-            "compaction",
-            "background",
-            "subagent",
-            "workflow",
-            "interaction"
-          ]
-        },
-        {
-          "description": "Canonical inbound accepted as a turn this conversation owes an answer for.",
-          "type": "string",
-          "const": "user"
-        }
       ]
     },
     "TraceState": {
@@ -7197,55 +7098,10 @@
         "started_at"
       ]
     },
-    "TracePreview": {
-      "description": "A one-line summary preview of longer content.\n\nWhitespace is collapsed so a multi-paragraph message occupies one ledger\nrow. This is presentation shaping of already-permitted content, not a\nsecond copy of it: the complete value is reached through detail.",
+    "TraceRequestOutcome": {
+      "description": "Mutable request outcome only.",
       "type": "object",
       "properties": {
-        "text": {
-          "type": "string"
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "text",
-        "truncated"
-      ]
-    },
-    "TraceRequestSummary": {
-      "description": "Bounded request facts carried by a pageable summary row.\n\nThe historical request input — system prompt, reconstructed context, Tool\ndefinitions — is deliberately absent. It lives in detail so a page of 32\nrequests does not carry 32 complete model contexts.",
-      "type": "object",
-      "properties": {
-        "request_id": {
-          "$ref": "#/$defs/RequestId2"
-        },
-        "retry_number": {
-          "description": "Native actual-request ordinal within the logical step. Zero is the\ninitial request; retry and recovery requests continue the sequence.\nIt is read from the frozen snapshot, never inferred from timestamps.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "assistant_message_id": {
-          "$ref": "#/$defs/MessageId"
-        },
-        "model": {
-          "description": "Historical model, from the request's own immutable snapshot.",
-          "type": "string"
-        },
-        "previous_failure_kind": {
-          "description": "The exact preceding actual request's failure class, when recorded.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelErrorKind"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "failure_kind": {
           "anyOf": [
             {
@@ -7275,45 +7131,9 @@
               "type": "null"
             }
           ]
-        },
-        "system_prompt": {
-          "description": "Request-relative System Prompt presentation, resolved natively so the\nbrowser never compares request details to discover a prompt change.",
-          "$ref": "#/$defs/TraceSystemPromptPresentation"
-        },
-        "predecessor": {
-          "$ref": "#/$defs/TraceRequestPredecessor"
-        },
-        "tool_catalog": {
-          "$ref": "#/$defs/TraceToolCatalogState"
-        },
-        "context_additions": {
-          "description": "Canonical request Context this exact request introduced, in the order\nfrozen by `RequestSnapshot.request_context_ids`. A retry or recovery\nrequest reuses admitted context and therefore introduces none.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TraceContextPresentation"
-          }
-        },
-        "context_truncated": {
-          "description": "Whether the Context list was shortened by the Trace summary bound.",
-          "type": "boolean"
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "request_id",
-        "retry_number",
-        "assistant_message_id",
-        "model",
-        "system_prompt",
-        "predecessor",
-        "tool_catalog",
-        "context_additions",
-        "context_truncated"
-      ]
-    },
-    "RequestId2": {
-      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. It is derived once from the immutable\n[`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is\nthe durable correlation key for the Request Snapshot and its\nrequest-start fact.",
-      "type": "string"
+      "additionalProperties": false
     },
     "ModelErrorKind": {
       "description": "Error classes the runtime distinguishes for retry/termination decisions.\nProvider SDK error structs never cross this boundary.",
@@ -7531,6 +7351,373 @@
         "dispatch_ms",
         "terminal_ms"
       ]
+    },
+    "TraceToolOutcomeUpdate": {
+      "description": "Mutable Tool outcome only.",
+      "type": "object",
+      "properties": {
+        "started": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "started"
+      ]
+    },
+    "TraceToolOutcome": {
+      "description": "The closed canonical Tool outcome vocabulary.",
+      "type": "string",
+      "enum": [
+        "success",
+        "failed",
+        "denied",
+        "cancelled",
+        "timed_out",
+        "outcome_unknown"
+      ]
+    },
+    "TracePreview": {
+      "description": "A one-line summary preview of longer content.\n\nWhitespace is collapsed so a multi-paragraph message occupies one ledger\nrow. This is presentation shaping of already-permitted content, not a\nsecond copy of it: the complete value is reached through detail.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "truncated"
+      ]
+    },
+    "TraceArtifact": {
+      "description": "Safe reference to the existing native artifact carrier, never a path.",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "image": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "image"
+      ]
+    },
+    "TraceRecord": {
+      "description": "One bounded pageable ledger record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable native Trace identity. Selection and detail reads use it, and\nit survives paging, prepending and reconnect for the same record.",
+          "type": "string"
+        },
+        "position": {
+          "description": "Ordering boundary of this read model; not an event cursor.",
+          "$ref": "#/$defs/TraceCursor"
+        },
+        "location": {
+          "$ref": "#/$defs/TraceLocation"
+        },
+        "kind": {
+          "$ref": "#/$defs/TraceKind"
+        },
+        "state": {
+          "$ref": "#/$defs/TraceState"
+        },
+        "timing": {
+          "$ref": "#/$defs/TraceTiming"
+        },
+        "preview": {
+          "description": "One-line content preview, so a ledger row carries meaning rather than\nan identity alone.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceRequestSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceToolSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calls": {
+          "description": "Canonical `ToolCall` proposals of an Assistant record, in block order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceToolCall"
+          }
+        },
+        "native_id": {
+          "description": "Exact native detached execution / Subagent / Workflow / interaction ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originating_tool_call_id": {
+          "description": "The exact outer `ToolCall` this Tool-owned domain record belongs to,\ncopied from the native start fact. It is presentation and navigation\ncorrelation only: it confers no lifecycle, ownership, settlement or\ncancellation authority, and it is never resolved from a Tool name, a\ntimestamp, row adjacency or the loaded page.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "description": "Canonical accepted message; publication without acceptance is absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceArtifact"
+          }
+        },
+        "has_detail": {
+          "description": "Whether this record has heavy detail available for inspection.",
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "position",
+        "location",
+        "kind",
+        "state",
+        "timing",
+        "calls",
+        "attachments",
+        "has_detail",
+        "truncated"
+      ]
+    },
+    "TraceLocation": {
+      "description": "Server-resolved native grouping of one record.\n\n`TurnId` is the logical model step inside an Attempt. An actual request\nretry never allocates a new step, so retries of one step group together.",
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TurnId": {
+      "description": "Identifies one turn within an attempt.",
+      "type": "string"
+    },
+    "TraceKind": {
+      "description": "The closed record vocabulary of the ledger.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "attempt",
+            "step",
+            "request",
+            "assistant",
+            "tool",
+            "compaction",
+            "background",
+            "subagent",
+            "workflow",
+            "interaction"
+          ]
+        },
+        {
+          "description": "Canonical inbound accepted as a turn this conversation owes an answer for.",
+          "type": "string",
+          "const": "user"
+        }
+      ]
+    },
+    "TraceRequestSummary": {
+      "description": "Bounded request facts carried by a pageable summary row.\n\nThe historical request input — system prompt, reconstructed context, Tool\ndefinitions — is deliberately absent. It lives in detail so a page of 32\nrequests does not carry 32 complete model contexts.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId2"
+        },
+        "retry_number": {
+          "description": "Native actual-request ordinal within the logical step. Zero is the\ninitial request; retry and recovery requests continue the sequence.\nIt is read from the frozen snapshot, never inferred from timestamps.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "assistant_message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "model": {
+          "description": "Historical model, from the request's own immutable snapshot.",
+          "type": "string"
+        },
+        "previous_failure_kind": {
+          "description": "The exact preceding actual request's failure class, when recorded.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failure_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "system_prompt": {
+          "description": "Request-relative System Prompt presentation, resolved natively so the\nbrowser never compares request details to discover a prompt change.",
+          "$ref": "#/$defs/TraceSystemPromptPresentation"
+        },
+        "predecessor": {
+          "$ref": "#/$defs/TraceRequestPredecessor"
+        },
+        "tool_catalog": {
+          "$ref": "#/$defs/TraceToolCatalogState"
+        },
+        "context_additions": {
+          "description": "Canonical request Context this exact request introduced, in the order\nfrozen by `RequestSnapshot.request_context_ids`. A retry or recovery\nrequest reuses admitted context and therefore introduces none.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceContextPresentation"
+          }
+        },
+        "context_truncated": {
+          "description": "Whether the Context list was shortened by the Trace summary bound.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "retry_number",
+        "assistant_message_id",
+        "model",
+        "system_prompt",
+        "predecessor",
+        "tool_catalog",
+        "context_additions",
+        "context_truncated"
+      ]
+    },
+    "RequestId2": {
+      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. It is derived once from the immutable\n[`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is\nthe durable correlation key for the Request Snapshot and its\nrequest-start fact.",
+      "type": "string"
     },
     "TraceSystemPromptPresentation": {
       "description": "Bounded System Prompt presentation for one actual request.\n\nThe complete prompt is deliberately absent: a page of 32 requests would\notherwise carry 32 complete system prompts. The exact historical value\nstays in [`TraceRequestDetail::effective_system_prompt`].",
@@ -7792,35 +7979,6 @@
         }
       ]
     },
-    "TraceArtifact": {
-      "description": "Safe reference to the existing native artifact carrier, never a path.",
-      "type": "object",
-      "properties": {
-        "artifact_id": {
-          "$ref": "#/$defs/ArtifactId"
-        },
-        "image": {
-          "type": "boolean"
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mime_type": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "artifact_id",
-        "image"
-      ]
-    },
     "TraceToolSummary": {
       "description": "Bounded Tool facts carried by a pageable summary row.",
       "type": "object",
@@ -7875,18 +8033,6 @@
     "ToolCallId": {
       "description": "Provider/model-issued opaque correlation string, scoped to a request/publication.\nNot a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.",
       "type": "string"
-    },
-    "TraceToolOutcome": {
-      "description": "The closed canonical Tool outcome vocabulary.",
-      "type": "string",
-      "enum": [
-        "success",
-        "failed",
-        "denied",
-        "cancelled",
-        "timed_out",
-        "outcome_unknown"
-      ]
     },
     "TraceToolCall": {
       "description": "One canonical `ToolCall` the model proposed.\n\nA proposal proves that the generation assembled a call. It never proves\nthat execution started: a started Tool record is separate evidence.",
@@ -14188,138 +14334,6 @@
         "diagnostic"
       ]
     },
-    "TraceLifecycle": {
-      "description": "Refresh of an already loaded record, resolved at the server's snapshot cut.\n\nOnly mutable lifecycle facts travel here. Immutable historical input is\nnever repeated, because it cannot have changed.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/TraceState"
-        },
-        "timing": {
-          "$ref": "#/$defs/TraceTiming"
-        },
-        "request": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TraceRequestOutcome"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tool": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TraceToolOutcomeUpdate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "message_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MessageId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "attachments": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TraceArtifact"
-          }
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "state",
-        "timing",
-        "attachments",
-        "truncated"
-      ]
-    },
-    "TraceRequestOutcome": {
-      "description": "Mutable request outcome only.",
-      "type": "object",
-      "properties": {
-        "failure_kind": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelErrorKind"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "usage": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelUsage"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "generation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TraceGeneration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "TraceToolOutcomeUpdate": {
-      "description": "Mutable Tool outcome only.",
-      "type": "object",
-      "properties": {
-        "started": {
-          "type": "boolean"
-        },
-        "outcome": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TraceToolOutcome"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "detail": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TracePreview"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "started"
-      ]
-    },
     "RuntimeClientAttempt": {
       "description": "The external attempt view of the Runtime Client projection.\n\nThe view folds attempt lifecycle, turn progress, in-flight agent\noutput, and foreground tool execution into one structured read model.",
       "type": "object",
@@ -18774,7 +18788,45 @@
       "description": "One externally visible Runtime Client observation.\n\nThe stable `type` discriminator is the protocol contract; unknown\nfields are rejected.",
       "oneOf": [
         {
-          "description": "Presentation invalidation only; fetch an authoritative snapshot.",
+          "description": "Native derived read domains at a committed journal cut. Published only\nwhen durable facts change, never for publication text/argument suffixes.",
+          "type": "object",
+          "properties": {
+            "transcript": {
+              "$ref": "#/$defs/RuntimeClientTranscriptPage"
+            },
+            "occupancy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextOccupancy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "todos": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TodoSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "read_domains_updated"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "transcript"
+          ]
+        },
+        {
+          "description": "Independent Trace invalidation; reread Trace, not the Session snapshot.",
           "type": "object",
           "properties": {
             "type": {
@@ -19337,6 +19389,10 @@
           "description": "A tool call within the in-flight Assistant message finished assembly.",
           "type": "object",
           "properties": {
+            "arguments_json": {
+              "description": "Exact native assembled representation; clients must not reserialize JSON numbers.",
+              "type": "string"
+            },
             "attempt_id": {
               "description": "The attempt assembling the call.",
               "$ref": "#/$defs/AttemptId"
@@ -19361,6 +19417,7 @@
           "additionalProperties": false,
           "required": [
             "type",
+            "arguments_json",
             "attempt_id",
             "message_id",
             "block_index",

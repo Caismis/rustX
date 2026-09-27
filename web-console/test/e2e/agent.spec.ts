@@ -1,3 +1,4 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { choose } from './shell-actions';
@@ -7,7 +8,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  page.on('pageerror', error => errors.push(error.message));
  await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
  await page.emulateMedia({ reducedMotion: 'reduce' });
-   await page.goto(`http://127.0.0.1:5174/test/fixtures/agent.html?mode=${mode}`);
+   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=${mode}`);
    await expect(page).toHaveTitle('rustX Agent reference');
    await expect(page.getByLabel('Canonical conversation')).toBeVisible();
    if (mode === 'error') {
@@ -40,7 +41,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
-const composerURL = 'http://127.0.0.1:5174/test/fixtures/agent.html?mode=composer';
+const composerURL = `${fixtureOrigin}/test/fixtures/agent.html?mode=composer`;
 test('composer geometry grows, caps, scrolls once and shrinks across desktop and narrow widths', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -153,7 +154,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
 
 
 test('restored Session-scoped drafts are measured on mount and shrink on identity switch', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5174/test/fixtures/agent.html?mode=restored');
+  await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=restored`);
   const input = page.getByRole('textbox', { name: 'Message', exact: true });
   await expect(input).toHaveValue(/Restored line 0/);
   await expect.poll(() => input.evaluate(node => node.clientHeight === parseFloat(getComputedStyle(node).maxHeight) && node.scrollHeight > node.clientHeight)).toBe(true);
@@ -171,7 +172,7 @@ test('restored Session-scoped drafts are measured on mount and shrink on identit
 test('ModelSelect submenus stay usable inside a narrow viewport', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/agent.html?mode=selectors');
+  await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=selectors`);
   const trigger = page.getByRole('button', { name: 'Model and reasoning' });
   const profile = page.getByRole('menuitem', { name: 'Reasoning profile' });
   const submenu = page.getByRole('menu').filter({ has: page.getByRole('menuitem', { name: 'deliberate' }) });

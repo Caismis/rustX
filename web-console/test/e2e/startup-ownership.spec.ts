@@ -1,5 +1,6 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect, type Page } from '@playwright/test';
-const fixture = 'http://127.0.0.1:5174/test/fixtures/startup.html';
+const fixture = `${fixtureOrigin}/test/fixtures/startup.html`;
 const methods = (page: Page): Promise<string[]> => page.evaluate(() => (window as any).startupFixture.requests().map((r: any) => r.method));
 const release = (page: Page, method: string, failure?: string) => page.evaluate(({ method, failure }) => (window as any).startupFixture.release(method, failure), { method, failure });
 async function begin(page: Page, language = 'en', files = false, model?: 'explicit' | 'preference') {

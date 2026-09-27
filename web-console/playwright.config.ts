@@ -1,4 +1,8 @@
 import { defineConfig } from '@playwright/test';
+const previewPort = Number(process.env.RUSTX_E2E_PREVIEW_PORT ?? 5173);
+const fixturePort = Number(process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
+const previewURL = `http://127.0.0.1:${previewPort}`;
+const fixtureURL = `http://127.0.0.1:${fixturePort}`;
 const wsEndpoint = process.env.RUSTX_BROWSER_WS_ENDPOINT;
 if (!wsEndpoint) throw new Error('Use pnpm test:e2e or pnpm test:e2e:update: references require the pinned browser container.');
 export default defineConfig({
@@ -9,6 +13,6 @@ export default defineConfig({
   // only a strict tripwire: an accidental toHaveScreenshot must never inherit a permissive
   // Playwright default, and normal runs must never write snapshots.
   expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 0 } },
-  use: { locale: 'en-US', storageState: { cookies: [], origins: ['http://127.0.0.1:5173', 'http://127.0.0.1:5174'].map(origin => ({ origin, localStorage: [{ name: 'rustx-locale-v1', value: 'en' }] })) }, connectOptions: { wsEndpoint }, baseURL: 'http://127.0.0.1:5173', viewport: { width: 1440, height: 1000 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
-  webServer: [{ command: 'pnpm preview --port 5173 --strictPort', url: 'http://127.0.0.1:5173', reuseExistingServer: false }, { command: 'pnpm dev --port 5174 --strictPort', url: 'http://127.0.0.1:5174/test/fixtures/foundation.html', reuseExistingServer: false }],
+  use: { locale: 'en-US', storageState: { cookies: [], origins: [previewURL, fixtureURL].map(origin => ({ origin, localStorage: [{ name: 'rustx-locale-v1', value: 'en' }] })) }, connectOptions: { wsEndpoint }, baseURL: previewURL, viewport: { width: 1440, height: 1000 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
+  webServer: [{ command: `pnpm preview --port ${previewPort} --strictPort`, url: previewURL, reuseExistingServer: false }, { command: `pnpm dev --port ${fixturePort} --strictPort`, url: `${fixtureURL}/test/fixtures/foundation.html`, reuseExistingServer: false }],
 });

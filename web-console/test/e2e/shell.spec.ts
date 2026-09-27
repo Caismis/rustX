@@ -1,9 +1,10 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { choose } from './shell-actions';
 test('stream publications and a turn-local clock preserve chrome identity, geometry and caret', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-24T23:00:00Z') });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await page.clock.pauseAt(new Date('2026-09-25T00:00:00Z'));
   await page.evaluate(() => window.sessionFixture.stream('Token zero'));
   await expect(page.getByText('Token zero', { exact: true })).toBeVisible();
@@ -33,7 +34,7 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   if (mode !== 'background') await page.evaluate(mode => window.sessionFixture.presentation(mode), mode);
   await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
@@ -70,7 +71,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await expect(page).toHaveTitle('rustX shell reference');
   await expect(page.getByLabel('Sidebar', { exact: true })).toContainText('rustX');
   await expect(page.locator('body')).not.toContainText('DeepSeek');
@@ -118,7 +119,7 @@ test('Session product states stay concise and recovery evidence remains in Inspe
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const mode of ['idle', 'queued', 'stopping', 'reconnect', 'uncertain'] as const) {
-    await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+    await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
     await expect(page.getByLabel('Session status')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Deep diving/ }).first()).toBeVisible();
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
@@ -152,7 +153,7 @@ test('a Session row scrolled out from under its open actions menu leaves the key
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.evaluate(() => window.sessionFixture.presentation('many'));
   const tree = page.getByRole('tree', { name: 'Session browser' });

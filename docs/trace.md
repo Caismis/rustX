@@ -301,13 +301,18 @@ revision gap/resync. No owner samples a later durable maximum.
 The queue releases one semantic observation batch only after every staged
 Trace-affecting receipt has been acknowledged. Thus a later owner's publication
 cannot advance the durable prefix past an earlier uninstalled transition. Under
-the host mutex the batch folds native state, publishes the ordinary invalidations,
-and advances the represented prefix. `snapshot_cut()` then copies all four: native
+the host mutex the batch folds native state, advances the represented prefix and
+publishes one `TraceChanged` even when Session events were also published. Cursor
+movement is never a proxy for Trace invalidation; `read_domains_updated` does not
+invalidate Trace. `snapshot_cut()` then copies all four: native
 state, cursor, Trace frontier, and the lifecycle evidence used by `trace_updates`.
 Materialization runs outside that mutex. Runtime owners never wait for Trace.
-The projection worker owns only read-model state, the pending queue and the native
-Workflow read model. It cannot retain the host, runtime or durable storage lease,
-even while actively folding; native resource release does not wait for a reader.
+The semantic projection worker owns read-model state, the pending queue and the native
+Workflow read model. It cannot retain the host or runtime. A bounded in-flight durable
+read owns its cancellable Store scope outside projection synchronization. Closing
+delivery cancels connection waits/SQLite queries and joins the read, proving terminal
+behavior before normal residency release. Late installation is forbidden; the global
+Tokio Runtime shutdown policy is unchanged.
 
 The closed classification in `runtime::observation` gates Attempt/Turn/request,
 Assistant/Tool message and execution, compaction, Background, Subagent terminal
@@ -334,9 +339,11 @@ Inactive durable inspection instead captures its own SQLite frontier; it has no
 live publication boundary and receives no live lifecycle overlay: a durable start
 alone remains incomplete. Paging cursors remain Trace-specific in both cases.
 Exact positive lifecycle evidence applies regardless of anchor age. For loaded
-records outside the newest tail, `session/snapshot` accepts at most 512 opaque
-`trace_records` positions and returns `snapshot.trace_updates`, resolved at the
-**same snapshot cut**. These bounded typed patches carry lifecycle/timing, safe
+records outside the newest tail, `session/trace` accepts at most 512 opaque
+`records` positions and returns `page.updates`, resolved at the same represented
+read cut. Explicit `session/snapshot` reconciliation can also return those repairs
+via `trace_records` / `snapshot.trace_updates`; normal Session events require no
+full snapshot. These bounded typed patches carry lifecycle/timing, safe
 request usage/failure details and canonical artifact references (at most 1 KiB
 per update; oversized optional references are omitted with `truncated`); no arbitrary
 payload or raw event is exposed. Background execution ID, Subagent ID, structured

@@ -536,6 +536,7 @@ describe("lifecycle progression", () => {
       },
       {
         type: "tool_call_assembled" as const,
+        arguments_json: '{"command":"cargo test"}',
         attempt_id: "a1",
         message_id: "m1",
         block_index: 0,

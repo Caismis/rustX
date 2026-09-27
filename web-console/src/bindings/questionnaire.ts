@@ -1,5 +1,5 @@
 import { displayText, message, type Message, type Translate } from '../locale/translation';
-import type { QuestionSpecification, QuestionnaireAnswerEntry, QuestionnaireSubmission } from '../../../protocol/app-server/v24';
+import type { QuestionSpecification, QuestionnaireAnswerEntry, QuestionnaireSubmission } from '../../../protocol/app-server/v25';
 export class QuestionnaireValidationError extends Error {
   constructor(tx: Translate, readonly notice: Message) { super(displayText(tx, notice)); }
 }

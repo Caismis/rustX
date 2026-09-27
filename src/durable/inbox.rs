@@ -700,6 +700,26 @@ pub struct TranscriptPage {
     pub next_cursor: Option<TranscriptCursor>,
 }
 
+/// One finite durable inspection seed, copied from a single database read cut.
+/// Journal folding and decorations happen later through this fixed frontier.
+pub struct InspectionSeed {
+    pub messages: Vec<MessageBlock>,
+    pub canonical: Vec<MessageBlock>,
+    pub transcript: TranscriptPage,
+    pub journal_through: u64,
+}
+
+/// Immutable membership evidence captured by the semantic projection. Mutable
+/// pending bodies are copied; canonical/audit bodies retain their durable owner.
+#[derive(Debug, Clone)]
+pub struct TranscriptSnapshotCut {
+    pub bootstrap_through: u64,
+    pub journal_through: u64,
+    pub messages: Vec<MessageId>,
+    pub publications: Vec<PublicationStreamId>,
+    pub pending: Vec<(TranscriptCursor, UserMessageBlock)>,
+}
+
 /// The one composition-time binding of a conversation's durable authority.
 ///
 /// A binding owns the full backend-independent store handle and is the only
@@ -1728,6 +1748,16 @@ pub trait ConversationStore: Send + Sync + 'static {
         limit: usize,
     ) -> Result<TranscriptPage, ConversationStoreError>;
 
+    /// Capture the durable inspection authorities in one read transaction.
+    fn load_inspection_seed(&self) -> Result<InspectionSeed, ConversationStoreError>;
+
+    /// Materialize the newest bounded page belonging to a captured semantic cut.
+    /// Later commits, pending edits/removals and Tool results cannot enter it.
+    fn load_transcript_snapshot(
+        &self,
+        cut: &TranscriptSnapshotCut,
+    ) -> Result<TranscriptPage, ConversationStoreError>;
+
     /// Commits one model-turn start atomically (Issue #12, M9b): the
     /// request-scoped canonical context messages (Ledger append + Surface
     /// advance), the immutable Request Snapshot, and the exact
@@ -1881,6 +1911,16 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         observer: std::sync::Arc<dyn super::presentation::JournalObserver>,
     ) -> Result<u64, ConversationStoreError>;
+
+    /// Isolated cancellation scope for presentation reads. It shares storage,
+    /// never execution ownership, and must be closed before joining its tasks.
+    fn presentation_reader(&self) -> std::sync::Arc<dyn ConversationStore>;
+
+    /// Cancel this reader's connection waits and running `SQLite` queries.
+    fn close_presentation_reader(&self);
+
+    #[cfg(test)]
+    fn park_presentation_read_until_cancelled(&self, entered: tokio::sync::oneshot::Sender<()>);
 
     /// Latest committed Journal position, read without enumerating history.
     fn presentation_frontier(&self) -> Result<u64, ConversationStoreError>;

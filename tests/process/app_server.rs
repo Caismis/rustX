@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":24,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":25,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            24
+            25
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -232,9 +232,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v24"),
+            Some("rustx.app-server.v25"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v24, rustx-token.wrong"),
+            Some("rustx.app-server.v25, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -726,6 +726,60 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
             assert!(replacement.wait().await.unwrap().success());
             client.close().await;
         }
+    }))
+    .await;
+}
+
+// The injection seam is absent from optimized production binaries.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn app_server_process_exits_with_cancelled_blocked_presentation_read() {
+    Box::pin(bounded(async {
+        use rustx::app_server::protocol::*;
+        let f = Fixture::new().await;
+        let mut child = f
+            .command("ws://127.0.0.1:0")
+            .arg("--token-file")
+            .arg(f.root.path().join("token"))
+            .env("RUSTX_TEST_PRESENTATION_READ_BLOCK", "1")
+            .spawn()
+            .unwrap();
+        let line = BufReader::new(child.stderr.as_mut().unwrap())
+            .lines()
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap();
+        let url = line.strip_prefix("rustx app-server listening ").unwrap();
+        let client = driver::websocket(url).await;
+        initialize_client(&client).await;
+        let target = attach(&client, f.sessions[0].clone(), 2).await;
+        assert!(matches!(
+            rpc(
+                &client,
+                3,
+                Method::TurnStart {
+                    target,
+                    content: vec![UserInputBlock::Text(rustx::message::content::TextBlock {
+                        text: "presentation cancellation".into()
+                    })],
+                }
+            )
+            .await,
+            Response::Success(_)
+        ));
+        let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+        loop {
+            let line = lines.next_line().await.unwrap().unwrap();
+            if line == "rustx presentation read blocked at connection admission" {
+                break;
+            }
+        }
+        terminate(&child);
+        // No release channel or lock rollback exists. Production cancellation
+        // must end the Store wait and Tokio must really finish destruction.
+        assert!(child.wait().await.unwrap().success());
+        client.close().await;
     }))
     .await;
 }

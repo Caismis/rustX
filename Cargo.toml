@@ -98,7 +98,7 @@ schemars = { version = "1", features = ["chrono04"] }
 tempfile = "3.27.0"
 # The M8 durability backend (Issue #63 / #11). `bundled` compiles the SQLite
 # amalgamation so no system libsqlite3 is required on any CI platform.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # The parser-only document decode backend behind native Read (Issue #48).
 # rustX owns the supported-format whitelist (`.pdf`, `.docx`, `.xlsx`,
 # `.pptx`), the path contract, and all extraction policy; xberg only decodes.

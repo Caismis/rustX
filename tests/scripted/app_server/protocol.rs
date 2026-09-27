@@ -604,7 +604,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 24, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 25, requested: 12 })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -906,22 +906,47 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
             },
         )
         .await;
-        assert_eq!(
-            serde_json::to_value(before).unwrap(),
-            serde_json::to_value(after).unwrap()
-        );
+        let (
+            MethodResult::Snapshot {
+                snapshot: before,
+                cursor: before_cursor,
+            },
+            MethodResult::Snapshot {
+                snapshot: after,
+                cursor: after_cursor,
+            },
+        ) = (before, after)
+        else {
+            panic!("snapshots");
+        };
+        assert_eq!(before, after, "catalog summary changes no Session field");
+        assert!(after_cursor >= before_cursor);
+        let mut checked_cursor = before_cursor;
         let mut seen = std::collections::BTreeSet::new();
-        while seen.len() != 2 {
+        while seen.len() != 2 || checked_cursor < after_cursor {
             let notification = connection.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event: it
             // carries no cursor and no attachment target (Issue #386).
             if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
                 continue;
             }
-            let NotificationMethod::Event { target, event, .. } = notification else {
+            let NotificationMethod::Event {
+                target,
+                event,
+                cursor,
+            } = notification
+            else {
                 panic!("event")
             };
             assert!(target == a || target == b);
+            if target == a && cursor > before_cursor && cursor <= after_cursor {
+                assert_eq!(cursor.get(), checked_cursor.get() + 1);
+                assert!(matches!(
+                    *event,
+                    RuntimeClientEvent::ReadDomainsUpdated { .. }
+                ));
+                checked_cursor = cursor;
+            }
             if matches!(*event, RuntimeClientEvent::AttemptStarted { .. }) {
                 seen.insert(target.session_id);
             }
@@ -1594,40 +1619,183 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
-        call(&connection, 900, Method::TurnStart { target: target.clone(), content: (input("request-A")).into_iter().map(|block| match block {
-                    crate::message::types::UserContentBlock::Text(text) => crate::app_server::protocol::UserInputBlock::Text(text),
-                    _ => panic!("client fixtures must use text or issued receipts"),
-                }).collect()}).await;
+        call(
+            &connection,
+            900,
+            Method::TurnStart {
+                target: target.clone(),
+                content: (input("request-A"))
+                    .into_iter()
+                    .map(|block| match block {
+                        crate::message::types::UserContentBlock::Text(text) => {
+                            crate::app_server::protocol::UserInputBlock::Text(text)
+                        }
+                        _ => panic!("client fixtures must use text or issued receipts"),
+                    })
+                    .collect(),
+            },
+        )
+        .await;
         f.gates[0].wait_entered().await;
-        let before = call(&connection, 901, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
-        let read = call(&connection, 902, Method::Trace { target: target.clone(), before: None, limit: 32 }).await;
-        let MethodResult::Trace { page } = read else { panic!("Trace page"); };
-        assert!(page.records.iter().any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request));
-        assert!(matches!(rejected(&connection, Method::Trace { target: target.clone(), before: None, limit: 0 }).await, ErrorData::InvalidParams));
-        let after = call(&connection, 903, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
-        assert_eq!(before, after, "Trace reads change no live cursor, inbound, interactions, attempt, surface or transcript");
+        let before = call(
+            &connection,
+            901,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: target.clone(),
+            },
+        )
+        .await;
+        let read = call(
+            &connection,
+            902,
+            Method::Trace {
+                records: Vec::new(),
+                target: target.clone(),
+                before: None,
+                limit: 32,
+            },
+        )
+        .await;
+        let MethodResult::Trace { page } = read else {
+            panic!("Trace page");
+        };
+        assert!(
+            page.records
+                .iter()
+                .any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request)
+        );
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::Trace {
+                    records: Vec::new(),
+                    target: target.clone(),
+                    before: None,
+                    limit: 0
+                }
+            )
+            .await,
+            ErrorData::InvalidParams
+        ));
+        let after = call(
+            &connection,
+            903,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: target.clone(),
+            },
+        )
+        .await;
+        let (
+            MethodResult::Snapshot {
+                snapshot: before_view,
+                cursor: before_cursor,
+            },
+            MethodResult::Snapshot {
+                snapshot: after_view,
+                cursor: after_cursor,
+            },
+        ) = (&before, &after)
+        else {
+            panic!("snapshots");
+        };
+        assert_eq!(
+            before_view, after_view,
+            "Trace reads change no Session or Trace field"
+        );
+        assert!(after_cursor >= before_cursor);
+        let mut cursor = *before_cursor;
+        while cursor < *after_cursor {
+            if let NotificationMethod::Event {
+                event,
+                cursor: next,
+                ..
+            } = connection.next_notification().await.notification
+                && next > cursor
+            {
+                assert_eq!(next.get(), cursor.get() + 1);
+                assert!(
+                    matches!(*event, RuntimeClientEvent::ReadDomainsUpdated { .. }),
+                    "only independent materialization may advance the cursor"
+                );
+                cursor = next;
+            }
+        }
         connection.close();
         let repaired = AppServerConnection::new(f.host.clone());
         initialize(&repaired).await;
         let repaired_target = attach(&repaired, &f, 0).await;
-        let MethodResult::Snapshot { snapshot: continuous, .. } = after else { panic!("snapshot"); };
-        let MethodResult::Snapshot { snapshot: reconnected, .. } = call(&repaired, 904, Method::SessionSnapshot { trace_records: vec![], target: repaired_target.clone() }).await else { panic!("snapshot"); };
+        let MethodResult::Snapshot {
+            snapshot: continuous,
+            ..
+        } = after
+        else {
+            panic!("snapshot");
+        };
+        let MethodResult::Snapshot {
+            snapshot: reconnected,
+            ..
+        } = call(
+            &repaired,
+            904,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: repaired_target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("snapshot");
+        };
         assert_eq!(continuous.trace, reconnected.trace);
         f.gates[0].release();
         loop {
-            if let NotificationMethod::Event { event, .. } = repaired.next_notification().await.notification
-                && matches!(*event, RuntimeClientEvent::AttemptSettled { .. }) { break; }
+            if let NotificationMethod::Event { event, .. } =
+                repaired.next_notification().await.notification
+                && matches!(*event, RuntimeClientEvent::AttemptSettled { .. })
+            {
+                break;
+            }
         }
-        let MethodResult::Snapshot { snapshot: settled, .. } = call(&repaired, 905, Method::SessionSnapshot { trace_records: vec![], target: repaired_target }).await else { panic!("snapshot"); };
+        let MethodResult::Snapshot {
+            snapshot: settled, ..
+        } = call(
+            &repaired,
+            905,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: repaired_target,
+            },
+        )
+        .await
+        else {
+            panic!("snapshot");
+        };
         repaired.close();
         let final_connection = AppServerConnection::new(f.host.clone());
         initialize(&final_connection).await;
         let final_target = attach(&final_connection, &f, 0).await;
-        let MethodResult::Snapshot { snapshot: final_snapshot, .. } = call(&final_connection, 906, Method::SessionSnapshot { trace_records: vec![], target: final_target }).await else { panic!("snapshot"); };
+        let MethodResult::Snapshot {
+            snapshot: final_snapshot,
+            ..
+        } = call(
+            &final_connection,
+            906,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: final_target,
+            },
+        )
+        .await
+        else {
+            panic!("snapshot");
+        };
         assert_eq!(settled.trace, final_snapshot.trace);
         final_connection.close();
         f.close().await;
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

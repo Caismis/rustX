@@ -1,3 +1,4 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { expect, test } from '@playwright/test';
 import { choose } from './shell-actions';
 import { expectStableScreenshot } from './screenshot';
@@ -13,7 +14,7 @@ test('Chinese General switches the resident UI without requests, keeps native id
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/settings.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/settings.html`);
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -38,7 +39,7 @@ test('Chinese General switches the resident UI without requests, keeps native id
 
 test('Chinese new conversation preserves the user draft and localizes composer controls', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'zh'));
-  await page.goto('http://127.0.0.1:5174/test/fixtures/settings.html?conversation=ready');
+  await page.goto(`${fixtureOrigin}/test/fixtures/settings.html?conversation=ready`);
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
   const input = page.getByRole('textbox', { name: '消息', exact: true });
@@ -59,7 +60,7 @@ test('Chinese new conversation preserves the user draft and localizes composer c
 
 test('Chinese approval localizes actions while preserving the native request reason', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'zh'));
-  await page.goto('http://127.0.0.1:5174/test/fixtures/agent.html?mode=approval');
+  await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=approval`);
   await expect(page.locator('.interaction').getByText('bash：Developer approval required', { exact: true })).toBeVisible();
   const allow = page.getByRole('button', { name: '允许一次', exact: true });
   await expect(allow).toBeVisible();

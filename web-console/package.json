@@ -18,7 +18,8 @@
     "test:e2e:update": "RUSTX_SCREENSHOT_UPDATE=1 pnpm test:e2e",
     "dogfood:server": "node scripts/dogfood.ts",
     "check:provenance": "node scripts/provenance.ts && node scripts/notices.ts",
-    "check:i18n": "node scripts/check-i18n.ts"
+    "check:i18n": "node scripts/check-i18n.ts",
+    "test:issue-420-performance": "vitest run --config vite.performance.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.8.0",
