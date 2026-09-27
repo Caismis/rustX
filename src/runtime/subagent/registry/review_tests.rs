@@ -513,7 +513,8 @@ async fn active_guidance_uses_real_child_durable_acceptance_and_ack_evidence() {
             &plane.dir, None, None, None, None, None, admitted.child_conversation_id.clone(),
             model,
             Some(child_store.clone()),
-        ).await;
+        None,
+).await;
         runtime.gate_child_turns();
         runtime.activate();
         let stop = Arc::new(tokio::sync::Notify::new());

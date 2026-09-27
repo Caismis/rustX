@@ -1172,6 +1172,8 @@ pub(crate) struct CoordinatorProbe {
     pub(crate) admission_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
+    /// Parks after durable terminal publication, before restoring conversation state.
+    pub(crate) before_restore_gate: Option<Arc<Gate>>,
     /// Parks the next activation before the lifecycle transition when
     /// armed.
     pub(crate) activation_gate: Option<Arc<Gate>>,
@@ -2633,6 +2635,17 @@ impl RuntimeInner {
         attempt_id: AttemptId,
         result: crate::agent::AgentExecutionResult,
     ) {
+        #[cfg(test)]
+        let restore_gate = self
+            .probe
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|probe| probe.before_restore_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = restore_gate {
+            gate.enter();
+        }
         {
             let mut state = self.lock_state();
             // An active-attempt durable canonical-write failure means the
@@ -5927,18 +5940,52 @@ impl ConversationRuntime {
         &self.inner.settlement
     }
 
-    /// The runtime-owned Message Ledger records, or `None` while an attempt
-    /// owns the conversation state.
-    ///
-    /// This is a read-only handout of canonical state the runtime already
-    /// owns between attempts; the subagent child driver (Issue #60) reads
-    /// its final answer here after the attempt's canonical terminal event.
-    #[must_use]
-    /// Reads the canonical ledger from the durable authority.
-    ///
-    /// Every committed message is durable by definition, so a terminal
-    /// observer (Issue #60's child result extraction) races nothing even
-    /// while an attempt still owns the in-memory conversation state.
+    #[cfg(test)]
+    pub(crate) fn install_before_restore_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .unwrap()
+            .get_or_insert_with(CoordinatorProbe::default)
+            .before_restore_gate = Some(gate);
+    }
+
+    /// Select the final canonical Assistant commit owned by this exact attempt.
+    /// Terminal observation can precede coordinator restoration, so both the
+    /// ownership reference and content come from committed storage.
+    pub(crate) fn durable_final_assistant(
+        &self,
+        attempt: &AttemptId,
+    ) -> Option<crate::message::types::AssistantMessageBlock> {
+        use crate::durable::presentation::{FactQuery, FactScope};
+        let facts = self
+            .inner
+            .store
+            .read_presentation_events(&FactQuery {
+                scope: FactScope::Attempt(attempt.clone()),
+                kinds: vec!["assistant_message_committed"],
+                before: None,
+                after: 0,
+                ascending: false,
+                through: self.inner.store.presentation_frontier().ok()?,
+                limit: 1,
+            })
+            .ok()?;
+        let RuntimeEvent::AssistantMessageCommitted { message_id } = &facts.first()?.event else {
+            return None;
+        };
+        let mut messages = self
+            .inner
+            .store
+            .load_messages(std::slice::from_ref(message_id))
+            .ok()?;
+        match messages.pop()? {
+            MessageBlock::Assistant(assistant) => Some(assistant),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn durable_ledger(&self) -> Option<Vec<MessageBlock>> {
         self.inner.store.load_canonical().ok()
     }
@@ -8847,6 +8894,7 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: Some(gate.clone()),
             settlement_gate: None,
+            before_restore_gate: None,
             activation_gate: None,
             manual_compaction_settlement_gate: None,
             submit_gate: None,
@@ -10303,6 +10351,7 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: None,
             settlement_gate: None,
+            before_restore_gate: None,
             activation_gate: None,
             manual_compaction_settlement_gate: None,
             submit_gate: Some(gate.clone()),
@@ -10390,6 +10439,7 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: Some(admission_gate.clone()),
             settlement_gate: None,
+            before_restore_gate: None,
             activation_gate: None,
             manual_compaction_settlement_gate: None,
             submit_gate: None,

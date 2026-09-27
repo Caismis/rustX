@@ -83,7 +83,9 @@ use futures_util::future::BoxFuture;
 
 use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
-use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
+#[cfg(test)]
+use crate::message::types::MessageBlock;
+use crate::message::types::{UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::conversation_runtime::{InboundAdmissionError, ParentGuidanceSeal};
 use crate::runtime::interaction::{
@@ -636,7 +638,7 @@ pub(crate) async fn serve_child_delegation(
         {
             break AttemptTerminal::Cancelled;
         }
-        if !matches!(terminal, AttemptTerminal::Completed) {
+        if !matches!(terminal, AttemptTerminal::Completed(_)) {
             break terminal;
         }
         match runtime.seal_parent_guidance(observed_terminals).await {
@@ -672,14 +674,14 @@ pub(crate) async fn serve_child_delegation(
         }
     };
     let frame = match terminal {
-        AttemptTerminal::Completed => {
+        AttemptTerminal::Completed(attempt_id) => {
             let answer = workflow_output.as_ref().and_then(|latch| {
                 latch
                     .committed_value()
                     .and_then(|value| serde_json::to_string(&value).ok())
             });
             let answer = if workflow_output.is_none() {
-                final_answer(&runtime)
+                final_answer(&runtime, &attempt_id)
             } else {
                 answer
             };
@@ -1010,10 +1012,10 @@ async fn send_interaction_response_result(
         .map_err(|error| ChildExit::Protocol(error.to_string()))
 }
 
-/// The canonical terminal of the child's one attempt.
+/// The canonical terminal and identity of one child attempt.
 enum AttemptTerminal {
     /// `AttemptCompleted`.
-    Completed,
+    Completed(crate::runtime::identity::AttemptId),
     /// `AttemptCancelled`.
     Cancelled,
     /// `AttemptFailed`, `AttemptTimedOut`, or `AttemptLimitExceeded`, with
@@ -1189,8 +1191,8 @@ where
                     match observation {
                         ConversationObservation::Event { event, .. } => {
                             match event {
-                                RuntimeEvent::AttemptCompleted { .. } => {
-                                    return Ok(AttemptTerminal::Completed);
+                                RuntimeEvent::AttemptCompleted { attempt_id, .. } => {
+                                    return Ok(AttemptTerminal::Completed(attempt_id));
                                 }
                                 RuntimeEvent::AttemptCancelled { .. } => {
                                     return Ok(AttemptTerminal::Cancelled);
@@ -1228,30 +1230,19 @@ where
 /// The bounded final assistant answer of the settled attempt.
 fn final_answer(
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    attempt_id: &crate::runtime::identity::AttemptId,
 ) -> Option<String> {
-    // The terminal observation fires on the durable commit inside the
-    // attempt, before the coordinator's in-memory conversation state is
-    // restored — so the answer must be read from the durable authority,
-    // where the committed assistant message already exists by definition.
-    let ledger = runtime.durable_ledger()?;
-    let answer = ledger.iter().rev().find_map(|message| match message {
-        MessageBlock::Assistant(assistant) => {
-            let text: String = assistant
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    crate::message::types::AssistantContentBlock::Text(text) => {
-                        Some(text.text.as_str())
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            if text.is_empty() { None } else { Some(text) }
-        }
-        _ => None,
-    })?;
-    Some(bound_utf8(answer, MAX_RESULT_CONTENT_BYTES))
+    let assistant = runtime.durable_final_assistant(attempt_id)?;
+    let answer = assistant
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            crate::message::types::AssistantContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    (!answer.is_empty()).then(|| bound_utf8(answer, MAX_RESULT_CONTENT_BYTES))
 }
 
 /// Caps one diagnostic at the result-content bound.
@@ -1379,6 +1370,7 @@ pub(crate) mod tests {
             conversation_id,
             model,
             None,
+            None,
         )
         .await
     }
@@ -1402,6 +1394,7 @@ pub(crate) mod tests {
             conversation_id,
             model,
             None,
+            None,
         )
         .await
     }
@@ -1421,6 +1414,7 @@ pub(crate) mod tests {
         conversation_id: ConversationId,
         model: Arc<FakeModel>,
         store: Option<Arc<crate::durable::SqliteConversationStore>>,
+        tools: Option<ToolRegistry>,
     ) -> ConversationRuntime {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -1435,13 +1429,21 @@ pub(crate) mod tests {
             store.map(|store| crate::durable::ConversationStoreBinding::new(store));
         let tool_runtime = ConversationToolRuntime::from_config(conversation_id.clone(), config)
             .expect("tool runtime");
+        let mut activation = crate::capabilities::AgentActivation::default();
+        if let Some(tools) = &tools {
+            activation.profile.tools.builtin = tools
+                .definitions()
+                .into_iter()
+                .map(|tool| tool.name.clone())
+                .collect();
+        }
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             conversation_id: conversation_id.clone(),
             workspace: tool_runtime.workspace().clone(),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(tools.unwrap_or_default()),
             extension_tools: tool_runtime.extension_tool_plane(),
-            agent_activation: crate::capabilities::AgentActivation::default(),
+            agent_activation: activation,
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
@@ -2327,6 +2329,7 @@ pub(crate) mod tests {
             id,
             model.clone(),
             Some(store.clone()),
+            None,
         )
         .await;
         let mut fixture = serve_child(&runtime);
@@ -2488,6 +2491,7 @@ pub(crate) mod tests {
                 id.clone(),
                 model.clone(),
                 Some(store.clone()),
+                None,
             )
             .await;
             let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
@@ -2582,6 +2586,7 @@ pub(crate) mod tests {
                 id,
                 resumed_model.clone(),
                 Some(store.clone()),
+                None,
             )
             .await;
             let mut fixture = serve_child(&resumed);
@@ -2629,6 +2634,7 @@ pub(crate) mod tests {
             id.clone(),
             model.clone(),
             Some(store.clone()),
+            None,
         )
         .await;
         let committed = Arc::new(PendingObservations::new());
@@ -2723,6 +2729,7 @@ pub(crate) mod tests {
             id,
             next_model.clone(),
             Some(store.clone()),
+            None,
         )
         .await;
         let mut next = serve_child(&resumed);
@@ -2771,6 +2778,7 @@ pub(crate) mod tests {
             id,
             model.clone(),
             Some(store.clone()),
+            None,
         )
         .await;
         let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
@@ -3295,6 +3303,173 @@ pub(crate) mod tests {
     // terminal machinery (Issue #193 architecture review blocker 1)
     // -----------------------------------------------------------------
 
+    /// A real semantic activation over the same on-disk child conversation.
+    /// Registry tests forward its emitted Result through the parent publisher.
+    #[allow(clippy::too_many_lines)] // One persistent child/IPC/commit interleaving.
+    pub(crate) async fn persistent_answer_activation(
+        dir: &tempfile::TempDir,
+        id: ConversationId,
+        mode: &str,
+    ) -> ResultFrame {
+        use crate::durable::ConversationStore;
+        use crate::message::types::ContentBlockIndex;
+        use crate::model::event::ModelEvent;
+        use crate::model::finish::ModelFinishReason;
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::open(
+                id.clone(),
+                &dir.path().join("answer-child.sqlite"),
+            )
+            .unwrap(),
+        );
+        let refusal = vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::RefusalDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "Current refusal".into(),
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Refusal,
+                usage: None,
+            }),
+        ];
+        let scripts = match mode {
+            "refusal" => vec![refusal],
+            "narration" => {
+                let mut narration = workflow_output_answer(serde_json::json!({}));
+                for step in &mut narration {
+                    match step {
+                        FakeStep::Emit(ModelEvent::ToolCallStarted { block_index, call }) => {
+                            *block_index = ContentBlockIndex::new(1);
+                            call.name = "inspect".into();
+                            call.tool_id = crate::runtime::identity::ToolId::new("tool-inspect");
+                        }
+                        FakeStep::Emit(ModelEvent::ToolCallCompleted { block_index, call }) => {
+                            *block_index = ContentBlockIndex::new(1);
+                            call.name = "inspect".into();
+                            call.tool_id = crate::runtime::identity::ToolId::new("tool-inspect");
+                        }
+                        _ => {}
+                    }
+                }
+                // Ordinary committed tool narration precedes a valid refusal
+                // in a later generation of this same attempt.
+                narration.insert(
+                    1,
+                    FakeStep::Emit(ModelEvent::TextDelta {
+                        block_index: ContentBlockIndex::new(0),
+                        text: "Earlier tool narration".into(),
+                    }),
+                );
+                vec![narration, refusal]
+            }
+            "guidance" => vec![
+                answer("Earlier guidance attempt"),
+                answer("Concluding answer"),
+            ],
+            text => vec![answer(text)],
+        };
+        let model = Arc::new(FakeModel::new(scripts));
+        let seal = (mode == "guidance").then(|| Arc::new(Gate::default()));
+        let mut tools = ToolRegistry::new();
+        crate::scripted_suites::support::fake::FakeTool::new(
+            crate::scripted_suites::common::tool("inspect", "tool-inspect"),
+            crate::scripted_suites::support::fake::success_result("inspected"),
+        )
+        .register(&mut tools);
+        let runtime = child_test_runtime_full(
+            dir,
+            None,
+            None,
+            seal.clone(),
+            None,
+            None,
+            id,
+            model.clone(),
+            Some(store.clone()),
+            Some(tools),
+        )
+        .await;
+        let restore = Arc::new(Gate::default());
+        let _restore_release = restore.arm_scoped();
+        if let Some(seal) = &seal {
+            seal.arm();
+        } else {
+            runtime.install_before_restore_gate(restore.clone());
+        }
+        let mut fixture = serve_child(&runtime);
+        delegate(&mut fixture.parent, "current task").await;
+        if let Some(seal) = seal {
+            tokio::task::spawn_blocking({
+                let gate = seal.clone();
+                move || gate.wait_entered()
+            })
+            .await
+            .unwrap();
+            runtime
+                .submit_parent_guidance(
+                    UserSource::Agent {
+                        agent_id: AgentId::new("agent-parent"),
+                    },
+                    vec![UserContentBlock::Text(TextBlock {
+                        text: "accepted guidance".into(),
+                    })],
+                )
+                .unwrap();
+            seal.release();
+        } else {
+            tokio::task::spawn_blocking({
+                let gate = restore.clone();
+                move || gate.wait_entered()
+            })
+            .await
+            .unwrap();
+            assert!(
+                runtime.has_current_attempt(),
+                "coordinator has not restored state"
+            );
+            let terminal = store
+                .read_events(None, 1024)
+                .unwrap()
+                .events
+                .into_iter()
+                .rev()
+                .find_map(|event| match event.event {
+                    RuntimeEvent::AttemptCompleted { attempt_id, .. } => Some(attempt_id),
+                    _ => None,
+                })
+                .unwrap();
+            let answer = final_answer(&runtime, &terminal);
+            restore.release();
+            assert_eq!(
+                answer.as_deref(),
+                if matches!(mode, "refusal" | "narration") {
+                    None
+                } else {
+                    Some(mode)
+                }
+            );
+        }
+        let result = read_result(&mut fixture.parent).await;
+        assert_eq!(
+            crate::runtime::subagent::ipc::read_child_frame(&mut fixture.parent)
+                .await
+                .unwrap(),
+            None
+        );
+        fixture.serve.await.unwrap().unwrap();
+        assert_eq!(
+            model.requests().len(),
+            if matches!(mode, "narration" | "guidance") {
+                2
+            } else {
+                1
+            }
+        );
+        assert!(store.load_pending().unwrap().is_empty());
+        result
+    }
+
     /// Scripts the one model turn of a Workflow `AgentRun` child: a single
     /// reserved `workflow_output(value)` tool-shaped call (never an
     /// ordinary Tool Plane call) whose arguments satisfy the frozen output
@@ -3361,6 +3536,7 @@ pub(crate) mod tests {
             id,
             model.clone(),
             Some(store.clone()),
+            None,
         )
         .await;
         let committed = Arc::new(PendingObservations::new());
@@ -3534,6 +3710,7 @@ pub(crate) mod tests {
             None,
             ConversationId::new("conv_65454923-c390-7329-8410-7a51296c305b"),
             model.clone(),
+            None,
             None,
         )
         .await;

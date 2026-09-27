@@ -1,5 +1,8 @@
 # PR #416 activation ownership repair
 
+Follow-up: [publication, terminal answers, and Web waits](pr-416-publication-answer-waits.md)
+extends this historical repair; its final validation is recorded separately.
+
 This repair starts at `e438dfc939c8427df3e4514100a9175f861ffa7f` on
 `issue-411-jobs-continuable-subagents`, in `rustX-issue-411`. The fetched main
 `6ff49deb4c0855e64f0acaed85ebea2b6a277103` was already an ancestor.

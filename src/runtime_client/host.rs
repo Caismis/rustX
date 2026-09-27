@@ -5805,6 +5805,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -5898,6 +5899,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -6649,6 +6651,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -6747,6 +6750,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: None,
                 settlement_gate: Some(settlement_gate.clone()),
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -8706,6 +8710,7 @@ model = "scripted/scripted"
             Some(CoordinatorProbe {
                 admission_gate: None,
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: Some(gate.clone()),
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,

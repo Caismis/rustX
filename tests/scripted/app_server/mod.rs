@@ -1919,3 +1919,98 @@ async fn recovery_with_unproven_catalog_durability_retains_delete_fence() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_retires_abandoned_unpublished_activation_without_inventing_an_agent() {
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+    use crate::runtime::subagent::physical_recovery::{AllocationBoundary, ParentPhysicalLease};
+    for boundary in [
+        AllocationBoundary::Created,
+        AllocationBoundary::LeaseCreated,
+        AllocationBoundary::Initialized,
+    ] {
+        let f = Fixture::new().await;
+        let session = &f.sessions[0];
+        let product =
+            crate::runtime::local_storage::ProductRoot::existing(&f.archive_root).unwrap();
+        let activation = crate::runtime::identity::SubagentId::for_conversation(
+            &session.active_conversation_id,
+            1,
+        );
+        assert!(
+            ParentPhysicalLease::reserve_at_boundaries(
+                &product,
+                &session.id,
+                &ConversationId::generate(),
+                &activation,
+                |at| if at == boundary {
+                    Err(std::io::Error::other("abandoned initialization"))
+                } else {
+                    Ok(())
+                }
+            )
+            .is_err()
+        );
+        let managed = f.load(0).await.unwrap().unwrap();
+        let runtime = managed.inspect_runtime().unwrap();
+        let registry = runtime.subagent_registry().unwrap();
+        registry.wait_recovery_reconciliation().await;
+        assert!(registry.all_snapshots().is_empty());
+        assert!(registry.unproven_settlements().is_empty());
+        drop(runtime); // release the inspection lease before actual deletion cleanup
+        let revision = deletion_revision(&f, 0).await;
+        assert!(matches!(
+            f.manager
+                .delete_session(&session.id, &revision)
+                .await
+                .unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert!(managed.inspect_runtime().is_none());
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_keeps_live_published_activation_fenced() {
+    use crate::runtime::subagent::physical_recovery::ParentPhysicalLease;
+    let f = Fixture::new().await;
+    let session = &f.sessions[0];
+    let product = crate::runtime::local_storage::ProductRoot::existing(&f.archive_root).unwrap();
+    let activation =
+        crate::runtime::identity::SubagentId::for_conversation(&session.active_conversation_id, 1);
+    let owner = ParentPhysicalLease::reserve(
+        &product,
+        &session.id,
+        &ConversationId::generate(),
+        &activation,
+    )
+    .unwrap();
+    let managed = f.load(0).await.unwrap().unwrap();
+    let runtime = managed.inspect_runtime().unwrap();
+    assert_eq!(
+        runtime.subagent_registry().unwrap().unproven_settlements(),
+        vec![activation]
+    );
+    let revision = deletion_revision(&f, 0).await;
+    assert!(
+        f.manager
+            .delete_session(&session.id, &revision)
+            .await
+            .is_err()
+    );
+    assert!(!runtime.is_quiescent());
+    assert!(managed.inspect_runtime().is_some());
+    assert!(f.manager.sessions.read_session(&session.id).await.is_ok());
+    assert!(
+        f.manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .retiring_sessions
+            .contains(&session.id)
+    );
+    drop(owner);
+}

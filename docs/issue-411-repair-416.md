@@ -1,5 +1,8 @@
 # PR #416 ownership repair
 
+Follow-up: [publication, terminal answers, and Web waits](pr-416-publication-answer-waits.md)
+extends this historical repair; its final validation is recorded separately.
+
 The inspected PR was open on `issue-411-jobs-continuable-subagents`, based on
 `656c39f97e50d444fffa68447057867324db8708`, at reviewed head
 `524ac57117aaeaa93261d717246144d27af77ba7`. The remote head had not moved.

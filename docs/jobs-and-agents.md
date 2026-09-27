@@ -93,6 +93,15 @@ closed message admission. A message that loses this boundary sees Stopping; a
 message that wins stays with that exact activation. Interruption or physical loss
 can still prevent later model observation, and cannot erase durable acceptance.
 
+An ordinary result retains the concluding `AttemptCompleted.attempt_id` through
+terminal handling and guidance draining. The last `AssistantMessageCommitted`
+Journal fact scoped to that exact attempt selects one canonical MessageId; only
+that committed Assistant message supplies ordinary Text. Refusal-only or otherwise
+unsupported terminal content reports the explicit no-final-answer failure.
+Earlier activation answers, earlier guidance attempts, tool narration and provisional
+stream text cannot substitute. Reads use durable storage even before coordinator
+state restoration. Workflow children retain their committed output-latch contract.
+
 `interrupt_agent` captures the reserved or current activation, requests cancellation
 through the admission signal or shared supervisor and waits for physical settlement.
 The same mutex orders admission commit versus interruption; no control gap exists. The Agent then
@@ -237,9 +246,25 @@ uncertainty; committed publication is never described as an unpublished terminal
 
 The activation authority lives at
 `conversations/<conversation>/physical-settlement/<activation>/`, independently of
-the disposable runtime incarnation. Before durable Reserved, the parent creates and
-fsyncs an exact identity receipt and exclusively locked `physical-owner` file.
-The initial receipt is `Unstarted`. The parent passes the same open-file description
+the disposable runtime incarnation. The storage owner locks `.allocation-owner`
+in that conversation's physical-settlement namespace before creating
+`.pending-<activation>`. Fsync of that directory and its linking ancestors durably
+consumes the activation ordinal, even if no lease or receipt can be initialized.
+Both private and published names reseed the allocator.
+
+Before durable Reserved, the parent initializes and fsyncs the exclusive
+`physical-owner` lease and exact `Unstarted` receipt inside the private directory.
+Atomic rename to `<activation>` publishes complete authority; fsync of the parent
+precedes returning any authority handle. An error after rename still leaves a
+published obligation. Recovery takes the same namespace lock before classifying
+private allocations, so no surviving initializer can publish after recovery.
+It renames an abandoned private allocation to `.abandoned-<activation>` and fsyncs
+the parent; that positive consumed name never authorizes another allocation.
+No logical Agent, Reserved, rollback, or terminal event is invented for it.
+Published allocations always require exact physical proof, even if initialization
+returned an error. The typed allocation error carries the positive consumption
+fact into the live registry's existing pending reconciliation set immediately. Missing/corrupt published evidence never means unpublished.
+The initial published receipt is `Unstarted`. The parent passes the same open-file description
 on fd 2 into the child; closing the parent's descriptor cannot release a live child's
 copy. Before composition the child duplicates it CLOEXEC, restores diagnostics on
 stderr, and durably changes the receipt to `Running`.
@@ -260,8 +285,10 @@ Each such command reserves its own continuation authority under the activation,
 before spawning the existing trusted command supervisor. The supervisor owns the
 inherited lease and publishes proof only after its complete containment gate,
 including parent-control EOF. Commands cannot inherit or reuse the private authority.
-A `.pending-` directory is an unpublished allocation: no spawn permit has escaped.
-Only atomically published helper directories can be executable authorities.
+A helper's `.pending-` directory is private under the already-published parent
+lease: no helper spawn permit has escaped. Only atomically published helper
+directories can be executable authorities. Helper UUIDs do not allocate activation
+ordinals; activation-private directories use the separate consumption protocol above.
 
 Recovery takes the parent authority lock and every published continuation lock.
 It accepts exact `Quiescent` receipts. `Unstarted` plus the released inherited lock
@@ -282,8 +309,9 @@ Native proof commits `SubagentPhysicalSettlementProven` for a terminal activatio
 For a reserved generation it commits the original provenance with
 `RolledBack { physical_settlement_proven: true }`. Proof locks remain held through
 that durable append and its snapshot cut. A physical allocation without Reserved has
-no semantic admission to roll back: recovery seals its exact Unstarted/Quiescent
-receipts and retains the proof locks through workspace release. The consumed ID
+no semantic admission to roll back: recovery seals its private allocation or
+validates its published Unstarted/Quiescent receipts and retains proof locks
+through workspace release. The consumed ID
 and inert physical evidence remain durable. An earlier unproven rollback cannot close
 that obligation. Independent workspace poison is not cleared by physical proof.
 Logical Interrupted and its canonical parent notice remain unchanged; the old

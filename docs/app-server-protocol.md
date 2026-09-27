@@ -268,6 +268,22 @@ Already admitted runtime operations continue under their existing server owners.
 A mutation whose response is lost has an **unknown outcome**: no transport retries it.
 Reconnect with initialize/attach/snapshot/resync and inspect authoritative state.
 
+The Web typed request layer gives `agent/wait`, `job/wait`, `agent/interrupt`,
+`job/cancel`, and `agent/sendMessage` no response deadline: these operations can
+legitimately await native admission, durable acceptance, or physical settlement.
+Their lifetime is not transport liveness. Ordinary RPCs retain the 30-second
+response deadline and existing response-loss disconnect behavior. Actual socket
+close/error settles each pending operation once; transmitted mutations remain
+uncertain, waits are abandoned without cancellation, and no request is replayed.
+
+Web admission permits four outstanding waits, two message admissions, and two
+settlement controls, independently of eight transmitted ordinary RPCs (sixteen
+total, within the server bound). A full domain lane rejects new local requests
+before transmission. The existing 64-request queue/uncertainty bound remains.
+Waiting cannot occupy inspection/control slots, and message admission cannot occupy
+interrupt/cancel slots. Connection generations and attachment-target checks still
+fence result adoption after reconnect, detach, or target replacement.
+
 `AppServerConnection::close()` is permanent and idempotent. Its route-table lock
 linearizes close against attachment reservation/claim/commit, including pending loads.
 It releases exact external claims even if concurrent tasks retain an `Arc`; it never

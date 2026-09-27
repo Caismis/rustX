@@ -962,10 +962,7 @@ fn run_inner() -> i32 {
         // group". macOS therefore escalates to the outer supervisor's
         // fallback containment (a `SIGKILL` to the retained group) instead
         // of claiming the group is empty.
-        match waitid(
-            Id::PGid(Pid::from_raw(self_pid)),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
-        ) {
+        match observe_inner_group(self_pid) {
             Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
             Err(Errno::ECHILD) => {
                 #[cfg(target_os = "macos")]
@@ -1183,6 +1180,15 @@ fn supervisor_binary() -> std::path::PathBuf {
 // Structural primitives (`become_child_subreaper`, `ignore_group_term`,
 // `enforce_fixed_group_membership`) come from the shared supervisor-unit core.
 
+fn observe_inner_group(pgid: i32) -> Result<WaitStatus, Errno> {
+    // Hygiene owns shell status publication. This proof observation must not
+    // consume a shell that exited after hygiene's preceding WNOHANG pass.
+    waitid(
+        Id::PGid(Pid::from_raw(pgid)),
+        WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+    )
+}
+
 #[cfg(all(
     test,
     target_os = "linux",
@@ -1236,6 +1242,37 @@ mod anchor_reaping_tests {
     /// The strict deadline for every supervisor observation of a test
     /// (a deadlock guard, never a synchronization mechanism).
     const DEADLINE: Duration = Duration::from_secs(15);
+
+    #[test]
+    fn group_proof_cannot_consume_shell_exit_between_hygiene_passes() {
+        use std::os::unix::process::CommandExt;
+        let mut shell = Command::new("/bin/sh")
+            .args(["-c", "read gate; exit 23"])
+            .stdin(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_raw(i32::try_from(shell.id()).unwrap());
+        assert_eq!(
+            waitpid(pid, Some(WaitPidFlag::WNOHANG)),
+            Ok(WaitStatus::StillAlive)
+        );
+        shell.stdin.take().unwrap().write_all(b"release\n").unwrap();
+        // Pin the interleaving: the shell exits after hygiene's empty pass,
+        // before the production group gate observes it. This wait retains it.
+        let exited = WaitStatus::Exited(pid, 23);
+        assert_eq!(
+            waitid(Id::Pid(pid), WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT),
+            Ok(exited)
+        );
+        assert_eq!(observe_inner_group(pid.as_raw()), Ok(exited));
+        assert_eq!(
+            shell.wait().unwrap().code(),
+            Some(23),
+            "only hygiene may consume the exit status needed for ShellExited"
+        );
+        assert_eq!(observe_inner_group(pid.as_raw()), Err(Errno::ECHILD));
+    }
 
     /// Spawns the real outer supervisor with the test-only anchor barrier
     /// armed and returns the child and the rustX-side control stream.

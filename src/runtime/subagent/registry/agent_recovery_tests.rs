@@ -633,3 +633,117 @@ async fn recovered_verification_before_reserved_retains_physical_exclusion_after
         &admitted.child_conversation_id, &activation).is_err());
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupted_authority_publication_reopens_without_logical_facts() {
+    use super::super::physical_recovery::{AllocationBoundary, ParentPhysicalLease};
+    for boundary in [AllocationBoundary::Created, AllocationBoundary::LeaseCreated,
+        AllocationBoundary::Initialized, AllocationBoundary::Published] {
+        let plane = plane_with_storage(4, true);
+        let spawn = &plane.registry.config.spawn;
+        let child = ConversationId::generate();
+        let activation = SubagentId::for_conversation(&plane.conversation_id, 1);
+        let result = ParentPhysicalLease::reserve_at_boundaries(
+            &spawn.product_root, &spawn.session_id, &child, &activation,
+            |at| if at == boundary { Err(std::io::Error::other("injected initialization failure")) } else { Ok(()) },
+        );
+        assert!(result.is_err(), "no child/helper authority escaped at {boundary:?}");
+        for _ in 0..2 {
+            let store = Arc::new(crate::durable::SqliteConversationStore::open(
+                plane.conversation_id.clone(), &plane.dir.path().join("parent.sqlite"),
+            ).unwrap());
+            let mut config = plane.registry.config.clone();
+            config.mailbox = ConversationInboundMailbox::over_store(store.clone());
+            let recovered = SubagentRegistry::new(config);
+            recovered.restore_agents(store.as_ref()).unwrap();
+            recovered.wait_recovery_reconciliation().await;
+            assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
+            assert!(recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents.is_empty());
+            assert!(recovered.all_snapshots().is_empty());
+            assert!(!recovered.owns_idle_work());
+            assert!(recovered.unproven_settlements().is_empty());
+            assert_eq!(recovered.with_goal_idle(|| true), Some(true));
+            assert!(store.read_events(None, 128).unwrap().events.is_empty());
+            let version = *recovered.state_version.borrow();
+            recovered.reconcile_recovered_settlements();
+            assert_eq!(*recovered.state_version.borrow(), version);
+            let (runtime, _) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
+                &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id, store, recovered,
+            ).await;
+            runtime.settle_child_physical_lifetime(false).await.unwrap();
+            runtime.shutdown().await.unwrap();
+            assert!(runtime.is_quiescent());
+        }
+        assert!(ParentPhysicalLease::reserve(&spawn.product_root, &spawn.session_id, &child, &activation).is_err());
+        let next = SubagentId::for_conversation(&plane.conversation_id, 2);
+        drop(ParentPhysicalLease::reserve(&spawn.product_root, &spawn.session_id, &child, &next).unwrap());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn persistent_child_result_belongs_to_concluding_terminal_attempt() {
+    use crate::local_runtime::subagent_child::tests::persistent_answer_activation;
+    for mode in ["refusal", "B", "narration", "guidance"] {
+        let plane = plane_with_storage(4, true);
+        let first_child = stage_exit0(&plane);
+        let first = start(&plane, &start_spec("first activation")).await;
+        let first_result = persistent_answer_activation(&plane.dir, first.child_conversation_id.clone(), "A").await;
+        assert_eq!(first_result.status, ChildResultStatus::Succeeded);
+        assert_eq!(first_result.content.as_deref(), Some("A"));
+        first_child.complete(first_result.status, first_result.content.as_deref()).await;
+        plane.registry.wait_until_settled(&first.subagent_id).await.unwrap();
+        let mut child = stage_exit0(&plane);
+        let (resumed, _) = tokio::join!(plane.registry.send_message(&first.child_agent_id, "later task", AgentActivationOrigin::ClientControl, CancellationSignal::new()), child.accept_delegate());
+        let resumed = resumed.unwrap();
+        assert_eq!(resumed.agent_id, first.child_agent_id);
+        assert_ne!(resumed.activation_id, first.subagent_id);
+        let current = plane.registry.snapshot(&resumed.activation_id).unwrap();
+        assert_eq!(current.child_conversation_id, first.child_conversation_id);
+        let result = persistent_answer_activation(&plane.dir, current.child_conversation_id, mode).await;
+        let expected = match mode { "B" => Some("B"), "guidance" => Some("Concluding answer"), _ => None };
+        assert_eq!(result.content.as_deref(), expected);
+        assert_eq!(result.status, if expected.is_some() { ChildResultStatus::Succeeded } else { ChildResultStatus::Failed });
+        if expected.is_none() { assert_eq!(result.diagnostic.as_deref(), Some("the attempt completed without a final answer")); }
+        super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::Result(result)).await.unwrap();
+        let terminal = plane.registry.wait_until_settled(&resumed.activation_id).await.unwrap();
+        assert_eq!(terminal.state, if expected.is_some() { SubagentState::Succeeded } else { SubagentState::Failed });
+        let pending = plane.store.select_pending_batch().unwrap().unwrap();
+        let report = pending.items.iter().find(|item| item.correlation.as_deref() == Some(super::super::terminal_correlation(&resumed.activation_id).as_str())).unwrap();
+        let text = report.message.content.iter().filter_map(|block| match block { crate::message::types::UserContentBlock::Text(text) => Some(text.text.as_str()), _ => None }).collect::<String>();
+        assert!(text.contains(expected.unwrap_or("the attempt completed without a final answer")));
+        assert_eq!(events(&plane).iter().filter(|event| matches!(event, crate::events::types::RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } if *subagent_id == resumed.activation_id)).count(), 1);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn published_initialization_error_retains_live_registry_obligation_until_exact_proof() {
+    use super::super::physical_recovery::{AllocationBoundary, ParentPhysicalLease};
+    let plane = plane_with_storage(4, true);
+    let spawn = &plane.registry.config.spawn;
+    let child = ConversationId::generate();
+    let activation = SubagentId::for_conversation(&plane.conversation_id, 1);
+    let path = super::super::child_conversation_store_path(spawn.product_root.root(), &spawn.session_id, &child)
+        .parent().unwrap().join("physical-settlement").join(activation.as_str()).join("physical-settlement.json");
+    let receipt = std::sync::Mutex::new(Vec::new());
+    let allocation = ParentPhysicalLease::reserve_at_boundaries(&spawn.product_root, &spawn.session_id, &child, &activation, |at| {
+        if at != AllocationBoundary::Published { return Ok(()); }
+        *receipt.lock().unwrap() = std::fs::read(&path)?;
+        std::fs::write(&path, b"corrupt published evidence")?;
+        Err(std::io::Error::other("failure after publication"))
+    });
+    assert!(plane.registry.finish_physical_reservation(&child, &activation, allocation).is_err());
+    assert!(plane.registry.owns_idle_work());
+    assert_eq!(plane.registry.with_goal_idle(|| true), None);
+    assert_eq!(plane.registry.unproven_settlements(), vec![activation.clone()]);
+    assert!(events(&plane).is_empty());
+    let reopened = SubagentRegistry::new(plane.registry.config.clone());
+    reopened.restore_agents(plane.store.as_ref()).unwrap();
+    assert_eq!(reopened.unproven_settlements(), vec![activation]);
+    // Restore the exact original authority receipt, never a heuristic proof.
+    std::fs::write(path, &*receipt.lock().unwrap()).unwrap();
+    plane.registry.wait_recovery_reconciliation().await;
+    reopened.wait_recovery_reconciliation().await;
+    assert_eq!(plane.registry.with_goal_idle(|| true), Some(true));
+    assert_eq!(reopened.with_goal_idle(|| true), Some(true));
+    assert!(events(&plane).is_empty());
+}

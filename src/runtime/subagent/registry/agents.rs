@@ -597,12 +597,13 @@ impl SubagentRegistry {
                         // Authority exists before the first durable obligation. The same
                         // locked open-file description is inherited by the physical child.
                         identity.physical_owner = Some(std::sync::Arc::new(
-                            super::super::physical_recovery::ParentPhysicalLease::reserve(
-                                &registry.config.spawn.product_root,
-                                &registry.config.spawn.session_id,
-                                &identity.conversation_id,
-                                &identity.activation_id,
-                            ).map_err(|error| SubagentStartError::Durability { detail: error.to_string() })?
+                            registry.finish_physical_reservation(
+                                &identity.conversation_id, &identity.activation_id,
+                                super::super::physical_recovery::ParentPhysicalLease::reserve(
+                                    &registry.config.spawn.product_root, &registry.config.spawn.session_id,
+                                    &identity.conversation_id, &identity.activation_id,
+                                ),
+                            )?
                         ));
                         {
                             let mut state = registry.state.lock().unwrap_or_else(PoisonError::into_inner);

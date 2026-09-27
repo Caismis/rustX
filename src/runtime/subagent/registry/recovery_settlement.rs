@@ -62,6 +62,49 @@ impl super::RegistryState {
 }
 
 impl SubagentRegistry {
+    /// Initialization errors do not decide physical ownership. Preserve a
+    /// consumed allocation in the same reconciliation owner used after reopen.
+    pub(super) fn finish_physical_reservation(
+        &self,
+        conversation: &super::ConversationId,
+        activation: &super::SubagentId,
+        result: Result<
+            super::super::physical_recovery::ParentPhysicalLease,
+            super::super::physical_recovery::AllocationError,
+        >,
+    ) -> Result<super::super::physical_recovery::ParentPhysicalLease, super::SubagentStartError>
+    {
+        match result {
+            Ok(owner) => Ok(owner),
+            Err(error) => {
+                if error.consumed {
+                    {
+                        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                        if let Some(agent) = state
+                            .agents
+                            .values()
+                            .find(|agent| agent.conversation_id == *conversation)
+                        {
+                            agent.workspace.await_recovered_physical_proof();
+                        }
+                        state
+                            .recovery_unreserved
+                            .insert(activation.clone(), conversation.clone());
+                        state.recovery_pending.insert(activation.clone());
+                        self.state_version.send_modify(|version| *version += 1);
+                    }
+                    self.config.mailbox.wake().notify_one();
+                    // No filesystem work or proof acquisition occurs under the
+                    // registry mutex. A damaged published authority stays pending.
+                    self.reconcile_recovered_settlements();
+                }
+                Err(super::SubagentStartError::Durability {
+                    detail: error.to_string(),
+                })
+            }
+        }
+    }
+
     /// One bounded runtime owner follows old child drain completion without a
     /// client retry. The deadline limits supervision, never constitutes proof.
     /// Unresolved entries remain explicit and are reconsidered on later opens.

@@ -150,6 +150,18 @@ const READS = new Set<Request1['method']>([
   'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
   'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
 ]);
+/** Domain settlement has no RPC response deadline. Separate bounded lanes keep
+ * observation/admission from occupying the slots needed to stop or inspect work. */
+function requestLane(method: Request1['method']): 'wait' | 'admission' | 'control' | 'rpc' {
+  switch (method) {
+    case 'agent/wait': case 'job/wait': return 'wait';
+    case 'agent/sendMessage': return 'admission';
+    case 'agent/interrupt': case 'job/cancel': return 'control';
+    default: return 'rpc';
+  }
+}
+const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2 } as const;
+
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
   a.session_id === b.session_id && a.conversation_id === b.conversation_id &&
@@ -306,7 +318,7 @@ export class AppServerClient {
   }
   /** Side-effect-free policy, called immediately before fencing with no intervening await.
    * One replacement detaches at most one authority batch. pump transmits at most
-   * eight requests; only sent mutations become uncertain, each exactly once.
+   * sixteen requests across bounded lanes; only sent mutations become uncertain, each exactly once.
    * request admission already bounds uncertain + pending to 64 for mutations.
    * Reserve Session rows for pending continuations too, including unsent work.
    */
@@ -369,6 +381,10 @@ export class AppServerClient {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
     if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
+    const lane = requestLane(operation.method);
+    if (lane !== 'rpc' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
+      throw new Error(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
+    }
     if (this.pending.size >= 64) throw new Error('Client request capacity reached.');
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
     if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new Error('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
@@ -392,15 +408,16 @@ export class AppServerClient {
     return result as Extract<MethodResult, { type: T }>;
   }
   private pump() {
-    let sent = [...this.pending.values()].filter(p => p.sent).length;
+    let sent = [...this.pending.values()].filter(p => p.sent && requestLane(p.request.method) === 'rpc').length;
     for (const pending of this.pending.values()) {
-      if (sent >= 8 || !this.socket) break;
-      if (pending.sent) continue;
+      if (!this.socket) break;
+      const lane = requestLane(pending.request.method);
+      if (pending.sent || (lane === 'rpc' && sent >= 8)) continue;
       const raw = JSON.stringify(pending.request);
       const generation = this.state.generation;
-      pending.sent = true; sent++;
+      pending.sent = true; if (lane === 'rpc') sent++;
       this.log.observe('out', generation, raw, pending.context);
-      pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
+      if (lane === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
       try { this.socket.send(raw); } catch { this.lose(generation); break; }
     }
   }

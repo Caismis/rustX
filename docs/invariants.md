@@ -7356,6 +7356,27 @@ Selection and page generations plus attachment epochs fence all TUI child reads;
 reconnect rereads authority and Esc mutates only presentation. Root-routed HITL
 and existing lifecycle/control surfaces remain the sole control owners.
 
+## Activation publication and child answer ownership
+
+Activation identity consumption precedes executable authority. The storage owner's
+namespace lock spans private allocation, durable ordinal consumption, complete
+lease/receipt initialization, and atomic publication. Recovery acquires that same
+lock before sealing private allocations; it cannot release a live initializer's
+obligation. Private/abandoned identities remain consumed. Published names require
+exact lease, receipt, identity and continuation proof even after an initializer
+error. Proof locks remain held through existing durable/in-memory settlement.
+
+An ordinary child result belongs to its concluding terminal AttemptId and that
+attempt's final canonical Assistant MessageId. History supplies context only;
+missing terminal Text fails explicitly. Neither earlier narration nor refusal-
+discarded provisional text supplies a substitute. Workflow output-latch success
+and late-cancellation ordering are independent of ordinary answer extraction.
+
+Domain wait/admission/settlement lifetime is not Web transport failure. Typed
+method policy leaves those responses pending within separate finite capacities;
+ordinary RPCs stay bounded, controls and inspection remain available, real response
+loss stays explicit, and abandoned waits never cancel or automatically replay.
+
 ## Recovered activation containment proof
 
 A child acquires its mandatory incarnation lease before composition. Only native

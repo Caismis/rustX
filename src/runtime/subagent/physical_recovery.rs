@@ -1,4 +1,7 @@
-//! One durable physical authority per activation, installed before admission.
+//! Activation identities are consumed privately before executable publication.
+//! A namespace lock excludes recovery throughout initialization; atomic rename
+//! publishes the complete authority. Private abandoned identities remain consumed.
+//! Published authority is installed before admission and always needs exact proof.
 //!
 //! The parent acquires an exclusive open-file-description lock before Reserved
 //! and passes a duplicate to the child on fd 2. Closing the parent's descriptor
@@ -27,6 +30,27 @@ const LEASE: &str = "physical-owner";
 const RECEIPT: &str = "physical-settlement.json";
 const EVIDENCE: &str = "physical-settlement";
 const CONTINUATIONS: &str = "continuations";
+const ALLOCATION_OWNER: &str = ".allocation-owner";
+const PRIVATE: &str = ".pending-";
+const ABANDONED: &str = ".abandoned-";
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AllocationBoundary {
+    Created,
+    LeaseCreated,
+    Initialized,
+    Published,
+}
+
+fn allocation_lock(directory: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.join(ALLOCATION_OWNER))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,44 +100,126 @@ impl PhysicalLease {
 #[derive(Debug)]
 pub(crate) struct ParentPhysicalLease(PhysicalLease);
 
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
+pub(crate) struct AllocationError {
+    source: std::io::Error,
+    /// A positive namespace allocation exists and must enter settlement even
+    /// when initialization could not return an executable authority handle.
+    pub(crate) consumed: bool,
+}
+
 impl ParentPhysicalLease {
     pub(crate) fn reserve(
         product: &ProductRoot,
         session: &SessionId,
         conversation: &ConversationId,
         activation: &SubagentId,
+    ) -> Result<Self, AllocationError> {
+        Self::reserve_inner(
+            product,
+            session,
+            conversation,
+            activation,
+            #[cfg(test)]
+            |_| Ok(()),
+        )
+    }
+
+    /// The namespace lock covers identity consumption through publication. No
+    /// authority descriptor escapes this scope before the final directory barrier.
+    fn reserve_inner(
+        product: &ProductRoot,
+        session: &SessionId,
+        conversation: &ConversationId,
+        activation: &SubagentId,
+        #[cfg(test)] boundary: impl Fn(AllocationBoundary) -> std::io::Result<()>,
+    ) -> Result<Self, AllocationError> {
+        let mut consumed = false;
+        Self::initialize(
+            product,
+            session,
+            conversation,
+            activation,
+            &mut consumed,
+            #[cfg(test)]
+            boundary,
+        )
+        .map_err(|source| AllocationError { source, consumed })
+    }
+
+    fn initialize(
+        product: &ProductRoot,
+        session: &SessionId,
+        conversation: &ConversationId,
+        activation: &SubagentId,
+        consumed: &mut bool,
+        #[cfg(test)] boundary: impl Fn(AllocationBoundary) -> std::io::Result<()>,
     ) -> std::io::Result<Self> {
         let path = evidence_path(product, session, conversation, activation)?;
-        let parent = path
-            .parent()
-            .expect("activation evidence parent")
-            .to_path_buf();
-        std::fs::create_dir_all(&parent)?;
-        std::fs::create_dir(&path)?; // consumed identity; never overwritten
-        let file = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(path.join(LEASE))?;
-        file.try_lock()?;
-        file.sync_all()?;
-        let owner = Self(PhysicalLease {
-            lock: file,
-            path,
-            activation: activation.clone(),
-            conversation: conversation.clone(),
-        });
-        owner.0.publish(Phase::Unstarted)?;
-        // create_dir_all may have allocated a fresh child conversation before
-        // ownership exists. Persist every linking directory up to the stable
-        // product root before this authority or its consumed ID can escape.
+        let parent = path.parent().expect("activation evidence parent");
+        std::fs::create_dir_all(parent)?;
+        let allocation = allocation_lock(parent)?;
+        allocation.lock()?;
+        let pending = parent.join(format!("{PRIVATE}{}", activation.as_str()));
+        let abandoned = parent.join(format!("{ABANDONED}{}", activation.as_str()));
+        if path.try_exists()? || abandoned.try_exists()? || pending.try_exists()? {
+            *consumed = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "activation identity consumed",
+            ));
+        }
+        std::fs::create_dir(&pending)?;
+        *consumed = true;
+        // This barrier durably consumes the ordinal, independently of whether
+        // authority initialization ever finishes. Persist all new ancestors.
+        File::open(&pending)?.sync_all()?;
         for directory in parent.ancestors() {
             File::open(directory)?.sync_all()?;
             if directory == product.root() {
                 break;
             }
         }
+        #[cfg(test)]
+        boundary(AllocationBoundary::Created)?;
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(pending.join(LEASE))?;
+        file.try_lock()?;
+        file.sync_all()?;
+        #[cfg(test)]
+        boundary(AllocationBoundary::LeaseCreated)?;
+        let mut owner = Self(PhysicalLease {
+            lock: file,
+            path: pending.clone(),
+            activation: activation.clone(),
+            conversation: conversation.clone(),
+        });
+        owner.0.publish(Phase::Unstarted)?;
+        #[cfg(test)]
+        boundary(AllocationBoundary::Initialized)?;
+        std::fs::rename(&pending, &path)?;
+        owner.0.path.clone_from(&path);
+        File::open(parent)?.sync_all()?;
+        // Errors here leave published authority, which recovery must validate
+        // exactly like any other published allocation. Err never means harmless.
+        #[cfg(test)]
+        boundary(AllocationBoundary::Published)?;
         Ok(owner)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reserve_at_boundaries(
+        product: &ProductRoot,
+        session: &SessionId,
+        conversation: &ConversationId,
+        activation: &SubagentId,
+        boundary: impl Fn(AllocationBoundary) -> std::io::Result<()>,
+    ) -> Result<Self, AllocationError> {
+        Self::reserve_inner(product, session, conversation, activation, boundary)
     }
 
     pub(crate) fn inherited_file(&self) -> std::io::Result<File> {
@@ -389,6 +495,34 @@ fn prove_with_lock(
     locking: ProofLock,
 ) -> std::io::Result<Option<RecoveredPhysicalProof>> {
     let path = evidence_path(product, session, conversation, activation)?;
+    let parent = path.parent().expect("activation evidence parent");
+    if !parent.try_exists()? {
+        return Ok(None);
+    }
+    let allocation = allocation_lock(parent)?;
+    match allocation.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(None),
+        Err(TryLockError::Error(error)) => return Err(error),
+    }
+    if !path.try_exists()? {
+        let pending = parent.join(format!("{PRIVATE}{}", activation.as_str()));
+        let abandoned = parent.join(format!("{ABANDONED}{}", activation.as_str()));
+        if pending.try_exists()? {
+            // Acquiring the initializer's lock excludes a surviving publisher.
+            // Seal its consumed identity without manufacturing physical receipts.
+            std::fs::rename(pending, &abandoned)?;
+        } else if !abandoned.try_exists()? {
+            return Ok(None);
+        }
+        // Repeat the barrier after uncertain acknowledgement of an earlier seal.
+        File::open(parent)?.sync_all()?;
+        return Ok(Some(RecoveredPhysicalProof {
+            locks: vec![allocation],
+        }));
+    }
+    // Published names always require the exact lease and receipt. Private
+    // evidence cannot excuse missing/corrupt evidence in this namespace.
     let Some(proof) = prove_at(&path, conversation, activation, locking)? else {
         return Ok(None);
     };
@@ -559,9 +693,12 @@ pub(crate) fn consumed_activation_ids(
     for entry in entries {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
-            ids.push(SubagentId::new(
-                entry.file_name().to_string_lossy().into_owned(),
-            ));
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let identity = name
+                .strip_prefix(PRIVATE)
+                .or_else(|| name.strip_prefix(ABANDONED))
+                .unwrap_or(&name);
+            ids.push(SubagentId::new(identity));
         }
     }
     Ok(ids)
@@ -608,6 +745,95 @@ mod inheritance_tests {
             ConversationId::new("conv_01900000-0000-7000-8000-000000000002"),
             SubagentId::new("activation:1"),
         )
+    }
+
+    #[test]
+    fn live_private_initializer_excludes_recovery_at_every_publication_boundary() {
+        for boundary in [
+            AllocationBoundary::Created,
+            AllocationBoundary::LeaseCreated,
+            AllocationBoundary::Initialized,
+            AllocationBoundary::Published,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let product = ProductRoot::create(directory.path()).unwrap();
+            let (session, conversation, activation) = identities();
+            let owner = ParentPhysicalLease::reserve_at_boundaries(
+                &product,
+                &session,
+                &conversation,
+                &activation,
+                |at| {
+                    if at == boundary {
+                        // Synchronous injection runs while the actual initializer
+                        // retains its lock, before it may return any spawn handle.
+                        assert!(prove(&product, &session, &conversation, &activation)?.is_none());
+                        assert_eq!(
+                            consumed_activation_ids(&product, &session, &conversation)?,
+                            vec![activation.clone()]
+                        );
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(
+                prove(&product, &session, &conversation, &activation)
+                    .unwrap()
+                    .is_none()
+            );
+            drop(owner);
+            assert!(
+                prove_after_release(&product, &session, &conversation, &activation)
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn published_initialization_error_never_excuses_missing_or_corrupt_evidence() {
+        for damage in [LEASE, RECEIPT, "corrupt", "mismatched"] {
+            let directory = tempfile::tempdir().unwrap();
+            let product = ProductRoot::create(directory.path()).unwrap();
+            let (session, conversation, activation) = identities();
+            let path = evidence_path(&product, &session, &conversation, &activation).unwrap();
+            assert!(
+                ParentPhysicalLease::reserve_at_boundaries(
+                    &product,
+                    &session,
+                    &conversation,
+                    &activation,
+                    |at| {
+                        if at != AllocationBoundary::Published {
+                            return Ok(());
+                        }
+                        match damage {
+                            LEASE | RECEIPT => std::fs::remove_file(path.join(damage))?,
+                            "corrupt" => std::fs::write(path.join(RECEIPT), b"invalid")?,
+                            _ => write_receipt(
+                                &path,
+                                &Receipt {
+                                    activation: SubagentId::new("wrong"),
+                                    conversation: conversation.clone(),
+                                    phase: Phase::Unstarted,
+                                },
+                            )?,
+                        }
+                        Err(std::io::Error::other("error after publication"))
+                    }
+                )
+                .is_err()
+            );
+            assert!(!matches!(
+                prove_after_release(&product, &session, &conversation, &activation),
+                Ok(Some(_))
+            ));
+            assert!(
+                ParentPhysicalLease::reserve(&product, &session, &conversation, &activation)
+                    .is_err()
+            );
+        }
     }
 
     #[test]

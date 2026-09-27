@@ -2352,19 +2352,16 @@ impl SubagentRegistry {
                         .expect("Reserved physical authority")
                         .clone()
                 } else {
-                    Arc::new(
+                    Arc::new(self.finish_physical_reservation(
+                        &child_conversation_id,
+                        &subagent_id,
                         super::physical_recovery::ParentPhysicalLease::reserve(
                             &self.config.spawn.product_root,
                             &self.config.spawn.session_id,
                             &child_conversation_id,
                             &subagent_id,
-                        )
-                        .map_err(|error| {
-                            SubagentStartError::Durability {
-                                detail: error.to_string(),
-                            }
-                        })?,
-                    )
+                        ),
+                    )?)
                 };
                 runtime_root.install_physical_owner(physical_owner.clone());
                 (Some(runtime_root), Some(physical_owner))

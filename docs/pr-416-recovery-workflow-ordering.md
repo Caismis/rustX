@@ -1,5 +1,8 @@
 # PR #416: recovery ownership and Workflow cancellation ordering
 
+Follow-up: [publication, terminal answers, and Web waits](pr-416-publication-answer-waits.md)
+extends this historical repair; its final validation is recorded separately.
+
 This repair starts at `e407d09d662c22a29a5f3d7f2558b038a61550ad` on
 `issue-411-jobs-continuable-subagents`, in
 `/home/caismis/Documents/codes/rustX-issue-411`. The fetched main and merge-base

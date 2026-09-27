@@ -251,3 +251,19 @@ it.each([['agent_not_delivered', 'input was not delivered'], ['agent_delivery_un
   act(() => localeController.setLocale('en'));
   expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
 });
+
+it('a wait response from an obsolete attachment cannot publish an activation result', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const state = snapshot(); const agent = agentFixture(); state.agents = [agent];
+  server.snapshots.set('A', state); server.held.add('agent/wait');
+  const ui = render(<RuntimeFacts snapshot={state} client={server.client} sessionId="A"/>);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
+  const request = server.requests.find(row => row.request.method === 'agent/wait')!.request;
+  await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+  const current = server.client.getSnapshot().views.A;
+  await act(async () => { server.socket.success(request, { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'obsolete-activation', outcome: 'succeeded', agent }); });
+  expect(ui.queryByText(/obsolete-activation/)).toBeNull();
+  expect(server.client.getSnapshot().views.A).toBe(current);
+  expect(server.requests.filter(row => row.request.method === 'agent/wait')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'agent/interrupt')).toHaveLength(0);
+});
