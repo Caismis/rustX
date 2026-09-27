@@ -3912,13 +3912,14 @@ async fn issue422_multi_client_deletion_membership_converges_at_commit() {
                 },
             )
             .await;
-            assert!(
+            assert_eq!(
                 matches!(
                     result,
                     MethodResult::Deletion {
                         result: Deletion::CommittedDurabilityUncertain { .. }
                     }
-                ) == uncertain
+                ),
+                uncertain
             );
             if !uncertain {
                 assert!(matches!(
