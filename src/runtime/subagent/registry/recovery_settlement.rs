@@ -31,6 +31,11 @@ impl Drop for RecoveryPass {
         for activation in &self.activations {
             state.recovery_inflight.remove(activation);
         }
+        if !self.activations.is_empty() {
+            self.registry
+                .state_version
+                .send_modify(|version| *version += 1);
+        }
     }
 }
 
@@ -160,6 +165,37 @@ impl SubagentRegistry {
         self.reconcile_recovered_settlements();
     }
 
+    /// Shared execution does not make another activation's obligation ours.
+    /// Subscribe before inspecting the exact settlement cut, so publication
+    /// between the check and await cannot be lost. Owner completion is only a
+    /// failure boundary when this activation still lacks proof.
+    pub(super) async fn wait_recovery_settlement_for(
+        &self,
+        activation: &super::SubagentId,
+    ) -> bool {
+        let mut changes = self.state_version.subscribe();
+        let mut completion = self.recovery_reconciliation.subscribe();
+        loop {
+            changes.borrow_and_update();
+            {
+                let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                let finished = *completion.borrow_and_update();
+                if !state.recovery_pending.contains(activation)
+                    && !state.recovery_inflight.contains(activation)
+                {
+                    return true;
+                }
+                if finished && !state.recovery_inflight.contains(activation) {
+                    return false;
+                }
+            }
+            tokio::select! {
+                result = changes.changed() => if result.is_err() { return false; },
+                result = completion.changed() => if result.is_err() { return false; },
+            }
+        }
+    }
+
     fn capture_recovery_obligations(&self) -> Vec<RecoveryObligation> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let pending: Vec<_> = state
@@ -263,6 +299,8 @@ impl SubagentRegistry {
         }
         state.recovery_unreserved.remove(activation);
         state.recovery_pending.remove(activation);
+        state.recovery_inflight.remove(activation);
+        self.state_version.send_modify(|version| *version += 1);
         if let Some((agent_id, index)) = agent_id.zip(index) {
             let agent = &state.agents[agent_id];
             if !state.has_recovery_obligation_for(agent_id) {
@@ -371,6 +409,7 @@ impl SubagentRegistry {
                 state.records[index].physical_settlement_proven = true;
             }
             state.recovery_pending.remove(&activation);
+            state.recovery_inflight.remove(&activation);
             if let Some(agent) = state.agents.get(&agent_id)
                 && !state.has_recovery_obligation_for(&agent_id)
             {

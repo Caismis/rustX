@@ -745,6 +745,7 @@ pub(crate) struct SupervisedCommandRunner {
     settled: Option<Settled>,
     exit_status: Option<ExitStatus>,
     terminate_sent: bool,
+    trace: Option<crate::tools::native::bash_supervisor::diagnostics::Trace>,
     terminate_deadline: Option<tokio::time::Instant>,
     terminal_event_held: bool,
     /// The nested containment gate of this unit (Issue #145).
@@ -758,6 +759,12 @@ pub(crate) struct SupervisedCommandRunner {
 }
 
 impl SupervisedCommandRunner {
+    fn trace_event(&mut self, event: crate::tools::native::bash_supervisor::diagnostics::Event) {
+        if let Some(trace) = &mut self.trace {
+            trace.record(event);
+        }
+    }
+
     /// Spawns the supervisor unit for one owned command.
     ///
     /// The runtime child-subreaper capability is a pre-ownership
@@ -914,6 +921,15 @@ impl SupervisedCommandRunner {
                 settled: None,
                 exit_status: None,
                 terminate_sent: false,
+                trace: spec
+                    .environment
+                    .iter()
+                    .find(|(key, _)| {
+                        key == crate::tools::native::bash_supervisor::diagnostics::TRACE_ENV
+                    })
+                    .map(|(_, path)| {
+                        crate::tools::native::bash_supervisor::diagnostics::Trace::new(path)
+                    }),
                 terminate_deadline: None,
                 terminal_event_held: false,
                 anchor_gate: crate::runtime::nested_containment::AnchorGate::Idle,
@@ -956,8 +972,9 @@ impl SupervisedCommandRunner {
                 biased;
                 () = self.cancellation.cancelled(), if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::Cancelled);
-                    send_terminate(&mut self.stream).await;
+                    let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = async {
@@ -967,14 +984,16 @@ impl SupervisedCommandRunner {
                     }
                 }, if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::TimedOut);
-                    send_terminate(&mut self.stream).await;
+                    let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = wait_for_forced_timeout(self.control.as_ref()), if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::TimedOut);
-                    send_terminate(&mut self.stream).await;
+                    let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 event = read_supervisor_event(&mut self.stream), if self.supervisor_channel == SupervisorChannel::Connected => match event {
@@ -1035,6 +1054,7 @@ impl SupervisedCommandRunner {
                         }
                     }
                     Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
+                        self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminalObserved);
                         send_terminal_ack(&mut self.stream).await;
                         #[cfg(test)]
                         if let Some(control) = self.control.as_ref() {
@@ -1093,6 +1113,7 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
+                                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
@@ -1119,6 +1140,7 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
+                                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
@@ -1140,8 +1162,9 @@ impl SupervisedCommandRunner {
                             // terminal.
                             self.failure = Some(error.to_string());
                             if !self.terminate_sent {
-                                send_terminate(&mut self.stream).await;
+                                let sent = send_terminate(&mut self.stream).await;
                                 self.terminate_sent = true;
+                                self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                                 self.terminate_deadline = Some(
                                     tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION,
                                 );
@@ -1204,6 +1227,7 @@ impl SupervisedCommandRunner {
             match wait {
                 Ok(_) => {
                     self.direct_child_reaped = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
                     #[cfg(test)]
                     if let Some(control) = self.control.as_ref() {
                         control.lifecycle.mark_direct_child_reaped();
@@ -1344,9 +1368,9 @@ pub(crate) fn interactive_supervisor_binary() -> PathBuf {
 /// terminal child-set events are already in flight or were received; the
 /// supervision loop's read side remains authoritative.
 #[cfg(unix)]
-pub(crate) async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
+pub(crate) async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) -> bool {
     let frame = [1u8, 0, 0, 0, MSG_TERMINATE];
-    let _ = stream.write_all(&frame).await;
+    stream.write_all(&frame).await.is_ok()
 }
 
 #[cfg(unix)]

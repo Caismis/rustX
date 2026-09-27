@@ -262,6 +262,11 @@
 //! not imply the escaped process terminated. This boundary is documented
 //! and is never claimed as containment.
 
+/// Opt-in bounded native regression evidence; not lifecycle authority.
+#[doc(hidden)]
+pub mod diagnostics;
+use diagnostics::{Event as TraceEvent, record as trace};
+
 use std::process::{Command, Stdio};
 
 use nix::errno::Errno;
@@ -508,6 +513,7 @@ fn run_outer() -> i32 {
                     #[cfg(target_os = "linux")]
                     Ok(WaitStatus::PtraceEvent(..) | WaitStatus::PtraceSyscall(_)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
+                        trace(TraceEvent::InnerExited { status: code << 8 });
                         anchor = if code == INNER_EXIT_NORMAL {
                             InnerAnchor::TerminalRetained
                         } else {
@@ -517,7 +523,10 @@ fn run_outer() -> i32 {
                             contain_after_abnormal_exit(&mut stream, inner_pid)
                         };
                     }
-                    Ok(WaitStatus::Signaled(..)) => {
+                    Ok(WaitStatus::Signaled(_, signal, _)) => {
+                        trace(TraceEvent::InnerExited {
+                            status: signal as i32,
+                        });
                         anchor = contain_after_abnormal_exit(&mut stream, inner_pid);
                     }
                     Err(Errno::EINTR) => {}
@@ -701,6 +710,7 @@ fn await_terminal_ack() {
 /// `Contained` (`Ok` or `ESRCH`) versus `Unproven` (`EPERM` and every other
 /// error).
 fn containment_signal(stream: &mut ControlStream, pgid: i32) -> ContainmentOutcome {
+    trace(TraceEvent::FallbackContainment);
     stream
         .write_frame(
             MSG_SIGNAL_ATTEMPT,
@@ -876,6 +886,8 @@ fn run_inner() -> i32 {
         .arg("-c")
         .arg(&shell_command)
         .stdin(Stdio::null())
+        .env_remove(diagnostics::TRACE_ENV)
+        .env_remove(diagnostics::TERM_GATE_ENV)
         .spawn()
     {
         Ok(child) => child,
@@ -890,6 +902,7 @@ fn run_inner() -> i32 {
     // SAFETY-free pid capture: the pid is a positive `u32` from the kernel;
     // it is only compared against `waitpid` pids of the same conversion.
     let bash_pid = i32::try_from(bash.id()).unwrap_or(0);
+    trace_shell_group(bash_pid);
     let mut shell_reported = false;
     let mut kill_deadline: Option<std::time::Instant> = None;
     loop {
@@ -993,6 +1006,7 @@ fn run_inner() -> i32 {
                 &mut control_reader,
                 &mut stream,
                 self_pid,
+                bash_pid,
                 fail_signal,
                 force_anchor_loss,
                 &mut kill_deadline,
@@ -1023,6 +1037,12 @@ fn run_inner() -> i32 {
         // its terminal child set by the deadline, KILL the invocation group
         // (including this process; the outer supervisor reaps everything).
         if kill_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            trace(TraceEvent::GraceExpired);
+            trace(TraceEvent::Signal {
+                pgid: self_pid,
+                signal: libc::SIGKILL,
+                result: None,
+            });
             stream
                 .write_frame(
                     MSG_SIGNAL_ATTEMPT,
@@ -1047,6 +1067,7 @@ fn handle_frames(
     reader: &mut FrameReader,
     stream: &mut ControlStream,
     self_pid: i32,
+    bash_pid: i32,
     fail_signal: bool,
     force_anchor_loss: bool,
     kill_deadline: &mut Option<std::time::Instant>,
@@ -1054,6 +1075,9 @@ fn handle_frames(
     while let Some((kind, _payload)) = reader.pop() {
         match kind {
             MSG_TERMINATE => {
+                trace(TraceEvent::TerminateReceived);
+                diagnostics::before_term();
+                trace_shell_group(bash_pid);
                 if fail_signal {
                     // The injected signaling failure: the TERM cannot be
                     // delivered, so the termination contract cannot be
@@ -1086,7 +1110,14 @@ fn handle_frames(
                     MSG_SIGNAL_ATTEMPT,
                     &signal_attempt_payload(self_pid, Signal::SIGTERM, true),
                 )?;
-                match killpg(Pid::from_raw(self_pid), Signal::SIGTERM) {
+                let result = killpg(Pid::from_raw(self_pid), Signal::SIGTERM);
+                let signaled_at = std::time::Instant::now();
+                trace(TraceEvent::Signal {
+                    pgid: self_pid,
+                    signal: libc::SIGTERM,
+                    result: Some(result.map_or_else(|error| error as i32, |()| 0)),
+                });
+                match result {
                     Ok(()) | Err(Errno::ESRCH) => {}
                     Err(error) => {
                         return Err(format!(
@@ -1098,7 +1129,7 @@ fn handle_frames(
                 // terminal child set (ECHILD in the main loop) or is KILLed
                 // at the deadline.
                 if kill_deadline.is_none() {
-                    *kill_deadline = Some(std::time::Instant::now() + TERM_GRACE);
+                    *kill_deadline = Some(signaled_at + TERM_GRACE);
                 }
             }
             other => return Err(format!("unknown control message kind {other:#04x}")),
@@ -1153,6 +1184,18 @@ impl ControlStream {
         frame.extend_from_slice(payload);
         write(std::io::stdin(), &frame)
             .map_err(|error| format!("cannot write to the control channel: {error}"))?;
+        match kind {
+            MSG_ALL_CHILDREN_REAPED => trace(TraceEvent::TerminalPublished),
+            MSG_PROCESS_CONTROL_FAILURE => trace(TraceEvent::ControlFailure),
+            MSG_SHELL_EXITED if payload.len() == 9 => {
+                let code = i32::from_le_bytes(payload[..4].try_into().unwrap());
+                let signal = i32::from_le_bytes(payload[5..9].try_into().unwrap());
+                trace(TraceEvent::ShellExited {
+                    status: if payload[4] == 0 { code << 8 } else { signal },
+                });
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -1165,6 +1208,15 @@ impl ControlStream {
         self.write_failure(message)?;
         self.write_frame(MSG_NO_OWNERSHIP, &[])
     }
+}
+
+fn trace_shell_group(pid: i32) {
+    if std::env::var_os(diagnostics::TRACE_ENV).is_none() {
+        return;
+    }
+    let group = nix::unistd::getpgid(Some(Pid::from_raw(pid)))
+        .map_or_else(|error| -(error as i32), Pid::as_raw);
+    trace(TraceEvent::ShellGroup { pid, pgid: group });
 }
 
 /// The `SIGNAL_ATTEMPT` payload for one attempted group signal.

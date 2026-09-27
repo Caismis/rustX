@@ -608,7 +608,7 @@ async fn run_interactive_unit(
             biased;
             command = shutdown_rx.recv(), if lifecycle != UnitLifecycle::Terminal => {
                 if command.is_some() {
-                    let () = send_terminate(&mut control_write).await;
+                    let _ = send_terminate(&mut control_write).await;
                 }
                 // A dropped sender is not a shutdown request: the business
                 // handle requests shutdown explicitly.
@@ -630,7 +630,7 @@ async fn run_interactive_unit(
                         if control_failure.is_none() {
                             control_failure = Some(error.to_string());
                         }
-                        let () = send_terminate(&mut control_write).await;
+                        let _ = send_terminate(&mut control_write).await;
                     }
                 }
             }

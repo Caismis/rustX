@@ -28,7 +28,9 @@ actually committed, the existing durable rollback path remains in charge; the ne
 unreserved path does not replace it. Existing admission completion classifies a
 still-unproven transfer as Failed, so a captured interrupt cannot report successful
 settlement while native proof remains unavailable. Before classification the
-admission owner joins the existing bounded recovery owner. A temporarily unavailable
+admission owner originally joined the existing bounded recovery owner. The subsequent
+[exact-activation repair](pr-416-exact-recovery-and-signal-evidence.md) scopes this
+wait to its own allocation while retaining shared recovery execution. A temporarily unavailable
 probe therefore does not prematurely fail a captured wait while recovery is still
 in progress. Starts share one completion owner: the registry mutex excludes a
 second reconciler from publishing completion for the first. The existing receipt

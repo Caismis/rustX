@@ -172,6 +172,9 @@ the in-memory release. No Reserved, RolledBack, or logical activation event is
 invented for that unadmitted allocation. Session destructive exclusion also retains
 native proof for every consumed allocation, including those absent from the journal.
 The consumed ordinal remains unavailable for reuse after success or restart.
+Recovery execution is shared, but admission completion observes only its exact
+activation. Settling one allocation does not await another Agent's pending proof;
+Goal idle and whole-runtime drain still account for all remaining obligations.
 
 The append runs outside the mutex; interruption still captures the same reservation.
 Ownership must consume that same Agent, activation and origin. After Reserved has committed, conclusive rollback records `RolledBack` with an explicit

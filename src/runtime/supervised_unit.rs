@@ -491,7 +491,15 @@ pub(crate) enum ContainmentOutcome {
 /// containment, and the caller must never convert that into a terminal
 /// result.
 pub(crate) fn contain_group(pgid: i32) -> ContainmentOutcome {
-    classify_containment_result(killpg(Pid::from_raw(pgid), Signal::SIGKILL))
+    let result = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
+    crate::tools::native::bash_supervisor::diagnostics::record(
+        crate::tools::native::bash_supervisor::diagnostics::Event::Signal {
+            pgid,
+            signal: libc::SIGKILL,
+            result: Some(result.map_or_else(|error| error as i32, |()| 0)),
+        },
+    );
+    classify_containment_result(result)
 }
 
 /// Maps one raw containment-signal result to [`ContainmentOutcome`].

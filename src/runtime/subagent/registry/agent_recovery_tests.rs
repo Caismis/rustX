@@ -872,3 +872,88 @@ fn assert_start_joins_recovery_owner(registry: &SubagentRegistry) {
     registry.start_recovery_reconciliation();
     assert!(!completion.has_changed().unwrap(), "joining a parked owner must not start another completion publisher");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // Two exact allocations and one causally parked shared owner.
+async fn pre_reserved_wait_settles_independently_of_another_agents_recovery() {
+    use crate::runtime::subagent::physical_recovery::ParentPhysicalLease;
+    let plane = plane(4);
+    let mut agents = Vec::new();
+    for task in ["Agent A", "Agent B"] {
+        let child = stage_exit0(&plane);
+        let admitted = start(&plane, &spec(task)).await;
+        child.complete(ChildResultStatus::Succeeded, Some("done")).await;
+        plane.registry.wait_until_settled(&admitted.subagent_id).await.unwrap();
+        agents.push(admitted);
+    }
+    let registry = &plane.registry;
+    let spawn = &registry.config.spawn;
+    let x = {
+        let mut state = registry.state.lock().unwrap();
+        let id = SubagentId::for_conversation(&plane.conversation_id, state.next_ordinal);
+        state.next_ordinal += 1;
+        id
+    };
+    let x_owner = ParentPhysicalLease::reserve(&spawn.product_root, &spawn.session_id,
+        &agents[0].child_conversation_id, &x).unwrap();
+    let x_lock = x_owner.duplicate_lock_for_test().unwrap();
+    registry.retain_unreserved_allocation(&agents[0].child_conversation_id, &x);
+    drop(x_owner);
+    let (entered, entry) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    registry.state.lock().unwrap().recovery_probe_hook = Some(Box::new(move || {
+        entered.send(()).unwrap();
+        released.recv().unwrap();
+    }));
+    registry.start_recovery_reconciliation();
+    entry.await.unwrap(); // X's exact claim parks the shared worker off-lock.
+
+    let gate = Arc::new(CommitBoundaryHook::default());
+    registry.state.lock().unwrap().authority_install_hook = Some(gate.clone());
+    let (retained, retained_lock) = tokio::sync::oneshot::channel();
+    registry.state.lock().unwrap().resume_cleanup_hook = Some(Box::new(move |owner| {
+        retained.send(owner.duplicate_lock_for_test().unwrap()).unwrap();
+    }));
+    let mut send = Box::pin(registry.send_message(&agents[1].child_agent_id, "cancel before Reserved",
+        AgentActivationOrigin::ClientControl, CancellationSignal::new()));
+    assert!(futures_util::poll!(&mut send).is_pending());
+    gate.wait_until_entered();
+    let mut wait = Box::pin(registry.wait_agent(&agents[1].child_agent_id));
+    assert!(futures_util::poll!(&mut wait).is_pending());
+    let mut interrupt = Box::pin(registry.interrupt_agent(&agents[1].child_agent_id));
+    assert!(futures_util::poll!(&mut interrupt).is_pending());
+    let y = registry.state.lock().unwrap().agents[&agents[1].child_agent_id]
+        .resuming.as_ref().unwrap().activation_id.clone();
+    gate.release();
+    let y_lock = retained_lock.await.unwrap();
+    let mut changes = registry.state_version.subscribe();
+    loop {
+        changes.borrow_and_update();
+        if registry.state.lock().unwrap().recovery_pending.contains(&y) { break; }
+        changes.changed().await.unwrap();
+    }
+    assert!(futures_util::poll!(&mut wait).is_pending());
+    // Explicit unlock releases this test-owned description even if an unrelated
+    // spawn transiently inherited a duplicate. No drop=>next-Try assumption.
+    y_lock.unlock().unwrap();
+    drop(y_lock);
+    registry.reconcile_recovered_settlements();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), &mut wait).await.unwrap().unwrap();
+    assert_eq!(result.activation_id, Some(y.clone()));
+    assert!(result.outcome.is_none());
+    assert!(interrupt.await.unwrap().outcome.is_none());
+    assert!(send.await.is_err());
+    assert!(!*registry.recovery_reconciliation.borrow(), "X's worker is still parked");
+    assert_eq!(registry.unproven_settlements(), vec![x.clone()]);
+    assert_eq!(registry.agent_snapshot(&agents[1].child_agent_id).unwrap().state, AgentState::Inactive);
+    assert_eq!(registry.with_goal_idle(|| true), None);
+    assert!(!events(&plane).iter().any(|event| matches!(event,
+        crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. }
+        if activation_id == &y)));
+    x_lock.unlock().unwrap();
+    drop(x_lock);
+    release.send(()).unwrap();
+    registry.wait_recovery_reconciliation().await;
+    assert!(registry.unproven_settlements().is_empty());
+    assert_eq!(registry.with_goal_idle(|| true), Some(true));
+}

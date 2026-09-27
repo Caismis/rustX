@@ -772,7 +772,9 @@ impl SubagentRegistry {
                         drop(identity.physical_owner.take());
                         registry.reconcile_recovered_settlements();
                         registry.start_recovery_reconciliation();
-                        registry.wait_recovery_reconciliation().await;
+                        registry
+                            .wait_recovery_settlement_for(&identity.activation_id)
+                            .await;
                     }
                     let recovery_pending = registry
                         .state
