@@ -2026,6 +2026,15 @@ mod tests {
             ),
             "deletion wins at its own visibility point"
         );
+        assert_eq!(
+            invalidations.recorded(),
+            recorded + 1,
+            "deletion announces its membership visibility exactly once"
+        );
+        assert_eq!(
+            invalidations.next_after(recorded),
+            Some((recorded + 1, session.id.clone(), true))
+        );
         gate.release();
         assert_eq!(
             repairing.await.unwrap().unwrap(),
@@ -2038,8 +2047,8 @@ mod tests {
         ));
         assert_eq!(
             invalidations.recorded(),
-            recorded,
-            "a publication that never became visible announces nothing"
+            recorded + 1,
+            "the resumed repair adds nothing to deletion's membership invalidation"
         );
     }
 }

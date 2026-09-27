@@ -96,3 +96,59 @@ Channels, scoped gates, acknowledged source application and held RPC responses
 prove ordering; no sleeps establish a race. This repair does not add latency
 measurements or make a startup/provider speed claim. The original before/after
 measurements remain historical evidence for #419's navigation change.
+
+## Final validation
+
+Environment: Node 24.21.0, pnpm 11.13.1, rustc 1.95.0. Re-ran
+`pnpm install --frozen-lockfile` in protocol/app-server, tui and web-console and
+`uv sync --frozen` in test-support/fake-provider; all were already current.
+No lockfiles or dependencies changed. Commands below ran in the implementation
+worktree; Cargo build jobs were bounded to two and test threads to four.
+
+| Executed command | Final result |
+| --- | --- |
+| `CARGO_BUILD_JOBS=2 cargo test --lib --all-features issue422 -- --test-threads=4` | 4 passed |
+| `CARGO_BUILD_JOBS=2 cargo test --lib --all-features issue419 -- --test-threads=4` | 5 passed; opt-in measurement ignored |
+| `CARGO_BUILD_JOBS=2 cargo test --lib --all-features a_repair_parked_past_deletion_neither_resurrects_nor_announces` | 1 passed |
+| `pnpm --dir web-console exec vitest run test/client.test.ts test/first-submit.test.ts test/new-conversation.test.tsx test/conversation-residency.test.tsx` | 85 passed |
+| `(cd web-console && CONTAINER_ENGINE=podman bash scripts/browser-tests.sh startup-ownership.spec.ts)` | 13 passed |
+| `cargo fmt --all -- --check` | Pass, including final rerun |
+| `CARGO_BUILD_JOBS=2 cargo clippy --all-targets --all-features -- -D warnings` | Pass, including final rerun |
+| `CARGO_BUILD_JOBS=2 cargo build --bins` | Pass; real transport/browser lanes use these binaries |
+| `CARGO_BUILD_JOBS=2 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features -- --test-threads=4` | 3,949 passed, 8 explicit ignores, 18 targets |
+| `(cd protocol/app-server && CARGO_BUILD_JOBS=2 pnpm generate)` | Pass; only v24 schema/TypeScript descriptions changed |
+| `(cd protocol/app-server && CARGO_BUILD_JOBS=2 pnpm check && pnpm typecheck)` | Pass after committing generated outputs; regeneration has no drift |
+| `(cd tui && pnpm typecheck && RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test)` | Pass; 854 tests, including real stdio/WebSocket transport |
+| `(cd web-console && pnpm typecheck && pnpm build && pnpm test && pnpm check:i18n && pnpm check:provenance)` | Pass; 1,061 tests / 58 files, 143 provenance records, 131 package notices |
+| `(cd web-console && CONTAINER_ENGINE=podman RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test:e2e)` | All 124 passed, including real-process/transport lanes |
+| `git diff --check` | Pass |
+
+The all-target Rust command includes in-crate App Server/boundary conformance,
+3,338 library tests, cfg3_catalog (26), cfg3_managed_output (5), conformance (22),
+contracts (28), durable (129), process (62), provider (166), subagent (43) and
+tools (130). No cancellation, physical settlement or provider-isolation test
+was weakened. The eight ignores remain the three opt-in library measurement/
+fixture writers and five credential-dependent live provider tests. External
+credentialed providers were not exercised; required lanes use isolated fixtures.
+No new before/after latency comparison was performed for this repair.
+
+The initial full Rust run exposed the obsolete assertion in
+`a_repair_parked_past_deletion_neither_resurrects_nor_announces`: it expected no
+invalidation even from deletion. The test now requires exactly one membership
+invalidation at deletion and zero additional invalidations from the resumed
+repair. Its focused rerun and the complete Rust rerun pass. New test construction
+also corrected explicit fixture response types and established real source B
+publication through an existing Session before asserting the creation race.
+
+The first browser launch failed before tests because unrelated processes occupied
+5173/5174. Both successful browser lanes used temporary 15173/15174 substitutions;
+every port-only change was restored afterward. No unrelated process was stopped.
+The pinned Playwright container/image and screenshot references are unchanged.
+Inspected English/Chinese attaching and attachment-failure screenshots from the
+actual App tests: native identity is visible with retained text/Files, input is
+explicitly unsent during preparation, and failure retains the draft without a
+replay action. Existing Vite large-chunk advisories remain non-failing.
+
+The implementation worktree remains available for review. The original worktree
+was neither edited nor switched. Delivery updates only the existing PR #422;
+auto-merge remains disabled and CI is not watched after pushing.

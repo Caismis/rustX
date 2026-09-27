@@ -1,5 +1,8 @@
 # Validation and delivery record (#419)
 
+This records the initial implementation. The subsequent PR #422 review repair
+and its final validation are recorded in [repair-422.md](repair-422.md).
+
 ## Environment and scope
 
 Base: `6ff49deb4c0855e64f0acaed85ebea2b6a277103` from fetched `origin/main`.

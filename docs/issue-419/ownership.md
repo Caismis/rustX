@@ -16,10 +16,11 @@ Workspace. It does not need a catalog row. `ConversationSeat` gates execution.
 Native `Connection::handle` dispatches `SessionCreate` to
 `SessionRuntimeManager::create_session`. `ApplicationState::initial_binding`
 validates explicit `SessionPersistentState.model` or captures the published native
-default. The manager passes that capture to `SessionController::create_session`,
+default. At the audited base, the manager passes the selected settings to `SessionController::create_session`,
 which prepares private storage and publishes the catalog. Committed durability
-errors return identity plus a diagnostic. Configuration binding registration
-precedes ACK; runtime composition does not. Attach consumes this binding.
+errors return identity plus a diagnostic. At that base, configuration binding
+registration followed catalog visibility and preceded ACK; the PR #422 repair
+closes that visibility gap, as described below. Runtime composition is separate.
 The existing v23 contract already carries optional `settings.model`.
 
 Planned ownership: the AppServerClient lifetime retains first-submit work.
@@ -64,7 +65,7 @@ protocol. No source is copied and no pinned Harness reference is changed.
 | Boundary | Owning symbol | Fact / next permitted effect |
 | --- | --- | --- |
 | Draft gesture | `ConversationComposer`, `AgentComposer` | Resolve authorized Workspace; seal text, ordered browser Files and creation intent |
-| Identity commit | `SessionRuntimeManager::create_session`, `SessionController::create_session`, `SessionCatalog::publish_session` | Validated/persisted initial model and native Session identity; no loaded runtime required |
+| Identity commit | `SessionRuntimeManager::create_session`, `SessionController::create_session_with_binding`, `SessionCatalog::publish_session` | Full captured binding installed before catalog visibility; validated/persisted initial model and native identity; no loaded runtime required |
 | Client handoff | `AppServerClient.request` decoded acknowledgement → `FirstSubmissions.submit` committed callback | Publish exact Session operation before `firstSubmitPort.handoff` calls `App.focusSession` |
 | Navigation | `App`, client-owned `NavigationEpoch` | Restore native ID directly; Conversation renders without a sidebar row or attach ACK |
 | Runtime readiness | `firstSubmitPort.attach`, `AppServerClient.performAttach`, native `load` | Capture this operation's exact attachment; consume established native model/configuration |
@@ -106,7 +107,7 @@ No new model wire field was needed: base v23 already had the correct native
 The Web now uses that contract. Explicit choice and browser preference are sent;
 a displayed projected default is not. Native creation validates without fallback,
 persists/readbacks the initial model and captures configuration authority before
-ACK. Attach reads it, and the first Attempt freezes it. A later intentional
+catalog visibility (and therefore before ACK). Attach reads it, and the first Attempt freezes it. A later intentional
 `setModel` still follows native busy/settlement rules and cannot rewrite an
 already-admitted Attempt.
 
@@ -117,10 +118,14 @@ The old composer-owned `firstSubmitMachine`, RESET/completion navigation chain,
 post-create initial `selectSessionModel` and redundant `repairAgentModel` call
 are deleted. Legitimate snapshot/recovery/model-switch paths remain. Neither
 `listSessions` nor display-summary reads gate successful attachment. Native
-creation now publishes catalog-membership invalidation even when publication
+catalog additions and removals publish membership invalidation even when publication
 returns a committed durability diagnostic. v24 adds mandatory `catalog_changed`
 to the existing summary invalidation; it introduces no second catalog authority.
 The coalescer retains unobserved membership invalidation across preview updates.
+Cleanup/recovery without another membership transition emits no duplicate.
+ACK observer exceptions are isolated from wire settlement and request pumping.
+See the [PR #422 repair contract and regression map](repair-422.md) for native
+creation exclusion, rollback/durability semantics and multi-client proofs.
 
 ## Deterministic coverage
 
