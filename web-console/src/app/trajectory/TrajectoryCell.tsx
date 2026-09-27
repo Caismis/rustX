@@ -6,7 +6,7 @@ import type {
   TraceKind,
   TraceRecord,
   TraceSystemPromptState,
-} from '../../../../protocol/app-server/v23';
+} from '../../../../protocol/app-server/v24';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { InspectableDisplayItem } from './layout';

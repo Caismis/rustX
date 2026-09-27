@@ -769,9 +769,13 @@ impl AppServerConnection {
             .summary_invalidations_delivered
             .lock()
             .expect("summary invalidation cursor");
-        let (sequence, session_id) = self.summary_invalidations.next_after(*delivered)?;
+        let (sequence, session_id, catalog_changed) =
+            self.summary_invalidations.next_after(*delivered)?;
         *delivered = sequence;
-        Some(NotificationMethod::SummaryInvalidated { session_id })
+        Some(NotificationMethod::SummaryInvalidated {
+            session_id,
+            catalog_changed,
+        })
     }
 
     /// Wait for one routed notification. No per-Session event queues or pump tasks.

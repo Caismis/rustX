@@ -1050,3 +1050,45 @@ async fn deletion_stale_control_response_requires_a_new_preview_token() {
     ));
     assert_completed_absent(dir.path(), &source.id);
 }
+
+#[test]
+fn issue422_deletion_membership_changes_once_before_cleanup_even_when_uncertain() {
+    for uncertain in [false, true] {
+        let (_dir, mut catalog, preview) = fixture();
+        let log = catalog.summary_invalidations();
+        let frontier = log.frontier();
+        if uncertain {
+            catalog.arm_write_fault_after_rename();
+        }
+        let committed = catalog
+            .commit_delete(&preview.session_id, &preview.target_revision)
+            .unwrap();
+        let (sequence, id, membership) = log.next_after(frontier).unwrap();
+        assert_eq!(id, preview.session_id);
+        assert!(membership);
+        assert!(!catalog.document.sessions.contains_key(&id));
+        let work = if uncertain {
+            assert!(matches!(
+                committed,
+                Err(SessionDeleteResult::CommittedDurabilityUncertain { .. })
+            ));
+            catalog.recover_delete(&id).unwrap()
+        } else {
+            committed.unwrap()
+        };
+        assert_eq!(log.next_after(sequence), None);
+        // A failed cleanup still leaves membership removed and does not announce it twice.
+        assert!(matches!(
+            catalog.finish_delete(&work.record, Err(std::io::Error::other("gated cleanup"))),
+            SessionDeleteResult::CommittedCleanupPending { .. }
+        ));
+        assert_eq!(log.next_after(sequence), None);
+        let work = catalog.recover_delete(&id).unwrap();
+        let cleaned = work.run();
+        assert!(matches!(
+            catalog.finish_delete(&work.record, cleaned),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert_eq!(log.next_after(sequence), None);
+    }
+}

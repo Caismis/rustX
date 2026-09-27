@@ -2,7 +2,7 @@ import type { AppServerClient } from '../client/app-server';
 import type { ProductHostWorkspaces } from './host';
 /** The Web admission/navigation owner. No trust decisions or durable membership. */
 export class WorkspaceSessionNavigation {
-  constructor(private readonly host: ProductHostWorkspaces, private readonly client: AppServerClient, private readonly navigation: import('../app/commands/native').NavigationEpoch) {}
+  constructor(private readonly host: ProductHostWorkspaces, private readonly client: AppServerClient, private readonly navigation: import('../client/navigation').NavigationEpoch) {}
   private fence(current: () => boolean) {
     const generation = this.client.getSnapshot().generation;
     const navigationCurrent = this.navigation.capture();

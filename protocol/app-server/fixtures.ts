@@ -1,6 +1,33 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v23.js';
+import type {ProtocolMessage} from './v24.js';
 export const fixtures = [
+  {
+    "jsonrpc": "2.0",
+    "id": "create-with-initial-model",
+    "method": "session/create",
+    "params": {
+      "settings": {
+        "cwd": "/workspace",
+        "model": {
+          "model": "provider/selected",
+          "requestParams": {},
+          "summaryModel": {
+            "mode": "session"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "create-with-native-default",
+    "method": "session/create",
+    "params": {
+      "settings": {
+        "cwd": "/workspace"
+      }
+    }
+  },
   {
     "jsonrpc": "2.0",
     "id": "exact-session-summary",
@@ -73,7 +100,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 23,
+      "protocol_version": 24,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -90,7 +117,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 23,
+      "protocol_version": 24,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,

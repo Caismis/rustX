@@ -1,10 +1,12 @@
+import { NavigationEpoch } from './navigation';
+import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v23';
+} from '../../../protocol/app-server/v24';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -97,6 +99,8 @@ export interface Socket {
 }
 export type SocketFactory = (url: string, protocols: string[]) => Socket;
 interface Pending {
+  dispatchCurrent?: () => boolean;
+  acknowledged?: (result: MethodResult) => void;
   request: Request;
   context: WireContext;
   mutation: boolean;
@@ -139,6 +143,10 @@ export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a &&
  * No event fold, retry transaction ID, runtime lifetime, or browser persistence. */
 export class AppServerClient {
   readonly log = new ProtocolLog();
+  readonly navigation = new NavigationEpoch();
+  readonly firstSubmissions = new FirstSubmissions();
+  /** Final client lifetime ends only explicitly, never on a component unmount. */
+  dispose() { this.firstSubmissions.dispose(); return this.disconnect(); }
   private socket?: Socket;
   private initialized = false;
   private nextId = 0;
@@ -218,6 +226,7 @@ export class AppServerClient {
     if (this.closing) await this.closing;
     if (generation !== this.state.generation || attempt !== this.connectionAttempt) return;
     if (replacing) {
+      this.firstSubmissions.retireAuthority();
       const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
         .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
       // Admission reserved capacity for close-time evidence before synchronous fencing.
@@ -235,7 +244,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v23', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v24', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -253,12 +262,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 23, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 24, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 23 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v23 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 24 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v24 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -345,7 +354,7 @@ export class AppServerClient {
     }
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
-  async request<T extends MethodResult['type']>(operation: Request1, expected: T): Promise<Extract<MethodResult, { type: T }>> {
+  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: () => boolean): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
     if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
@@ -360,7 +369,7 @@ export class AppServerClient {
       const params = operation.params;
       const context = { method: operation.method,
         sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
-      this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject });
+      this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject, dispatchCurrent, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       if (operation.method === 'turn/start' || operation.method === 'turn/steer') this.publishInbound(operation.params.target.session_id);
       this.pump();
     });
@@ -376,6 +385,12 @@ export class AppServerClient {
     for (const pending of this.pending.values()) {
       if (sent >= 8 || !this.socket) break;
       if (pending.sent) continue;
+      if (pending.dispatchCurrent && !pending.dispatchCurrent()) {
+        this.pending.delete(String(pending.request.id));
+        pending.reject(new Error('Authority changed before dispatch. No operation was sent.'));
+        if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
+        continue;
+      }
       const raw = JSON.stringify(pending.request);
       const generation = this.state.generation;
       pending.sent = true; sent++;
@@ -406,19 +421,33 @@ export class AppServerClient {
         this.lose(generation); return;
       }
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
-      const operation = pending.request;
-      if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
-        const target = operation.params.target;
-        const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.state.views[target.session_id]?.target, target)
-          ? { messageId: value.result.message_id, content: operation.params.content } : undefined;
-        // One publication hands request ownership to exact acknowledged identity.
-        // Never publish a zero count before publishing the accepted MessageId.
-        this.publishInbound(target.session_id, accepted);
-        this.settleSubmissions(target.session_id);
+      // Evidence observers run at decode time, before continuation authority
+      // checks. Their failures are local diagnostics, never a native RPC result.
+      try {
+        if ('result' in value) pending.acknowledged?.(value.result);
+      } catch (error) {
+        console.error('App Server acknowledgement observer failed', error);
       }
-      if ('error' in value) pending.reject(new RpcFailure(value.error));
-      else if ('result' in value) pending.resolve(value.result);
-      this.pump();
+      try {
+        const operation = pending.request;
+        if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
+          const target = operation.params.target;
+          const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.state.views[target.session_id]?.target, target)
+            ? { messageId: value.result.message_id, content: operation.params.content } : undefined;
+          // One publication hands request ownership to exact acknowledged identity.
+          // Never publish a zero count before publishing the accepted MessageId.
+          this.publishInbound(target.session_id, accepted);
+          this.settleSubmissions(target.session_id);
+        }
+      } catch (error) {
+        console.error('App Server response presentation failed', error);
+      } finally {
+        // The correlated wire outcome alone settles the RPC. Presentation
+        // subscribers cannot strand it or consume a request capacity slot.
+        if ('error' in value) pending.reject(new RpcFailure(value.error));
+        else if ('result' in value) pending.resolve(value.result);
+        this.pump();
+      }
       return;
     }
     if (value.method === 'configuration/changed') {
@@ -434,8 +463,9 @@ export class AppServerClient {
       // view — or a row this client only lists — converges without attaching a
       // runtime, and Session A can never update Session B.
       const sessionId = value.params?.session_id;
-      if (typeof sessionId !== 'string') { this.lose(generation); return; }
+      if (typeof sessionId !== 'string' || typeof value.params.catalog_changed !== 'boolean') { this.lose(generation); return; }
       this.invalidateSummary(sessionId, generation);
+      if (value.params.catalog_changed) this.invalidateCatalog(generation);
       return;
     }
     if (!['session/event', 'session/resyncRequired', 'session/closed'].includes(value.method) || !value.params?.target) {
@@ -573,6 +603,22 @@ export class AppServerClient {
     }).catch(() => {});
     return work;
   }
+  private catalogRefresh?: { generation: number; dirty: boolean; work: Promise<void> };
+  /** Coalesced native membership invalidation. Never awaited by attach or send.
+   * A failure settles this read; another invalidation/reconnect may reread. */
+  private invalidateCatalog(generation: number) {
+    const existing = this.catalogRefresh;
+    if (existing?.generation === generation) { existing.dirty = true; return; }
+    const refresh = { generation, dirty: true, work: Promise.resolve() };
+    this.catalogRefresh = refresh;
+    refresh.work = (async () => {
+      while (refresh.dirty && this.current(generation)) {
+        refresh.dirty = false;
+        await this.listSessions();
+      }
+    })();
+    void refresh.work.catch(() => {}).finally(() => { if (this.catalogRefresh === refresh) this.catalogRefresh = undefined; });
+  }
   /** Native post-commit Session metadata invalidation (Issue #386).
    * Authoritative rereading, not a value: it overrides any earlier cached-null
    * check, and a read already in flight cannot answer it. A cached Session is
@@ -662,21 +708,22 @@ export class AppServerClient {
     }
   }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
-  attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true): Promise<void> {
+  attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (nodeId && this.state.views[id]?.target && this.state.views[id]?.nodeId !== nodeId) return Promise.reject(new Error('Use branch switching to open another node.'));
     if (this.state.views[id]?.deleting) return Promise.reject(new Error('Verify the pending Session deletion before opening it.'));
     this.setSession(id, { attachmentIntent: 'wanted', ...(nodeId ? { nodeId } : {}) });
-    return this.acquireAttachment(id, navigationCurrent);
+    return this.acquireAttachment(id, navigationCurrent, attached);
   }
-  private acquireAttachment(id: string, navigationCurrent: () => boolean = () => true): Promise<void> {
+  private acquireAttachment(id: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     return this.changeAttachment(id, 'attach', async generation => {
       if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
-      if (this.state.views[id]?.target) return this.refresh(id);
+      const existing = this.state.views[id]?.target;
+      if (existing) { attached?.(existing); return this.refresh(id); }
       this.setSession(id, { attachment: 'attaching', error: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       this.summarySettled.delete(id);
-      await this.performAttach(id, generation, epoch, navigationCurrent);
+      await this.performAttach(id, generation, epoch, navigationCurrent, attached);
     });
   }
   /** Serialize explicit attachment gestures, including close during attach and
@@ -702,25 +749,26 @@ export class AppServerClient {
     }).catch(() => {});
     return work;
   }
-  private async performAttach(id: string, generation: number, epoch: number, navigationCurrent: () => boolean) {
+  private async performAttach(id: string, generation: number, epoch: number, navigationCurrent: () => boolean, attached?: (target: AttachmentTarget) => void) {
     const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch;
     const admissionCurrent = () => current() && navigationCurrent();
     let target: AttachmentTarget | undefined;
     try {
       if (!await this.admitAttachment(id, admissionCurrent) || !admissionCurrent()) return;
-      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached');
+      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, admissionCurrent);
       if (!current()) return;
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
       this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), trace: replaceTrace(result.snapshot.trace, this.state.views[id]?.trace), attachment: 'attached' });
+      attached?.(result.target);
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       this.setSession(id, { settings: settings.settings });
       // A restored/branched view may be outside the visible catalog page. Read
       // its native identity even before any user message exists; never invent it.
-      await this.refreshDisplaySummary(id);
+      void this.refreshDisplaySummary(id).catch(() => {});
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       if (this.dirty.has(id)) { this.resubscribe.add(id); await this.refresh(id); }
     } catch (error) {
@@ -878,7 +926,7 @@ export class AppServerClient {
   rememberNode(target: AttachmentTarget, nodeId: string) {
     if (sameTarget(this.state.views[target.session_id]?.target, target)) this.setSession(target.session_id, { nodeId });
   }
-  async upload(id: string, files: readonly File[]): Promise<UploadedFile[]> {
+  async upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }): Promise<UploadedFile[]> {
     const target = this.target(id);
     const generation = this.state.generation;
     if (!files.length || files.length > DRAFT_MAX_FILES || files.some(file => file.size > UPLOAD_MAX_BYTES)
@@ -890,27 +938,27 @@ export class AppServerClient {
       for (const byte of bytes) binary += String.fromCharCode(byte);
       encoded.push({ name: file.name, data: btoa(binary) });
     }
-    if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) throw new Error('Upload target changed before transfer.');
-    const uploaded = await this.request({ method: 'session/upload', params: { target, files: encoded } }, 'session_uploaded');
+    if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target) || evidence && !evidence.current()) throw new Error('Upload target changed before transfer.');
+    const uploaded = await this.request({ method: 'session/upload', params: { target, files: encoded } }, 'session_uploaded', result => evidence?.acknowledged(result.files), evidence?.current);
     if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) throw new Error('Upload outcome belongs to an obsolete view. Remove this draft selection; do not replay it.');
     return uploaded.files;
   }
-  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send') {
+  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
     if (receipts.length > DRAFT_MAX_FILES || receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
       ...(text ? [{ type: 'text' as const, text }] : []),
     ];
-    return this.sendContent(id, content, delivery);
+    return this.sendContent(id, content, delivery, acknowledged, dispatchCurrent);
   }
-  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send') {
+  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
     const target = this.target(id);
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before sending.');
     // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
     // The request pipeline owns unresolved transport and its acknowledgement
     // handoff. No MessageId or queue identity is invented before acceptance.
-    return this.request({ method: delivery === 'steer' ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
+    return this.request({ method: delivery === 'steer' ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted', acknowledged, dispatchCurrent);
   }
   private publishInbound(id: string, accepted?: Submission) {
     const view = this.state.views[id];
@@ -994,7 +1042,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v23').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v24').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

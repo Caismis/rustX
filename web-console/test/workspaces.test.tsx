@@ -2,7 +2,7 @@ import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
-import { NavigationEpoch } from '../src/app/commands/native';
+import { NavigationEpoch } from '../src/client/navigation';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { sessionObservation } from '../src/workspaces/WorkspaceNavigation';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
@@ -89,17 +89,17 @@ it('picker capability exposes only authorized choices and Session rename uses th
 it('Host resolution supplies exact cwd, rejects unauthorized identifiers, and a late resolution cannot create or reopen', async () => {
   await server.connect(); const host = hostFixture(), navigation = new NavigationEpoch();
   const gate = deferred<{ cwd: string }>(); vi.mocked(host.resolveWorkspace).mockReturnValueOnce(gate.promise);
-  const pending = firstSubmitPort(server.client, host, navigation.capture()).create({ workspaceId: 'wA', text: 'hello', files: [] });
+  const pending = firstSubmitPort(server.client, host, navigation.capture(), () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {});
   navigation.invalidate(); const rejected = expect(pending).rejects.toThrow('authority changed'); gate.resolve({ cwd: '/workspace/A' }); await rejected;
   expect(methods()).not.toContain('session/create');
-  await expect(firstSubmitPort(server.client, host, navigation.capture()).create({ workspaceId: '/arbitrary/path', text: 'hello', files: [] })).rejects.toThrow('Unauthorized');
+  await expect(firstSubmitPort(server.client, host, navigation.capture(), () => {}).create({ workspaceId: '/arbitrary/path', text: 'hello', files: [] }, () => {})).rejects.toThrow('Unauthorized');
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw new Error('wrong request');
     expect(request.params.settings.cwd).toBe('/workspace/A');
     server.snapshots.set('created', snapshot('created'));
     return { type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
   });
-  expect((await firstSubmitPort(server.client, host, navigation.capture()).create({ workspaceId: 'wA', text: 'hello', files: [] })).id).toBe('created');
+  expect((await firstSubmitPort(server.client, host, navigation.capture(), () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {})).id).toBe('created');
 });
 it('late metadata searches cannot replace newer results or results after Workspace navigation', async () => {
   await mount(); server.held.add('session/list');
@@ -376,7 +376,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v23').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v24').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -435,7 +435,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by one App-owned epoch. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v23').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v24').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { UserInputBlock } from '../../../../protocol/app-server/v23';
+import type { UserInputBlock } from '../../../../protocol/app-server/v24';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
@@ -24,7 +24,7 @@ export function ConversationStatus({ client, sessionId, recover }: { client: App
 export function ConversationSeat({ client, host, sessionId, initialWorkspace, binding, current, consumed, restored, opened, onCommand }: {
   client: AppServerClient; host: ProductHostWorkspaces; sessionId?: string; initialWorkspace?: string;
   binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
-  restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => void;
+  restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => (() => boolean) | void;
   onCommand: (id: CommandId) => void;
 }) {
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);

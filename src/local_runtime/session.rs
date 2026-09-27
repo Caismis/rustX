@@ -439,7 +439,7 @@ struct SummaryInvalidationState {
     /// publication this process made.
     sequence: u64,
     /// The sequence of each Session's latest recorded publication.
-    published: BTreeMap<SessionId, u64>,
+    published: BTreeMap<SessionId, (u64, u64)>,
     /// Woken on every record. A `watch` is a level-triggered wake-up, not a
     /// delivery channel: observers always reread the map above, so a coalesced
     /// wake-up can never drop an invalidation.
@@ -451,10 +451,24 @@ impl SessionSummaryInvalidations {
     /// point. Never blocks on a client, a socket, or an acknowledgement: it
     /// takes one uncontended `std::sync::Mutex` and wakes parked observers.
     pub(crate) fn record(&self, session_id: &SessionId) {
+        self.record_change(session_id, false);
+    }
+
+    fn record_change(&self, session_id: &SessionId, catalog_changed: bool) {
         let mut state = self.state.lock().expect("summary invalidation log lock");
         state.sequence += 1;
         let sequence = state.sequence;
-        state.published.insert(session_id.clone(), sequence);
+        let membership = if catalog_changed {
+            sequence
+        } else {
+            state
+                .published
+                .get(session_id)
+                .map_or(0, |(_, membership)| *membership)
+        };
+        state
+            .published
+            .insert(session_id.clone(), (sequence, membership));
         if let Some(changed) = &state.changed {
             changed.send_replace(sequence);
         }
@@ -472,14 +486,21 @@ impl SessionSummaryInvalidations {
 
     /// The next invalidation after `delivered`, in publication order, or
     /// `None` when the observer is current.
-    pub(crate) fn next_after(&self, delivered: u64) -> Option<(u64, SessionId)> {
+    pub(crate) fn next_after(&self, delivered: u64) -> Option<(u64, SessionId, bool)> {
         let state = self.state.lock().expect("summary invalidation log lock");
         state
             .published
             .iter()
-            .filter(|(_, sequence)| **sequence > delivered)
-            .min_by_key(|(_, sequence)| **sequence)
-            .map(|(session_id, sequence)| (*sequence, session_id.clone()))
+            .filter_map(|(id, (sequence, membership))| {
+                if *membership > delivered {
+                    Some((*membership, id.clone(), true))
+                } else if *sequence > delivered {
+                    Some((*sequence, id.clone(), false))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|(sequence, _, _)| *sequence)
     }
 
     /// A wake-up source for a parked observer. The value carried is the
@@ -611,6 +632,8 @@ pub(crate) struct PreparedLineage {
 #[serde(deny_unknown_fields)]
 pub struct SessionPersistentState {
     pub cwd: PathBuf,
+    /// Explicit initial selection. Omission delegates to the native configuration
+    /// owner at creation; clients must not copy a projected default into this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<SessionModelConfig>,
 }
@@ -2435,27 +2458,30 @@ impl SessionCatalog {
                 detail: "catalog generation exhausted".into(),
             })?;
         validate_document(&next)?;
-        match self.persist(&next) {
-            Ok(()) => {
-                self.document = next;
-                self.published = true;
-                Ok(())
+        // Membership evidence belongs to the visibility commit, including
+        // uncertain directory durability. Cleanup/recovery commits with unchanged
+        // membership emit nothing. This covers creation, copies and deletion.
+        let membership: Vec<_> = self
+            .document
+            .sessions
+            .keys()
+            .filter(|id| self.published && !next.sessions.contains_key(*id))
+            .chain(
+                next.sessions
+                    .keys()
+                    .filter(|id| !self.published || !self.document.sessions.contains_key(*id)),
+            )
+            .cloned()
+            .collect();
+        let committed = self.persist(&next);
+        if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
+            self.document = next;
+            self.published = true;
+            for id in membership {
+                self.summary_invalidations.record_change(&id, true);
             }
-            Err(
-                error @ SessionError::CatalogCommit {
-                    error: CatalogCommitError::CommittedButDurabilityUncertain { .. },
-                },
-            ) => {
-                // `rename` has already made `next` the visible catalog
-                // document. Keep the in-process authority aligned even
-                // though the directory durability barrier could not be
-                // proven, then surface the distinct post-commit outcome.
-                self.document = next;
-                self.published = true;
-                Err(error)
-            }
-            Err(error) => Err(error),
         }
+        committed
     }
 
     fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {
@@ -6861,6 +6887,44 @@ model = "provider/model"
         let head = store.load_head().expect("head");
         assert_eq!(first.len(), 2);
         assert!(head.revision > SurfaceRevision::new(2));
+    }
+    #[test]
+    fn issue419_catalog_membership_invalidation_survives_coalesced_preview_changes() {
+        let log = super::SessionSummaryInvalidations::default();
+        let a = SessionId::new("ses_00000000-0000-7000-8000-000000000001");
+        let b = SessionId::new("ses_00000000-0000-7000-8000-000000000002");
+        log.record_change(&a, true);
+        log.record_change(&b, true);
+        log.record(&a);
+        assert_eq!(log.next_after(0), Some((1, a.clone(), true)));
+        assert_eq!(log.next_after(1), Some((2, b, true)));
+        assert_eq!(log.next_after(2), Some((3, a, false)));
+        assert_eq!(log.next_after(3), None);
+    }
+
+    #[test]
+    fn issue419_creation_invalidation_tracks_visibility_even_with_durability_diagnostic() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let log = catalog.summary_invalidations();
+        let frontier = log.frontier();
+        let prepared = catalog.prepare_session(&state(), &[]).unwrap();
+        catalog.arm_write_fault_before_rename();
+        assert!(
+            catalog
+                .publish_session(&prepared, SessionNodeOrigin::New)
+                .is_err()
+        );
+        assert_eq!(log.next_after(frontier), None);
+        let prepared = catalog.prepare_session(&state(), &[]).unwrap();
+        catalog.arm_write_fault_after_rename();
+        assert!(
+            catalog
+                .publish_session(&prepared, SessionNodeOrigin::New)
+                .unwrap_err()
+                .committed()
+        );
+        assert_eq!(log.next_after(frontier).unwrap().1, prepared.session_id);
+        assert!(log.next_after(frontier).unwrap().2);
     }
     mod archive_tests;
     mod deletion_tests;

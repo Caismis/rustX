@@ -11,7 +11,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v23';
+import type { CatalogModelView, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v24';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -65,7 +65,12 @@ function host() {
   return { ...server.workspaceHost, configureWorkspace: async () => ({ kind: 'read' as const, projection: source }), resolveWorkspace: async () => ({ cwd: '/workspace/A' }), classifyLocations: async (paths: string[]) => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' })) };
 }
 function nativeModel() {
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.handlers.set('session/create', request => {
+    if (request.method !== 'session/create') throw Error('wrong method');
+    const selection = request.params.settings.model ?? { model: 'fixture/root' };
+    server.snapshots.set('A', { ...snapshot(), model: { configured: selection, effective: { model: selection.model } } as NonNullable<RuntimeClientSnapshot['model']> });
+    return { type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } };
+  });
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('wrong request');
     const selection = request.params.config;
@@ -93,6 +98,8 @@ it('hero and committed Session retain the exact composer card/input; internal ph
   await act(async () => server.reply(created));
   const attached = await server.waitFor('session/attach', 1);
   expect(input()).toBe(message); expect(message.closest('[data-composer-card]')).toBe(card);
+  expect(document.querySelector('#session-view')?.getAttribute('data-phase')).toBe('active');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
   await act(async () => server.reply(attached));
   const sent = await server.waitFor('turn/start', 1);
   expect(input()).toBe(message); expect(message.selectionStart).toBe(4);

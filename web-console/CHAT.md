@@ -251,8 +251,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v23 (`rustx.app-server.v23` and generated
-`protocol/app-server/v23.ts` / `v23.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v24 (`rustx.app-server.v24` and generated
+`protocol/app-server/v24.ts` / `v24.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -332,7 +332,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v23, Runtime Client v49, SQLite v44, and Session catalog v12, with no
+App Server v24, Runtime Client v49, SQLite v44, and Session catalog v12, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -356,17 +356,29 @@ handle and optional Session model intent are presentation data. Opening it or
 changing its Workspace creates nothing native. The Product Host lists, adopts and
 resolves Workspace handles; the browser never supplies an arbitrary path.
 
-The `firstSubmitMachine` owns one non-replayable submission. It creates one native
-Session, records that acknowledgement as an irreversible fact, attaches its exact
-Conversation, applies explicit Session model intent and fences on authoritative
-model observation, uploads files one at a time, then starts the turn. Every
-acknowledged upload receipt remains in the machine context. Later failures retain
-the committed Session and report their actual stage; they never rewind to a
-pre-creation state. An uncertain mutation has no automatic retry transition.
-Each SUBMIT carries the authority captured at its own gesture; navigation,
-endpoint, authority revision, connection generation and attachment identity fence
-its continuations. The route owns the draft, so a transport transition neither
-remounts it nor issues Product Host traffic, and a committed Session stays visible.
+`AppServerClient.firstSubmissions` owns the pending first input for the client
+lifetime. Native `session/create` commits identity and initial model configuration
+without composing a runtime. Its decoded acknowledgement synchronously publishes
+the Session-scoped operation, then `App` navigates to the Conversation, even when
+attach or the sidebar catalog is parked. `ConversationComposer` only observes;
+remounting never restarts continuation. The owner retains ordered File references,
+text and acknowledged receipts together until admission or explicit discard.
+
+`firstSubmitPort` transfers the expected navigation fence once and preserves
+endpoint, generation, authority revision, exact attachment and Conversation fences.
+Unrelated navigation prevents further dispatch without erasing acknowledged facts.
+A retired connection's intent remains inspectable and discardable, never replayable.
+Attach/readiness gates uploads and `turn/start`, not Conversation visibility.
+Creation success is not admission; pending intent is not canonical history. The
+localized composer distinguishes preparation, upload, admission and uncertainty.
+Conflicting input/model actions remain disabled until admission or explicit discard.
+
+Display uses explicit choice, then browser preference, then the native default
+projection. Creation sends only explicit choice or browser preference; omission
+lets the native creation owner capture its current default. There is no post-create
+initial-model mutation or repair snapshot. Later intentional model changes remain
+native operations. Catalog membership invalidation independently refreshes the
+existing catalog. See [startup ownership and evidence](../docs/issue-419/ownership.md).
 
 Composer model choices come only from the Workspace read's native
 `session_models` catalog, the one the created Session serves from `session/models`.
@@ -381,7 +393,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v23 / Runtime Client v49 project one `turn_process` owner on exact
+App Server v24 / Runtime Client v49 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,
@@ -402,9 +414,9 @@ bounded generic body and all renderers retain native lifecycle and artifacts.
 
 A known pre-commit rejection returns first-submit to editable drafting with its
 error and draft retained. Typed uncertain outcomes remain inspection-only. The
-create actor records the native acknowledgement before the next effect checks
+client owner records the native acknowledgement before the next effect checks
 authority, so a stale continuation retains the real Session rather than erasing
-its commit. Attach/model/upload/send remain fenced.
+its commit. Attach/upload/send remain fenced.
 
 New Conversation reads submission readiness from the existing Workspace Settings
 target and approval-unit transaction. Send is disabled (the draft stays editable)

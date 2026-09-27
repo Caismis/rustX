@@ -1,6 +1,11 @@
-# App Server protocol v23
+# App Server protocol v24
 
-App Server v23 / Runtime Client v49 complete the reviewed #406 contract. The
+App Server v24 adds mandatory catalog-membership invalidation for Session startup
+(#419). Initial model intent uses the existing native creation contract; see the
+[startup contract](#session-startup-commit-and-catalog-invalidation-v24).
+Runtime Client remains v49.
+
+App Server v23 / Runtime Client v49 completed the reviewed #406 contract. The
 #409 follow-up replaces separate successful/terminal process DTOs with native
 `TurnProcessView`: exact Attempt ownership on each committed process member,
 whole-process message/tool counts, immutable `control_cursor`, native clock and
@@ -11,19 +16,19 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only v23/v49 are supported; v22/v48 and earlier peers are rejected without a
-compatibility path, and generated v22 artifacts are removed.
+Only App Server v24 / Runtime Client v49 are supported. App Server v23 and earlier
+peers are rejected without a compatibility path; generated v23 artifacts are removed.
 
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. v23/v49 retain these capabilities. A browser product preference can
+its catalog. v24/v49 retain these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
 The historical v21/v47 revision introduced `completed_process` on transcript
 entries, using committed Assistant identities and exact Tool occurrence owners
-to identify a successful Attempt and its final response. v23/v49 replace that
+to identify a successful Attempt and its final response. v24/v49 replace that
 field with `turn_process`, extending the semantic owner across outcomes. SQLite
 schema 44 retains exact completed-process members in lineage provenance,
 remapped by the native copy owner; this selective lineage policy is unchanged.
@@ -67,13 +72,13 @@ Catalog metadata after an asynchronous display-projection publication
 and every earlier version are rejected; there is no dual handling and no
 compatibility shim. Generated v16 artifacts are removed.
 
-App Server v23 also carries v16's producer identity on Trace context additions
+App Server v24 also carries v16's producer identity on Trace context additions
 and typed accepted contributions on request detail. These are historical
 RequestSnapshot facts, not live Todo/Goal authority. See
 [native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v23 identifies one complete mandatory vocabulary, including exact
+App Server v24 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -181,13 +186,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v23",
+  "rustx.app-server.v24",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v23` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v24` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -204,7 +209,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v23 subprotocols above.
+endpoint/token; the browser then connects directly using the v24 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -301,7 +306,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v23; pipeline individual requests instead. This limitation is
+supported in v24; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -390,7 +395,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v23 admits at most one writable external controller per resident
+Protocol v24 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -420,10 +425,19 @@ are a separate durable paging domain, not event cursors.
 
 ### `session/summaryInvalidated`
 
-`session/summaryInvalidated { session_id }` says exactly one thing: this
-Session's durable display metadata changed on the server after the client may
-already have read it, so read `session/summary` again. It carries no metadata,
-claims no durability beyond the catalog commit that produced it, and is not
+`session/summaryInvalidated { session_id, catalog_changed }` is invalidation
+evidence only; clients reread native authority. With `catalog_changed=false`,
+the named Session's summary/display metadata changed, so reread `session/summary`.
+With `catalog_changed=true`, catalog membership may have changed and the named
+summary is invalidated; reread `session/list` as well. A deleted Session is no
+longer a valid summary target. The native catalog visibility commit emits this
+for every membership addition (creation or copy) and removal (deletion), including
+visible commits whose directory durability remains uncertain. Deletion announces
+removal before physical cleanup; cleanup pending, finish and recovery do not
+announce another membership transition when membership is unchanged.
+
+It carries no metadata, claims no durability beyond the catalog commit that
+produced it, and is not
 canonical history, an Agent event, an Attempt event, or a Conversation runtime
 cursor. Session display responsibilities never enter the Agent Loop or the
 Conversation runtime.
@@ -442,9 +456,10 @@ between the initial metadata observation and live observation.
 
 The log is level-triggered and coalescing, exactly like `configuration/changed`
 above: per-Session state plus one connection cursor, with no durable replay, no
-background queue and no independent scheduler. Publication is once-only per
-Session, so a no-op repair and an already-correct projection produce neither a
-catalog write nor a notification. Lag and disconnect reuse the existing resync
+background queue and no independent scheduler. Display-preview publication is
+once-only per Session, so a no-op repair and an already-correct projection
+produce neither a catalog write nor a notification. Membership notifications
+correspond to additions/removals, not to every catalog write. Lag and disconnect reuse the existing resync
 discipline: a reconnecting client re-establishes authoritative metadata through
 its ordinary bootstrap reads.
 
@@ -506,8 +521,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v23.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v23.ts`: TypeScript generated from that schema using pinned
+- `v24.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v24.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -772,7 +787,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v23; no compatibility path is provided.
+This remains mandatory protocol v24; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -802,7 +817,7 @@ The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
 version 49 retains it under strict negotiation. This remains mandatory
-App Server protocol v23, with no compatibility field and no activation mode.
+App Server protocol v24, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -817,7 +832,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v23 includes `inbound/edit { target, expected, text }` and
+Protocol v24 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -987,7 +1002,7 @@ literal values. `SourceSettings.user`, `SourceSettings.workspace`,
 redacted document view, so no source projection can carry a literal Tool
 environment value, and an override is authored by supplying a new value rather
 than by reading a lower owner's value back.
-Protocol v23 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v24 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -1111,9 +1126,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v23 and WebSocket requires `rustx.app-server.v23`.
-v22 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v23.ts`, `v23.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v24 and WebSocket requires `rustx.app-server.v24`.
+v23 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v24.ts`, `v24.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1142,7 +1157,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v23;
+explicit recovery action. These recovery semantics remain in App Server v24;
 native Runtime Client is v44.
 
 ## Rich historical Trace inspection (#364)
@@ -1164,7 +1179,7 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v23 vocabulary includes v12's
+is unchanged and never repeats them. This v24 vocabulary includes v12's
 read-only native `subagent/transcript` contract and these Trace DTO changes.
 Version 19 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
@@ -1184,7 +1199,7 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Subagent conversations (v23)
+## Read-only native Subagent conversations (v24)
 
 `subagent/transcript { target, subagent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,
@@ -1224,3 +1239,21 @@ stale errors update a replacement. Resync/reconnect remembers only the selected
 SubagentId, reconstructs through the new parent authority, and explicitly shows
 unavailability if lookup fails. It does not reuse cached child history or replay
 mutations.
+
+## Session startup commit and catalog invalidation (v24)
+
+`session/create.settings.model` is optional `SessionModelConfig`. Explicit intent
+is validated and persisted by native creation; omitted intent captures the native
+default at creation, not a client's earlier projection. Successful creation (also
+with a durability diagnostic) acknowledges a real Session identity. It does not
+acknowledge runtime attachment, input admission or provider output. Clients may
+navigate immediately, after transferring pending input to a Session-scoped owner.
+A durability diagnostic preserves the identity but stops automatic continuation.
+
+`session/summaryInvalidated.catalog_changed` is mandatory. `true` invalidates
+catalog membership as well as the named summary; `false` invalidates only the
+summary. Every membership visibility commit publishes invalidation independently
+of attachment or deletion cleanup. The sequence coalescer preserves an unobserved membership change even
+when a newer preview change arrives for that Session. Catalog reads must not gate
+attach or first admission. v24 is mandatory; no v23 decoder or compatibility path
+is retained. See [ownership and evidence](issue-419/ownership.md).

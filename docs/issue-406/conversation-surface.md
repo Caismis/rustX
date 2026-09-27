@@ -44,7 +44,7 @@ App / conversation surface (bounded chrome subscription)
 | Composer | ConversationComposer renders one unconditional AgentComposer |
 | Session binding | App navigation + native Session/attachment identities; first-submit commit preserves draft binding |
 | Draft and attachments | AgentComposer; explicit binding transition resets; asynchronous results are binding-fenced |
-| First submit | firstSubmitMachine/Port; exact create acknowledgement commits Session identity, then model/upload/send; no replay |
+| First submit | Client-owned FirstSubmissions/Port (#419); create ACK transfers Session intent before navigation; attach/readiness/upload/admission continue once; no replay |
 | Input trigger | useInputTrigger reducer for typed and synthetic launcher hits, query/highlight/dismiss; launcher never edits draft |
 | Workspace context | Product Host authorization; WorkspaceControls source observation and Settings CAS actor |
 | Model selection | Native Session projection after creation; pre-creation intent must pass Workspace catalog admission |

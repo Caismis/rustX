@@ -27,7 +27,7 @@ async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", protocol_version: 23, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", protocol_version: 24, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
@@ -148,20 +148,22 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
   assert.equal(transport.log.count("session/attach"), 2, "one explicit attempt per chosen identity");
 });
 
-for (const resume of [true, false]) {
-  it(`${resume ? "empty-catalog resume" : "ordinary startup"} creates and attaches exactly one Session with unchanged remote cwd`, async () => {
+for (const resume of [true, false]) for (const model of [undefined, "local/initial"]) {
+  it(`${resume ? "empty-catalog resume" : "ordinary startup"} creates and attaches exactly one Session with unchanged remote cwd (model=${model ?? "native default"})`, async () => {
     const { host, transport } = await connected();
-    const parsed = parseArguments(["--connect", "wss://server.test", "--token-file", "/client/token", "--workspace", "/server/work/../project", ...(resume ? ["--resume"] : [])]);
+    const parsed = parseArguments(["--connect", "wss://server.test", "--token-file", "/client/token", "--workspace", "/server/work/../project", ...(resume ? ["--resume"] : []), ...(model ? ["--model", model] : [])]);
     const starting = prepareStartup(host, parsed);
     if (resume) await catalog(transport, []);
     const [create] = await transport.log.awaitMethod("session/create");
     assert.equal(paramsOf(create!, "session/create").settings.cwd, "/server/work/../project");
+    assert.deepEqual(paramsOf(create!, "session/create").settings.model, model ? { model } : null);
     transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_NEW }) });
     await attachment(transport, SESSION_NEW);
     assert.equal((await starting).session?.sessionId, SESSION_NEW);
     assert.equal(transport.log.count("session/create"), 1);
     assert.equal(transport.log.count("session/attach"), 1);
     assert.equal(transport.log.count("session/list"), resume ? 1 : 0);
+    assert.equal(transport.log.count("session/setModel"), 0, "creation is the sole initial model owner");
     await host.shutdown();
   });
 }

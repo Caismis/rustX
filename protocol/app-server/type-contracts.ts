@@ -1,6 +1,6 @@
 // Regressions for fields contributed by draft-2020-12 $ref siblings.
 // These must be usable through the public union, not a handwritten DTO.
-import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v23.js';
+import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v24.js';
 
 const text = {type: 'text', text: 'Native content'} satisfies UserContentBlock;
 const user = {role: 'user', id: 'user-1', content: [text], source: 'human'} satisfies MessageBlock;
@@ -34,7 +34,7 @@ void nativeOwner;
 void invalidTool;
 
 // Native response projections and explicit cut side are the mandatory v21 contract.
-import type {CompletedResponseView, Request1} from './v23.js';
+import type {CompletedResponseView, Request1} from './v24.js';
 const completed = {
   closing_message_id: 'destination-assistant',
   origin: {conversation_id: 'source-conversation', attempt_id: 'source-attempt', closing_message_id: 'source-assistant'},
@@ -45,3 +45,12 @@ void completed;
 const after: Extract<Request1, {method: 'session/branch'}>['params']['side'] = 'after';
 const before: Extract<Request1, {method: 'session/branch'}>['params']['side'] = 'before';
 void after; void before;
+
+// Creation intent already belongs to SessionPersistentState in mandatory v24.
+// A display-only projected default must be expressible as no explicit override.
+import type {SessionModelConfig} from './v24.js';
+const initialModel = {model: 'provider/selected', reasoningProfile: 'high'} satisfies SessionModelConfig;
+const explicitCreate = {method: 'session/create', params: {settings: {cwd: '/workspace', model: initialModel}}} satisfies Request1;
+const nativeDefaultCreate = {method: 'session/create', params: {settings: {cwd: '/workspace'}}} satisfies Request1;
+void explicitCreate;
+void nativeDefaultCreate;

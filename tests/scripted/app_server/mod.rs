@@ -7,6 +7,7 @@ mod configuration;
 mod inbound_model;
 mod protocol;
 mod residency_policy;
+mod startup_measurements;
 mod transports;
 use super::*;
 use crate::events::types::RuntimeEvent;

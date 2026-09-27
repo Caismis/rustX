@@ -1,14 +1,8 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v23';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v24';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { selectSessionModel } from '../model-preference';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
-/** A UI continuation fence, never a cancellation token for server mutations. */
-export class NavigationEpoch {
-  private epoch = 0;
-  invalidate() { this.epoch++; }
-  capture() { const epoch = this.epoch; return () => this.epoch === epoch; }
-}
 export interface HistoricalSelection {
   target: AttachmentTarget;
   nodeId: string;
