@@ -41,7 +41,7 @@ impl crate::agent::PreToolPolicy for AskPolicy {
     }
 }
 
-async fn call(connection: &AppServerConnection, id: i64, call: Method) -> MethodResult {
+pub(super) async fn call(connection: &AppServerConnection, id: i64, call: Method) -> MethodResult {
     static SCHEMA: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
     let response = connection
         .handle_request(Request {
@@ -66,7 +66,7 @@ async fn call(connection: &AppServerConnection, id: i64, call: Method) -> Method
     response.result
 }
 
-async fn initialize(connection: &AppServerConnection) {
+pub(super) async fn initialize(connection: &AppServerConnection) {
     call(
         connection,
         0,
@@ -3853,6 +3853,107 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
             MethodResult::Detached {}
         ));
         f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue422_multi_client_deletion_membership_converges_at_commit() {
+    use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Deletion;
+    bounded(async {
+        for uncertain in [false, true] {
+            let f = Fixture::with_session_count(None, 1).await;
+            let a = AppServerConnection::new(f.host.clone());
+            let b = AppServerConnection::new(f.host.clone());
+            initialize(&a).await;
+            initialize(&b).await;
+            let id = f.sessions[0].id.clone();
+            let MethodResult::Sessions { sessions, .. } = call(
+                &a,
+                1,
+                Method::SessionList {
+                    query: None,
+                    offset: 0,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!()
+            };
+            assert_eq!(sessions[0].id, id);
+            let MethodResult::Deletion {
+                result: Deletion::Preview { preview },
+            } = call(
+                &b,
+                2,
+                Method::SessionDeletePreview {
+                    session_id: id.clone(),
+                },
+            )
+            .await
+            else {
+                panic!()
+            };
+            if uncertain {
+                f.manager
+                    .sessions
+                    .catalog
+                    .lock()
+                    .await
+                    .arm_write_fault_after_rename();
+            }
+            let result = call(
+                &b,
+                3,
+                Method::SessionDelete {
+                    session_id: id.clone(),
+                    expected_target_revision: preview.target_revision,
+                },
+            )
+            .await;
+            assert!(
+                matches!(
+                    result,
+                    MethodResult::Deletion {
+                        result: Deletion::CommittedDurabilityUncertain { .. }
+                    }
+                ) == uncertain
+            );
+            if !uncertain {
+                assert!(matches!(
+                    result,
+                    MethodResult::Deletion {
+                        result: Deletion::Deleted { .. }
+                    }
+                ));
+            }
+            loop {
+                if let NotificationMethod::SummaryInvalidated {
+                    session_id,
+                    catalog_changed: true,
+                } = a.next_notification().await.notification
+                {
+                    assert_eq!(session_id, id);
+                    break;
+                }
+            }
+            let MethodResult::Sessions { sessions, .. } = call(
+                &a,
+                4,
+                Method::SessionList {
+                    query: None,
+                    offset: 0,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!()
+            };
+            assert!(sessions.is_empty());
+            f.close().await;
+        }
     })
     .await;
 }

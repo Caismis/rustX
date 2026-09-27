@@ -7431,7 +7431,7 @@ never bytes.
   The Session metadata owner records a post-commit invalidation *after* the
   Catalog visibility point — including the visible-but-durability-uncertain
   outcome, which is a real visible change — and never before it. The App
-  Server translates that into `session/summaryInvalidated { session_id }`,
+  Server translates that into `session/summaryInvalidated { session_id, catalog_changed }`,
   addressed by Session identity rather than by attachment target, so a branch
   view and an unattached listed row both converge without a new runtime
   attachment, another User turn, a manual refresh, a rename, or a reconnect.

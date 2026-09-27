@@ -596,9 +596,8 @@ pub enum NotificationMethod {
     },
     #[serde(rename = "session/closed")]
     Closed { target: AttachmentTarget },
-    /// This Session's durable display metadata changed on the server after the
-    /// client may already have read it; read `session/summary` again
-    /// (Issue #386).
+    /// Invalidate the named Session summary. When `catalog_changed` is true,
+    /// membership may also have changed; reread `session/list` from native authority.
     ///
     /// It is an *invalidation*, not a value: it carries no metadata, makes no
     /// durability claim beyond the catalog commit that produced it, and is not
@@ -609,7 +608,8 @@ pub enum NotificationMethod {
     /// because observing metadata must never require holding a runtime
     /// attachment.
     ///
-    /// Creation publishes catalog membership; asynchronous display-projection
+    /// Creation, copies and deletion invalidate catalog membership at visibility;
+    /// asynchronous display-projection
     /// publication refreshes metadata: the Session's first ordinary root-lineage user message is
     /// committed canonically first, and its derived `preview` is committed to
     /// the catalog afterwards, so a client that read `session/summary` in
@@ -617,7 +617,8 @@ pub enum NotificationMethod {
     #[serde(rename = "session/summaryInvalidated")]
     SummaryInvalidated {
         session_id: SessionId,
-        /// A visible new Session requires a fresh catalog page independently of attachment.
+        /// Membership may have changed; reread the catalog and invalidate the named summary.
+        /// False invalidates only the named Session's display metadata.
         catalog_changed: bool,
     },
 }

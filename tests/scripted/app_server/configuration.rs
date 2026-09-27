@@ -4351,3 +4351,236 @@ async fn issue419_rejected_explicit_model_does_not_publish_or_substitute() {
     assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
     assert!(f.provider.request_bodies().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue422_creation_binding_precedes_multi_client_visibility() {
+    use crate::app_server::{connection::AppServerConnection, protocol::*};
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    Box::pin(bounded(async {
+        for uncertain in [false, true] {
+            let f = Fixture::with_session_count(None, 1).await;
+            f.manager.load(&f.sessions[0].id, None).await.unwrap();
+            f.manager
+                .source_settings(
+                    &SourceTarget::Workspace {
+                        directory: f.workspaces[0].clone(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            let creator = AppServerConnection::new(f.host.clone());
+            let observer = AppServerConnection::new(f.host.clone());
+            super::protocol::initialize(&creator).await;
+            super::protocol::initialize(&observer).await;
+            let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+            let release = gate.arm_scoped();
+            *f.manager.sessions.create_gate.lock().unwrap() = Some(gate.clone());
+            let (visible, visibility) = tokio::sync::oneshot::channel();
+            let (finish, finishing) = std::sync::mpsc::channel();
+            f.manager
+                .configuration
+                .test_hooks
+                .insert("create_after_visibility", move || {
+                    visible.send(()).unwrap();
+                    finishing.recv().unwrap();
+                });
+            let cwd = f.workspaces[0].clone();
+            let create = tokio::spawn(async move {
+                super::protocol::call(
+                    &creator,
+                    1,
+                    Method::SessionCreate {
+                        settings: SessionPersistentState { cwd, model: None },
+                    },
+                )
+                .await
+            });
+            tokio::task::spawn_blocking(move || gate.wait_entered())
+                .await
+                .unwrap();
+            // The creation owner already captured A; private preparation is gated.
+            assert_eq!(
+                f.manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                f.manager
+                    .sessions
+                    .list_sessions(None, 0, 32)
+                    .await
+                    .unwrap()
+                    .sessions
+                    .len(),
+                1
+            );
+            let path = f
+                .manager
+                .source_settings(&SourceTarget::User, None)
+                .await
+                .unwrap()
+                .user
+                .path;
+            let mut document: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let instructions_a = document["agent"].get("instructions").cloned();
+            document["agent"]["model"]["model"] = "local/b".into();
+            document["agent"]
+                .as_table_mut()
+                .unwrap()
+                .insert("instructions".into(), "configuration B".into());
+            std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+            let source = SourceTarget::Workspace {
+                directory: f.workspaces[0].clone(),
+            };
+            f.manager.reconcile_configuration(&source).await.unwrap();
+            source_settled(&f, &source).await;
+            settled(&f, 0).await;
+            // A fresh creation capture really would select B, not merely a changed file.
+            let fresh = f
+                .manager
+                .applications
+                .lock()
+                .initial_binding(
+                    &f.manager.configuration,
+                    &SessionConfigInput {
+                        cwd: f.workspaces[0].clone(),
+                        model: None,
+                    },
+                    &f.manager.credentials,
+                )
+                .unwrap();
+            assert_eq!(fresh.session_model().model.to_string(), "local/b");
+            assert_eq!(fresh.config().agent.instructions, "configuration B");
+            if uncertain {
+                f.manager
+                    .sessions
+                    .catalog
+                    .lock()
+                    .await
+                    .arm_write_fault_after_rename();
+            }
+            drop(release);
+            visibility.await.unwrap(); // Creator is parked before scope bookkeeping/ACK.
+            let id = loop {
+                if let NotificationMethod::SummaryInvalidated {
+                    session_id,
+                    catalog_changed: true,
+                } = observer.next_notification().await.notification
+                {
+                    break session_id;
+                }
+            };
+            let MethodResult::Sessions { sessions, .. } = super::protocol::call(
+                &observer,
+                2,
+                Method::SessionList {
+                    query: None,
+                    offset: 0,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!()
+            };
+            assert_eq!(sessions.len(), 2);
+            assert!(sessions.iter().any(|session| session.id == id));
+            let retained = f.manager.sessions.configuration_bindings.lock().unwrap()[&id].clone();
+            assert_eq!(retained.session_model().model.to_string(), "local/a");
+            assert_ne!(retained.config().agent.instructions, "configuration B");
+            if let Some(toml::Value::String(text)) = instructions_a {
+                assert_eq!(retained.config().agent.instructions, text);
+            }
+            let MethodResult::Attached { target, .. } = super::protocol::call(
+                &observer,
+                3,
+                Method::SessionAttach {
+                    session_id: id.clone(),
+                    node_id: None,
+                },
+            )
+            .await
+            else {
+                panic!()
+            };
+            let runtime = f.manager.configuration_runtime(&id).unwrap();
+            assert_eq!(
+                runtime
+                    .runtime_resources()
+                    .configuration()
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                retained.config().agent.instructions
+            );
+            assert_eq!(runtime.model_view().configured, *retained.session_model());
+            assert!(!create.is_finished());
+            finish.send(()).unwrap();
+            let MethodResult::SessionTransition {
+                session,
+                durability_diagnostic,
+                ..
+            } = create.await.unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(session.id, id);
+            assert_eq!(durability_diagnostic.is_some(), uncertain);
+            assert_eq!(
+                f.manager.sessions.configuration_bindings.lock().unwrap()[&id].binding_revision,
+                retained.binding_revision
+            );
+            super::protocol::call(&observer, 4, Method::SessionDetach { target }).await;
+            f.close().await;
+        }
+    }))
+    .await;
+}
+
+#[tokio::test]
+async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
+    let f = Fixture::with_session_count(None, 0).await;
+    let log = f.manager.sessions.summary_invalidations();
+    let frontier = log.frontier();
+    f.manager
+        .sessions
+        .catalog
+        .lock()
+        .await
+        .arm_write_fault_before_rename();
+    assert!(
+        f.manager
+            .create_session(SessionPersistentState {
+                cwd: f.workspaces[0].clone(),
+                model: None
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        f.manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        f.manager
+            .sessions
+            .list_sessions(None, 0, 32)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+    assert_eq!(log.next_after(frontier), None);
+    f.close().await;
+}

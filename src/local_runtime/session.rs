@@ -2054,11 +2054,7 @@ impl SessionCatalog {
         let session_id = prepared.session_id.clone();
         let next = self.build_session_document(prepared, origin)?;
         crate::runtime::process_death::reach("before:publish_session");
-        let committed = self.commit(next);
-        if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
-            self.summary_invalidations.record_change(&session_id, true);
-        }
-        committed?;
+        self.commit(next)?;
         crate::runtime::process_death::reach("after:publish_session");
         self.snapshot(&session_id)
     }
@@ -2267,13 +2263,7 @@ impl SessionCatalog {
         // Session metadata change the standalone publication seam makes, so it
         // announces itself the same way — after visibility, never before.
         let published = planned.display_preview_published.clone();
-        let created = !self.document.sessions.contains_key(&planned.target);
-        let target = planned.target.clone();
         let committed = self.commit(planned.document);
-        if created && (committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed))
-        {
-            self.summary_invalidations.record_change(&target, true);
-        }
         if let Some(session_id) = published
             && (committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed))
         {
@@ -2468,27 +2458,30 @@ impl SessionCatalog {
                 detail: "catalog generation exhausted".into(),
             })?;
         validate_document(&next)?;
-        match self.persist(&next) {
-            Ok(()) => {
-                self.document = next;
-                self.published = true;
-                Ok(())
+        // Membership evidence belongs to the visibility commit, including
+        // uncertain directory durability. Cleanup/recovery commits with unchanged
+        // membership emit nothing. This covers creation, copies and deletion.
+        let membership: Vec<_> = self
+            .document
+            .sessions
+            .keys()
+            .filter(|id| self.published && !next.sessions.contains_key(*id))
+            .chain(
+                next.sessions
+                    .keys()
+                    .filter(|id| !self.published || !self.document.sessions.contains_key(*id)),
+            )
+            .cloned()
+            .collect();
+        let committed = self.persist(&next);
+        if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
+            self.document = next;
+            self.published = true;
+            for id in membership {
+                self.summary_invalidations.record_change(&id, true);
             }
-            Err(
-                error @ SessionError::CatalogCommit {
-                    error: CatalogCommitError::CommittedButDurabilityUncertain { .. },
-                },
-            ) => {
-                // `rename` has already made `next` the visible catalog
-                // document. Keep the in-process authority aligned even
-                // though the directory durability barrier could not be
-                // proven, then surface the distinct post-commit outcome.
-                self.document = next;
-                self.published = true;
-                Err(error)
-            }
-            Err(error) => Err(error),
         }
+        committed
     }
 
     fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {

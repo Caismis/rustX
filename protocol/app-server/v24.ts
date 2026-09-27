@@ -2588,7 +2588,8 @@ export type Notification1 =
       params: {
         session_id: SessionId;
         /**
-         * A visible new Session requires a fresh catalog page independently of attachment.
+         * Membership may have changed; reread the catalog and invalidate the named summary.
+         * False invalidates only the named Session's display metadata.
          */
         catalog_changed: boolean;
       };

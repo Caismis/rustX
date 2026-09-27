@@ -425,10 +425,19 @@ are a separate durable paging domain, not event cursors.
 
 ### `session/summaryInvalidated`
 
-`session/summaryInvalidated { session_id }` says exactly one thing: this
-Session's durable display metadata changed on the server after the client may
-already have read it, so read `session/summary` again. It carries no metadata,
-claims no durability beyond the catalog commit that produced it, and is not
+`session/summaryInvalidated { session_id, catalog_changed }` is invalidation
+evidence only; clients reread native authority. With `catalog_changed=false`,
+the named Session's summary/display metadata changed, so reread `session/summary`.
+With `catalog_changed=true`, catalog membership may have changed and the named
+summary is invalidated; reread `session/list` as well. A deleted Session is no
+longer a valid summary target. The native catalog visibility commit emits this
+for every membership addition (creation or copy) and removal (deletion), including
+visible commits whose directory durability remains uncertain. Deletion announces
+removal before physical cleanup; cleanup pending, finish and recovery do not
+announce another membership transition when membership is unchanged.
+
+It carries no metadata, claims no durability beyond the catalog commit that
+produced it, and is not
 canonical history, an Agent event, an Attempt event, or a Conversation runtime
 cursor. Session display responsibilities never enter the Agent Loop or the
 Conversation runtime.
@@ -447,9 +456,10 @@ between the initial metadata observation and live observation.
 
 The log is level-triggered and coalescing, exactly like `configuration/changed`
 above: per-Session state plus one connection cursor, with no durable replay, no
-background queue and no independent scheduler. Publication is once-only per
-Session, so a no-op repair and an already-correct projection produce neither a
-catalog write nor a notification. Lag and disconnect reuse the existing resync
+background queue and no independent scheduler. Display-preview publication is
+once-only per Session, so a no-op repair and an already-correct projection
+produce neither a catalog write nor a notification. Membership notifications
+correspond to additions/removals, not to every catalog write. Lag and disconnect reuse the existing resync
 discipline: a reconnecting client re-establishes authoritative metadata through
 its ordinary bootstrap reads.
 
@@ -1242,8 +1252,8 @@ A durability diagnostic preserves the identity but stops automatic continuation.
 
 `session/summaryInvalidated.catalog_changed` is mandatory. `true` invalidates
 catalog membership as well as the named summary; `false` invalidates only the
-summary. A committed creation publishes membership invalidation independently of
-attachment. The sequence coalescer preserves an unobserved membership change even
+summary. Every membership visibility commit publishes invalidation independently
+of attachment or deletion cleanup. The sequence coalescer preserves an unobserved membership change even
 when a newer preview change arrives for that Session. Catalog reads must not gate
 attach or first admission. v24 is mandatory; no v23 decoder or compatibility path
 is retained. See [ownership and evidence](issue-419/ownership.md).
