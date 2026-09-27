@@ -880,13 +880,29 @@ export class AppServerClient {
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     const read = { dirty: true, work: Promise.resolve() };
     read.work = (async () => {
-      while (read.dirty && current()) {
-        read.dirty = false;
-        const authority = this.traceAuthorities.get(id);
-        const result = await this.request({ method: 'session/trace', params: { target, before: null, limit: TRACE_PAGE_SIZE, records: traceInterests(this.state.views[id]?.trace) } }, 'trace');
-        if (current() && this.traceAuthorities.get(id) === authority) this.setSession(id, { trace: refreshTrace(this.state.views[id]?.trace, result.page, result.page.updates ?? []) });
+      try {
+        while (read.dirty && current()) {
+          // Consume only the obligation admitting this iteration. A call made
+          // while it awaits owns a separate, coalesced follow-up obligation.
+          read.dirty = false;
+          const authority = this.traceAuthorities.get(id);
+          let result;
+          try {
+            result = await this.request({ method: 'session/trace', params: { target, before: null, limit: TRACE_PAGE_SIZE, records: traceInterests(this.state.views[id]?.trace) } }, 'trace');
+          } catch (error) {
+            // Failure cannot create work or erase work already owed. Callers
+            // share the final owed read's outcome, not an earlier failure.
+            if (!read.dirty || !current()) throw error;
+            continue;
+          }
+          if (current() && this.traceAuthorities.get(id) === authority) this.setSession(id, { trace: refreshTrace(this.state.views[id]?.trace, result.page, result.page.updates ?? []) });
+        }
+      } finally {
+        // Retire in the same continuation that decides to exit, so a new call
+        // cannot coalesce onto a stopped worker before promise cleanup runs.
+        if (this.traceReads.get(id) === read) this.traceReads.delete(id);
       }
-    })().finally(() => { if (this.traceReads.get(id) === read) this.traceReads.delete(id); });
+    })();
     this.traceReads.set(id, read);
     return read.work;
   }

@@ -235,3 +235,93 @@ it.each(['snapshot', 'latest'] as const)('%s supersession keeps a burst bounded 
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(owner === 'snapshot' ? 1 : 0);
 });
+
+it.each([
+  { owner: 'snapshot', invalidations: 1 },
+  { owner: 'latest', invalidations: 0 },
+  { owner: 'existing authority', invalidations: 100 },
+])('failed Trace iteration preserves the owed read for $owner ($invalidations invalidations)', async ({ owner, invalidations }) => {
+  const s = await create(); s.held.add('session/trace');
+  emit(s, '1', { type: 'trace_changed' });
+  const old = await s.waitFor('session/trace', 1);
+  const work = s.client['traceReads'].get('A')!.work;
+  const authority = s.client['traceAuthorities'].get('A');
+  if (owner === 'snapshot') {
+    s.cursor = 1n;
+    s.snapshots.set('A', { ...s.snapshots.get('A')!, trace: { records: [traceRecord(1)] } });
+    await s.client.refresh('A');
+  } else if (owner === 'latest') s.client.latestTrace('A');
+  if (owner !== 'existing authority') expect(s.client['traceAuthorities'].get('A')).not.toBe(authority);
+  if (owner === 'latest') expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([]);
+  for (let cursor = 2; cursor <= invalidations + 1; cursor++) emit(s, String(cursor), { type: 'trace_changed' });
+  const beforeFailure = s.client.getSnapshot().views.A;
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
+  // Fail immediately if the owner exits instead of dispatching the owed read;
+  // neither a timeout nor another notification establishes the ordering.
+  const next = Promise.race([
+    s.waitFor('session/trace', 2),
+    work.then(() => { throw new Error('Trace owner exited with a read still owed'); }),
+  ]);
+  s.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'older Trace read failed', data: { kind: 'invalid_state' } } });
+  const fresh = await next;
+  expect(s.client.getSnapshot().views.A).toBe(beforeFailure);
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
+  s.socket.success(fresh, { type: 'trace', page: { records: [traceRecord(1), traceRecord(2)] } });
+  await work;
+  const view = s.client.getSnapshot().views.A;
+  expect(view.trace!.page.records).toEqual([traceRecord(1), traceRecord(2)]);
+  expect(view.trace!.error).toBeUndefined();
+  expect(view).toMatchObject({ target: beforeFailure.target, cursor: beforeFailure.cursor, attachment: 'attached' });
+  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(owner === 'snapshot' ? 1 : 0);
+});
+
+it('failed Trace iteration without a newer obligation propagates the error and never retries', async () => {
+  const s = await create(); s.held.add('session/trace');
+  s.client.latestTrace('A');
+  const request = await s.waitFor('session/trace', 1);
+  const work = s.client['traceReads'].get('A')!.work;
+  const rejected = expect(work).rejects.toThrow('current Trace read failed');
+  s.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'current Trace read failed', data: { kind: 'invalid_state' } } });
+  await rejected;
+  expect(s.client.getSnapshot().views.A.trace!.error).toContain('current Trace read failed');
+  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
+});
+
+it('a failed owed follow-up stops without further invalidation and reports only its own error', async () => {
+  const s = await create(); s.held.add('session/trace');
+  emit(s, '1', { type: 'trace_changed' });
+  const old = await s.waitFor('session/trace', 1);
+  s.client.latestTrace('A');
+  const work = s.client['traceReads'].get('A')!.work;
+  const rejected = expect(work).rejects.toThrow('latest read failed');
+  s.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'superseded read failed' } });
+  const fresh = await s.waitFor('session/trace', 2);
+  expect(s.client.getSnapshot().views.A.trace!.error).toBeUndefined();
+  s.socket.deliver({ jsonrpc: '2.0', id: fresh.id, error: { code: -32000, message: 'latest read failed' } });
+  await rejected;
+  expect(s.client.getSnapshot().views.A.trace!.error).toContain('latest read failed');
+  expect(s.client.getSnapshot().views.A.trace!.error).not.toContain('superseded');
+  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
+});
+
+it.each(['attachment replacement', 'disconnect'] as const)('failed dirty Trace owner cannot continue after %s', async retirement => {
+  const s = await create(); s.held.add('session/trace');
+  emit(s, '1', { type: 'trace_changed' });
+  const old = await s.waitFor('session/trace', 1);
+  const work = s.client['traceReads'].get('A')!.work;
+  const rejected = expect(work).rejects.toThrow();
+  emit(s, '2', { type: 'trace_changed' });
+  if (retirement === 'disconnect') await s.client.disconnect();
+  else { await s.client.release('A'); await s.client.attach('A'); }
+  const view = s.client.getSnapshot().views.A;
+  s.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'retired read failed' } });
+  await rejected;
+  expect(s.client.getSnapshot().views.A).toBe(view);
+  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
+});

@@ -201,7 +201,12 @@ and detail responses from a superseded authority are discarded; pending paging
 and detail loading markers are released with the new authority. Runtime Client
 cursors never order Trace reads. The tail owner retains one active read and one
 coalesced dirty bit; a later invalidation reads under the current authority,
-without requiring a Session snapshot or replaying any mutation.
+without requiring a Session snapshot or replaying any mutation. Each iteration
+consumes only its admission obligation. If it fails while a newer invalidation
+or explicit latest read is owed, the owner performs that coalesced read under the
+current authority and settles callers with its outcome. With no newer obligation,
+failure propagates without another read. Failure itself never authorizes work,
+and retirement or disconnect prevents follow-up work on the old attachment.
 
 `PendingObservations::trace_fact_requires_publication` covers Attempt/Turn/request
 (including retry and context contributions), adoption, Assistant/Tool committed
