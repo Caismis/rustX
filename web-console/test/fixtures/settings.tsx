@@ -76,6 +76,17 @@ function sessionApplication(state: string): ConfigurationApplication {
   if (state === 'failed') return { ...application, candidate: null, sources: [{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/B' }], units: { capabilities: { status: 'failed', diagnostic: 'MCP server repository-index failed to start: /usr/local/bin/repository-index-mcp exited with status 127 (command not found) before completing the initialize handshake' }, execution_policy: { status: 'applied' } } };
   return application;
 }
+// A draft conversation needs the native Session model catalog and prospective
+// permission; ordinary Settings references deliberately do not publish these.
+if (variant.get('conversation') === 'ready') {
+  source.prospective_approval_mode = 'policy';
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
+  source.session_models = { kind: 'available', default_model: { model: 'fixture/model' }, catalog: { models: [{
+    model: 'fixture/model', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192,
+    declaredCapabilities: capabilities, effectiveCapabilities: capabilities, reasoningProfiles: [],
+    credentialSource: { type: 'environment', variable: 'KEY' },
+  }] } };
+}
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };

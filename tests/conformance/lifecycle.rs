@@ -369,16 +369,27 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
     );
     assert!(runtime.runtime().is_activated());
 
+    // The observation cut is the attach snapshot: subscribing after its
+    // cursor before submitting means the turn's settlement is always after
+    // the cut, however fast the provider runs.
+    let (attachment, initialized) = runtime
+        .host()
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("attach");
+    let cursor = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized {
+            snapshot, cursor, ..
+        } => {
+            assert!(snapshot.attempt.is_none(), "no attempt precedes the cut");
+            cursor
+        }
+        other => panic!("attach result: {other:?}"),
+    };
+    let subscription = attachment.subscribe_events(cursor).expect("subscribe");
     runtime
         .host()
         .submit_inbound(submit_content("conformance: turn one"))
         .expect("inbound accepted");
-    let (attachment, _) = runtime
-        .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("attach");
-    let (_, cursor) = runtime.host().snapshot().expect("snapshot");
-    let subscription = attachment.subscribe_events(cursor).expect("subscribe");
     let mut settled = false;
     while let rustx::runtime_client::host::EventDelivery::Event(published) =
         tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next())

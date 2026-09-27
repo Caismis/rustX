@@ -975,7 +975,7 @@ it('S2-12 React Aria and TanStack Form stay bounded to their declared interactio
   expect(importers('@base-ui/react/alert-dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);
   expect(importers('@tanstack/react-form')).toEqual(['src/app/settings/forms/bridge.tsx']);
   // One Settings modal root.
-  const modalRoots = sources(join(root, 'src')).filter(path => readFileSync(path, 'utf8').includes('title="Settings" overlayClassName={css.overlay}'));
+  const modalRoots = sources(join(root, 'src')).filter(path => readFileSync(path, 'utf8').includes('data-settings-dialog'));
   expect(modalRoots.map(path => relative(root, path))).toEqual(['src/presentation/settings/SettingsRoot.tsx']);
   // Settings keeps no browser storage and no URL state.
   for (const path of sources(join(root, 'src/app/settings'))) {

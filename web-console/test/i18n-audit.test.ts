@@ -1,0 +1,78 @@
+import { expect, it } from 'vitest';
+import { findCopy } from '../scripts/i18n-audit';
+import { translator } from '../src/locale/translation';
+import { en, zh, type SettingsKey } from '../src/locale/dictionaries/settings';
+it('checks multiline JSX, accessibility, tooltip labels, defaults and callback copy with AST positions', () => {
+  const violations = findCopy('example.tsx', `
+    function Panel({ placeholder = 'Write a message' }) {
+      return <section aria-description={busy ? 'Please wait' : 'Ready'}>
+        New
+        Conversation
+        <Input placeholder={placeholder} title="Help" />
+        <Tooltip label={\`Show \${count} more\`} />
+        <Confirm confirm="Delete permanently" />
+        <Block labels={{ collapseAria: () => { return 'Hide lines'; }, expandAria: n => \`Show \${n} lines\` }} />
+      </section>;
+    }
+  `);
+  expect(violations.map(v => v.text)).toEqual(expect.arrayContaining(['Write a message', 'Please wait', 'Ready', 'New Conversation', 'Help', 'Show {p0} more', 'Show {p0} lines', 'Hide lines', 'Delete permanently']));
+  expect(violations.every(v => v.line > 1)).toBe(true);
+});
+it('permits opaque expressions and one reasoned literal without exempting nearby copy', () => {
+  const violations = findCopy('example.tsx', `<><p>{error.message}</p><button aria-label={tx('settings:page.general')}>rustX</button><span>{/* i18n-raw: immutable wire identity */ 'native.Tool'}</span><p>Translate this</p></>`);
+  expect(violations.map(v => v.text)).toEqual(['Translate this']);
+});
+it('the built-in dictionary contract is exact and public keys stay bounded', () => {
+  expect(Object.keys(en).sort()).toEqual(Object.keys(zh).sort());
+  expect(Object.values(zh).every(value => value.length > 0)).toBe(true);
+  // This function is intentionally never called. tsc verifies that each
+  // negative type contract remains an error, rather than a runtime fallback.
+  function typeContract() {
+    // @ts-expect-error Missing keys cannot satisfy a namespace.
+    const incomplete: Record<SettingsKey, string> = {};
+    // @ts-expect-error There is no arbitrary-key translation path.
+    translator('en')('settings:this-key-does-not-exist');
+    // @ts-expect-error Exactly two locale ids are built in.
+    translator('fr');
+    return incomplete;
+  }
+  expect(typeContract).toBeTypeOf('function');
+});
+
+it('requires stable option values so localized labels cannot become filter identities', () => {
+  const source = `<select><option>{tx('inspector:inspector.request')}</option><option value="response">{tx('inspector:inspector.response')}</option></select>`;
+  expect(findCopy('example.tsx', source).map(row => row.kind)).toEqual(['identity']);
+});
+
+
+it('checks only the visible second position in inline Choice/Enum options, including spreads and const tuples', () => {
+  const source = `<><Choice options={[
+    ['foreground_only', 'Foreground only'],
+    ['background_only', tx('settings:policy.background_only')],
+    ...(enabled ? [['parallel', 'Parallel'] as const] : []),
+  ]} /><Enum options={([['never', 'Never']] as const)} /></>`;
+  expect(findCopy('example.tsx', source).map(row => row.text)).toEqual(['Foreground only', 'Parallel', 'Never']);
+});
+
+it('accepts native option identities, translated labels, exact tokens and one narrowly exempt opaque label', () => {
+  const source = `<Choice options={[
+    ['English native identity', tx('settings:policy.always')],
+    ['mcp', 'MCP'],
+    ['wire_id', /* i18n-raw: exact wire-field identifier */ 'wire_id'],
+    ['another_id', 'Translate this'],
+    ...nativeIds.map(id => [id, id] as const),
+  ]} />`;
+  expect(findCopy('example.tsx', source).map(row => row.text)).toEqual(['Translate this']);
+});
+
+it('treats label affix props as presentation copy while semantic variants and opaque affixes stay native', () => {
+  const source = `<>
+    <ModelRequestFields value={summary} suffix=" (Summary)" change={change} />
+    <Field prefix={busy ? 'Pending: ' : ''} />
+    <Row labels={{ suffix: 'Summary' }} />
+    <ModelRequestFields value={summary} variant="summary" change={change} />
+    <Field suffix={tx('settings:models-page.output-limit-summary')} prefix=" · " />
+  </>;
+  function Fields({ suffix = ' (Summary)' }) { return null; }`;
+  expect(findCopy('example.tsx', source).map(row => [row.line, row.text])).toEqual([[2, '(Summary)'], [3, 'Pending:'], [4, 'Summary'], [8, '(Summary)']]);
+});

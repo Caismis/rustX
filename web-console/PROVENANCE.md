@@ -935,7 +935,85 @@ These are behavioral references for whole-Turn ownership, control placement,
 counts and always-open stopped/failed disclosure. No additional upstream source
 was copied. The existing adapted TurnProcess presentation is unchanged. Native
 Journal projection and cursor-based Web composition are rustX-authored. Generated
-App Server v24 imports and their local hashes/import closures move together.
+App Server v23 imports and their local hashes/import closures move together.
+
+## Issue #407 — Turn/Step projection and System Prompt cells
+
+The read-only local Harness checkout was clean at
+`477b4f420553e8a52c2fbccc464d7561b239c443` (`master`), matching fetched
+`origin/master`. This is the reference actually studied for this change, not an
+assumption based on the issue's historical SHA. The repository-wide provenance
+baseline remains unchanged; per-source `additional_sources` records pin the new
+review/adaptation precisely.
+
+Adapted presentation patterns from `packages/client/ui-trajectory/src/client/`:
+`layout.ts` (Turn owns Message/Step groups), `TrajectoryTurn.tsx`,
+`TrajectoryTurnHeader.tsx`, `TrajectoryGroupHeader.tsx` (hierarchy), the matching
+TurnHeader/GroupHeader CSS (sticky full-width bar and indented group labels), and
+`TrajectoryTable.tsx` (System Prompt versus request detail tab organization).
+These extend existing derived rustX files; no upstream runtime, module or whole
+file was vendored. Inventory hashes/import closures and MIT attribution cover the
+modified existing adaptations.
+
+Studied only: `TrajectoryView.tsx`, `TrajectoryCell.tsx`, `trajectory-record.ts`,
+`timeline.ts`, the `trajectory-*.ts` projection/search/virtualization/definition
+family and module CSS; `ui-chat/.../chat/SystemPromptRow.tsx`, `ContextBody.tsx`,
+`conversation-nodes/request-prompt.ts` and the conversation-node ownership,
+retry, Tool and process definitions; `ui-conversation/.../conversation/` assembly,
+registries, group store and especially `location-index.ts`. Newly pinned key
+reference-only files are listed under `inspected_only` in the inventory.
+
+Native `AttemptId` maps to visible Turn; native `TurnId`/`step_id` maps to visible
+Step. Unlike Harness's assembler, the Web never fills missing ownership from a
+following Assistant or location cursor. Request-owned initial System Prompt and
+Context remain in their native Step; only native attempt-only inputs form Message.
+Outside records stay outside. Exact scoped native Tool proposal/execution matching
+is retained; Background/Subagent/Workflow/Interaction keep their own domain cells.
+Request retries remain compact metadata, and the current frozen Tool catalog is
+inspectable without inventing a historical Tool-catalog diff absent from Trace.
+
+One `TrajectoryProjection` feeds both ledger and overview. All interaction state
+uses native or record keys, including drag focus; Turn ordinals can change after
+prepend. Drag focus lives only within the Trace cache epoch that created it,
+while in-flight coordinate interactions belong to a separate semantic Timeline
+projection revision. Same-epoch geometry changes retire gestures atomically;
+status-only updates preserve the interaction generation. Epoch rebases retire
+both layers. The overview and focus resolver consume the same Timeline model.
+Turn/Step headers never own detail reads; their exact loaded native
+Attempt/Step record is shown in a separate bounded structure inspector. The old contiguous Attempt/Step segments and SystemRow facet abstraction
+are removed. Request-relative timing, finite cache/frontiers and native prompt
+classification remain unchanged. See `docs/trace.md` for the current contract and
+`docs/trajectory-407-validation.md` for deterministic regressions and validation.
+
+## Issue #410 — browser-owned English/Chinese presentation
+
+The read-only Harness checkout was clean at
+`477b4f420553e8a52c2fbccc464d7561b239c443`. Its locale owner, browser bootstrap,
+settings store and static UI-copy check were studied as design references only.
+The rustX controller, React subscription, typed translation path and bounded
+TypeScript AST gate are independently implemented; no Harness Host, Cordis,
+plugin registration or dynamic language-pack runtime is imported.
+
+Matching English/Chinese presentation wording was materially adapted from the
+current Harness workspace, sidebar, General Settings and conversation locale
+files into the feature-owned `src/locale/dictionaries` modules. Each adapted
+module records its actual sources and this exact upstream revision in
+`source-inventory.json`, including the moved legacy workspace dictionary.
+Commands and Inspector dictionaries are independently authored. Existing
+derived presentation files retain their original attribution; their local
+hashes and import closures are refreshed. The repository-wide historical
+baseline is unchanged.
+
+The former English-only static translator, separate workspace translation API
+and Sidebar inline translator are removed. All authored chrome uses one typed
+translation path; native/user/model/Tool text remains opaque. The locale layer
+imports only itself and React, and the presentation dependency boundary permits
+only its React and translation entry points.
+
+PR #418 review corrections (invariant command search, deferred clipboard notices,
+option-label checking and typed status presentation) are independent rustX work.
+No additional Harness material was copied or adapted. Existing source records
+retain their upstream revisions; local hashes and import closures are refreshed.
 
 ## #411 Jobs and continuable Agents
 

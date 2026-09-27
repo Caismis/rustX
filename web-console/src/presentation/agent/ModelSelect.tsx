@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Derived from ui-model-selection/ModelSelect; see PROVENANCE.md. */
 import { useState } from 'react';
 import { Menu, type MenuEntry } from '../primitives/Menu';
@@ -9,21 +10,22 @@ export function ModelSelect({ choices, current, profile, disabled, loading, erro
  choices: ModelChoice[]; current?: string; profile?: string; disabled: boolean; loading: boolean; error?: string;
  load: () => void; choose: (model: string, profile?: string) => void; initialOpen?: boolean; binding?: string;
 }) {
+  const tx = useTranslation();
  const [open, setOpen] = useState(initialOpen);
  const [owner, setOwner] = useState(binding);
  if (owner !== binding) { setOwner(binding); setOpen(false); }
  const selected = choices.find(choice => choice.id === current);
  const effectiveProfile = profile ?? selected?.defaultProfile;
- const items: MenuEntry[] = [{ id: 'models', label: 'Model', submenu: choices.map(choice => ({ id: `model:${choice.id}`, label: choice.id, disabled: disabled || loading })) }];
- if (selected?.profiles.length) items.push({ id: 'profiles', label: 'Reasoning profile', submenu: selected.profiles.map(choice => ({ id: `profile:${choice.id}`, label: choice.label, disabled: disabled || loading })) });
+ const items: MenuEntry[] = [{ id: 'models', label: tx('agent:model-select.model'), submenu: choices.map(choice => ({ id: `model:${choice.id}`, label: choice.id, disabled: disabled || loading })) }];
+ if (selected?.profiles.length) items.push({ id: 'profiles', label: tx('agent:model-select.reasoning-profile'), submenu: selected.profiles.map(choice => ({ id: `profile:${choice.id}`, label: choice.label, disabled: disabled || loading })) });
  return <div className={css.root}>
  <Menu open={open} side="top" align="end" autoFocus items={items}
  selectedIds={[`model:${current}`, `profile:${effectiveProfile}`]} onClose={() => setOpen(false)}
  onSelect={id => { if (disabled || loading) return; setOpen(false); if (id.startsWith('model:')) choose(id.slice(6)); else if (current && id.startsWith('profile:')) choose(current, id.slice(8)); }}
- anchor={<button className={css.trigger} type="button" aria-label="Model and reasoning" aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16}/><span className={css.triggerLabel}>{current ?? 'Choose model'}</span>{effectiveProfile && <span className={css.triggerEffort}>{effectiveProfile}</span>}<IconChevronDownOutline14/></button>}/>
- {open && loading && <span role="status">Reading native models…</span>}
- {current && !loading && !selected && <span role="status">{current} is unavailable in this Workspace.</span>}
- {selected && profile && !selected.profiles.some(choice => choice.id === profile) && <span role="status">Reasoning profile {profile} is unavailable for {current} in this Workspace.</span>}
+ anchor={<button data-model-select="" className={css.trigger} type="button" aria-label={tx('agent:model-select.model-and-reasoning')} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>{effectiveProfile && <span className={css.triggerEffort}>{effectiveProfile}</span>}<IconChevronDownOutline14/></button>}/>
+ {open && loading && <span role="status">{tx('agent:model-select.reading-native-models')}</span>}
+ {current && !loading && !selected && <span role="status">{current} {tx('agent:model-select.is-unavailable-in-this-workspace')}</span>}
+ {selected && profile && !selected.profiles.some(choice => choice.id === profile) && <span role="status">{tx('agent:model-select.reasoning-profile')}{' '}{profile} {tx('agent:model-select.is-unavailable-for')}{' '}{current} {tx('agent:model-select.in-this-workspace')}</span>}
  {error && <p role="alert">{error}</p>}
  </div>;
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
@@ -58,6 +59,7 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
   context?: ReactNode;
   onClose: () => void; children: ReactNode;
 }) {
+  const tx = useTranslation();
   const [sections, setSections] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const [dialogNode, setDialogNode] = useState<HTMLElement | null>(null);
@@ -69,18 +71,18 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
   useNavigationFocusHandoff(dialogNode, sectionTriggerRef);
   const active = pages.find(page => page.id === activeId)!;
   return (
-    <DialogSurface open onClose={onClose} title="Settings" overlayClassName={css.overlay}
+    <DialogSurface open onClose={onClose} title={tx('settings:settings.settings')} overlayClassName={css.overlay}
       panelClassName={css.panel} className={css.dialog} contentRef={attachDialog} initialFocus={() => { dialogRef.current?.focus({ preventScroll: true }); return false; }}>
           {/* The header is deliberately outside <Tabs>: React Aria renders a
               Tabs subtree a second time into a detached collection document
               to discover its tabs, and the section menu measures real DOM. */}
-          <header className={css.header}>
+          <header data-settings-dialog="" className={css.header}>
             <div className={css.sections}>
               <Menu open={sections} onClose={() => setSections(false)} autoFocus focusOwner={dialogRef}
                 items={pages.map(page => ({ id: page.id, label: page.label, icon: page.icon }))} selectedId={activeId}
                 onSelect={id => { setSections(false); onSelect(id); }}
                 anchor={<button ref={sectionTriggerRef} type="button" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}
-                  aria-label={`Settings page: ${active.label}`} onClick={() => setSections(open => !open)}>
+                  aria-label={tx('settings:settings-root.settings-page-value', { p0: active.label })} onClick={() => setSections(open => !open)}>
                   <span className={css.navIcon} aria-hidden="true">{active.icon}</span>
                   <span className={css.sectionLabel}>{active.label}</span>
                   <IconChevronDownOutline14 className={css.sectionChevron} />
@@ -89,13 +91,13 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
             <div className={css.context}>{context}</div>
             <button type="button" className={css.close} onClick={onClose}>
               <IconCloseOutline16 size={14} />
-              <span className={css.hiddenLabel}>Close Settings</span>
+              <span className={css.hiddenLabel}>{tx('settings:settings-root.close-settings')}</span>
             </button>
           </header>
           <Tabs className={css.tabsRoot} orientation="vertical" selectedKey={activeId} onSelectionChange={key => { onSelect(String(key)); }}>
-            <nav className={css.nav} aria-label={RAIL_LABEL}>
-              <div className={css.navTitle}>Settings</div>
-              <TabList className={clsx(css.navList, workflow.pageTabs)} aria-label="Settings pages">
+            <nav className={css.nav} aria-label={tx('settings:navigation.rail')} data-settings-navigation="">
+              <div className={css.navTitle}>{tx('settings:settings.settings')}</div>
+              <TabList className={clsx(css.navList, workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
                 {pages.map(page => (
                   <Tab key={page.id} id={page.id} className={clsx(css.navCell, workflow.pageTab)}>
                     <span className={css.navIcon} aria-hidden="true">{page.icon}</span>
@@ -112,9 +114,8 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
   );
 }
 
-const RAIL_LABEL = 'Settings navigation';
 /** A page tab on the rail — not a tab list inside a page's content. */
-const RAIL_TAB = `nav[aria-label="${RAIL_LABEL}"] [role="tab"]`;
+const RAIL_TAB = 'nav[data-settings-navigation] [role="tab"]';
 
 /**
  * Keyboard continuity across the panel's two navigation presentations.
@@ -159,7 +160,8 @@ function useNavigationFocusHandoff(dialog: HTMLElement | null, sectionTriggerRef
 }
 
 export function SettingsTrigger({ wide, onClick }: { wide: boolean; onClick: () => void }) {
-  return <div className={clsx(css.triggerRow, !wide && css.railRow)}><button type="button" className={clsx(css.trigger, !wide && css.rail)} aria-label="Settings" aria-haspopup="dialog" onClick={onClick}>
-    <IconSettingsOutline16 />{wide && <span className={css.triggerLabel}>Settings</span>}
+  const tx = useTranslation();
+  return <div className={clsx(css.triggerRow, !wide && css.railRow)}><button type="button" className={clsx(css.trigger, !wide && css.rail)} aria-label={tx('settings:settings.settings')} aria-haspopup="dialog" onClick={onClick}>
+    <IconSettingsOutline16 />{wide && <span className={css.triggerLabel}>{tx('settings:settings.settings')}</span>}
   </button></div>;
 }

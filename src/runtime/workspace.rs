@@ -4213,7 +4213,9 @@ mod tests {
     async fn supervised_settlement_git_preserves_large_binary_output_and_argument_bytes() {
         use crate::runtime::identity::{ConversationId, SessionId};
         use crate::runtime::local_storage::ProductRoot;
-        use crate::runtime::subagent::physical_recovery::{ParentPhysicalLease, prove};
+        use crate::runtime::subagent::physical_recovery::{
+            ParentPhysicalLease, prove_after_release,
+        };
         use std::os::unix::ffi::OsStringExt;
         use std::sync::Arc;
 
@@ -4276,7 +4278,7 @@ mod tests {
         assert!(!repository.path().join("NEVER").exists());
         drop(owner);
         assert!(
-            prove(&product, &session, &conversation, &activation)
+            prove_after_release(&product, &session, &conversation, &activation)
                 .unwrap()
                 .is_some()
         );

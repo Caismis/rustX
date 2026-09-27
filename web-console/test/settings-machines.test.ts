@@ -1,3 +1,4 @@
+import { displayText, translator } from '../src/locale/translation';
 import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
@@ -3087,7 +3088,7 @@ it('R15 an unregistered owning Workspace reports explicitly and opens nothing', 
   const actor = navigationActor(async directory => ({ kind: 'unregistered', directory }));
   actor.send({ type: 'OPEN.OWNER', directory: '/workspace/revoked' });
   await flush();
-  expect(actor.getSnapshot().context.error).toContain('/workspace/revoked is not registered');
+  expect(displayText(translator('en'), actor.getSnapshot().context.error)).toContain('/workspace/revoked is not registered');
   expect(actor.getSnapshot().context.page).toBeUndefined();
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
 });
@@ -3336,12 +3337,12 @@ it('first-submit readiness remains closed across approval write, confirmed commi
   scripted.reads[0].resolve(approvalSource('workspace-1', 'policy')); await flush();
   expect(workspaceApprovalBlock(actor)).toBeUndefined();
   requestApproval(actor);
-  expect(workspaceApprovalBlock(actor)).toBe('Applying Workspace permission…');
+  expect(workspaceApprovalBlock(actor)).toBe('workspace:approval.applying');
   expect(scripted.writes[0].expected).toBe('workspace-1');
   scripted.writes[0].resolve({ acknowledgement: approvalSource('workspace-2', 'full_access') }); await flush();
-  expect(workspaceApprovalBlock(actor)).toBe('Saved; awaiting authoritative observation.');
+  expect(workspaceApprovalBlock(actor)).toBe('workspace:approval.saved');
   scripted.reads.at(-1)!.reject(new Error('Read unavailable')); await flush();
-  expect(workspaceApprovalBlock(actor)).toBe('Saved; awaiting authoritative observation.');
+  expect(workspaceApprovalBlock(actor)).toBe('workspace:approval.saved');
   actor.send({ type: 'REFRESH' });
   scripted.reads.at(-1)!.resolve(approvalSource('workspace-2', 'full_access')); await flush();
   expect(workspaceApprovalBlock(actor)).toBeUndefined();
@@ -3353,7 +3354,7 @@ it.each([new OutcomeUncertain(), new RpcFailure({ code: -32000, message: 'Confli
   scripted.reads[0].resolve(approvalSource('workspace-1', 'policy')); await flush(); requestApproval(actor);
   scripted.writes[0].reject(error); await flush();
   scripted.reads.at(-1)!.resolve(approvalSource('external', 'policy')); await flush();
-  expect(workspaceApprovalBlock(actor)).toMatch(/uncertain|review/);
+  expect(workspaceApprovalBlock(actor)).toMatch(/^workspace:approval\.(uncertain|conflict)$/);
   expect(actor.getSnapshot().context.units[approvalIdentity]?.getSnapshot().context.draft?.value).toBe('full_access');
   expect(scripted.writes).toHaveLength(1); actor.stop();
 });

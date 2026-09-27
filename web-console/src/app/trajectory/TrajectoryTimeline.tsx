@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTimeline.tsx; see PROVENANCE.md. */
 /**
  * The fixed timing overview above the ledger.
@@ -11,13 +12,13 @@
  * A timed span requires endpoints in its rendered domain. Request Model spans
  * use provider evidence; Journal terminal timing cannot replace a missing bridge.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
-import type { TraceRecord } from '../../../../protocol/app-server/v26';
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import {
   TRAJECTORY_LANES,
   formatDuration,
   formatInstant,
-  trajectoryTimeline,
+  timelineProjectionRevision,
+  type TrajectoryTimelineModel,
   type TrajectoryTimeRange,
   type TrajectoryTimelineMode,
 } from './timeline';
@@ -64,10 +65,11 @@ function EarlierHistoryBoundary({
   enabled: boolean;
   onLoad: () => void;
 }) {
+  const tx = useTranslation();
   const actionable = enabled && !loading;
   return (
     <Tooltip
-      label={loading ? 'Loading earlier records…' : 'Load earlier records'}
+      label={loading ? tx('trajectory:trajectory.loading-earlier-records') : tx('trajectory:trajectory.load-earlier-records')}
       side="right"
     >
       <button
@@ -76,7 +78,7 @@ function EarlierHistoryBoundary({
         data-earlier-history=""
         data-loading={loading || undefined}
         aria-label={
-          loading ? 'Loading earlier records' : 'Load earlier records into the overview'
+          loading ? tx('trajectory:trajectory-timeline.loading-earlier-records') : tx('trajectory:trajectory-timeline.load-earlier-records-into-the-overview')
         }
         aria-disabled={!actionable}
         onClick={event => {
@@ -96,7 +98,7 @@ function EarlierHistoryBoundary({
 
 /** Props for the Trajectory timing overview. */
 export interface TrajectoryTimelineProps {
-  records: readonly TraceRecord[];
+  model: TrajectoryTimelineModel | null;
   mode: TrajectoryTimelineMode;
   range: TrajectoryTimeRange | null;
   selectedId: string | null;
@@ -104,8 +106,6 @@ export interface TrajectoryTimelineProps {
   searchMatches: ReadonlySet<string> | null;
   onRangeChange: (range: TrajectoryTimeRange | null) => void;
   onSelect: (id: string) => void;
-  /** Section boundary label for a record that opens one, else undefined. */
-  boundaryLabel: (record: TraceRecord, index: number) => string | undefined;
   /** True when the Trace cache reports an older page beyond this window. */
   hasEarlierRecords: boolean;
   /** True while that older page is already being fetched. */
@@ -126,35 +126,33 @@ export interface TrajectoryTimelineProps {
  * @param props - loaded records, projection mode, and selection callbacks.
  * @returns the overview element, or an explicit empty state.
  */
-export function TrajectoryTimeline({
-  records,
+export function TrajectoryTimeline(props: TrajectoryTimelineProps) {
+  // React commits the projection and its interaction owner atomically. A press
+  // can finish only in the instance where it began; removed DOM/capture and
+  // refs cannot deliver a P1 gesture to P2. Equivalent projections keep state.
+  return <TimelineInteraction key={timelineProjectionRevision(props.model, props.mode)} {...props} />;
+}
+
+function TimelineInteraction({
+  model,
   mode,
   range,
   selectedId,
   searchMatches,
   onRangeChange,
   onSelect,
-  boundaryLabel,
   hasEarlierRecords,
   loadingEarlier,
   canLoadEarlier,
   onLoadEarlier,
 }: TrajectoryTimelineProps) {
+  const tx = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
   const panRef = useRef<Pan | null>(null);
   const [draft, setDraft] = useState<TrajectoryTimeRange | null>(null);
   const [viewport, setViewport] = useState<TrajectoryTimeRange | null>(null);
   const [hover, setHover] = useState<string | null>(null);
-  const model = useMemo(
-    () => trajectoryTimeline(records, mode, boundaryLabel),
-    [records, mode, boundaryLabel],
-  );
-
-  // A rebuilt domain invalidates a viewport expressed in the old one.
-  const domainKey = model === null ? '' : `${model.start}:${model.end}`;
-  useEffect(() => { setViewport(null); }, [domainKey, mode]);
-
   const domain = viewport ?? (model === null ? null : { start: model.start, end: model.end });
   const span = domain === null ? 0 : Math.max(1e-6, domain.end - domain.start);
 
@@ -185,8 +183,8 @@ export function TrajectoryTimeline({
   // path below, inside the positioned canvas.
   if (model === null || domain === null) {
     return (
-      <section className={css.root} aria-label="Timing overview">
-        <p className={css.empty}>No recorded timing in the loaded window</p>
+      <section className={css.root} aria-label={tx('trajectory:trajectory-timeline.timing-overview')}>
+        <p className={css.empty}>{tx('trajectory:trajectory-timeline.no-recorded-timing-in-the-loaded-window')}</p>
       </section>
     );
   }
@@ -265,23 +263,23 @@ export function TrajectoryTimeline({
   }
 
   return (
-    <section className={css.root} aria-label="Timing overview">
+    <section className={css.root} aria-label={tx('trajectory:trajectory-timeline.timing-overview')}>
       <div className={css.legend}>
-        <span>Overview</span>
-        <small>Loaded window · drag to focus · wheel to zoom</small>
+        <span>{tx('trajectory:trajectory-timeline.overview')}</span>
+        <small>{tx('trajectory:trajectory-timeline.loaded-window-drag-to-focus-wheel-to-zoom')}</small>
         <div className={css.controls}>
-          <Button size="sm" aria-label="Zoom timeline in" onClick={() => {
+          <Button size="sm" aria-label={tx('trajectory:trajectory-timeline.zoom-timeline-in')} onClick={() => {
             const next = Math.max(MINIMUM_ZOOM_SPAN, span * .8);
             if (next < span) setViewport({ start: domain.start, end: domain.start + next });
           }}>+</Button>
-          <Button size="sm" aria-label="Reset timeline" onClick={() => { setViewport(null); onRangeChange(null); }}>Reset</Button>
+          <Button size="sm" aria-label={tx('trajectory:trajectory-timeline.reset-timeline')} onClick={() => { setViewport(null); onRangeChange(null); }}>{tx('trajectory:trajectory-timeline.reset')}</Button>
         </div>
       </div>
       <div
         ref={rootRef}
         className={css.canvas}
         tabIndex={0}
-        aria-label="Timeline navigation: arrow keys pan, Escape clears focus"
+        aria-label={tx('trajectory:trajectory-timeline.timeline-navigation-arrow-keys-pan-escape-clears-focus')}
         data-domain-start={domain.start}
         data-domain-end={domain.end}
         onKeyDown={event => {
@@ -307,6 +305,7 @@ export function TrajectoryTimeline({
         {focus !== null && (
           <div
             className={css.focus}
+            data-focus-range=""
             aria-hidden="true"
             style={
               {
@@ -318,7 +317,7 @@ export function TrajectoryTimeline({
         )}
         {model.boundaries.map(boundary => (
           <div
-            key={`${boundary.label}:${boundary.at}`}
+            key={boundary.nativeAttemptId}
             className={css.boundary}
             aria-hidden="true"
             style={{ left: `${percent(boundary.at)}%` } as CSSProperties}
@@ -328,7 +327,7 @@ export function TrajectoryTimeline({
         ))}
         {TRAJECTORY_LANES.map((lane, index) => (
           <div className={css.lane} key={lane}>
-            <span className={css.laneLabel}>{lane}</span>
+            <span className={css.laneLabel}>{tx(`trajectory:lane.${lane}`)}</span>
             <div className={css.laneTrack}>
               {model.spans
                 .filter(candidate => candidate.lane === index)
@@ -342,15 +341,15 @@ export function TrajectoryTimeline({
                       : `${100 * (at - candidate.start) / (candidate.end - candidate.start)}%`;
                   const detail = [
                     candidate.label,
-                    `Started ${formatInstant(
+                    tx('trajectory:copy.started-value', { p0: formatInstant(tx,
                       candidate.startedAt === undefined ? undefined : new Date(candidate.startedAt).toISOString(),
-                    )}`,
+                    ) }),
                     candidate.durationMs === undefined
-                      ? 'Journal duration unavailable'
-                      : `Journal duration ${formatDuration(candidate.durationMs)}`,
+                      ? tx('trajectory:copy.journal-duration-unavailable')
+                      : tx('trajectory:copy.journal-duration-value', { p0: formatDuration(tx, candidate.durationMs) }),
                     candidate.ttftMs === undefined || candidate.generationMs === undefined
                       ? undefined
-                      : `Dispatch → first output ${formatDuration(candidate.ttftMs)} · first output → provider terminal ${formatDuration(candidate.generationMs)}`,
+                      : tx('trajectory:copy.dispatch-first-output-value-first-output-provider-terminal-value', { p0: formatDuration(tx, candidate.ttftMs), p1: formatDuration(tx, candidate.generationMs) }),
                   ]
                     .filter(value => value !== undefined)
                     .join('\n');
@@ -368,13 +367,18 @@ export function TrajectoryTimeline({
                       data-dimmed={
                         searchMatches !== null && !searchMatches.has(candidate.id) ? '' : undefined
                       }
-                      aria-label={`Inspect ${candidate.label}`}
+                      aria-label={tx('trajectory:trajectory-timeline.inspect-value', { p0: candidate.label })}
                       title={detail}
                       onFocus={() => setHover(candidate.id)}
                       onBlur={() => setHover(null)}
                       onPointerEnter={() => setHover(candidate.id)}
                       onPointerLeave={() => setHover(current => (current === candidate.id ? null : current))}
-                      onClick={event => { event.stopPropagation(); onSelect(candidate.id); }}
+                      onClick={event => {
+                        event.stopPropagation();
+                        // Pointer selection is authorized by pointer-down/up in
+                        // this generation. Click alone is only keyboard/AT activation.
+                        if (event.detail === 0) onSelect(candidate.id);
+                      }}
                       style={
                         {
                           left: `${left}%`,
@@ -398,7 +402,7 @@ export function TrajectoryTimeline({
         {hover === null
           ? viewport === null
             ? ''
-            : 'Zoomed · wheel out or right-drag to pan'
+            : tx('trajectory:trajectory-timeline.zoomed-wheel-out-or-right-drag-to-pan')
           : model.spans.find(candidate => candidate.id === hover)?.label ?? ''}
       </p>
     </section>

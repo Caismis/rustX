@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 /**
  * Workspace browser tree row components (figma Cell set 14:3080): pure presentational —
@@ -16,7 +17,7 @@ import { relativeTime } from '../primitives/relative-time';
 import { IconBranchOutline16, IconEditOutline16, IconEllipsisOutline16,
   IconFolderClose16, IconFolderOpen16, IconPlusOutline16, IconTrashOutline16, IconTriangleRightFill14 } from '../primitives/icons';
 import type { GroupNode, SearchResultNode, SessionNode } from './types';
-import type { Translate } from '../locale/translate';
+import type { Translate } from '../../locale/translation';
 import css from './Rows.module.css'
 
 /** The standard locale seat, prop-passed from the browser root. */
@@ -54,13 +55,13 @@ function revealClippedTitle(title: HTMLSpanElement | null, revealed: boolean): v
 /** Dictionary-backed compact relative time, such as "now" or "5min". */
 function timeLabel(updatedAt: number, now: number, t: RowTranslate): string {
   const { unit, n } = relativeTime(updatedAt, now)
-  return unit === 'now' ? t('time.now') : t(`time.${unit}`, { n })
+  return unit === 'now' ? t('workspace:time.now') : t(`workspace:time.${unit}`, { n })
 }
 
 /** Hover-card variant: distances wrap in the ago template; the now bucket stays bare (no "now ago"). */
 function hoverTimeLabel(updatedAt: number, now: number, t: RowTranslate): string {
   const { unit, n } = relativeTime(updatedAt, now)
-  return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
+  return unit === 'now' ? t('workspace:time.now') : t('workspace:time.ago', { t: t(`workspace:time.${unit}`, { n }) })
 }
 
 /**
@@ -71,8 +72,8 @@ function hoverTimeLabel(updatedAt: number, now: number, t: RowTranslate): string
 function createdLabel(createdAt: number, t: RowTranslate): string {
   const d = new Date(createdAt)
   const pad2 = (v: number): string => String(v).padStart(2, '0')
-  const date = t('date.ymd', { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() })
-  return t('hover.created', { time: `${date} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` })
+  const date = t('workspace:date.ymd', { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() })
+  return t('workspace:hover.created', { time: `${date} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` })
 }
 
 /** Hover-card body: workspace title, display directory path, absolute creation time. */
@@ -116,14 +117,15 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
   menuFocusOwner: RefObject<HTMLElement | null>
   t: RowTranslate
 }) {
+  const tx = useTranslation();
   const row = group
   const label = row.label
   const active = containsCurrentDescendant || (group.expanded && group.containsCurrent)
   const [menuOpen, setMenuOpen] = useState(false)
   const workspaceMenuItems = [
-    ...(actions?.settings ? [{ id: 'settings', label: 'Workspace settings' }] : []),
-    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
-    { id: 'delete', label: t('delete.workspace'), icon: <IconTrashOutline16 />, danger: true },
+    ...(actions?.settings ? [{ id: 'settings', label: tx('workspace:rows.workspace-settings') }] : []),
+    { id: 'rename', label: t('workspace:rename'), icon: <IconEditOutline16 /> },
+    { id: 'delete', label: t('workspace:delete.workspace'), icon: <IconTrashOutline16 />, danger: true },
   ]
   const ownRow = (
     <div
@@ -138,11 +140,11 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
       <span className={clsx(css.slot, css.folder, active && css.folderActive)}>
         {row.expanded ? <IconFolderOpen16 /> : <IconFolderClose16 />}
       </span>
-      <button type="button" aria-label={`Toggle ${label}`} aria-expanded={row.expanded} className={clsx(css.slot, css.chevron)}>
+      <button type="button" aria-label={tx('workspace:rows.toggle-value', { p0: label })} aria-expanded={row.expanded} className={clsx(css.slot, css.chevron)}>
         <IconTriangleRightFill14 className={clsx(css.arrow, row.expanded && css.arrowOpen)} />
       </button>
       <span className={css.projectText}>
-        <button type="button" className={css.titleButton} aria-label={`Select Workspace ${label}`} aria-current={group.workspaceId && group.containsCurrent ? "page" : undefined} onClick={event => { event.stopPropagation(); onSelect?.(); }}>{label}</button>
+        <button type="button" className={css.titleButton} aria-label={tx('workspace:rows.select-workspace-value', { p0: label })} aria-current={group.workspaceId && group.containsCurrent ? "page" : undefined} onClick={event => { event.stopPropagation(); onSelect?.(); }}>{label}</button>
       </span>
       <span className={css.rowActions}>
         {actions !== undefined && (
@@ -168,7 +170,7 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
                 className={css.iconButton}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                aria-label={t('actions.workspace.aria', { name: label })}
+                aria-label={t('workspace:actions.workspace.aria', { name: label })}
                 onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
               >
                 <IconEllipsisOutline16 />
@@ -179,7 +181,7 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
         {row.workspaceId !== undefined && <button
           type="button"
           className={css.iconButton}
-          aria-label={t('actions.newSession.aria', { name: label })}
+          aria-label={t('workspace:actions.newSession.aria', { name: label })}
           onClick={(e) => { e.stopPropagation(); onCreate() }}
         >
           <IconPlusOutline16 />
@@ -200,8 +202,8 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
       />}
       disabled={menuOpen}
       copyText={row.cwd}
-      copyLabel={t('copy')}
-      copiedLabel={t('hover.copied')}
+      copyLabel={t('workspace:copy')}
+      copiedLabel={t('workspace:hover.copied')}
     />
   )
 }
@@ -230,21 +232,21 @@ function sessionStatuses(
       state: 'ongoing',
       label: t(
         node.runningSubagentCount === 1
-          ? 'status.subagentsRunning.one'
-          : 'status.subagentsRunning.other',
+          ? 'workspace:status.subagentsRunning.one'
+          : 'workspace:status.subagentsRunning.other',
         { n: node.runningSubagentCount },
       ),
     }
   let pending: SessionStatus | undefined
   switch (node.pendingInteraction) {
     case 'approval':
-      pending = { state: 'warning', label: t('status.waitingApproval') }
+      pending = { state: 'warning', label: t('workspace:status.waitingApproval') }
       break
     case 'plan-review':
-      pending = { state: 'warning', label: t('status.planReview') }
+      pending = { state: 'warning', label: t('workspace:status.planReview') }
       break
     case 'question':
-      pending = { state: 'warning', label: t('status.waitingAnswer') }
+      pending = { state: 'warning', label: t('workspace:status.waitingAnswer') }
       break
     case undefined: break
     /* v8 ignore next -- closed PendingInteractionStatus union */
@@ -252,11 +254,11 @@ function sessionStatuses(
   }
   if (pending !== undefined) return subagents === undefined ? [pending] : [pending, subagents]
   if (node.running) {
-    const primary: SessionStatus = { state: 'ongoing', label: t('status.running') }
+    const primary: SessionStatus = { state: 'ongoing', label: t('workspace:status.running') }
     return subagents === undefined ? [primary] : [primary, subagents]
   }
   if (subagents !== undefined) return [subagents]
-  return [{ state: 'done', label: t('status.idle') }]
+  return [{ state: 'done', label: t('workspace:status.idle') }]
 }
 
 /** Primary status dot plus every status's screen-reader label, shared by the search and session rows. */
@@ -306,6 +308,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
   onOpen: (id: SearchResultNode['id']) => void
   t: RowTranslate
 }) {
+  const tx = useTranslation();
   const selected = result.id === currentId
   const statuses = sessionStatuses(result, t)
   const primaryStatus = statuses[0]
@@ -315,7 +318,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
       className={clsx(css.searchResultRow, selected && css.selected)}
       role="treeitem"
       aria-selected={selected}
-      aria-label={`Open ${result.title}`}
+      aria-label={tx('workspace:rows.open-value', { p0: result.title })}
       data-session-id={result.id}
       title={result.observation}
       onClick={() => { onOpen(result.id) }}
@@ -330,7 +333,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
       </span>
       <span className={css.searchResultMeta}>
         {result.observation && <span>{result.observation}</span>}
-        <span className={css.searchResultWorkspace}>{result.workspace || t('session.unclassified')}</span>
+        <span className={css.searchResultWorkspace}>{result.workspace || t('workspace:session.unclassified')}</span>
         {result.snippet !== undefined && (
           <span className={css.searchResultSnippet}>{result.snippet}</span>
         )}
@@ -346,7 +349,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
  * @param props.currentId - selected session id (row highlight).
  * @param props.now - epoch ms for relative-time formatting.
  * @param props.onOpen - open a session by id.
- * @param props.onRename - open the session rename dialog (id + current title).
+ * @param props.onRename - open the session rename dialog by native identity.
  * @param props.onFork - fork a session at its last completed turn.
  * @param props.onDelete - open native deletion preview.
  * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
@@ -363,7 +366,7 @@ export function SessionNodeItem({
   now: number
   onOpen: (id: SessionNode['id']) => void
   /** Open the browser-owned session rename dialog (row menu action). */
-  onRename: (id: SessionNode['id'], currentTitle: string) => void
+  onRename: (id: SessionNode['id']) => void
   /** Fork a session at its last completed turn (row menu action). */
   onFork: (id: SessionNode['id']) => void
   /** Open the native revision-checked deletion preview. */
@@ -374,6 +377,7 @@ export function SessionNodeItem({
   menuFocusOwner: RefObject<HTMLElement | null>
   t: RowTranslate
 }) {
+  const tx = useTranslation();
   const row = node
   const title = displayTitle(node)
   const selected = node.id === currentId
@@ -384,11 +388,11 @@ export function SessionNodeItem({
   const titleRef = useRef<HTMLSpanElement>(null)
   // The adapter opens native revision-checked deletion preview; never archive locally.
   const sessionMenuItems = [
-    ...(onClose ? [{ id: 'close', label: `Close ${title} view` }] : []),
-    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
-    { id: 'fork', label: t('menu.fork'), icon: <IconBranchOutline16 /> },
+    ...(onClose ? [{ id: 'close', label: tx('workspace:rows.close-value-view', { p0: title }) }] : []),
+    { id: 'rename', label: t('workspace:rename'), icon: <IconEditOutline16 /> },
+    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconBranchOutline16 /> },
     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
-    { id: 'delete', label: t('menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
+    { id: 'delete', label: t('workspace:menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
   ]
   // Figma session cell: pad 8, status slot 16, then a 4px title gap.
   const ownRow = (
@@ -412,7 +416,7 @@ export function SessionNodeItem({
           {showStatus && <SessionStatusDots statuses={statuses} />}
         </span>
       )}
-<button type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={`Open ${title}`} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>
+<button type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>
       <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>
         <span className={css.rowActions}>
           <Menu
@@ -421,7 +425,7 @@ export function SessionNodeItem({
             items={sessionMenuItems}
             onSelect={(id) => {
               setMenuOpen(false)
-              if (id === 'rename') onRename(node.id, row.title)
+              if (id === 'rename') onRename(node.id)
               if (id === 'fork') onFork(node.id)
               if (id === 'delete') onDelete(node.id)
               if (id === 'close') onClose?.(node.id)
@@ -434,7 +438,7 @@ export function SessionNodeItem({
                 className={css.iconButton}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                data-session-actions={node.id} aria-label={t('actions.session.aria', { name: title })}
+                data-session-actions={node.id} aria-label={t('workspace:actions.session.aria', { name: title })}
                 onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
               >
                 <IconEllipsisOutline16 />
@@ -450,8 +454,8 @@ export function SessionNodeItem({
       content={<SessionHoverContent node={node} now={now} t={t} />}
       disabled={menuOpen}
       copyText={row.title}
-      copyLabel={t('copy')}
-      copiedLabel={t('hover.copied')}
+      copyLabel={t('workspace:copy')}
+      copiedLabel={t('workspace:hover.copied')}
     />
   )
 }

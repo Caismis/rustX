@@ -1,3 +1,5 @@
+import { localeController } from '../src/locale/controller';
+import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
@@ -176,7 +178,7 @@ it('owner Unavailable differs from terminal Inactive and disables impossible set
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Preserved draft' } });
     fireEvent.click(ui.getByRole('button', { name: 'Send message' })); await server.waitFor('agent/sendMessage', 1);
   });
-  expect(ui.getByRole('alert').textContent).toContain('requires explicit repair');
+  expect(ui.getByRole('alert').textContent).toContain('remains unresolved');
   expect(ui.getByRole('alert').textContent).not.toContain('retry');
   const unavailable = { ...agent, state: 'unavailable' as const, activation_state: 'interrupted' as const };
   ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [unavailable] }} client={server.client} sessionId="A"/>);
@@ -208,6 +210,12 @@ it.each(['job/wait', 'job/cancel'] as const)('%s finishes with native publicatio
   expect(ui.queryByText('Request pending…')).toBeNull();
   expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('publishing_terminal');
   expect(server.requests.filter(row => row.request.method === method)).toHaveLength(1);
+  const requests = [...server.requests];
+  act(() => localeController.setLocale('zh'));
+  expect(ui.getByRole('alert').textContent).toBe(translator('zh')('common:activity.publication-abandoned', { id: job.job_id }));
+  expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('publishing_terminal');
+  expect(server.requests).toEqual(requests);
+  act(() => localeController.setLocale('en'));
 });
 
 it('Job list returns the complete owner metadata through the Web client', async () => {
@@ -232,5 +240,14 @@ it.each([['agent_not_delivered', 'no input was delivered'], ['agent_delivery_unk
   });
   expect(ui.getByRole('alert').textContent).toContain(expected);
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Keep this guidance');
+  const requests = [...server.requests];
+  const input = ui.getByRole('textbox');
+  act(() => localeController.setLocale('zh'));
+  expect(ui.getByRole('alert').textContent).toBe(translator('zh')(kind === 'agent_not_delivered' ? 'common:activity.not-delivered' : 'common:activity.delivery-unknown', { id: agent.agent_id }));
+  expect(ui.getByRole('textbox')).toBe(input);
+  expect((input as HTMLInputElement).value).toBe('Keep this guidance');
+  expect(ui.container.querySelector('[data-agent-id]')?.getAttribute('data-agent-id')).toBe(agent.agent_id);
+  expect(server.requests).toEqual(requests);
+  act(() => localeController.setLocale('en'));
   expect(server.requests.filter(row => row.request.method === 'agent/sendMessage')).toHaveLength(1);
 });

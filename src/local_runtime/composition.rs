@@ -559,6 +559,7 @@ const TEST_PREPARATION_GATE_ENV: &str = "RUSTX_ISSUE145_PREPARATION_GATE";
 /// race: Cancel consumed (signal set), then the step completes.
 #[cfg(test)]
 pub(crate) struct TestPreparationGate {
+    hold_cancelled: bool,
     entered: tokio::sync::watch::Sender<bool>,
     release: tokio::sync::watch::Sender<bool>,
     cancellation: std::sync::Mutex<Option<crate::runtime::cancellation::CancellationSignal>>,
@@ -577,9 +578,27 @@ static TEST_PREPARATION_GATES: std::sync::Mutex<
 pub(crate) fn arm_test_preparation_gate(
     runtime_root: &std::path::Path,
 ) -> std::sync::Arc<TestPreparationGate> {
+    arm_preparation_gate(runtime_root, false)
+}
+
+/// Models owned preparation whose cancellation has been observed but whose
+/// physical rollback still awaits the test's explicit release.
+#[cfg(test)]
+pub(crate) fn arm_test_preparation_drain_gate(
+    runtime_root: &std::path::Path,
+) -> std::sync::Arc<TestPreparationGate> {
+    arm_preparation_gate(runtime_root, true)
+}
+
+#[cfg(test)]
+fn arm_preparation_gate(
+    runtime_root: &std::path::Path,
+    hold_cancelled: bool,
+) -> std::sync::Arc<TestPreparationGate> {
     let (entered, _) = tokio::sync::watch::channel(false);
     let (release, _) = tokio::sync::watch::channel(false);
     let gate = std::sync::Arc::new(TestPreparationGate {
+        hold_cancelled,
         entered,
         release,
         cancellation: std::sync::Mutex::new(None),
@@ -658,7 +677,7 @@ impl TestPreparationGate {
                     )),
                 ),
             },
-            () = cancellation.cancelled() => Err(
+            () = cancellation.cancelled(), if !self.hold_cancelled => Err(
                 crate::capabilities::CapabilityPreparationError::PreparationSettled(
                     "the preparation cancellation settled the gated external step".to_owned(),
                 ),

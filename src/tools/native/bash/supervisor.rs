@@ -278,7 +278,8 @@ use crate::runtime::supervised_unit::{
     MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED,
     MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
     MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
-    contain_group, enforce_fixed_group_membership, ignore_group_term,
+    contain_group, enforce_fixed_group_membership, ignore_group_term, wait_for_supervisor_event,
+    wake_on_child_change,
 };
 
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
@@ -454,6 +455,14 @@ fn run_outer() -> i32 {
         }
         return 0;
     }
+    if let Err(error) = wake_on_child_change() {
+        let _ = stream
+            .write_preownership_failure(&format!("cannot watch supervisor children: {error}"));
+        if let Some(continuation) = &continuation {
+            let _ = continuation.publish_quiescent();
+        }
+        return 0;
+    }
     let inner_pid = match Command::new(supervisor_binary())
         .env_remove("RUSTX_PHYSICAL_CONTINUATION")
         .env("RUSTX_SUPERVISOR_ROLE", ROLE_INNER)
@@ -480,6 +489,7 @@ fn run_outer() -> i32 {
     let mut inner_frozen = false;
     let mut anchor_loss_reported = false;
     loop {
+        let previous = std::mem::discriminant(&anchor);
         match anchor {
             InnerAnchor::Running => {
                 // The dedicated anchor observation: matches only the inner
@@ -640,7 +650,9 @@ fn run_outer() -> i32 {
                 }
             }
         }
-        std::thread::sleep(POLL_INTERVAL);
+        if std::mem::discriminant(&anchor) == previous {
+            wait_for_supervisor_event(false);
+        }
     }
 }
 
@@ -657,7 +669,7 @@ fn await_terminal_ack() {
             Ok(0) => return,
             Ok(count) => buffered.extend_from_slice(&chunk[..count]),
             Err(Errno::EAGAIN) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(POLL_INTERVAL);
+                wait_for_supervisor_event(true);
             }
             Err(error) => {
                 if error == Errno::EINTR {
@@ -779,6 +791,11 @@ fn run_inner() -> i32 {
         let _ = stream.write_preownership_failure(&format!(
             "cannot install the invocation SIGTERM handler: {error}"
         ));
+        return INNER_EXIT_NORMAL;
+    }
+    if let Err(error) = wake_on_child_change() {
+        let _ =
+            stream.write_preownership_failure(&format!("cannot watch command children: {error}"));
         return INNER_EXIT_NORMAL;
     }
     // The control channel is non-blocking so the loop can poll for the
@@ -993,6 +1010,7 @@ fn run_inner() -> i32 {
                 Ok(control_read) => control_reader.feed(&chunk[..control_read]),
                 // non-blocking; EWOULDBLOCK == EAGAIN on Linux
                 Err(Errno::EAGAIN) => break,
+                Err(Errno::EINTR) => {}
                 Err(error) => {
                     let _ =
                         stream.write_failure(&format!("cannot read the control channel: {error}"));
@@ -1013,7 +1031,7 @@ fn run_inner() -> i32 {
             let _ = killpg(Pid::from_raw(self_pid), Signal::SIGKILL);
             return INNER_EXIT_CONTAINMENT;
         }
-        std::thread::sleep(POLL_INTERVAL);
+        wait_for_supervisor_event(true);
     }
 }
 
@@ -1112,7 +1130,7 @@ fn await_start(reader: &mut FrameReader) -> Result<bool, String> {
         match read(std::io::stdin(), &mut chunk) {
             Ok(0) => return Ok(false),
             Ok(count) => reader.feed(&chunk[..count]),
-            Err(Errno::EAGAIN) => std::thread::sleep(POLL_INTERVAL),
+            Err(Errno::EAGAIN) => wait_for_supervisor_event(true),
             Err(Errno::EINTR) => {}
             Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
         }

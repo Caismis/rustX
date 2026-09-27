@@ -1,19 +1,20 @@
+import type { TranslationKey } from '../../locale/translation';
 /** Browser grammar only. Identity is independent of translated labels/aliases. */
 export type CommandId = 'model' | 'compact' | 'new' | 'fork' | 'branch' | 'goal' | 'tools';
 export interface CommandDefinition {
   id: CommandId;
-  label: string;
+  labelKey: TranslationKey;
   aliases: readonly string[];
   availability: 'attached' | 'idle' | 'no-attempt' | 'goal';
 }
 export const commands: readonly CommandDefinition[] = [
-  { id: 'model', label: 'Choose model', aliases: ['模型'], availability: 'attached' },
-  { id: 'compact', label: 'Compact context', aliases: ['压缩'], availability: 'no-attempt' },
-  { id: 'new', label: 'New Conversation', aliases: ['新建'], availability: 'attached' },
-  { id: 'fork', label: 'Fork independent Session', aliases: ['分叉'], availability: 'attached' },
-  { id: 'branch', label: 'Branch within Session', aliases: ['分支'], availability: 'idle' },
-  { id: 'goal', label: 'Goal controls', aliases: ['目标'], availability: 'goal' },
-  { id: 'tools', label: 'Inspect capabilities', aliases: ['工具'], availability: 'attached' },
+  { id: 'model', labelKey: 'commands:command.model', aliases: [/* i18n-raw: command search vocabulary, identical in both locales */ 'Choose model', '模型'], availability: 'attached' },
+  { id: 'compact', labelKey: 'commands:command.compact', aliases: [/* i18n-raw: command search vocabulary, identical in both locales */ 'Compact context', '压缩'], availability: 'no-attempt' },
+  { id: 'new', labelKey: 'commands:command.new', aliases: [/* i18n-raw: command search vocabulary, identical in both locales */ 'New Conversation', '新建'], availability: 'attached' },
+  { id: 'fork', labelKey: 'commands:command.fork', aliases: [/* i18n-raw: command search vocabulary, identical in both locales */ 'Fork independent Session', '分叉'], availability: 'attached' },
+  { id: 'branch', labelKey: 'commands:command.branch', aliases: [/* i18n-raw: command search vocabulary, identical in both locales */ 'Branch within Session', '分支'], availability: 'idle' },
+  { id: 'goal', labelKey: 'commands:command.goal', aliases: [/* i18n-raw: command search vocabulary, identical in both locales */ 'Goal controls', '目标'], availability: 'goal' },
+  { id: 'tools', labelKey: 'commands:command.tools', aliases: [/* i18n-raw: command search vocabulary, identical in both locales */ 'Inspect capabilities', '工具'], availability: 'attached' },
 ];
 export function available(command: CommandDefinition, running: boolean, goal: boolean, lineageSwitchSafe: boolean) {
   switch (command.availability) {

@@ -1,3 +1,4 @@
+import { translator } from '../src/locale/translation';
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -16,11 +17,11 @@ it('keeps preview content inert, wrapping local, and error retries explicit', ()
 });
 it('persists only the safe Web appearance preference', () => {
  expect(readTheme()).toBe('light'); applyTheme('dark'); expect(readTheme()).toBe('dark'); expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
- expect({ ...localStorage }).toEqual({ 'rustx-appearance-v1': 'dark' });
+ expect({ ...localStorage }).toEqual({ 'rustx-appearance-v1': 'dark', 'rustx-locale-v1': 'en' });
  localStorage.setItem('rustx-appearance-v1', 'unexpected'); expect(readTheme()).toBe('light');
 });
 it('Goal Tool labels describe native outcomes while preserving exact tool identity', () => {
  const tool: ForegroundToolExecution = { call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'assembled', arguments: '{}' } } as ForegroundToolExecution;
- expect(goalActivityLabel(tool)).toBe('Starting Goal');
- expect(goalActivityLabel({ ...tool, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, content: [], duration_ms: 1 } } })).toBe('Goal started');
+ expect(goalActivityLabel(translator('en'), tool)).toBe('Starting Goal');
+ expect(goalActivityLabel(translator('en'), { ...tool, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, content: [], duration_ms: 1 } } })).toBe('Goal started');
 });

@@ -76,7 +76,7 @@
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
-/* Harness event/content geometry. Attempt/Step evidence forms section bars;
+/* Harness event/content geometry. Turn/Message/Step headers establish hierarchy;
    requests are quiet inspection affordances, never peer content cards. */
 .record {
   display: grid;
@@ -307,3 +307,21 @@
 .nativeDetails { padding: 12px 0; }
 
 .toolbar .search { height: 22px; flex: 1; min-width: 90px; border-radius: 3px; }
+
+/* Turn identity lives in the model; sticky chrome only presents its ordinal. */
+.record[data-display-type='TurnHeader'] {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--dsw-alias-bg-layer-2);
+  border-block: .5px solid var(--dsw-alias-border-l2);
+}
+.record[data-display-type='TurnHeader'] .event,
+.record[data-display-type='GroupHeader'] .event { justify-content: flex-start; padding-left: 12px; }
+.record[data-display-type='TurnHeader'] .kindTag { font-size: 13px; }
+.record[data-display-type='GroupHeader'] { background: var(--dsw-alias-bg-layer-1); border: 0; }
+.record[data-display-type='GroupHeader'] .event { padding-left: 30px; }
+.record[data-display-type='GroupHeader'] .kindTag { font-size: 12px; font-weight: 500; }
+.record[data-display-type='SystemPromptCell'] .kindTag { color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); }
+.record[data-display-type='SystemPromptCell'] strong { font-weight: 500; }
+.record[data-selected] { box-shadow: inset 3px 0 var(--dsw-alias-state-business-primary); }

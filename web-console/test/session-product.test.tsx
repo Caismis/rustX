@@ -1,3 +1,4 @@
+import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { ClientView, SessionView } from '../src/client/app-server';
@@ -38,7 +39,7 @@ it.each([
   const view = { ...base(), ...patch } as SessionView;
   const state = { ...connected, ...connection } as Pick<ClientView, 'connection' | 'uncertain'>;
   const before = JSON.stringify({ view, state });
-  const result = deriveSessionProductState(state, view);
+  const result = deriveSessionProductState(translator('en'), state, view);
   expect(result.status).toBe(status); expect(result.recovery?.action).toBe(action);
   expect(JSON.stringify(result)).not.toMatch(/private-attempt|native-incarnation|native-attachment|lost-request/);
   expect(JSON.stringify({ view, state })).toBe(before);

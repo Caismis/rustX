@@ -1,3 +1,4 @@
+import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
 import type {
   AgentSkillSelection, ApprovalMode, NativePolicyOverrideDocument, NativeTool,
@@ -28,6 +29,7 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
 export function ToolsPage({ source, document, scope, revision }: {
   source: SourceSettings; document: RuntimeLayer; scope: SourceScope; revision: string;
 }) {
+  const tx = useTranslation();
   const resolved = source.resolved;
   const agent = document.agent;
   const [source_, setSource] = useState('');
@@ -40,84 +42,85 @@ export function ToolsPage({ source, document, scope, revision }: {
     source.user_resource_root ? `${source.user_resource_root}/skills` : '',
     source.workspace_resource_root ? `${source.workspace_resource_root}/skills` : '',
   ];
-  return <section aria-label="Tools & Permissions">
-    <h3>Tools &amp; Permissions</h3>
-    <p>What the root Agent may use, and under what policy. Defining a resource never grants it: each grant below is its own decision, saved on its own.</p>
+  return <section aria-label={tx('settings:tools-page.tools-permissions')}>
+    <h3>{tx('settings:tools-page.tools-amp-permissions')}</h3>
+    <p>{tx('settings:tools-page.what-the-root-agent-may-use-and-under-what-policy-defining-a-res')}</p>
 
-    <h4>Approval</h4>
-    <UnitForm<ApprovalMode> title="Approval mode" authored={document.approval_mode ?? undefined} blank="policy" revision={revision}
+    <h4>{tx('settings:tools-page.approval')}</h4>
+    <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="policy" revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'approval', authored } })}>
-      {(value, change) => <Choice label="Approval mode" value={value}
-        options={[['policy', 'Policy'], ['full_access', 'Full access']]} onChange={change} />}
+      {(value, change) => <Choice label={tx('settings:tools-page.approval-mode')} value={value}
+        options={[['policy', tx('settings:copy.policy')], ['full_access', tx('settings:copy.full-access')]]} onChange={change} />}
     </UnitForm>
 
-    <h4>Built-in Tools</h4>
-    <UnitForm<string[]> title="Native Tools" authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
+    <h4>{tx('settings:tools-page.built-in-tools')}</h4>
+    <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'native_tools', authored } })}>
       {(value, change) => <>
-        <p className={css.hint}>An absent selection grants no built-in Tools. An explicit empty selection is an authored decision to grant none.</p>
-        <CheckboxList label="Explicit whitelist" values={nativeTools} selected={value} change={change} />
+        <p className={css.hint}>{tx('settings:tools-page.an-absent-selection-grants-no-built-in-tools-an-explicit-empty-s')}</p>
+        <CheckboxList label={tx('settings:tools-page.explicit-whitelist')} values={nativeTools} selected={value} change={change} />
       </>}
     </UnitForm>
 
-    <h4>Tool sources</h4>
-    <p>MCP servers and Managed Python packages are inert until the root Agent selects them. Each source is selected atomically: all of its Tools, an exact list, or none.</p>
-    {sources.map(id => <UnitForm<SourceToolSelection> key={id} title={`Source ${id}`}
+    <h4>{tx('settings:tools-page.tool-sources')}</h4>
+    <p>{tx('settings:tools-page.mcp-servers-and-managed-python-packages-are-inert-until-the-root')}</p>
+    {sources.map(id => <UnitForm<SourceToolSelection> key={id} title={tx('settings:extension-detail.source-value', { p0: id })}
       authored={agent?.tools?.sources?.[id] ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored } })}>
       {(value, change) => <Selection label={id} value={value} change={change} />}
     </UnitForm>)}
     <div className={css.actions}>
-      <Choice label="Source family" value={family} options={[['mcp', 'MCP'], ['python', 'Managed Python']]} onChange={setFamily} />
-      <TextField label="Source identity" value={source_} change={setSource} />
-      <Button disabled={!source_} onClick={() => { setAdded(current => [...current, family === 'python' ? `python:${source_}` : source_]); setSource(''); }}>Add source selection</Button>
+      <Choice label={tx('settings:tools-page.source-family')} value={family} options={[['mcp', 'MCP'], ['python', tx('settings:copy.managed-python')]]} onChange={setFamily} />
+      <TextField label={tx('settings:tools-page.source-identity')} value={source_} change={setSource} />
+      <Button disabled={!source_} onClick={() => { setAdded(current => [...current, family === 'python' ? `python:${source_}` : source_]); setSource(''); }}>{tx('settings:tools-page.add-source-selection')}</Button>
     </div>
 
-    <h4>Skills</h4>
-    <p>Skill selection controls which Skill descriptions are advertised in the prompt. It is native prompt and resource selection, not a filesystem ACL and not a security sandbox: Tools keep their ordinary read behavior either way.</p>
-    <dl><dt>User Skill root</dt><dd>{skillRoots[0]}</dd><dt>Workspace Skill root</dt><dd>{skillRoots[1]}</dd></dl>
-    <UnitForm<AgentSkillSelection> title="Skill visibility" authored={agent?.skills ?? undefined} blank={[]} revision={revision}
+    <h4>{tx('settings:tools-page.skills')}</h4>
+    <p>{tx('settings:tools-page.skill-selection-controls-which-skill-descriptions-are-advertised')}</p>
+    <dl><dt>{tx('settings:tools-page.user-skill-root')}</dt><dd>{skillRoots[0]}</dd><dt>{tx('settings:tools-page.workspace-skill-root')}</dt><dd>{skillRoots[1]}</dd></dl>
+    <UnitForm<AgentSkillSelection> title={tx('settings:extension-detail.skill-visibility')} authored={agent?.skills ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'skills', authored } })}>
-      {(value, change) => <Selection label="Visible Skills" value={value} change={change} />}
+      {(value, change) => <Selection label={tx('settings:extension-detail.visible-skills')} value={value} change={change} />}
     </UnitForm>
 
-    <h4>Delegation</h4>
-    <p>A defined named Agent or Workflow is not a delegation target. These allowlists are what makes one available to the root Agent, and each is an independent mutation from the definition itself.</p>
+    <h4>{tx('settings:tools-page.delegation')}</h4>
+    <p>{tx('settings:tools-page.a-defined-named-agent-or-workflow-is-not-a-delegation-target-the')}</p>
     {(['agents', 'workflows'] as const).map(unit => <UnitForm<string[]> key={unit}
-      title={unit === 'agents' ? 'Agent allowlist' : 'Workflow allowlist'} authored={agent?.[unit] ?? undefined} blank={[]} revision={revision}
+      title={unit === 'agents' ? tx('settings:extension-detail.agent-allowlist') : tx('settings:extension-detail.workflow-allowlist')} authored={agent?.[unit] ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit, authored } })}>
       {(value, change) => <Names label={unit} value={value} change={change} />}
     </UnitForm>)}
 
-    <Advanced title="Advanced Tool policies">
-      <p>Invocation policy governs execution ownership, concurrency and approval independently of which Tools the Agent may use. Each policy is replaced as one complete object.</p>
-      {policyTools.map(name => <UnitForm<NativePolicyOverrideDocument> key={name} title={`${name} policy`}
+    <Advanced title={tx('settings:tools-page.advanced-tool-policies')}>
+      <p>{tx('settings:tools-page.invocation-policy-governs-execution-ownership-concurrency-and-ap')}</p>
+      {policyTools.map(name => <UnitForm<NativePolicyOverrideDocument> key={name} title={tx('settings:tools-page.value-policy', { p0: name })}
         authored={document.native_tools?.[name as NativeTool] ?? undefined} blank={{}} revision={revision}
         mutation={authored => ({ kind: 'config', mutation: { unit: 'native_policy', id: name as NativeTool, authored } })}>
         {(value, change) => <PolicyFields value={value} change={change} />}
       </UnitForm>)}
-      <label>MCP policy identity<input list="mcp-policy-identities" value={mcpPolicy} onChange={event => setMcpPolicy(event.target.value)} /></label>
+      <label>{tx('settings:tools-page.mcp-policy-identity')}<input list="mcp-policy-identities" value={mcpPolicy} onChange={event => setMcpPolicy(event.target.value)} /></label>
       <datalist id="mcp-policy-identities">
-        {reachableIdentities(scope, document.mcp_tool_policies, resolved?.mcp_tool_policies).map(id => <option key={id}>{id}</option>)}
+        {reachableIdentities(scope, document.mcp_tool_policies, resolved?.mcp_tool_policies).map(id => <option key={id} value={id}>{id}</option>)}
       </datalist>
-      <Button disabled={!mcpPolicy} onClick={() => selectMcpPolicy(mcpPolicy)}>Edit MCP policy</Button>
-      {selectedMcpPolicy && <UnitForm<NativePolicyOverrideDocument> key={selectedMcpPolicy} title={`MCP policy ${selectedMcpPolicy}`}
+      <Button disabled={!mcpPolicy} onClick={() => selectMcpPolicy(mcpPolicy)}>{tx('settings:tools-page.edit-mcp-policy')}</Button>
+      {selectedMcpPolicy && <UnitForm<NativePolicyOverrideDocument> key={selectedMcpPolicy} title={tx('settings:tools-page.mcp-policy-value', { p0: selectedMcpPolicy })}
         authored={document.mcp_tool_policies?.[selectedMcpPolicy] ?? undefined} blank={{}} revision={revision}
         mutation={authored => ({ kind: 'config', mutation: { unit: 'mcp_policy', id: selectedMcpPolicy, authored } })}>
         {(value, change) => <PolicyFields value={value} change={change} />}
       </UnitForm>}
     </Advanced>
-    {sourceView(source, scope) === undefined && <p role="alert" className={css.error}>This scope has no source view.</p>}
+    {sourceView(source, scope) === undefined && <p role="alert" className={css.error}>{tx('settings:tools-page.this-scope-has-no-source-view')}</p>}
   </section>;
 }
 
 export function PolicyFields({ value, change }: { value: NativePolicyOverrideDocument; change: (value: NativePolicyOverrideDocument) => void }) {
+  const tx = useTranslation();
   return <>
-    <Choice label="execution" value={value.execution ?? ''} onChange={execution => change({ ...value, execution: (execution || undefined) as NativePolicyOverrideDocument['execution'] })}
-      options={[['', 'Domain default'], ['foreground_only', 'foreground_only'], ['background_only', 'background_only'], ['model_selectable', 'model_selectable']]} />
-    <Choice label="concurrency" value={value.concurrency ?? ''} onChange={concurrency => change({ ...value, concurrency: (concurrency || undefined) as NativePolicyOverrideDocument['concurrency'] })}
-      options={[['', 'Domain default'], ['sequential', 'sequential'], ['parallel', 'parallel']]} />
-    <Choice label="approval" value={value.approval ?? ''} onChange={approval => change({ ...value, approval: (approval || undefined) as NativePolicyOverrideDocument['approval'] })}
-      options={[['', 'Domain default'], ['never', 'never'], ['always', 'always']]} />
+    <Choice label={tx('settings:tools-page.execution')} value={value.execution ?? ''} onChange={execution => change({ ...value, execution: (execution || undefined) as NativePolicyOverrideDocument['execution'] })}
+      options={[['', tx('settings:copy.domain-default')], ['foreground_only', tx('settings:policy.foreground_only')], ['background_only', tx('settings:policy.background_only')], ['model_selectable', tx('settings:policy.model_selectable')]]} />
+    <Choice label={tx('settings:tools-page.concurrency')} value={value.concurrency ?? ''} onChange={concurrency => change({ ...value, concurrency: (concurrency || undefined) as NativePolicyOverrideDocument['concurrency'] })}
+      options={[['', tx('settings:copy.domain-default')], ['sequential', tx('settings:policy.sequential')], ['parallel', tx('settings:policy.parallel')]]} />
+    <Choice label={tx('settings:tools-page.approval-2')} value={value.approval ?? ''} onChange={approval => change({ ...value, approval: (approval || undefined) as NativePolicyOverrideDocument['approval'] })}
+      options={[['', tx('settings:copy.domain-default')], ['never', tx('settings:policy.never')], ['always', tx('settings:policy.always')]]} />
   </>;
 }

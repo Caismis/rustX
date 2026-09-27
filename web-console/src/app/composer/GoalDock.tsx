@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Adapted from DeepSeek Harness ui-goal GoalBar: the strip, phase labels, icon
 // actions, single-flight controls and inline edit form. rustX GoalDomain owns
@@ -38,15 +39,8 @@ function parseBudget(draft: string): number | undefined {
 /** The user-facing status word for each durable phase. `complete` never
  * reaches this card — the dock is hidden for a finished Goal — but the map is
  * total so a phase can never render as a blank label. */
-const STATUS: Record<GoalSnapshot['phase'], string> = {
-  active: 'Active', paused: 'Paused', blocked: 'Blocked', complete: 'Complete',
-};
 
-const AWAITING: Record<Awaiting['kind'], string> = {
-  applied: 'Goal control applied. Controls stay locked until the authoritative Goal state is reread.',
-  rejected: 'Controls stay locked until the authoritative Goal state is reread.',
-  uncertain: 'Goal control outcome uncertain. It was not replayed; waiting for an authoritative reread.',
-};
+
 
 export function GoalDock({ state, observation, disabled, mutate }: {
   state: GoalDockState | undefined;
@@ -55,6 +49,15 @@ export function GoalDock({ state, observation, disabled, mutate }: {
   disabled: boolean;
   mutate: (expected: GoalRef, mutation: GoalMutation) => Promise<GoalControlOutcome>;
 }) {
+  const tx = useTranslation();
+  const STATUS: Record<GoalSnapshot['phase'], string> = {
+  active: tx('agent:copy.active'), paused: tx('agent:copy.paused'), blocked: tx('agent:copy.blocked'), complete: tx('agent:copy.complete'),
+};
+  const AWAITING: Record<Awaiting['kind'], string> = {
+  applied: tx('agent:copy.goal-control-applied-controls-stay-locked-until-the-authoritative-goal-state-is-reread'),
+  rejected: tx('agent:copy.controls-stay-locked-until-the-authoritative-goal-state-is-reread'),
+  uncertain: tx('agent:copy.goal-control-outcome-uncertain-it-was-not-replayed-waiting-for-an-authoritative-reread'),
+};
   const goal = state?.goal;
   const [editing, setEditing] = useState<{ field: Field; draft: string }>();
   const [pending, setPending] = useState(false);
@@ -120,29 +123,29 @@ export function GoalDock({ state, observation, disabled, mutate }: {
   // Issue #351: the status line is the durable phase and nothing else.
   // `Active` is authorization to continue, so there is no Inactive Goal and
   // no separate Play control beside it.
-  const label = `${STATUS[goal.phase]} Goal`;
+  const label = tx('agent:copy.value-goal', { p0: STATUS[goal.phase] });
 
-  return <section className={css.dock} aria-label="Goal" data-goal-phase={goal.phase}>
+  return <section data-goal-dock="" className={css.dock} aria-label={tx('agent:goal-dock.goal')} data-goal-phase={goal.phase}>
     <div className={css.bar} title={goal.phase === 'blocked' ? goal.blocked_reason ?? undefined : undefined}>
       <span className={css.glyph} aria-hidden><IconGoalOutline16 size={14} /></span>
       {editing
-        ? <input className={css.input} autoFocus aria-label={editing.field === 'objective' ? 'Goal objective' : 'Autonomous round budget'}
+        ? <input className={css.input} autoFocus aria-label={editing.field === 'objective' ? tx('agent:goal-dock.goal-objective') : tx('agent:goal-dock.autonomous-round-budget')}
           {...editing.field === 'budget' ? { type: 'number', min: 1, step: 1, inputMode: 'numeric' as const } : { type: 'text' }}
           value={editing.draft} disabled={pending} onChange={event => setEditing({ field: editing.field, draft: event.target.value })} onKeyDown={onKeyDown} />
         : <><span className={css.label}>{label}</span><span className={css.objective} title={goal.objective}>{goal.objective}</span></>}
-      <span className={css.meta}>{goal.autonomous_rounds_consumed}/{goal.autonomous_round_budget} rounds</span>
+      <span className={css.meta}>{goal.autonomous_rounds_consumed}/{goal.autonomous_round_budget} {tx('agent:goal-dock.rounds')}</span>
       <div className={css.actions}>{editing ? <>
-        <button type="button" className={css.iconButton} aria-label={editing.field === 'objective' ? 'Save goal objective' : 'Save round budget'} disabled={locked || !draftValid} onClick={save}><IconCheckOutline14 /></button>
-        <button type="button" className={css.iconButton} aria-label="Cancel goal edit" disabled={pending} onClick={cancel}><IconCloseOutline16 size={14} /></button>
+        <button type="button" className={css.iconButton} aria-label={editing.field === 'objective' ? tx('agent:goal-dock.save-goal-objective') : tx('agent:goal-dock.save-round-budget')} disabled={locked || !draftValid} onClick={save}><IconCheckOutline14 /></button>
+        <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.cancel-goal-edit')} disabled={pending} onClick={cancel}><IconCloseOutline16 size={14} /></button>
       </> : <>
         {goal.phase === 'active'
-          ? <button type="button" className={css.iconButton} aria-label="Pause goal" disabled={locked} onClick={() => void run({ action: 'pause' })}><IconPauseOutline16 size={14} /></button>
-          : <button type="button" className={css.iconButton} aria-label="Resume goal" disabled={locked} onClick={() => void run({ action: 'resume' })}><IconPlayOutline16 size={14} /></button>}
-        <button ref={objectiveButton} type="button" className={css.iconButton} aria-label="Edit goal objective" disabled={locked} onClick={() => open('objective')}><IconEditOutline16 size={14} /></button>
-        <button ref={budgetButton} type="button" className={css.iconButton} aria-label="Edit round budget" disabled={locked} onClick={() => open('budget')}><BudgetGlyph /></button>
+          ? <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.pause-goal')} disabled={locked} onClick={() => void run({ action: 'pause' })}><IconPauseOutline16 size={14} /></button>
+          : <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.resume-goal')} disabled={locked} onClick={() => void run({ action: 'resume' })}><IconPlayOutline16 size={14} /></button>}
+        <button ref={objectiveButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-goal-objective')} disabled={locked} onClick={() => open('objective')}><IconEditOutline16 size={14} /></button>
+        <button ref={budgetButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-round-budget')} disabled={locked} onClick={() => open('budget')}><BudgetGlyph /></button>
       </>}</div>
     </div>
-    {goal.phase === 'blocked' && goal.blocked_reason && <p className={css.note}>Blocked: {goal.blocked_reason}</p>}
+    {goal.phase === 'blocked' && goal.blocked_reason && <p className={css.note}>{tx('agent:goal-dock.blocked')}{' '}{goal.blocked_reason}</p>}
     {error && <p className={css.error} role="alert">{error}</p>}
     {locking && <p className={css.note} role="status">{AWAITING[locking.kind]}</p>}
   </section>;

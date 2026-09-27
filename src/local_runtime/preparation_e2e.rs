@@ -330,7 +330,7 @@ impl Lab {
             "exactly one activation identity was consumed"
         );
         assert!(
-            crate::runtime::subagent::physical_recovery::prove(
+            crate::runtime::subagent::physical_recovery::prove_after_release(
                 &self.product,
                 &session,
                 &conversation,

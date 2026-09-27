@@ -1,3 +1,4 @@
+import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -133,8 +134,8 @@ it('late cold open cannot restore focus after Workspace navigation', async () =>
 });
 it('stale or unloaded snapshots cannot claim running work', () => {
   const view = { id: 'A', attachmentIntent: 'wanted' as const, attachment: 'stale' as const, snapshot: snapshot('A') };
-  expect(sessionObservation({ ...server.client.getSnapshot(), views: { A: view }, connection: 'connected' }, 'A')).toBe('Connection interrupted');
-  expect(sessionObservation({ ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('Connection interrupted');
+  expect(sessionObservation(translator('en'), { ...server.client.getSnapshot(), views: { A: view }, connection: 'connected' }, 'A')).toBe('Connection interrupted');
+  expect(sessionObservation(translator('en'), { ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('Connection interrupted');
 });
 it('sidebar Fork uses the exact native boundary and late completion cannot undo Workspace focus', async () => {
   const boundary = { surface_revision: '37', message: { id: 'user-cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Fork this native boundary' }] } };

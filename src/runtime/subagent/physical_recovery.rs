@@ -335,8 +335,47 @@ pub(crate) fn prove(
     conversation: &ConversationId,
     activation: &SubagentId,
 ) -> std::io::Result<Option<RecoveredPhysicalProof>> {
+    prove_with_lock(product, session, conversation, activation, ProofLock::Try)
+}
+
+#[derive(Clone, Copy)]
+enum ProofLock {
+    Try,
+    #[cfg(test)]
+    AwaitRelease,
+}
+
+/// Positive-proof assertions synchronize on the kernel ownership boundary.
+/// Concurrent fork/exec in the test harness can temporarily inherit even a
+/// CLOEXEC proof descriptor. Dropping this thread's copy need not make a
+/// nonblocking reacquisition succeed immediately. Waiting changes only lock
+/// acquisition: exact identity, receipt phase, and every continuation still
+/// pass through the production validator, with all proof locks retained.
+#[cfg(test)]
+pub(crate) fn prove_after_release(
+    product: &ProductRoot,
+    session: &SessionId,
+    conversation: &ConversationId,
+    activation: &SubagentId,
+) -> std::io::Result<Option<RecoveredPhysicalProof>> {
+    prove_with_lock(
+        product,
+        session,
+        conversation,
+        activation,
+        ProofLock::AwaitRelease,
+    )
+}
+
+fn prove_with_lock(
+    product: &ProductRoot,
+    session: &SessionId,
+    conversation: &ConversationId,
+    activation: &SubagentId,
+    locking: ProofLock,
+) -> std::io::Result<Option<RecoveredPhysicalProof>> {
     let path = evidence_path(product, session, conversation, activation)?;
-    let Some(mut proof) = prove_at(&path, conversation, activation)? else {
+    let Some(mut proof) = prove_at(&path, conversation, activation, locking)? else {
         return Ok(None);
     };
     // Holding the parent authority excludes any further continuation allocation
@@ -358,7 +397,7 @@ pub(crate) fn prove(
                 "invalid physical continuation authority",
             ));
         }
-        let Some(continuation) = prove_at(&entry.path(), conversation, activation)? else {
+        let Some(continuation) = prove_at(&entry.path(), conversation, activation, locking)? else {
             return Ok(None);
         };
         proof.locks.extend(continuation.locks);
@@ -370,6 +409,7 @@ fn prove_at(
     path: &Path,
     conversation: &ConversationId,
     activation: &SubagentId,
+    locking: ProofLock,
 ) -> std::io::Result<Option<RecoveredPhysicalProof>> {
     let file = match OpenOptions::new()
         .read(true)
@@ -380,10 +420,14 @@ fn prove_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    match file.try_lock() {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return Ok(None),
-        Err(TryLockError::Error(error)) => return Err(error),
+    match locking {
+        ProofLock::Try => match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Error(error)) => return Err(error),
+        },
+        #[cfg(test)]
+        ProofLock::AwaitRelease => file.lock()?,
     }
     let Some(mut receipt) = read_receipt(&path.join(RECEIPT))? else {
         return Ok(None);
@@ -558,7 +602,7 @@ mod inheritance_tests {
         );
         drop(child);
         assert!(
-            prove(&product, &session, &conversation, &activation)
+            prove_after_release(&product, &session, &conversation, &activation)
                 .unwrap()
                 .is_some()
         );
@@ -628,7 +672,7 @@ mod inheritance_tests {
             .await
             .unwrap();
         assert!(child.wait().await.unwrap().success());
-        let proof = prove(&product, &session, &conversation, &activation)
+        let proof = prove_after_release(&product, &session, &conversation, &activation)
             .unwrap()
             .unwrap();
         let path = evidence_path(&product, &session, &conversation, &activation).unwrap();
@@ -644,7 +688,7 @@ mod inheritance_tests {
         std::fs::create_dir(&incarnation).unwrap();
         std::fs::remove_dir(&incarnation).unwrap();
         assert!(
-            prove(&product, &session, &conversation, &activation)
+            prove_after_release(&product, &session, &conversation, &activation)
                 .unwrap()
                 .is_some()
         );

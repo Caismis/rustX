@@ -137,3 +137,16 @@ export const toolDetail = (n: number, overrides: Partial<TraceDetail> = {}): Tra
   truncated: false,
   ...overrides,
 });
+
+/** Interleaved exact membership; labels alone uniquely match Step 2 / Turn 2. */
+export const structuralSearchRecords = (): TraceRecord[] => [
+  traceRecord(0, { kind: 'user', request: null, location: {} }),
+  traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' } }),
+  traceRecord(2, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' } }),
+  traceRecord(3, { location: { attempt_id: 'attempt-a', step_id: 'alpha' } }),
+  traceRecord(4, { kind: 'step', request: null, location: { attempt_id: 'attempt-a', step_id: 'beta' } }),
+  traceRecord(5, { location: { attempt_id: 'attempt-a', step_id: 'beta' } }),
+  traceRecord(6, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-b' } }),
+  traceRecord(7, { location: { attempt_id: 'attempt-b', step_id: 'gamma' } }),
+  traceRecord(8, { location: { attempt_id: 'attempt-a', step_id: 'beta' } }),
+];

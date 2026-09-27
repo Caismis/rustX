@@ -109,16 +109,39 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   await settingsReady();
   // The inherited identity is reachable and reported as a redacted native fact.
   await openResourceRow('transport');
-  expect(screen.getByText(/Literal secret \(redacted\)/)).toBeTruthy();
+  const dialog = screen.getByRole('dialog', { name: 'Settings' });
+  const provider = screen.getByRole('form', { name: 'Provider transport' });
+  const form = within(provider);
+  expect(within(dialog).getByText(/Native effective Provider transport/).textContent).toContain('Literal secret (redacted)');
+  const endpoint = form.getByLabelText('Endpoint') as HTMLInputElement;
+  expect(endpoint.value).toBe('');
+  expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
+  const transactionsBefore = retained(s);
+  const requestsBefore = s.request.mock.calls.slice();
+  const sourceBefore = structuredClone(s.source);
   // Authoring an override starts a complete new definition; `retain` is not
   // even offered, because this Workspace authors no credential to retain.
-  fireEvent.click(await screen.findByRole('button', { name: /Credential source/ }));
-  expect((await screen.findAllByRole('option')).map(option => option.textContent)).toEqual([
+  fireEvent.click(form.getByRole('button', { name: /Credential source/ }));
+  const listbox = await screen.findByRole('listbox');
+  expect(within(listbox).getAllByRole('option').map(option => option.textContent)).toEqual([
     'Read it from an environment variable', 'Enter a literal secret',
   ]);
-  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
-  expect((screen.getByLabelText('Endpoint') as HTMLInputElement).value).toBe('');
+  expect(within(listbox).queryByRole('option', { name: 'Keep the credential this scope already authored' })).toBeNull();
+  // Select owns this Escape. A synthetic click need not settle browser focus,
+  // so document.activeElement can still name a control in the Settings layer.
+  fireEvent.keyDown(listbox, { key: 'Escape' });
+  expect(screen.queryByRole('listbox')).toBeNull();
+  expect(screen.getByRole('dialog', { name: 'Settings' })).toBe(dialog);
+  expect(screen.getByRole('form', { name: 'Provider transport' })).toBe(provider);
+  expect(form.getByLabelText('Endpoint')).toBe(endpoint);
+  expect(endpoint.value).toBe('');
+  expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
   expect(document.body.innerHTML).not.toContain(SENTINEL);
+  expect(retained(s)).not.toContain(SENTINEL);
+  expect(retained(s)).toBe(transactionsBefore);
+  expect(s.request.mock.calls).toEqual(requestsBefore);
+  expect(writes(s)).toHaveLength(0);
+  expect(s.source).toEqual(sourceBefore);
 });
 
 it('S1-15 an MCP literal environment value is never projected back into its editor', async () => {

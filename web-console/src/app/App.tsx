@@ -1,3 +1,5 @@
+import { message } from '../locale/translation';
+import { useTranslation, useNotice } from '../locale/react';
 import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
 import { ConversationHeader } from './agent/ConversationHeader';
 import { useClientSelector, selectShell, sameValue } from '../client/selectors';
@@ -44,6 +46,7 @@ function readPreferences(): { endpoint?: string; openViews: string[] } {
 }
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 export function App({ client, workspaceHost = defaultWorkspaceHost, connection: providedConnection }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces; connection?: ConnectionController }) {
+  const tx = useTranslation();
   const state = useClientSelector(client, selectShell, sameValue);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
@@ -80,7 +83,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // Existing navigation hints may restore wanted views, never a released claim.
   // Released views are not restored. Sidebar rows remain catalog-owned.
   const resumeViews = JSON.stringify(openViews.filter(id => state.views[id]?.attachmentIntent !== 'released'));
-  const [error, setError] = useState('');
+  const [error, setError] = useNotice();
   const [deletingSession, setDeletingSession] = useState<string>();
   const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
   // The client owns authority retirement. This render adjustment retires only
@@ -112,7 +115,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
     if (request.id === 'new') { createInWorkspace(workspace); return; }
     if (request.id === 'goal') {
-      document.querySelector<HTMLElement>('[aria-label="Goal"] button')?.focus();
+      document.querySelector<HTMLElement>('[data-goal-dock] button')?.focus();
       setConsumed(previous => ({ id: 'goal', sequence: (previous?.sequence ?? 0) + 1 }));
       return;
     }
@@ -168,7 +171,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (connected && selected) focusSession(selected, { preserveDraft: true });
   }, [state.connection, state.generation]);
   const open = (id: string, ready?: () => void) => {
-    if (!openViews.includes(id) && openViews.length >= 32) { setError('32 Session views are open. Close a view from its Sidebar Session actions, or use Sidebar View options → Close all views.'); return; }
+    if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
     setOpenViews(current => current.includes(id) ? current : [...current, id]);
     focusSession(id, { attach: true, ready });
   };
@@ -210,27 +213,27 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
-    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? 'Artifact preview' : 'Developer inspector'}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <LiveInspector client={client} sessionId={view?.id} />}</RightPanel>}
+    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel closeLabel={artifactPreview && artifactPreview.resources === artifacts ? tx('artifacts:preview.close') : tx('common:right-panel.close-inspector')} {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? tx('common:app.artifact-preview') : tx('common:app.developer-inspector')}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <LiveInspector client={client} sessionId={view?.id} />}</RightPanel>}
     overlay={<>
       {/* Settings renders the navigation machine's state and nothing else: which
           target, page and detail are open is decided there, including whether
           this target may reach the client-owned Connection surface at all. */}
       <Settings navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
     </>}>
-    {!connected && !view && <section className="notice" aria-label="Connection recovery"><p>{selection.busy ? 'Connecting…' : 'Unable to connect to rustX'}</p>
-      {selection.mode === 'local' && !selection.busy && <p>No local managed connection is available. Reopen the launcher URL or configure a Remote App Server in Settings.</p>}
-      <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>Reconnect</Button><Button onClick={openConnectionSettings}>Show details</Button>
+    {!connected && !view && <section className="notice" aria-label={tx('common:app.connection-recovery')}><p>{selection.busy ? tx('common:app.connecting') : tx('common:app.unable-to-connect-to-rustx')}</p>
+      {selection.mode === 'local' && !selection.busy && <p>{tx('common:app.no-local-managed-connection-is-available-reopen-the-launcher-url')}</p>}
+      <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>{tx('common:app.reconnect')}</Button><Button onClick={openConnectionSettings}>{tx('common:app.show-details')}</Button>
     </section>}
-    {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={`Deletion recovery for ${sessionDisplayTitle(item.summary)}`}>
-      <p>{sessionDisplayTitle(item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? 'Session removed. Cleanup is still pending.' : 'Deletion durability needs verification.'}</p>
+    {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={tx('common:app.deletion-recovery-for-value', { p0: sessionDisplayTitle(tx, item.summary) })}>
+      <p>{sessionDisplayTitle(tx, item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? tx('common:app.session-removed-cleanup-is-still-pending') : tx('common:app.deletion-durability-needs-verification')}</p>
       <Button disabled={!connected || item.recoveringDeletion} onClick={() => runGlobal(async () => {
         const result = await client.recoverSessionDeletion(item.id);
         if (result && result.status !== 'deleted' && result.status !== 'not_found') setError(sessionDeletionNotice(result));
-      })}>{item.recoveringDeletion ? 'Recovering deletion…' : 'Retry deletion recovery'}</Button>
+      })}>{item.recoveringDeletion ? tx('common:app.recovering-deletion') : tx('common:app.retry-deletion-recovery')}</Button>
     </section>)}
-    {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>Dismiss notice</Button></div>}
-    {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">A global operation needs verification. Inspect Global / other Session diagnostics and check the affected work before trying again.</div>}
-    {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
+    {error && <div className="notice error" role="alert">{error}<Button size="sm" onClick={() => setError('')}>{tx('common:app.dismiss-notice')}</Button></div>}
+    {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-inspect-global-other-sessi')}</div>}
+    {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(tx, state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
       const remaining = openViews.filter(id => id !== deletingSession);
       setOpenViews(remaining);
       if (selected === deletingSession) {

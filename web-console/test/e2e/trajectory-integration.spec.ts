@@ -88,7 +88,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await remote.client.call('session/detach', { target: attachedA.target }, 'detached');
     await page.locator(`button[data-session-id="${a}"]`).click();
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-    const boundary = page.locator(`[data-display-type="SystemRow"][data-owner="${current.id}"]`);
+    const boundary = page.locator(`[data-display-type="SystemPromptCell"][data-owner="${current.id}"]`);
     await expect(boundary).toContainText('System Prompt and Tools Updated');
     await boundary.click();
     await page.getByRole('tab', { name: 'Diff', exact: true }).click();

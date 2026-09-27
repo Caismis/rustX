@@ -169,6 +169,49 @@ pub(crate) fn ignore_group_term() -> Result<(), String> {
     Ok(())
 }
 
+/// A caught child-state signal wakes the dedicated synchronous supervisor's
+/// readiness wait. It never reaps or establishes containment. Unlike `SIG_IGN` or
+/// `SA_NOCLDWAIT`, this preserves every child for the existing exact wait owner.
+/// `SA_RESTART` protects ordinary I/O; poll still reports `EINTR`.
+/// Exec resets the caught disposition; no blocked mask reaches owned commands.
+#[allow(unsafe_code)]
+pub(crate) fn wake_on_child_change() -> Result<(), String> {
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, sigaction};
+    extern "C" fn wake(_signal: libc::c_int) {}
+    let action = SigAction::new(
+        SigHandler::Handler(wake),
+        SaFlags::SA_RESTART,
+        SigSet::empty(),
+    );
+    // SAFETY: the handler performs no operations or memory access. This is
+    // installed only in the dedicated single-threaded supervisor before spawn.
+    unsafe { sigaction(Signal::SIGCHLD, &action) }
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Readiness and `SIGCHLD` are wake hints only. A signal delivered between the
+/// caller's state check and poll can be coalesced; the existing bounded cadence
+/// still revisits the exact wait gate. No timeout or readiness proves settlement.
+pub(crate) fn wait_for_supervisor_event(control: bool) {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    use std::os::fd::AsFd;
+    let stdin = std::io::stdin();
+    let mut descriptor = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
+    let descriptors = if control {
+        &mut descriptor[..]
+    } else {
+        &mut []
+    };
+    let timeout = PollTimeout::try_from(POLL_INTERVAL).expect("bounded supervisor cadence");
+    match poll(descriptors, timeout) {
+        Ok(_) | Err(Errno::EINTR) => {}
+        // Resource exhaustion in poll changes no ownership fact. Retain the
+        // bounded cadence so the caller can still reap and drain its control.
+        Err(_) => std::thread::sleep(POLL_INTERVAL),
+    }
+}
+
 /// The `AUDIT_ARCH` constant of the compiled architecture, used by the
 /// seccomp filter to reject syscalls from an unexpected ABI before any
 /// other check.

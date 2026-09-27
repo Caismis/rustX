@@ -1,3 +1,4 @@
+import { useTranslation } from '../../locale/react';
 import type { ReactNode } from 'react';
 import css from './SettingsContent.module.css';
 
@@ -9,5 +10,6 @@ export function Badge({ children, tone }: { children: ReactNode; tone?: 'error' 
   return <span className={css.badge} data-tone={tone}>{children}</span>;
 }
 export function Facts({ rows }: { rows: readonly (readonly [string, ReactNode])[] }) {
-  return <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value ?? 'Not specified'}</dd></div>)}</dl>;
+  const tx = useTranslation();
+  return <dl>{rows.map(([label, value], index) => <div key={index}><dt>{label}</dt><dd>{value ?? tx('settings:settings-content.not-specified')}</dd></div>)}</dl>;
 }

@@ -1,3 +1,5 @@
+import type { Translate } from '../../locale/translation';
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Adapted from DeepSeek Harness ui-conversation TodoPanel: empty renders nothing,
 // collapsed count summary, bounded expanded list and status glyphs. The rustX
@@ -11,7 +13,7 @@ import type { TodoDockState } from '../../bindings/composer-context';
 import { IconChecklistOutline14, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import css from './TodoDock.module.css';
 
-const STATUS: Record<TodoTask['status'], string> = { pending: 'Pending', in_progress: 'In progress', completed: 'Completed', deleted: 'Deleted' };
+
 
 function StatusGlyph({ status }: { status: TodoTask['status'] }) {
   if (status === 'completed') return <svg width={14} height={14} viewBox="0 0 14 14" fill="none" className={css.completed}>
@@ -28,14 +30,16 @@ function StatusGlyph({ status }: { status: TodoTask['status'] }) {
 const ChecklistGlyph = () => <IconChecklistOutline14 />;
 
 /** Zero-count segments are omitted; a non-empty list keeps at least one. */
-function progress(tasks: readonly TodoTask[]) {
+function progress(tx: Translate, tasks: readonly TodoTask[]) {
   const done = tasks.filter(task => task.status === 'completed').length;
   const active = tasks.filter(task => task.status === 'in_progress').length;
   const pending = tasks.length - done - active;
-  return [done && `${done} completed`, active && `${active} in progress`, pending && `${pending} pending`].filter(Boolean).join(' · ');
+  return [done && tx('agent:copy.value-completed', { p0: done }), active && tx('agent:copy.value-in-progress', { p0: active }), pending && tx('agent:copy.value-pending', { p0: pending })].filter(Boolean).join(' · ');
 }
 
 export function TodoDock({ state }: { state: TodoDockState }) {
+  const tx = useTranslation();
+  const STATUS: Record<TodoTask['status'], string> = { pending: tx('agent:copy.pending'), in_progress: tx('agent:copy.in-progress'), completed: tx('agent:copy.completed'), deleted: tx('agent:copy.deleted') };
   const [collapsed, setCollapsed] = useState(true);
   const listId = useId();
   // A list that disappears and returns is a new presentation, not a restored one.
@@ -50,10 +54,10 @@ export function TodoDock({ state }: { state: TodoDockState }) {
   // not capability discovery; that belongs to the capability/settings surfaces.
   if (state.kind === 'absent' || !state.tasks.length) return null;
   const { tasks } = state;
-  return <section className={css.root} aria-label="To-dos" data-todo-state="current">
+  return <section className={css.root} aria-label={tx('agent:todo-dock.to-dos')} data-todo-state="current">
     <button type="button" className={css.header} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : listId} onClick={() => setCollapsed(value => !value)}>
-      <span className={css.lead}><ChecklistGlyph /></span><span className={css.title}>To-dos</span>
-      <span className={css.progress}>{progress(tasks)}</span>
+      <span className={css.lead}><ChecklistGlyph /></span><span className={css.title}>{tx('agent:todo-dock.to-dos')}</span>
+      <span className={css.progress}>{progress(tx, tasks)}</span>
       <span className={css.chevron} data-collapsed={collapsed} aria-hidden><IconChevronDownOutline14 /></span>
     </button>
     {!collapsed && <ol id={listId} className={css.list}>{tasks.map(task => {
@@ -62,7 +66,7 @@ export function TodoDock({ state }: { state: TodoDockState }) {
         <span className={css.glyph} aria-hidden><StatusGlyph status={task.status} /></span>
         <span className={css.content} title={text}>{text}</span>
         <span className={css.hidden}>{STATUS[task.status]}</span>
-        {!!task.blocked_by?.length && <span className={css.dependency}>after {task.blocked_by.map(id => `#${id}`).join(', ')}</span>}
+        {!!task.blocked_by?.length && <span className={css.dependency}>{tx('agent:todo-dock.after')}{' '}{task.blocked_by.map(id => `#${id}`).join(', ')}</span>}
       </li>;
     })}</ol>}
   </section>;

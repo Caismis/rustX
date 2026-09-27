@@ -2673,9 +2673,14 @@ mod tests {
             "native rollback preserves its physical proof despite retained user work"
         );
         assert!(
-            super::super::physical_recovery::prove(&product, &session, &conversation, &activation,)
-                .unwrap()
-                .is_some()
+            super::super::physical_recovery::prove_after_release(
+                &product,
+                &session,
+                &conversation,
+                &activation,
+            )
+            .unwrap()
+            .is_some()
         );
 
         // The test owns the retained worktree and can make it clean before

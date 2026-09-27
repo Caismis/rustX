@@ -20,4 +20,4 @@ export function lineageSwitchSafe(view?: SessionView): boolean {
   return view?.attachment === 'attached' && view.attachmentIntent === 'wanted'
     && executionIdle(view) && !view.inboundRequests && !view.modelMutation;
 }
-export const json = (value: unknown) => JSON.stringify(value, null, 2) ?? 'Unavailable';
+export const json = (value: unknown) => JSON.stringify(value, null, 2) ?? 'undefined';

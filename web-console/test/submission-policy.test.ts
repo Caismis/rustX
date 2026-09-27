@@ -1,3 +1,4 @@
+import { translator } from '../src/locale/translation';
 import { describe, expect, it } from 'vitest';
 import { composerSubmissionPolicy, type ComposerSubmissionFacts, type SubmitGesture } from '../src/app/composer/submission-policy';
 const ready: ComposerSubmissionFacts = { running: false, actionable: true, draftKind: 'message', blocked: false, acknowledging: false, uploadsPending: false, cancellationAvailable: true };
@@ -26,7 +27,7 @@ describe('composer submission policy (no runtime authority)', () => {
     ['command awaiting ack', { draftKind: 'command', acknowledging: true }, 'enter', 'Run command', true, undefined],
   ])('%s', (_, patch, gesture, label, disabled, delivery) => {
     const result = composerSubmissionPolicy({ ...ready, ...patch }, gesture);
-    expect(result.label).toBe(label); expect(result.disabled).toBe(disabled);
+    expect(translator('en')(result.label)).toBe(label); expect(result.disabled).toBe(disabled);
     expect('delivery' in result ? result.delivery : undefined).toBe(delivery);
   });
 });

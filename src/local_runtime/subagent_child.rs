@@ -1937,7 +1937,7 @@ mod tests {
         dispatcher.shutdown().await;
         drop(lease);
         assert!(
-            crate::runtime::subagent::physical_recovery::prove(
+            crate::runtime::subagent::physical_recovery::prove_after_release(
                 &product,
                 &session,
                 &conversation,
@@ -1952,7 +1952,7 @@ mod tests {
     async fn protocol_failure_awaits_composition_before_publishing_physical_proof() {
         let dir = tempfile::tempdir().unwrap();
         let (spec, product) = preparation_fixture(&dir);
-        let gate = crate::local_runtime::composition::arm_test_preparation_gate(
+        let gate = crate::local_runtime::composition::arm_test_preparation_drain_gate(
             &spec.runtime_root().unwrap(),
         );
         let activation = spec.subagent_id.clone();
@@ -1983,12 +1983,28 @@ mod tests {
         // consumed; the guarded owner still cannot complete before release.
         gate.cancellation().cancelled().await;
         assert!(!child.is_finished());
+        let receipt = crate::runtime::subagent::child_conversation_store_path(
+            product.root(),
+            &session,
+            &conversation,
+        )
+        .parent()
+        .unwrap()
+        .join("physical-settlement")
+        .join(activation.as_str())
+        .join("physical-settlement.json");
+        let evidence: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
+        assert_eq!(
+            evidence["phase"], "running",
+            "cancellation cannot publish proof before the held preparation drains"
+        );
         gate.release();
         let (result, lease) = child.await.unwrap();
         assert!(matches!(result, Err(ChildExit::Protocol(_))));
         drop(lease);
         assert!(
-            crate::runtime::subagent::physical_recovery::prove(
+            crate::runtime::subagent::physical_recovery::prove_after_release(
                 &product,
                 &session,
                 &conversation,
@@ -2081,7 +2097,7 @@ mod tests {
         );
         drop(lease);
         assert!(
-            crate::runtime::subagent::physical_recovery::prove(
+            crate::runtime::subagent::physical_recovery::prove_after_release(
                 &product,
                 &session,
                 &conversation,

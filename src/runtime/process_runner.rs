@@ -1631,7 +1631,9 @@ mod tests {
     async fn physical_continuation_survives_parent_control_loss_and_rejects_supervisor_death() {
         use crate::runtime::identity::{ConversationId, SessionId, SubagentId};
         use crate::runtime::local_storage::ProductRoot;
-        use crate::runtime::subagent::physical_recovery::{ParentPhysicalLease, prove};
+        use crate::runtime::subagent::physical_recovery::{
+            ParentPhysicalLease, prove, prove_after_release,
+        };
         use tokio::io::AsyncReadExt;
 
         for kill_supervisor in [false, true] {
@@ -1694,7 +1696,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let proof = prove(&product, &session, &conversation, &activation).unwrap();
+            let proof =
+                prove_after_release(&product, &session, &conversation, &activation).unwrap();
             assert_eq!(proof.is_some(), !kill_supervisor);
             if kill_supervisor {
                 // Cleanup uses the structural group anchor, not a vanished PID

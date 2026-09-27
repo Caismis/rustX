@@ -1,3 +1,4 @@
+import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Choice } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
@@ -14,14 +15,15 @@ export function TextField({ label, value, change, required = false, secret = fal
 }
 
 export function Names({ label, value, change }: { label: string; value: string[]; change: (value: string[]) => void }) {
+  const tx = useTranslation();
   return <fieldset><legend>{label}</legend>
     {value.map((name, index) => <div className={css.names} key={index}>
-      <input aria-label={`${label} ${index + 1}`} value={name}
+      <input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={name}
         onChange={event => change(value.map((item, at) => at === index ? event.target.value : item))} />
-      <Button aria-label={`Remove ${label} ${index + 1}`} onClick={() => change(value.filter((_, at) => at !== index))}>Remove</Button>
+      <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => change(value.filter((_, at) => at !== index))}>{tx('settings:controls.remove')}</Button>
     </div>)}
-    <Button onClick={() => change([...value, ''])}>Add {label}</Button>
-    {!value.length && <p className={css.hint}>Empty list · no entries</p>}
+    <Button onClick={() => change([...value, ''])}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
+    {!value.length && <p className={css.hint}>{tx('settings:controls.empty-list-no-entries')}</p>}
   </fieldset>;
 }
 
@@ -31,11 +33,12 @@ export function Names({ label, value, change }: { label: string; value: string[]
  * "every identity currently known", an explicit empty list is an authored
  * decision to select none, and an absent unit is neither. */
 export function Selection({ label, value, change }: { label: string; value: 'all' | string[]; change: (value: 'all' | string[]) => void }) {
+  const tx = useTranslation();
   const mode = value === 'all' ? 'all' : value.length ? 'exact' : 'none';
   return <fieldset><legend>{label}</legend>
-    <Choice label="Selection" value={mode} options={[['none', 'None'], ['all', 'All'], ['exact', 'Exact identities']]}
+    <Choice label={tx('settings:controls.selection')} value={mode} options={[['none', tx('settings:copy.none')], ['all', tx('settings:copy.all')], ['exact', tx('settings:copy.exact-identities')]]}
       onChange={next => change(next === 'all' ? 'all' : next === 'exact' ? [''] : [])} />
-    {Array.isArray(value) && value.length > 0 && <Names label={`${label} identities`} value={value} change={change} />}
+    {Array.isArray(value) && value.length > 0 && <Names label={tx('settings:controls.value-identities', { p0: label })} value={value} change={change} />}
   </fieldset>;
 }
 

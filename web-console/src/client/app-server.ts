@@ -127,7 +127,7 @@ export class RpcFailure extends Error {
         message = `Job ${data.job_id} terminal publication was abandoned; no durable terminal result is available`;
         break;
       case 'agent_settlement':
-        message = `Agent ${data.agent_id} is unavailable; physical settlement, publication, or workspace authority requires explicit repair`;
+        message = `Agent ${data.agent_id} is unavailable; physical settlement, publication, or workspace authority remains unresolved`;
         break;
       case 'archive_preparation_failed':
         message = error.message;
