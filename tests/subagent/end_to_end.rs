@@ -630,15 +630,6 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
                 id: rustx::runtime_client::RequestId::new(id),
             })
             .await;
-        // A moving durable cut can explicitly refuse this finite read. The
-        // existing bounded polling budget owns the next *read*, never a replay
-        // of SubmitInbound or any other mutation. All other errors still fail.
-        if matches!(&response.error,
-            Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { message })
-                if message == "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition")
-        {
-            continue;
-        }
         let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
             panic!("snapshot_get must succeed: {response:?}");
         };
@@ -850,15 +841,6 @@ async fn subagent_process_stack(alias_root: bool) {
                 id: rustx::runtime_client::RequestId::new(id),
             })
             .await;
-        // A moving durable cut can explicitly refuse this finite read. The
-        // existing bounded polling budget owns the next *read*, never a replay
-        // of SubmitInbound or any other mutation. All other errors still fail.
-        if matches!(&response.error,
-            Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { message })
-                if message == "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition")
-        {
-            continue;
-        }
         let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
             panic!("snapshot_get must succeed: {response:?}");
         };
@@ -1851,39 +1833,29 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         "subagent-secret",
         session_id.as_str(),
     );
-    let mut initialized = false;
+    let response = recovered
+        .request(|id| RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(id),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+        })
+        .await;
+    assert!(
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::Initialized { .. })
+        ),
+        "restarted parent must initialize: {response:?}"
+    );
+
     let mut recovered_snapshot = None;
     for _ in 0..4_000 {
         let response = recovered
-            .request(|id| {
-                if initialized {
-                    RuntimeClientRequest::SnapshotGet {
-                        id: rustx::runtime_client::RequestId::new(id),
-                    }
-                } else {
-                    RuntimeClientRequest::Initialize {
-                        id: rustx::runtime_client::RequestId::new(id),
-                        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-                    }
-                }
+            .request(|id| RuntimeClientRequest::SnapshotGet {
+                id: rustx::runtime_client::RequestId::new(id),
             })
             .await;
-        // This explicit read-cut refusal precedes attachment allocation. It
-        // proves no Initialize registration occurred; a lost/other response
-        // is never retried. Both handshake and reads share the original budget.
-        if matches!(&response.error,
-            Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { message })
-                if message == "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition")
-        {
-            continue;
-        }
-        let snapshot = match response.result {
-            Some(RuntimeClientResult::Initialized { snapshot, .. }) if !initialized => {
-                initialized = true;
-                snapshot
-            }
-            Some(RuntimeClientResult::Snapshot { snapshot, .. }) if initialized => snapshot,
-            _ => panic!("recovery acquisition must succeed: {response:?}"),
+        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
+            panic!("snapshot_get must succeed after recovery: {response:?}");
         };
         let interrupted = snapshot
             .messages

@@ -494,7 +494,23 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     assert_eq!(response["error"]["type"], "not_attached");
 
     let response = adapter.exchange(r#"{"method":"initialize","id":8,"protocol_version":50}"#);
-    assert_eq!(response["result"]["cursor"].as_u64(), Some(expected));
+    let reattached = response["result"]["cursor"].as_u64().unwrap();
+    adapter.exchange(&format!(
+        r#"{{"method":"subscribe_events","id":9,"after_cursor":{expected}}}"#
+    ));
+    while expected < reattached {
+        let frame = adapter
+            .notification()
+            .await
+            .expect("derived suffix across detach");
+        expected += 1;
+        assert_eq!(frame["cursor"].as_u64(), Some(expected));
+        assert!(matches!(
+            frame["event"]["type"].as_str(),
+            Some("read_domains_updated" | "trace_changed")
+        ));
+    }
+    assert_eq!(reattached, expected);
     let messages = response["result"]["snapshot"]["messages"]
         .as_array()
         .expect("the snapshot carries canonical history");

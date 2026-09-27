@@ -128,12 +128,11 @@ separate baseline worktree. No baseline run was fabricated during this repair.
 
 ## Development findings and environment observations
 
-- The first native cut implementation rejected a snapshot after three concurrently
-  superseded reads. Focused native races exposed that normal semantic progress is
-  not a read error. That first repair retried read/validate cuts outside
-  projection ownership until current; the follow-up replaces this unbounded loop
-  with three attempts and explicit failure; Web replay recovery retains its separate
-  bounded three-attempt policy.
+- Earlier repairs tried optimistic live-cut acquisition (first repeated reads,
+  then a finite retry limit). Hosted process regressions proved that model wrong.
+  The current [candidate repair](candidate-validation.md) completes a captured
+  historical cut independently of live installation. Web replay-window recovery
+  retains its separate bounded policy.
 - The first clippy run found documentation markup and test-hook type complexity;
   both were repaired. A Web typecheck caught a missing native subscribe ACK cursor
   in the new test fixture; it was supplied.

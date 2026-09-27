@@ -133,9 +133,7 @@ use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
 };
-use crate::durable::{
-    ConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
-};
+use crate::durable::{ConversationStore, TRANSCRIPT_PAGE_LIMIT_MAX};
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
@@ -423,59 +421,39 @@ impl ClientInner {
         guard
     }
 
-    /// Read pending authority outside projection synchronization. Publication
-    /// guards only the durable read; the captured semantic fence prevents a
-    /// completed read from overwriting a later mailbox observation.
-    fn lock_snapshot_state(&self) -> Result<MutexGuard<'_, ClientState>, RuntimeClientError> {
-        const MAX_SNAPSHOT_READS: usize = 3;
-        for _ in 0..MAX_SNAPSHOT_READS {
-            let fence = self.lock_state().projection.read_domain_fence();
-            let items = if let Some(runtime) = &self.runtime {
-                runtime
-                    .tool_runtime()
-                    .mailbox()
-                    .with_pending_snapshot(|items| items)
-                    .map_err(|error| RuntimeClientError::RuntimeFailure {
-                        message: format!("durable pending snapshot failed: {error}"),
-                    })?
-            } else {
-                None
-            };
+    /// Pending readback is advisory repair at its captured fence. A raced or
+    /// unpublished mutation uses the already represented semantic pending view;
+    /// candidate acquisition never retries to catch the head.
+    fn snapshot_candidate(
+        &self,
+    ) -> Result<super::projection::SnapshotCandidate, RuntimeClientError> {
+        let fence = self.lock_state().projection.read_domain_fence();
+        let items = if let Some(runtime) = &self.runtime {
+            runtime
+                .tool_runtime()
+                .mailbox()
+                .with_pending_snapshot(|items| items)
+                .map_err(|error| RuntimeClientError::RuntimeFailure {
+                    message: format!("durable pending snapshot failed: {error}"),
+                })?
+        } else {
+            None
+        };
+        let candidate = {
             let mut state = self.lock_state();
-            if self.pending.has_unpublished() {
-                if state.projection.read_domain_cut().is_none() {
-                    return Ok(state);
-                }
-                continue;
-            }
-            if let Some(items) = items
+            if !self.pending.has_unpublished()
                 && state.projection.read_domain_fence() == fence
+                && let Some(items) = items
             {
                 state.projection.repair_pending(items);
             }
-            state.projection.retry_failed_read();
-            let Some(cut) = state.projection.read_domain_cut() else {
-                return Ok(state);
-            };
-            drop(state);
-            #[cfg(test)]
-            if let Some(hook) = self.snapshot_read_hook.lock().unwrap().as_mut() {
-                hook();
-            }
-            let read = cut.read(self.store.as_ref());
-            let mut state = self.lock_state();
-            if !self.pending.has_unpublished() {
-                state.projection.install_read_domains(cut, read, true);
-                // A concurrent materializer may already have installed a newer
-                // coherent cut. Do not spend another attempt rereading it.
-                if state.projection.read_domain_cut().is_none() {
-                    return Ok(state);
-                }
-            }
+            state.projection.snapshot_candidate()?
+        };
+        #[cfg(test)]
+        if let Some(hook) = self.snapshot_read_hook.lock().unwrap().as_mut() {
+            hook();
         }
-        Err(RuntimeClientError::RuntimeFailure {
-            message: "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition".into(),
-        })
+        candidate.materialize(self.store.as_ref())
     }
 
     /// A bound live projection can expose interactions to a future client.
@@ -588,14 +566,17 @@ impl ClientInner {
                     {
                         store.close_presentation_reader();
                     }
-                    if pending.has_unpublished() || guard.projection.snapshot_ref().shutting_down {
+                    if read.is_some()
+                        || pending.has_unpublished()
+                        || guard.projection.snapshot_ref().shutting_down
+                    {
                         None
                     } else {
-                        guard.projection.read_domain_cut()
+                        guard.projection.read_domain_candidate()
                     }
                 };
                 if read.is_none()
-                    && let Some(cut) = cut
+                    && let Some((cut, candidate)) = cut
                 {
                     let Some(store) = store.upgrade() else {
                         break;
@@ -609,7 +590,7 @@ impl ClientInner {
                         if let Some(hook) = hook {
                             hook();
                         }
-                        (cut, cut.read(store.as_ref()))
+                        (cut, candidate.read_domains(store.as_ref()))
                     }));
                 }
             }
@@ -713,13 +694,16 @@ impl ClientInner {
         if self.read_only {
             self.refresh_durable_projection()?;
         }
-        let mut state = self.lock_snapshot_state()?;
+        let candidate = self.snapshot_candidate()?;
+        let mut snapshot = candidate.snapshot;
+        let cursor = candidate.cursor;
+        let through = candidate.trace_through;
+        let mut state = self.lock_state();
         if !read_only_attachment && let Some(existing) = &state.control_attachment {
             return Err(RuntimeClientError::AttachmentInUse {
                 existing_attachment_id: existing.attachment_id.clone(),
             });
         }
-        let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
         let next_attachment_seq = state
             .next_attachment_seq
             .checked_add(1)
@@ -1076,9 +1060,12 @@ impl ClientInner {
         if self.read_only {
             self.refresh_durable_projection()?;
         }
-        let state = self.lock_snapshot_state()?;
-        let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
-        drop(state);
+        let candidate = self.snapshot_candidate()?;
+        let (mut snapshot, cursor, through) = (
+            candidate.snapshot,
+            candidate.cursor,
+            candidate.trace_through,
+        );
         self.materialize_trace(&mut snapshot, through, records)?;
         Ok((snapshot, cursor))
     }
@@ -1093,25 +1080,8 @@ impl ClientInner {
         if let Some(hook) = self.trace_cut_hook.lock().unwrap().take() {
             hook();
         }
-        // Live Session domains were installed at the captured client cursor.
-        // Only historical inspection enriches here; a Trace read must never
-        // silently change live Session state after its cursor was captured.
-        if self.read_only {
-            super::response::decorate_through(
-                self.store.as_ref(),
-                &mut snapshot.transcript,
-                through,
-            )
-            .map_err(|error| RuntimeClientError::RuntimeFailure {
-                message: error.to_string(),
-            })?;
-            snapshot.context.last_request_occupancy =
-                crate::context::occupancy::read(self.store.as_ref(), through).map_err(|error| {
-                    RuntimeClientError::RuntimeFailure {
-                        message: error.to_string(),
-                    }
-                })?;
-        }
+        // Both live and inspection candidates completed Session fields before
+        // this independent Trace enrichment. Never rewrite the Session cut here.
         snapshot.trace = super::trace::TraceProjection::through(self.store.as_ref(), through)
             .page(None, super::trace::TRACE_PAGE_LIMIT)
             .map_err(|_| RuntimeClientError::RuntimeFailure {
@@ -1245,7 +1215,7 @@ impl ClientInner {
         validate_transcript_page_limit(limit)?;
         self.ensure_session_runtime_live()?;
         let page = read_transcript_page(self.store.as_ref(), before, limit, || {
-            let (_, _, through) = self.lock_snapshot_state()?.projection.snapshot_cut()?;
+            let through = self.lock_state().projection.snapshot_cut()?.2;
             Ok(through)
         })?;
         Ok(RuntimeClientResult::TranscriptPage { page })
@@ -1878,18 +1848,15 @@ fn durable_projection(
     const DURABLE_EVENT_PAGE_LIMIT: usize = 256;
 
     let conversation_id = store.conversation_id().clone();
-    let head = store
-        .load_head()
+    let seed = store
+        .load_inspection_seed()
         .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
-    let messages = store
-        .load_surface_snapshot(head.revision)
-        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
-    let canonical = store
-        .load_canonical()
-        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
-    let transcript = store
-        .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
-        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+    let (messages, canonical, transcript, through) = (
+        seed.messages,
+        seed.canonical,
+        seed.transcript,
+        seed.journal_through,
+    );
     let capabilities = super::snapshot::CapabilityView {
         revision: crate::runtime::identity::CapabilityRevision::new(0),
         tools: Vec::new(),
@@ -1908,17 +1875,22 @@ fn durable_projection(
     // historical evidence stays honest about what it cannot know.
     let mut transcript =
         transcript_page_view(transcript).map_err(HostConstructionError::Durable)?;
-    super::response::decorate(store, &mut transcript)
+    super::response::decorate_through(store, &mut transcript, through)
         .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
     projection.set_transcript_page(transcript);
 
-    let mut after_sequence = None;
-    loop {
+    let mut after_sequence = 0;
+    while after_sequence < through {
         let page = store
-            .read_events(after_sequence, DURABLE_EVENT_PAGE_LIMIT)
+            .read_events(Some(after_sequence), DURABLE_EVENT_PAGE_LIMIT)
             .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
-        let next_sequence = page.next_sequence;
-        for event in &page.events {
+        let page: Vec<_> = page
+            .events
+            .into_iter()
+            .take_while(|event| event.sequence <= through)
+            .collect();
+        let next_sequence = page.last().map(|event| event.sequence);
+        for event in &page {
             let committed_message_id = match &event.event {
                 crate::events::types::RuntimeEvent::AssistantMessageCommitted { message_id }
                 | crate::events::types::RuntimeEvent::ToolMessageCommitted { message_id, .. } => {
@@ -1934,15 +1906,16 @@ fn durable_projection(
             }
             projection.bootstrap_durable_event(event);
         }
-        if page.events.is_empty() || next_sequence == after_sequence {
+        if page.is_empty() || next_sequence == Some(after_sequence) {
             break;
         }
         let Some(next_sequence) = next_sequence else {
             break;
         };
-        after_sequence = Some(next_sequence);
+        after_sequence = next_sequence;
     }
 
+    projection.set_inspection_frontier(through);
     Ok(projection)
 }
 
@@ -2040,11 +2013,9 @@ impl RuntimeClientHost {
     /// projection used by a live host. No child-specific transcript payload
     /// or parent-side history is introduced.
     ///
-    /// The attachment linearizes at the durable reads performed here. A
-    /// concurrent writer may advance the append-only authorities while those
-    /// reads occur; a later `snapshot_get`/fresh attachment repairs from the
-    /// store again, and no live event cursor is fabricated for the read-only
-    /// view.
+    /// The attachment captures a single database read cut, then folds its
+    /// finite Journal prefix. Concurrent writes cannot enter that seed or
+    /// its decorations. No live event cursor is fabricated for inspection.
     ///
     /// # Errors
     ///
@@ -5805,7 +5776,21 @@ mod tests {
             panic!("snapshot")
         };
         assert_eq!(reconnect.trace, continuous.trace);
-        assert_eq!(cursor, after_cursor);
+        assert!(cursor >= after_cursor);
+        let mut state = inner.lock_state();
+        let (subscriber, _) = state.projection.subscribe(after_cursor).unwrap();
+        for expected in after_cursor.get() + 1..=cursor.get() {
+            let super::super::projection::SubscriberPoll::Event(event) =
+                state.projection.poll_subscriber(subscriber)
+            else {
+                panic!("derived suffix");
+            };
+            assert_eq!(event.cursor.get(), expected);
+            assert!(matches!(
+                event.event,
+                RuntimeClientEvent::ReadDomainsUpdated { .. }
+            ));
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5911,42 +5896,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_acquisition_is_finite_when_every_read_is_superseded() {
+    async fn snapshot_candidate_survives_moving_head_and_replays_exact_suffix() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let inner = fixture.host.weak_inner().upgrade().unwrap();
         inner
             .lock_state()
             .projection
             .apply(ConversationObservation::Event {
-                attempt_id: AttemptId::new("snapshot-cut"),
+                attempt_id: AttemptId::new("candidate"),
                 event: RuntimeEvent::AttemptStarted {
-                    attempt_id: AttemptId::new("snapshot-cut"),
+                    attempt_id: AttemptId::new("candidate"),
                 },
             });
-        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls = count.clone();
+        let cursor = inner.lock_state().projection.cursor();
         let state = inner.state.clone();
         *inner.snapshot_read_hook.lock().unwrap() = Some(Box::new(move || {
-            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            state
-                .lock()
-                .unwrap()
-                .projection
-                .apply(ConversationObservation::Event {
-                    attempt_id: AttemptId::new("snapshot-cut"),
+            let mut state = state.lock().unwrap();
+            for _ in 0..8 {
+                state.projection.apply(ConversationObservation::Event {
+                    attempt_id: AttemptId::new("candidate"),
                     event: RuntimeEvent::TurnStarted,
                 });
+            }
         }));
-        let result = inner.lock_snapshot_state();
-        assert!(
-            matches!(result, Err(RuntimeClientError::RuntimeFailure { ref message }) if message == "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition")
-        );
-        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 3);
-        let state = inner.lock_state();
-        assert!(
-            state.projection.read_domain_cut().is_some(),
-            "no stale candidate installed"
-        );
+        let candidate = inner.snapshot_candidate().unwrap();
+        assert_eq!(candidate.cursor, cursor);
+        assert_eq!(candidate.snapshot.attempt.as_ref().unwrap().turn, 0);
+        let mut state = inner.lock_state();
+        let (subscriber, _) = state.projection.subscribe(candidate.cursor).unwrap();
+        for turn in 1..=8 {
+            let super::super::projection::SubscriberPoll::Event(event) =
+                state.projection.poll_subscriber(subscriber)
+            else {
+                panic!("exact replay suffix");
+            };
+            assert_eq!(event.cursor.get(), cursor.get() + u64::from(turn));
+            assert!(
+                matches!(event.event, RuntimeClientEvent::AttemptTurnUpdated { turn: actual, .. } if actual == turn)
+            );
+        }
         assert_eq!(
             state
                 .projection
@@ -5955,59 +5943,168 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .turn,
-            3
+            8
         );
     }
 
     #[tokio::test]
-    async fn snapshot_acquisition_retries_once_then_returns_exact_cursor_cut() {
+    async fn captured_snapshot_excludes_later_durable_messages_and_replay_converges() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let inner = fixture.host.weak_inner().upgrade().unwrap();
-        inner
-            .lock_state()
-            .projection
-            .apply(ConversationObservation::Event {
-                attempt_id: AttemptId::new("snapshot-cut"),
-                event: RuntimeEvent::AttemptStarted {
-                    attempt_id: AttemptId::new("snapshot-cut"),
-                },
-            });
-        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls = count.clone();
+        let baseline = inner.snapshot_candidate().unwrap();
+        let old_cut = inner.lock_state().projection.read_domain_fence();
+        let store = inner.store.clone();
         let state = inner.state.clone();
         *inner.snapshot_read_hook.lock().unwrap() = Some(Box::new(move || {
-            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            for id in ["candidate-later-one", "candidate-later-two"] {
+                let message = MessageBlock::User(inbound_text(id, id));
+                let receipt = store.append_canonical(&message).unwrap();
                 state
                     .lock()
                     .unwrap()
                     .projection
-                    .apply(ConversationObservation::Event {
-                        attempt_id: AttemptId::new("snapshot-cut"),
-                        event: RuntimeEvent::TurnStarted,
+                    .apply(ConversationObservation::Committed {
+                        attempt_id: None,
+                        block: message,
+                        transcript_cursor: receipt.transcript_cursor,
                     });
             }
         }));
-        let mut state = inner.lock_snapshot_state().unwrap();
-        let (snapshot, cursor) = state.projection.snapshot().unwrap();
-        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
-        assert_eq!(snapshot.attempt.as_ref().unwrap().turn, 1);
-        assert!(state.projection.read_domain_cut().is_none());
-        let (subscriber, _) = state.projection.subscribe(cursor).unwrap();
-        state.projection.apply(ConversationObservation::Event {
-            attempt_id: AttemptId::new("snapshot-cut"),
-            event: RuntimeEvent::TurnStarted,
-        });
-        let super::super::projection::SubscriberPoll::Event(event) =
-            state.projection.poll_subscriber(subscriber)
-        else {
-            panic!("exact replay suffix");
-        };
-        assert_eq!(event.cursor.get(), cursor.get() + 1);
+        let candidate = inner.snapshot_candidate().unwrap();
+        assert_eq!(candidate.cursor, baseline.cursor);
+        assert_eq!(
+            candidate.snapshot, baseline.snapshot,
+            "later durable bodies cannot leak backward"
+        );
+        inner.snapshot_read_hook.lock().unwrap().take();
+        let mut replayed = candidate.snapshot.clone();
+        let mut state = inner.lock_state();
+        assert!(
+            !state.projection.install_read_domains(
+                old_cut,
+                Ok((
+                    candidate.snapshot.transcript.clone(),
+                    candidate.snapshot.context.last_request_occupancy.clone()
+                )),
+                true
+            ),
+            "returnable candidate is stale for live installation"
+        );
+        let (subscriber, _) = state.projection.subscribe(candidate.cursor).unwrap();
+        for offset in 1..=2 {
+            let super::super::projection::SubscriberPoll::Event(event) =
+                state.projection.poll_subscriber(subscriber)
+            else {
+                panic!("contiguous replay");
+            };
+            assert_eq!(event.cursor.get(), candidate.cursor.get() + offset);
+            let RuntimeClientEvent::MessageCommitted {
+                message,
+                transcript_cursor: Some(cursor),
+                ..
+            } = event.event
+            else {
+                panic!("canonical event");
+            };
+            replayed.messages.push(message.clone());
+            replayed.transcript.entries.push(
+                super::super::snapshot::RuntimeClientTranscriptEntry {
+                    cursor,
+                    item: super::super::snapshot::RuntimeClientTranscriptItem::Message { message },
+                    tool_calls: Vec::new(),
+                    turn_process: None,
+                    response_pending: false,
+                    completed_response: None,
+                },
+            );
+        }
         assert!(matches!(
-            event.event,
-            RuntimeClientEvent::AttemptTurnUpdated { turn: 2, .. }
+            state.projection.poll_subscriber(subscriber),
+            super::super::projection::SubscriberPoll::Pending
         ));
-        assert_eq!(snapshot.attempt.as_ref().unwrap().turn, 1);
+        drop(state);
+        let current = inner.snapshot_candidate().unwrap();
+        assert_eq!(
+            replayed, current.snapshot,
+            "replay equals independent authoritative completion"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn captured_pending_body_survives_later_edit_removal_and_commit() {
+        let (release, gate) = model_release();
+        let (adapter, fixture) = host_fixture(
+            vec![vec![
+                GatedStep::Emit(ModelEvent::Started),
+                GatedStep::ParkUntilReleased(gate),
+                GatedStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                }),
+            ]],
+            ToolRegistry::new(),
+            status_engine(),
+        )
+        .await;
+        let mailbox = fixture.runtime.tool_runtime().mailbox();
+        mailbox
+            .enqueue(inbound_text("candidate-active", "running"))
+            .unwrap();
+        await_adapter_request_count(&adapter, 1).await;
+        let sequence = mailbox
+            .enqueue(inbound_text("candidate-pending", "captured body"))
+            .unwrap();
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let store = inner.store.clone();
+        *inner.snapshot_read_hook.lock().unwrap() = Some(Box::new(move || {
+            let expected = crate::durable::inbox::PendingInboundRef {
+                sequence,
+                message_id: MessageId::new("candidate-pending"),
+                revision: 0,
+            };
+            store.edit_pending(&expected, "later edit").unwrap();
+            store
+                .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                    revision: 1,
+                    ..expected
+                })
+                .unwrap();
+            store
+                .append_canonical(&MessageBlock::User(inbound_text("future-commit", "future")))
+                .unwrap();
+        }));
+        let candidate = inner.snapshot_candidate().unwrap();
+        assert_eq!(candidate.snapshot.inbound.pending[0].revision, 0);
+        assert_eq!(
+            candidate.snapshot.inbound.pending[0].message.content,
+            inbound_text("x", "captured body").content
+        );
+        let transcript = format!("{:?}", candidate.snapshot.transcript);
+        assert!(transcript.contains("captured body"));
+        assert!(!transcript.contains("later edit"));
+        assert!(!transcript.contains("future-commit"));
+        inner.snapshot_read_hook.lock().unwrap().take();
+        release.send(true).unwrap();
+        fixture.runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn captured_snapshot_survives_replay_eviction_but_subscribe_requires_resync() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let state = inner.state.clone();
+        *inner.snapshot_read_hook.lock().unwrap() = Some(Box::new(move || {
+            let mut state = state.lock().unwrap();
+            for _ in 0..=super::super::projection::RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT {
+                state.projection.apply(ConversationObservation::Shutdown);
+            }
+        }));
+        let candidate = inner.snapshot_candidate().unwrap();
+        assert!(!candidate.snapshot.shutting_down);
+        assert!(matches!(
+            inner.lock_state().projection.subscribe(candidate.cursor),
+            Err(RuntimeClientError::ResyncRequired { .. })
+        ));
     }
 
     #[tokio::test]

@@ -1,5 +1,9 @@
 # Issue 420 process-lifetime follow-up
 
+This records the historical c793100c repair. Snapshot retry semantics and the
+associated test workarounds were subsequently replaced by captured candidates.
+See [current candidate validation](candidate-validation.md) and [the final contract](read-domains.md).
+
 Starting worktree: `/home/caismis/Documents/codes/rustX-issue-420`; branch:
 `issue-420-incremental-projection-chat-stability`. Fetched origin and verified a clean
 worktree, matching local/remote/PR head `9fbfda118b2875038974cc18a2ecb6f0533a1e47`,
@@ -20,11 +24,8 @@ open/non-draft PR #423 targeting main with auto-merge disabled. Fetched main:
   interrupts the VM, the read thread joins, and the ordinary busy policy and writes work.
 - `presentation_cancellation_ends_connection_wait_without_releasing_writer`:
   a retained writer lease cannot prevent a cancelled presentation reader from returning.
-- `snapshot_acquisition_is_finite_when_every_read_is_superseded`: exactly three
-  candidates are invalidated at the capture/read boundary; typed RuntimeFailure and
-  dirty newest revision prove finite termination without stale installation.
-- `snapshot_acquisition_retries_once_then_returns_exact_cursor_cut`: first candidate
-  superseded, second installed, exact DTO/cursor preserved, next event replays at C+1.
+- The original finite-retry snapshot tests have been replaced by captured-cut,
+  continuous-progress, replay convergence and eviction regressions.
 - `trace_only_progress_does_not_supersede_a_durable_read_cut`: a Trace/Tool Session
   transition advances its independent frontier without invalidating unchanged durable
   dependencies. Existing stale-read and real JournalBatch/Trace tests remain.
@@ -34,15 +35,8 @@ open/non-draft PR #423 targeting main with auto-merge disabled. Fetched main:
   model-start transition at the existing native gate. Background final snapshots
   wait for the terminal notice's root attempt to settle. All semantic/replay
   assertions remain.
-- Child-questionnaire/child-death/mixed-interaction conformance waits for root notice settlement
-  before its final projection assertion. The mixed test allows at most three reads
-  for two terminal-notice attempts, waiting on native settlement rather than time.
-- Real subagent process drivers retain their original 4,000-observation budget but
-  recognize the exact typed cut-exhaustion diagnostic as a refused read. Cold
-  recovery's Initialize uses that same budget: this explicit refusal occurs before
-  attachment allocation; lost/other responses are not retried. No execution
-  mutation or uncertain outcome is replayed; final identity, lineage, process death,
-  recovery-idempotence and message assertions remain unchanged.
+- The snapshot-refusal workarounds in subagent process/conformance tests were
+  removed by the candidate repair; ordinary snapshots again succeed during progress.
 - The existing SQLite-boundary shutdown process test is unchanged.
 
 ## Validation

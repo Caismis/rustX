@@ -213,6 +213,9 @@ pub(crate) struct RuntimeClientProjection {
     /// Latest represented prefix that changed a durable read dependency.
     /// Trace-only progress must not starve a Session snapshot candidate.
     read_through: u64,
+    bootstrap_transcript_through: u64,
+    pending_transcript: std::collections::BTreeMap<MessageId, crate::durable::TranscriptCursor>,
+    publication_transcript: VecDeque<crate::runtime::identity::PublicationStreamId>,
     read_domains_dirty: bool,
     read_failure: Option<String>,
     read_revision: u64,
@@ -263,6 +266,47 @@ impl ReadDomainCut {
         super::response::decorate_through(store, &mut page, self.through)?;
         let occupancy = crate::context::occupancy::read(store, self.through)?;
         Ok((page, occupancy))
+    }
+}
+
+/// Request-owned copy, independent of the live materializer's installation fence.
+pub(crate) struct SnapshotCandidate {
+    pub(crate) snapshot: RuntimeClientSnapshot,
+    pub(crate) cursor: RuntimeClientCursor,
+    pub(crate) trace_through: u64,
+    read_cut: ReadDomainCut,
+    transcript_cut: Option<crate::durable::inbox::TranscriptSnapshotCut>,
+}
+impl SnapshotCandidate {
+    pub(crate) fn read_domains(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+    ) -> ReadDomains {
+        let mut page = if let Some(cut) = &self.transcript_cut {
+            super::snapshot::transcript_page_view(store.load_transcript_snapshot(cut)?)
+                .map_err(crate::durable::ConversationStoreError::InvalidReference)?
+        } else {
+            self.snapshot.transcript.clone()
+        };
+        super::response::decorate_through(store, &mut page, self.read_cut.through)?;
+        Ok((
+            page,
+            crate::context::occupancy::read(store, self.read_cut.through)?,
+        ))
+    }
+
+    pub(crate) fn materialize(
+        mut self,
+        store: &dyn crate::durable::ConversationStore,
+    ) -> Result<Self, RuntimeClientError> {
+        let (page, occupancy) =
+            self.read_domains(store)
+                .map_err(|e| RuntimeClientError::RuntimeFailure {
+                    message: e.to_string(),
+                })?;
+        self.snapshot.transcript = page;
+        self.snapshot.context.last_request_occupancy = occupancy;
+        Ok(self)
     }
 }
 
@@ -334,6 +378,9 @@ impl RuntimeClientProjection {
         Self {
             journal_through: 0,
             read_through: 0,
+            bootstrap_transcript_through: 0,
+            pending_transcript: std::collections::BTreeMap::new(),
+            publication_transcript: VecDeque::new(),
             read_domains_dirty: false,
             read_failure: None,
             read_revision: 0,
@@ -436,6 +483,16 @@ impl RuntimeClientProjection {
         self.read_through = seed.journal_through;
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
+        self.bootstrap_transcript_through =
+            seed.transcript.entries.last().map_or(0, |e| e.cursor.get());
+        self.pending_transcript = seed
+            .inbound_pending
+            .iter()
+            .filter_map(|item| {
+                item.transcript_cursor()
+                    .map(|cursor| (item.message().id.clone(), cursor))
+            })
+            .collect();
         self.snapshot.shutting_down = seed.shutting_down;
         self.snapshot.effective_approval_mode = seed.approval_mode;
         self.snapshot.inbound.pending =
@@ -607,6 +664,38 @@ impl RuntimeClientProjection {
                 .read_revision
                 .checked_add(1)
                 .expect("read revision exhausted");
+        }
+        match &observation {
+            ConversationObservation::InboundEnqueued(item) => {
+                if let Some(cursor) = item.transcript_cursor() {
+                    self.pending_transcript
+                        .insert(item.message().id.clone(), cursor);
+                }
+            }
+            ConversationObservation::InboundDrained(batch) => {
+                for item in batch.items() {
+                    self.pending_transcript.remove(&item.message().id);
+                }
+            }
+            ConversationObservation::PendingInboundChanged(items) => {
+                self.pending_transcript = items
+                    .iter()
+                    .filter_map(|item| {
+                        item.transcript_cursor()
+                            .map(|cursor| (item.message().id.clone(), cursor))
+                    })
+                    .collect();
+            }
+            ConversationObservation::PublicationSettled { audit, .. } => {
+                self.publication_transcript
+                    .push_back(audit.stream_id.clone());
+                while self.publication_transcript.len()
+                    > crate::durable::TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT + 1
+                {
+                    self.publication_transcript.pop_front();
+                }
+            }
+            _ => {}
         }
         let published = self.fold(observation);
         #[cfg(test)]
@@ -1811,17 +1900,69 @@ impl RuntimeClientProjection {
         }
     }
 
+    pub(crate) fn set_inspection_frontier(&mut self, through: u64) {
+        self.journal_through = through;
+        self.read_through = through;
+    }
+
+    /// Capture one semantic cut. Completion never consults the moving live head.
+    pub(crate) fn snapshot_candidate(&self) -> Result<SnapshotCandidate, RuntimeClientError> {
+        #[cfg(test)]
+        self.probe_snapshot_enter();
+        self.capture_candidate()
+    }
+
+    pub(crate) fn read_domain_candidate(&self) -> Option<(ReadDomainCut, SnapshotCandidate)> {
+        self.read_domain_cut().and_then(|cut| {
+            self.capture_candidate()
+                .ok()
+                .map(|candidate| (cut, candidate))
+        })
+    }
+
+    fn capture_candidate(&self) -> Result<SnapshotCandidate, RuntimeClientError> {
+        if self.exhausted {
+            return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        Ok(SnapshotCandidate {
+            snapshot: self.snapshot.clone(),
+            cursor: self.cursor,
+            trace_through: self.journal_through,
+            read_cut: self.read_domain_fence(),
+            transcript_cut: (!matches!(
+                self.snapshot.settings_evidence,
+                super::settings::SettingsEvidence::HistoricalPartial
+            ))
+            .then(|| crate::durable::inbox::TranscriptSnapshotCut {
+                bootstrap_through: self.bootstrap_transcript_through,
+                journal_through: self.read_through,
+                messages: self
+                    .snapshot
+                    .messages
+                    .iter()
+                    .map(|message| crate::conversation::message_id_of(message).clone())
+                    .collect(),
+                publications: self.publication_transcript.iter().cloned().collect(),
+                pending: self
+                    .snapshot
+                    .inbound
+                    .pending
+                    .iter()
+                    .filter_map(|item| {
+                        self.pending_transcript
+                            .get(&item.message.id)
+                            .map(|cursor| (*cursor, item.message.clone()))
+                    })
+                    .collect(),
+            }),
+        })
+    }
+
     /// Capture a finite derived cut; Store work must happen outside the host lock.
     pub(crate) fn read_domain_fence(&self) -> ReadDomainCut {
         ReadDomainCut {
             revision: self.read_revision,
             through: self.read_through,
-        }
-    }
-
-    pub(crate) fn retry_failed_read(&mut self) {
-        if self.read_failure.is_some() {
-            self.read_domains_dirty = true;
         }
     }
 
@@ -1927,6 +2068,7 @@ impl RuntimeClientProjection {
         &mut self,
         page: super::snapshot::RuntimeClientTranscriptPage,
     ) {
+        self.bootstrap_transcript_through = page.entries.last().map_or(0, |e| e.cursor.get());
         self.snapshot.transcript = page;
     }
 

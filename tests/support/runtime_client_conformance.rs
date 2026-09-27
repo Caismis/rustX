@@ -805,7 +805,10 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     else {
         panic!("initialized");
     };
-    assert_eq!(reattached, settled_cursor);
+    // A request-owned snapshot does not wait for the background materializer.
+    // Only its derived suffix may appear across detach; no semantic replay.
+    subscribe(&mut *driver, 7, settled_cursor).await;
+    receive_read_domain_suffix(&mut *driver, settled_cursor, reattached).await;
     assert_eq!(
         snapshot.messages.len(),
         3,

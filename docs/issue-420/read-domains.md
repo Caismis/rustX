@@ -49,32 +49,56 @@ success or error is discarded, leaving the latest cut dirty. No second event que
 or durable authority exists. Store errors are explicit; a new invalidation or an
 explicit authoritative request can retry, without an automatic failure spin.
 
-### Finite authoritative snapshots
+### Finite authoritative snapshot candidates
 
-`lock_snapshot_state` makes at most **three** read/validate attempts, with no sleep
-or debounce. A candidate is installed only at the matching revision and represented
-Journal frontier, after folding queued semantics and checking unpublished receipts.
-If another materializer already repaired the current cut, the request can use that
-cut without another read. An unpublished receipt permits the preceding cut only
-when its derived domains are already clean. No dirty semantic/derived mixture is
-returned as a successful authoritative snapshot.
+`SnapshotCandidate` captures the complete semantic Session DTO, client cursor C,
+durable dependency frontier, transcript membership evidence and independent Trace
+frontier under the projection mutex after folding represented observations. That
+capture is the semantic linearization point. It makes one request-owned copy;
+completion never consults the mutable live projection again. Live progress to N
+cannot invalidate C and there is no optimistic retry-to-latest loop.
 
-At success, the host mutex protects both the clean Session DTO and client cursor;
-`snapshot_cut()` copies those and the Trace frontier together. This is the snapshot
-linearization point. It names a cut that existed during the request, not the newest
-state when the response reaches a client. The bounded replay ring owns later client
-cursors. Superseded results never install. Three superseded candidates return the
-existing typed `RuntimeClientError::RuntimeFailure` with the fixed diagnostic
-`snapshot cut superseded during all 3 read attempts; retry authoritative acquisition`.
-Clients' existing read-failure behavior keeps recovery explicit; no mutation is retried
-and no new wire variant/version is needed.
+The transcript read uses captured membership, not the newest database page:
 
-Explicit snapshot requests use the existing admitted synchronous Store request path,
-including pending-mailbox repair; they do not launch detached blocking work. Pending
-readback uses its publication guard outside the projection mutex and validates the
-semantic fence. Bootstrap precedes live host publication. Inspection rebuilds run
-outside host synchronization. `snapshot_with_trace` captures the Session DTO/cursor
-before independently enriching Trace; Trace never changes live Session fields.
+- the bootstrap transcript prefix supplies immutable canonical history;
+- subsequent canonical identities come from the captured semantic messages;
+- publication audit identities are retained only for the newest page plus one
+  overflow row (65); immutable Journal audits/terminal rows use the captured prefix;
+- pending message bodies and their transcript positions are frozen at capture,
+  so later edits, removals or adoption cannot rewrite C;
+- mutable Tool-result associations are filtered by captured canonical membership.
+
+These are references/copies of existing semantic facts, not another event queue
+or durable truth. SQLite selects the newest 64 eligible entries and its exact
+older-page continuation. Response decorations, statistics and occupancy read the
+same fixed durable dependency prefix. A later completion or Tool result cannot
+leak backward. Todo remains the captured semantic projection.
+
+Pending readback occurs under the mailbox publication guard outside the projection
+mutex. Repair is accepted only at its captured read-domain fence with no unpublished
+receipt. If either changed, capture uses the already represented semantic pending
+view instead; it never chases the latest durable pending table. An unpublished
+receipt cannot inject new pending state into an old client cursor.
+
+Completion populates the candidate's copy, without installing it into the live
+projection or allocating another client cursor. `snapshot(C)` followed by
+`subscribe(after C)` replays C+1...N. If history was evicted, subscription returns
+typed `ResyncRequired`; snapshot acquisition does not predict replay retention.
+Actual storage errors remain typed RuntimeFailure, but ordinary progress is not
+an error and no diagnostic string controls retry behavior. No protocol change is
+needed.
+
+SnapshotGet, App Server snapshots and attachment initialization share this native
+candidate. Attachment allocation/control fencing remains under its original mutex,
+and registration uses the candidate's exact C. The background read owner separately
+validates revision/frontier before live installation: stale for installation does
+not mean invalid for an already captured request.
+
+Read-only durable inspection copies Surface, canonical history, transcript and
+Journal frontier in one database read transaction, without a projection mutex.
+Journal folding then walks only that finite prefix, even if a writer advances.
+It completes the same candidate using the copied transcript seed. Independent Trace
+enrichment never rewrites Session fields, for either live or inspection snapshots.
 
 ### Presentation read execution and termination
 
@@ -113,7 +137,7 @@ closed. This is why that request path does not reuse a permanently cancelled rea
 | --- | --- |
 | Canonical messages, transient content, Attempt/control state | Incremental semantic fold at the captured client cursor |
 | Pending inbox | Semantic observations, with explicit mailbox readback fenced before repair |
-| Newest transcript page | Durable read result, installed only at its revision/frontier |
+| Newest transcript page | Candidate membership and prefix; background installation separately validates revision/frontier |
 | Response decorations and statistics | Bounded Journal prefix of that same durable read cut |
 | Occupancy | Immutable request snapshot resolved through that same prefix |
 | Todo | Semantic projection; read-domain event carries the current Todo at installation |
@@ -171,7 +195,7 @@ message identity and deterministic single-frame/history-reading scroll tests.
 
 | Question | Code/contract evidence |
 | --- | --- |
-| Can derived I/O hold projection/control synchronization? | `ClientInner::lock_state` only folds semantics; worker `ReadDomainCut::read`, explicit snapshot pending/domain reads and historical rebuilds run without the host mutex. Shutdown/drain regression holds materialization with channels. |
+| Can derived I/O hold projection/control synchronization? | `ClientInner::lock_state` only folds semantics; worker `SnapshotCandidate::read_domains`, explicit snapshot pending/domain reads and historical rebuilds run without the host mutex. Shutdown/drain regression holds materialization with channels. |
 | Can a Session publication suppress Trace? | `apply(JournalBatch)` always publishes Trace once after its successful represented frontier; no cursor comparison or per-event fallback remains. |
 | Can durable Session updates trigger Trace? | Web notification handler tests only `trace_changed`; production-client RPC-count regression covers both domains and burst coalescing. |
 | Can acquiring resync disappear? | The existing `resubscribe` owner is updated before checking `acquiring`, and invalid continuation marks `resynchronizing`; ACK, cursor and bounded failure tests cover the handoff. |
@@ -189,12 +213,24 @@ message identity and deterministic single-frame/history-reading scroll tests.
 3. App Server control/admission state remains independent; manager cancellation precedes operation drain.
 4. The blocking task returns after cancellation and is joined before normal process return.
 5. Dropping a handle is never considered terminal proof; Drop requests cancellation only.
-6. Snapshot acquisition has at most three candidates, with explicit typed exhaustion.
-7. Success copies a clean Session DTO and cursor in one critical section.
+6. Snapshot acquisition completes one captured candidate; later progress cannot invalidate it.
+7. Capture copies semantic DTO, cursor and durable membership in one critical section; completion is restricted to those dependencies.
 8. Exact durable revision/required-prefix validation rejects obsolete results.
-9. The retained replay ring owns C+1 onward, including events committed before response delivery.
+9. The retained replay ring owns C+1 onward; eviction returns typed ResyncRequired at subscription.
 10. Trace has its own frontier and invalidation; a Trace-only fact cannot retire a durable candidate.
 11. Web acquisition-time resync and ACK/replay handling are unchanged.
 12. The fixed measurement stays outside ordinary Vitest discovery.
 13. Chat's sole RAF writer, native message seat and narrow subscriptions are unchanged.
 14. Creation, FirstSubmissions, mutation ACK and generation ownership are unchanged.
+
+## Captured-cut self-review
+
+Snapshot completion succeeds while the head moves and never installs into live
+state. Canonical membership, frozen pending bodies, filtered Tool associations and
+fixed Journal prefixes exclude later state while including all represented facts.
+Replay supplies every later cursor or explicitly refuses an evicted cursor.
+Background installation remains revision-fenced; the same historical data can be
+valid for a candidate and stale for installation. No supersede diagnostic or string
+retry remains. Normal active process snapshots succeed. Store cancellation still
+joins the worker. Trace, Web/TUI recovery/mutation rules, Chat's writer/message seat,
+and #419/#422 startup/FirstSubmissions/ACK/generation ownership are unchanged.

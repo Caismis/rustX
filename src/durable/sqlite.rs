@@ -8,6 +8,7 @@
 //! The tables share transactions where rustX needs one semantic linearization
 //! point, but no table is a serialized `ConversationRecord` or transcript.
 
+use crate::durable::TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -2246,6 +2247,123 @@ impl ConversationStore for SqliteConversationStore {
         Ok(CanonicalMessagePage {
             messages,
             next_position: next,
+        })
+    }
+
+    fn load_inspection_seed(&self) -> Result<super::inbox::InspectionSeed, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        let head = load_head(&transaction)?;
+        let ids = reconstruct_surface(&transaction, head.revision)?;
+        Ok(super::inbox::InspectionSeed {
+            messages: ids
+                .iter()
+                .map(|id| load_message(&transaction, id))
+                .collect::<Result<_, _>>()?,
+            canonical: load_canonical_rows(&transaction)?,
+            transcript: load_transcript_page(&transaction, None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?,
+            journal_through: journal_prefix(&transaction)?,
+        })
+    }
+
+    fn load_transcript_snapshot(
+        &self,
+        cut: &super::inbox::TranscriptSnapshotCut,
+    ) -> Result<TranscriptPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let messages = serde_json::to_string(&cut.messages).map_err(|e| storage(e.to_string()))?;
+        let publications =
+            serde_json::to_string(&cut.publications).map_err(|e| storage(e.to_string()))?;
+        // The bootstrap prefix is immutable canonical history. Subsequent
+        // canonical membership comes from captured semantic receipts, never
+        // the current ledger head. Pending rows are supplied below from C.
+        let mut statement = connection
+            .prepare(
+                "SELECT t.position,t.reference_kind,t.reference_id FROM transcript_order t
+             WHERE (t.reference_kind='message' AND EXISTS
+               (SELECT 1 FROM message_ledger m WHERE m.message_id=t.reference_id)
+               AND (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?2))))
+             OR (t.reference_kind='publication_audit' AND
+               (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
+             OR (t.reference_kind IN ('interaction_event','attempt_terminal') AND EXISTS
+               (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
+             ORDER BY t.position DESC LIMIT ?5",
+            )
+            .map_err(|e| storage(e.to_string()))?;
+        let references = statement
+            .query_map(
+                params![
+                    seq_to_i64(cut.bootstrap_through)?,
+                    messages,
+                    publications,
+                    seq_to_i64(cut.journal_through)?,
+                    TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT + 1
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| storage(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| storage(e.to_string()))?;
+        let allowed: BTreeSet<_> = cut.messages.iter().map(MessageId::as_str).collect();
+        let mut entries = Vec::new();
+        for (position, kind, id) in references {
+            let item = load_transcript_item(&connection, &kind, &id)?;
+            let mut tool_calls = match &item {
+                TranscriptItem::Message {
+                    message: MessageBlock::Assistant(assistant),
+                } => load_transcript_tools(&connection, assistant)?,
+                _ => Vec::new(),
+            };
+            // Associations are mutable as later Tool results commit. Keep only
+            // results whose canonical message belonged to this captured cut.
+            for tool in &mut tool_calls {
+                let result: Option<(String, i64)> = connection.query_row(
+                    "SELECT m.message_id,t.position FROM canonical_tool_calls c
+                     JOIN message_ledger m ON m.message_id=c.result_message_id
+                     JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+                     WHERE c.assistant_message_id=?1 AND c.block_index=?2",
+                    params![tool.message_id.as_str(), tool.block_index.get()],
+                    |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e| storage(e.to_string()))?;
+                if result.is_some_and(|(id, pos)| {
+                    pos > i64::try_from(cut.bootstrap_through).expect("validated transcript prefix")
+                        && !allowed.contains(id.as_str())
+                }) {
+                    tool.result = None;
+                }
+            }
+            entries.push(TranscriptEntry {
+                cursor: TranscriptCursor::new(nonnegative(position, "transcript position")?),
+                item,
+                tool_calls,
+            });
+        }
+        // A later adoption/edit/removal cannot replace the pending body at C.
+        for (cursor, message) in &cut.pending {
+            entries.retain(|entry| entry.cursor != *cursor);
+            entries.push(TranscriptEntry {
+                cursor: *cursor,
+                item: TranscriptItem::Message {
+                    message: MessageBlock::User(message.clone()),
+                },
+                tool_calls: Vec::new(),
+            });
+        }
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.cursor));
+        let more = entries.len() > TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT;
+        entries.truncate(TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT);
+        let next_cursor = more.then(|| entries.last().unwrap().cursor);
+        entries.reverse();
+        Ok(TranscriptPage {
+            entries,
+            next_cursor,
         })
     }
 
@@ -9461,6 +9579,62 @@ mod tests {
                 text: text.to_owned(),
             })],
         })
+    }
+
+    #[test]
+    fn snapshot_transcript_excludes_later_tool_results() {
+        use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef};
+        let store = store();
+        let call = ToolCall {
+            id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".into(),
+            arguments: serde_json::json!({}),
+        };
+        let owner = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("a"),
+            content: vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "thinking".into(),
+                }),
+                AssistantContentBlock::ToolCall(call.clone()),
+            ],
+        });
+        store.initialize(&[owner]).unwrap();
+        let valid = ToolMessageBlock {
+            id: MessageId::new("result"),
+            occurrence: ToolCallOccurrenceRef::new(MessageId::new("a"), ContentBlockIndex::new(1)),
+            tool_call_id: call.id,
+            tool_id: call.tool_id,
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+        };
+        let cut = super::super::inbox::TranscriptSnapshotCut {
+            bootstrap_through: store.load_transcript_page(None, 1).unwrap().entries[0]
+                .cursor
+                .get(),
+            journal_through: 0,
+            messages: vec![MessageId::new("a")],
+            publications: Vec::new(),
+            pending: Vec::new(),
+        };
+        store
+            .append_canonical(&MessageBlock::Tool(valid.clone()))
+            .unwrap();
+        let historical = store.load_transcript_snapshot(&cut).unwrap();
+        assert_eq!(historical.entries.len(), 1);
+        assert!(
+            historical.entries[0].tool_calls[0].result.is_none(),
+            "later Tool association cannot enter captured membership"
+        );
     }
 
     #[test]

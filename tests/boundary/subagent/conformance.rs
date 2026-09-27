@@ -2379,10 +2379,6 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
             .is_none(),
         "the parent does not receive a child questionnaire result"
     );
-    // Adoption removes pending rows, but the notice's root attempt still
-    // advances durable read domains. Prove its semantic settlement before
-    // asserting the final authoritative projection.
-    parent.runtime.settlement_signal().notified().await;
     let (root_snapshot, _) = host.snapshot().expect("root projection");
     assert!(root_snapshot.pending_interactions.is_empty());
 
@@ -3074,27 +3070,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
             && !parent_requests.contains("staging"),
         "the parent may receive an ordinary child terminal answer, but never child HITL facts"
     );
-    // At most two child terminal notices can still drive root attempts.
-    // A refused finite read waits for an actual settlement signal, never a
-    // timer or an unbounded optimistic snapshot loop.
-    let mut final_snapshot = None;
-    for attempt in 0..3 {
-        match host.snapshot() {
-            Ok(value) => {
-                final_snapshot = Some(value);
-                break;
-            }
-            Err(rustx::runtime_client::RuntimeClientError::RuntimeFailure { message })
-                if attempt < 2
-                    && message
-                        == "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition" =>
-            {
-                parent.runtime.settlement_signal().notified().await;
-            }
-            Err(error) => panic!("root snapshot: {error:?}"),
-        }
-    }
-    let (snapshot, _) = final_snapshot.expect("both root notice attempts settled");
+    let (snapshot, _) = host.snapshot().expect("root snapshot");
     assert!(snapshot.pending_interactions.is_empty());
 
     attachment.detach();
@@ -3260,9 +3236,6 @@ async fn child_death_removes_only_its_routed_interactions() {
         .await
         .expect("dead child settles");
     assert_eq!(dead_snapshot.state, SubagentState::Interrupted);
-    // Child loss also publishes a terminal notice into the root attempt.
-    // Assert the final projection after that semantic attempt settles.
-    parent.runtime.settlement_signal().notified().await;
     let (root_snapshot, _) = host.snapshot().expect("root snapshot after child death");
     assert!(
         root_snapshot

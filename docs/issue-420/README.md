@@ -16,8 +16,10 @@ continuation. Snapshot acquisition retains no browser event queue: the bounded n
 replay ring supplies events after the acquired cursor. A resync received during acquisition marks the old continuation untrusted and
 retains the subscription handoff requirement. The snapshot installs its exact cursor;
 attachment becomes `attached` only after the required subscribe succeeds.
-If the replay ring moves during recovery, at most three acquisitions are attempted;
-a failed acquisition leaves stale controls and requires a later recovery. No write
+If subscription returns typed `resync_required` because replay was evicted, Web
+performs at most three snapshot/subscribe handoffs; exhaustion leaves stale controls
+and requires a later recovery. Native snapshot completion itself never retries
+because the live head moved. No write
 is retried. Same-Session replacement retires outstanding work.
 
 Native durable read cuts publish `read_domains_updated` only when the decorated
@@ -32,8 +34,9 @@ one blocking read is in flight. Its completion is installed only after queued
 semantics are folded again, the cut still matches and no native publication is
 outstanding. Installation and the event cursor allocation share the projection
 mutex. Stale reads are retired and the current dirty cut is retried. Requests that
-need authoritative snapshots perform at most three read/validate attempts outside
-the mutex, returning an explicit typed failure on exhaustion. Closing delivery cancels
+need authoritative snapshots capture one finite semantic candidate and materialize its exact durable dependencies outside
+the mutex. Later live progress does not invalidate C; bounded replay owns later
+cursors. Closing delivery cancels
 presentation connection waits and SQLite queries, then joins the worker and read task.
 The Store-only read scope cannot install after close or keep Tokio destruction waiting
 on an uncancelled operation. See the process ownership audit in read-domains.md.

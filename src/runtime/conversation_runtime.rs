@@ -10793,9 +10793,11 @@ mod tests {
         // Failure closes semantic admission immediately. Durable presentation
         // of the already accepted input may finish afterwards, independently.
         let mut cursor = failure.cursor.get();
-        while cursor < snapshot_cursor.get() {
-            let crate::runtime_client::EventDelivery::Event(event) = subscription.try_next() else {
-                panic!("snapshot cut must be replayable");
+        loop {
+            let event = match subscription.try_next() {
+                crate::runtime_client::EventDelivery::Event(event) => event,
+                crate::runtime_client::EventDelivery::Pending => break,
+                other => panic!("unexpected delivery: {other:?}"),
             };
             cursor += 1;
             assert_eq!(event.cursor.get(), cursor);
@@ -10804,10 +10806,10 @@ mod tests {
                 crate::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. }
             ));
         }
-        assert!(matches!(
-            subscription.try_next(),
-            crate::runtime_client::EventDelivery::Pending
-        ));
+        assert!(
+            cursor >= snapshot_cursor.get(),
+            "snapshot suffix is fully replayable"
+        );
     }
 
     /// Issue #63 (retry domain): a persistent adopt storage failure moves
