@@ -1,5 +1,9 @@
 # Captured snapshot repair
 
+This records the b7a2768b repair. The subsequent live-failure recovery repair is
+recorded in [read-failure-validation.md](read-failure-validation.md); candidate
+completion now additionally offers a successful result for optional fenced live repair.
+
 Starting clean implementation worktree: `/home/caismis/Documents/codes/rustX-issue-420`,
 branch `issue-420-incremental-projection-chat-stability`. `git fetch origin` confirmed
 local/remote/PR head `c793100c38cbd57a9419b163b864454a107adff6`, main
@@ -25,6 +29,7 @@ passed on that reviewed head; no hosted result is claimed for the new commit.
 
 See [the captured-cut contract](read-domains.md). Snapshot acquisition captures one
 candidate C and completes its own copy; no live-head validation/retry is needed.
+The follow-up adds optional matching-cut live repair without changing that contract.
 The background materializer shares captured transcript membership but separately
 validates the live installation revision. Its scoped Store cancellation and join
 are unchanged. Inspection obtains one transactionally coherent seed and folds a

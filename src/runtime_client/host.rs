@@ -377,7 +377,8 @@ pub(crate) struct ClientInner {
 }
 
 #[cfg(test)]
-type ReadDomainHook = Box<dyn FnOnce() + Send>;
+type ReadDomainHook =
+    Box<dyn FnOnce() -> Result<(), crate::durable::ConversationStoreError> + Send>;
 
 /// Root-side publication authority installed into the parent subagent
 /// registry. It is a weak adapter over runtime projection binding, independent
@@ -453,7 +454,25 @@ impl ClientInner {
         if let Some(hook) = self.snapshot_read_hook.lock().unwrap().as_mut() {
             hook();
         }
-        candidate.materialize(self.store.as_ref())
+        let candidate = candidate.materialize(self.store.as_ref())?;
+        // Completion belongs to C, regardless of whether C may still repair live
+        // state. Reuse the background installation owner after folding new facts.
+        let mut state = self.lock_state();
+        if !self.read_only
+            && !self.pending.is_closed()
+            && !self.pending.has_unpublished()
+            && !state.projection.snapshot_ref().shutting_down
+        {
+            state.projection.install_read_domains(
+                candidate.read_cut,
+                Ok((
+                    candidate.snapshot.transcript.clone(),
+                    candidate.snapshot.context.last_request_occupancy.clone(),
+                )),
+                true,
+            );
+        }
+        Ok(candidate)
     }
 
     /// A bound live projection can expose interactions to a future client.
@@ -587,8 +606,10 @@ impl ClientInner {
                     let hook = read_domain_hook.lock().unwrap().take();
                     read = Some(tokio::task::spawn_blocking(move || {
                         #[cfg(test)]
-                        if let Some(hook) = hook {
-                            hook();
+                        if let Some(hook) = hook
+                            && let Err(error) = hook()
+                        {
+                            return (cut, Err(error));
                         }
                         (cut, candidate.read_domains(store.as_ref()))
                     }));
@@ -5896,6 +5917,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authoritative_snapshot_repairs_idle_background_read_failure() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let cursor = inner.lock_state().projection.cursor();
+        let subscriber = attachment.subscribe_events(cursor).unwrap();
+        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(|| {
+            Err(crate::durable::ConversationStoreError::InvalidReference(
+                "one read fault".into(),
+            ))
+        }));
+        inner.pending.push(ConversationObservation::Event {
+            attempt_id: AttemptId::new("failed-cut"),
+            event: RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("failed-cut"),
+            },
+        });
+        loop {
+            match subscriber.next().await {
+                EventDelivery::ResyncRequired { .. } => break,
+                EventDelivery::Event(_) => {}
+                _ => panic!("live failure must notify the subscriber"),
+            }
+        }
+        let (cut, cursor) = {
+            let state = inner.lock_state();
+            assert!(matches!(
+                state.projection.snapshot_ref_checked(),
+                Err(RuntimeClientError::RuntimeFailure { .. })
+            ));
+            assert!(
+                state.projection.read_domain_cut().is_none(),
+                "no automatic error spin"
+            );
+            (
+                state.projection.read_domain_fence(),
+                state.projection.cursor(),
+            )
+        };
+        // No semantic transition and no reconnect: the request's successful read
+        // must repair the failed live cut through the ordinary install owner.
+        let (snapshot, recovered_cursor) = fixture.host.snapshot().unwrap();
+        assert_eq!(recovered_cursor, cursor);
+        let state = inner.lock_state();
+        assert_eq!(state.projection.read_domain_fence(), cut);
+        assert_eq!(
+            state.projection.snapshot_ref_checked().unwrap().transcript,
+            snapshot.transcript
+        );
+        assert!(state.projection.read_domain_cut().is_none());
+        drop(state);
+        let recovered = attachment.subscribe_events(recovered_cursor).unwrap();
+        assert!(matches!(subscriber.try_next(), EventDelivery::Closed));
+        loop {
+            match recovered.try_next() {
+                EventDelivery::Event(event) => assert!(matches!(
+                    event.event,
+                    RuntimeClientEvent::ReadDomainsUpdated { .. }
+                )),
+                EventDelivery::Pending => break,
+                _ => panic!("successful authoritative repair must retire the old failure"),
+            }
+        }
+        let mut state = inner.lock_state();
+        let cursor = state.projection.cursor();
+        state.projection.apply(ConversationObservation::Event {
+            attempt_id: AttemptId::new("failed-cut"),
+            event: RuntimeEvent::TurnStarted,
+        });
+        drop(state);
+        let EventDelivery::Event(event) = recovered.try_next() else {
+            panic!("normal delivery resumes without another snapshot");
+        };
+        assert_eq!(event.cursor.get(), cursor.get() + 1);
+        assert!(matches!(
+            event.event,
+            RuntimeClientEvent::AttemptTurnUpdated { turn: 1, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn historical_candidate_cannot_repair_newer_dirty_or_failed_cut() {
+        for fail_newer in [false, true] {
+            let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+            let inner = fixture.host.weak_inner().upgrade().unwrap();
+            let before = inner.snapshot_candidate().unwrap();
+            let state = inner.state.clone();
+            *inner.snapshot_read_hook.lock().unwrap() = Some(Box::new(move || {
+                let mut state = state.lock().unwrap();
+                state.projection.apply(ConversationObservation::Event {
+                    attempt_id: AttemptId::new("newer-cut"),
+                    event: RuntimeEvent::AttemptStarted {
+                        attempt_id: AttemptId::new("newer-cut"),
+                    },
+                });
+                if fail_newer {
+                    let cut = state.projection.read_domain_cut().unwrap();
+                    assert!(state.projection.install_read_domains(
+                        cut,
+                        Err(crate::durable::ConversationStoreError::InvalidReference(
+                            "newer failure".into()
+                        )),
+                        true
+                    ));
+                }
+            }));
+            let candidate = inner.snapshot_candidate().unwrap();
+            assert_eq!(candidate.cursor, before.cursor);
+            assert_eq!(candidate.snapshot, before.snapshot);
+            {
+                let state = inner.lock_state();
+                assert_eq!(
+                    state.projection.cursor().get(),
+                    before.cursor.get() + 1,
+                    "no false derived publication"
+                );
+                assert_ne!(state.projection.read_domain_fence(), candidate.read_cut);
+                assert_eq!(state.projection.read_domain_cut().is_some(), !fail_newer);
+                assert_eq!(state.projection.snapshot_ref_checked().is_err(), fail_newer);
+                assert!(state.projection.snapshot_ref().attempt.is_some());
+            }
+            *inner.snapshot_read_hook.lock().unwrap() = None;
+            let current = inner.snapshot_candidate().unwrap();
+            let state = inner.lock_state();
+            assert!(state.projection.read_domain_cut().is_none());
+            assert_eq!(
+                state.projection.snapshot_ref_checked().unwrap().transcript,
+                current.snapshot.transcript
+            );
+            assert!(current.snapshot.attempt.is_some());
+        }
+    }
+
+    #[tokio::test]
     async fn snapshot_candidate_survives_moving_head_and_replays_exact_suffix() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let inner = fixture.host.weak_inner().upgrade().unwrap();
@@ -6115,6 +6273,7 @@ mod tests {
         let reader = inner.read_store.clone();
         *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
             reader.park_presentation_read_until_cancelled(entered);
+            Ok(())
         }));
         inner.pending.push(ConversationObservation::Event {
             attempt_id: AttemptId::new("read-cut"),

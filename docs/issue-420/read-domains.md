@@ -49,6 +49,32 @@ success or error is discarded, leaving the latest cut dirty. No second event que
 or durable authority exists. Store errors are explicit; a new invalidation or an
 explicit authoritative request can retry, without an automatic failure spin.
 
+### Live failure and authoritative repair
+
+`read_failure` records failure to establish the **current** durable dependency
+fence `(read_revision, read_through)`. It is stored only after that exact fence
+passes `install_read_domains`; every new invalidating revision clears the old
+failure and marks its own cut dirty. Trace-only or unrelated progress does neither.
+Thus the message has one unambiguous cut owner without a second failure frontier.
+
+A matching background failure clears dirty, records failure and wakes subscribers.
+Polling fails closed with Lagged/resync. There is no automatic error retry loop.
+A successful background or authoritative result uses the same installation owner:
+it accepts only an unexhausted, exactly matching fence that is dirty or failed.
+Success clears failure/dirty and replaces the derived domains, publishing
+`ReadDomainsUpdated` only when values changed. A late failure after another owner
+has already established that cut is rejected, so it cannot re-poison the result.
+
+After a candidate's Store read succeeds outside synchronization, the host folds
+queued semantics and offers its result under projection synchronization. The host
+must still be live (not inspection, closed or shutting down), with no unpublished
+receipt; the shared installer then validates the exact dependency fence. A stale
+candidate changes nothing: it cannot clear a newer failure/dirty bit, replace
+newer values, or publish a false update. Its own historical response still succeeds.
+A same-cut success repairs an idle failed projection without another semantic
+event, reconnect or snapshot; subscription after the returned C resumes normally.
+Any actual candidate Store error still fails explicitly before this opportunity.
+
 ### Finite authoritative snapshot candidates
 
 `SnapshotCandidate` captures the complete semantic Session DTO, client cursor C,
@@ -80,8 +106,11 @@ receipt. If either changed, capture uses the already represented semantic pendin
 view instead; it never chases the latest durable pending table. An unpublished
 receipt cannot inject new pending state into an old client cursor.
 
-Completion populates the candidate's copy, without installing it into the live
-projection or allocating another client cursor. `snapshot(C)` followed by
+Completion populates the candidate's request-owned copy at its captured cursor.
+It then offers that successful result to the shared live installation primitive;
+this optional repair never changes the candidate or makes its success depend on
+installation. Only an actual change to live derived values allocates a subsequent
+`ReadDomainsUpdated` cursor. `snapshot(C)` followed by
 `subscribe(after C)` replays C+1...N. If history was evicted, subscription returns
 typed `ResyncRequired`; snapshot acquisition does not predict replay retention.
 Actual storage errors remain typed RuntimeFailure, but ordinary progress is not
@@ -225,8 +254,8 @@ message identity and deterministic single-frame/history-reading scroll tests.
 
 ## Captured-cut self-review
 
-Snapshot completion succeeds while the head moves and never installs into live
-state. Canonical membership, frozen pending bodies, filtered Tool associations and
+Snapshot completion succeeds while the head moves, independently of optional
+fenced live repair. Canonical membership, frozen pending bodies, filtered Tool associations and
 fixed Journal prefixes exclude later state while including all represented facts.
 Replay supplies every later cursor or explicitly refuses an evicted cursor.
 Background installation remains revision-fenced; the same historical data can be

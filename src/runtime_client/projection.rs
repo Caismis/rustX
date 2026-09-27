@@ -217,6 +217,8 @@ pub(crate) struct RuntimeClientProjection {
     pending_transcript: std::collections::BTreeMap<MessageId, crate::durable::TranscriptCursor>,
     publication_transcript: VecDeque<crate::runtime::identity::PublicationStreamId>,
     read_domains_dirty: bool,
+    /// Failure of the current read-domain fence; cleared by matching success
+    /// or a new invalidating revision, never by an obsolete read.
     read_failure: Option<String>,
     read_revision: u64,
     /// The cursor of the last published event (0 = nothing published yet).
@@ -274,7 +276,7 @@ pub(crate) struct SnapshotCandidate {
     pub(crate) snapshot: RuntimeClientSnapshot,
     pub(crate) cursor: RuntimeClientCursor,
     pub(crate) trace_through: u64,
-    read_cut: ReadDomainCut,
+    pub(crate) read_cut: ReadDomainCut,
     transcript_cut: Option<crate::durable::inbox::TranscriptSnapshotCut>,
 }
 impl SnapshotCandidate {
@@ -660,6 +662,7 @@ impl RuntimeClientProjection {
         if invalidates_read_domains(&observation) {
             self.read_through = self.journal_through;
             self.read_domains_dirty = true;
+            self.read_failure = None;
             self.read_revision = self
                 .read_revision
                 .checked_add(1)
@@ -1978,7 +1981,10 @@ impl RuntimeClientProjection {
         read: ReadDomains,
         publish: bool,
     ) -> bool {
-        if self.read_domain_cut() != Some(cut) {
+        if self.exhausted
+            || self.read_domain_fence() != cut
+            || (!self.read_domains_dirty && self.read_failure.is_none())
+        {
             return false;
         }
         let (transcript, occupancy) = match read {
@@ -1990,7 +1996,9 @@ impl RuntimeClientProjection {
                 return true;
             }
         };
-        self.read_failure = None;
+        if self.read_failure.take().is_some() {
+            self.wake_subscribers();
+        }
         self.read_domains_dirty = false;
         if self.snapshot.transcript != transcript
             || self.snapshot.context.last_request_occupancy != occupancy
@@ -4502,6 +4510,45 @@ mod tests {
             )),
             true
         ));
+    }
+
+    #[test]
+    fn read_failure_is_superseded_by_a_new_dependency_revision() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let failed = projection.read_domain_cut().unwrap();
+        assert!(projection.install_read_domains(
+            failed,
+            Err(crate::durable::ConversationStoreError::InvalidReference(
+                "transient".into()
+            )),
+            true
+        ));
+        assert!(projection.read_failure.is_some());
+        assert!(projection.read_domain_cut().is_none());
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let next = projection.read_domain_cut().unwrap();
+        assert_ne!(next, failed);
+        assert!(
+            projection.read_failure.is_none(),
+            "failure belongs only to its dependency revision"
+        );
+        let domains = (projection.snapshot.transcript.clone(), None);
+        assert!(!projection.install_read_domains(failed, Ok(domains.clone()), true));
+        assert_eq!(projection.read_domain_cut(), Some(next));
+        assert!(projection.install_read_domains(next, Ok(domains), true));
+        assert!(projection.read_failure.is_none());
+        assert!(projection.read_domain_cut().is_none());
+        // An older in-flight read for the same fence cannot poison a cut which
+        // another successful owner has already established.
+        assert!(!projection.install_read_domains(
+            next,
+            Err(crate::durable::ConversationStoreError::InvalidReference(
+                "late failure".into()
+            )),
+            true
+        ));
+        assert!(projection.snapshot().is_ok());
     }
 
     #[test]
