@@ -351,6 +351,7 @@ pub(crate) struct ClientInner {
     /// The one durable authority used for transcript/bootstrap reads by both
     /// live and read-only hosts.
     store: Arc<dyn ConversationStore>,
+    read_store: Arc<dyn ConversationStore>,
     /// Whether this host is a read-only attachment to durable conversation
     /// state rather than a control adapter over a live runtime.
     read_only: bool,
@@ -373,6 +374,8 @@ pub(crate) struct ClientInner {
     read_domain_hook: Arc<Mutex<Option<ReadDomainHook>>>,
     #[cfg(test)]
     trace_cut_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    snapshot_read_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
 }
 
 #[cfg(test)]
@@ -397,6 +400,7 @@ impl InteractionPublicationAuthority for RootInteractionPublicationAuthority {
 /// which is the projection worker's terminal condition.
 impl Drop for ClientInner {
     fn drop(&mut self) {
+        self.read_store.close_presentation_reader();
         self.pending.close();
     }
 }
@@ -423,7 +427,8 @@ impl ClientInner {
     /// guards only the durable read; the captured semantic fence prevents a
     /// completed read from overwriting a later mailbox observation.
     fn lock_snapshot_state(&self) -> Result<MutexGuard<'_, ClientState>, RuntimeClientError> {
-        loop {
+        const MAX_SNAPSHOT_READS: usize = 3;
+        for _ in 0..MAX_SNAPSHOT_READS {
             let fence = self.lock_state().projection.read_domain_fence();
             let items = if let Some(runtime) = &self.runtime {
                 runtime
@@ -438,7 +443,10 @@ impl ClientInner {
             };
             let mut state = self.lock_state();
             if self.pending.has_unpublished() {
-                return Ok(state);
+                if state.projection.read_domain_cut().is_none() {
+                    return Ok(state);
+                }
+                continue;
             }
             if let Some(items) = items
                 && state.projection.read_domain_fence() == fence
@@ -450,14 +458,24 @@ impl ClientInner {
                 return Ok(state);
             };
             drop(state);
+            #[cfg(test)]
+            if let Some(hook) = self.snapshot_read_hook.lock().unwrap().as_mut() {
+                hook();
+            }
             let read = cut.read(self.store.as_ref());
             let mut state = self.lock_state();
-            if !self.pending.has_unpublished()
-                && state.projection.install_read_domains(cut, read, true)
-            {
-                return Ok(state);
+            if !self.pending.has_unpublished() {
+                state.projection.install_read_domains(cut, read, true);
+                // A concurrent materializer may already have installed a newer
+                // coherent cut. Do not spend another attempt rereading it.
+                if state.projection.read_domain_cut().is_none() {
+                    return Ok(state);
+                }
             }
         }
+        Err(RuntimeClientError::RuntimeFailure {
+            message: "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition".into(),
+        })
     }
 
     /// A bound live projection can expose interactions to a future client.
@@ -508,10 +526,9 @@ impl ClientInner {
     ///
     /// The worker owns only the projection mutex, pending observations and the
     /// native Workflow read model. It never upgrades the host and cannot retain
-    /// runtime, catalog or executor authority. One in-flight blocking read may
-    /// retain storage until that read returns, independently of delivery shutdown.
-    /// Dropping the last host closes the pending queue immediately; that close
-    /// wakes and terminates the worker independently of native resource release.
+    /// runtime, catalog or executor authority. One in-flight blocking read owns
+    /// a cancellable Store scope. Closing the host cancels that scope and wakes
+    /// the worker, which joins the read before proving delivery termination.
     pub(crate) fn ensure_worker(self: &Arc<Self>) {
         // Construction may happen outside a runtime; a later call from a
         // request path spawns the worker instead.
@@ -522,7 +539,7 @@ impl ClientInner {
             return;
         }
         let state = self.state.clone();
-        let store = Arc::downgrade(&self.store);
+        let store = Arc::downgrade(&self.read_store);
         let pending = Arc::clone(&self.pending);
         let workflow_state = self
             .runtime
@@ -554,7 +571,7 @@ impl ClientInner {
                         if let Ok((cut, domains)) = result {
                             let mut guard = state.lock().expect("runtime client host lock poisoned");
                             guard.repair_semantics(&pending, workflow_state.as_ref());
-                            if !pending.is_closed() && !pending.has_unpublished() {
+                            if !pending.is_closed() && !pending.has_unpublished() && !guard.projection.snapshot_ref().shutting_down {
                                 guard.projection.install_read_domains(cut, domains, true);
                             }
                         }
@@ -566,7 +583,12 @@ impl ClientInner {
                 let cut = {
                     let mut guard = state.lock().expect("runtime client host lock poisoned");
                     guard.repair_semantics(&pending, workflow_state.as_ref());
-                    if pending.has_unpublished() {
+                    if guard.projection.snapshot_ref().shutting_down
+                        && let Some(store) = store.upgrade()
+                    {
+                        store.close_presentation_reader();
+                    }
+                    if pending.has_unpublished() || guard.projection.snapshot_ref().shutting_down {
                         None
                     } else {
                         guard.projection.read_domain_cut()
@@ -591,17 +613,26 @@ impl ClientInner {
                     }));
                 }
             }
-            // Closing delivery never joins blocking presentation I/O. A running
-            // read releases its Store handle on completion and cannot install.
+            if let Some(store) = store.upgrade() {
+                store.close_presentation_reader();
+            }
+            if let Some(read) = read {
+                let _ = read.await;
+            }
+            // Cancellation is followed by terminal proof, not handle detachment.
             #[cfg(test)]
             pending.signal_worker_exit();
         });
         *self.worker.lock().expect("projection worker mutex") = Some(worker);
     }
 
-    /// Residency shutdown joins semantic delivery, never blocking presentation I/O.
-    /// Closing the leaf queue ends read-model delivery without retaining the host.
+    pub(crate) fn cancel_presentation_reads(&self) {
+        self.read_store.close_presentation_reader();
+    }
+
+    /// Cancel Store waits/queries, then join semantic delivery and its finite read.
     pub(crate) async fn drain_projection(&self) -> Result<(), tokio::task::JoinError> {
+        self.read_store.close_presentation_reader();
         self.pending.close();
         let worker = self.worker.lock().expect("projection worker mutex").take();
         if let Some(worker) = worker {
@@ -2037,6 +2068,7 @@ impl RuntimeClientHost {
                 store.conversation_id()
             )),
             runtime: None,
+            read_store: store.presentation_reader(),
             store,
             read_only: true,
             replay_limit,
@@ -2052,6 +2084,8 @@ impl RuntimeClientHost {
             worker: Mutex::new(None),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
+            #[cfg(test)]
+            snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
             read_domain_hook: Arc::new(Mutex::new(None)),
         });
@@ -2169,6 +2203,7 @@ impl RuntimeClientHost {
             conversation_id: seed.conversation_id,
             agent_id: config.runtime.agent_id().clone(),
             runtime: Some(config.runtime),
+            read_store: store.presentation_reader(),
             store,
             read_only: false,
             replay_limit,
@@ -2184,6 +2219,8 @@ impl RuntimeClientHost {
             worker: Mutex::new(None),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
+            #[cfg(test)]
+            snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
             read_domain_hook: Arc::new(Mutex::new(None)),
         });
@@ -4847,7 +4884,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn detach_is_not_cancellation() {
         let (release_tx, release_rx) = model_release();
-        let (_, fixture) = host_fixture(
+        let (adapter, fixture) = host_fixture(
             vec![vec![
                 GatedStep::Emit(ModelEvent::Started),
                 GatedStep::ParkUntilReleased(release_rx),
@@ -4868,18 +4905,9 @@ mod tests {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("go"),
         });
-        // Wait for the attempt to be running.
-        loop {
-            let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-            if snapshot
-                .attempt
-                .as_ref()
-                .is_some_and(|attempt| matches!(attempt.phase, RuntimeClientAttemptPhase::Running))
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        // Native request-start publication precedes provider invocation. Use
+        // that exact signal instead of polling snapshots through moving cuts.
+        await_adapter_request_count(&adapter, 1).await;
         // Detach while the attempt is parked.
         attachment.detach();
         // A reattached client sees the attempt still running.
@@ -4985,7 +5013,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn detach_never_mutates_background_or_mailbox_state() {
         let (release_tx, release_rx) = model_release();
-        let (_, fixture) = host_fixture(
+        let (adapter, fixture) = host_fixture(
             vec![
                 vec![
                     GatedStep::Emit(ModelEvent::Started),
@@ -5041,17 +5069,7 @@ mod tests {
             .mailbox()
             .enqueue(inbound_text("msg-first", "admitted"))
             .expect("enqueue");
-        loop {
-            let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-            if snapshot
-                .attempt
-                .as_ref()
-                .is_some_and(|attempt| matches!(attempt.phase, RuntimeClientAttemptPhase::Running))
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        await_adapter_request_count(&adapter, 1).await;
         // Exact pending removal cannot cancel the parked attempt or the
         // independently committed background execution.
         let mailbox = fixture.runtime.tool_runtime().mailbox();
@@ -5147,6 +5165,7 @@ mod tests {
             "detach background execution",
         )
         .await;
+        fixture.runtime.settlement_signal().notified().await;
         let (final_snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             final_snapshot.background[0].state,
@@ -5696,6 +5715,9 @@ mod tests {
             "snapshot-fold background execution",
         )
         .await;
+        // The terminal notice has its own root attempt; settle that finite
+        // transition before asking for the final authoritative cut.
+        fixture.runtime.settlement_signal().notified().await;
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.background.len(), 1);
         assert_eq!(snapshot.background[0].execution_id, execution_id);
@@ -5889,16 +5911,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_acquisition_is_finite_when_every_read_is_superseded() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner
+            .lock_state()
+            .projection
+            .apply(ConversationObservation::Event {
+                attempt_id: AttemptId::new("snapshot-cut"),
+                event: RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("snapshot-cut"),
+                },
+            });
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = count.clone();
+        let state = inner.state.clone();
+        *inner.snapshot_read_hook.lock().unwrap() = Some(Box::new(move || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            state
+                .lock()
+                .unwrap()
+                .projection
+                .apply(ConversationObservation::Event {
+                    attempt_id: AttemptId::new("snapshot-cut"),
+                    event: RuntimeEvent::TurnStarted,
+                });
+        }));
+        let result = inner.lock_snapshot_state();
+        assert!(
+            matches!(result, Err(RuntimeClientError::RuntimeFailure { ref message }) if message == "snapshot cut superseded during all 3 read attempts; retry authoritative acquisition")
+        );
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let state = inner.lock_state();
+        assert!(
+            state.projection.read_domain_cut().is_some(),
+            "no stale candidate installed"
+        );
+        assert_eq!(
+            state
+                .projection
+                .snapshot_ref()
+                .attempt
+                .as_ref()
+                .unwrap()
+                .turn,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_acquisition_retries_once_then_returns_exact_cursor_cut() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner
+            .lock_state()
+            .projection
+            .apply(ConversationObservation::Event {
+                attempt_id: AttemptId::new("snapshot-cut"),
+                event: RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("snapshot-cut"),
+                },
+            });
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = count.clone();
+        let state = inner.state.clone();
+        *inner.snapshot_read_hook.lock().unwrap() = Some(Box::new(move || {
+            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                state
+                    .lock()
+                    .unwrap()
+                    .projection
+                    .apply(ConversationObservation::Event {
+                        attempt_id: AttemptId::new("snapshot-cut"),
+                        event: RuntimeEvent::TurnStarted,
+                    });
+            }
+        }));
+        let mut state = inner.lock_snapshot_state().unwrap();
+        let (snapshot, cursor) = state.projection.snapshot().unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(snapshot.attempt.as_ref().unwrap().turn, 1);
+        assert!(state.projection.read_domain_cut().is_none());
+        let (subscriber, _) = state.projection.subscribe(cursor).unwrap();
+        state.projection.apply(ConversationObservation::Event {
+            attempt_id: AttemptId::new("snapshot-cut"),
+            event: RuntimeEvent::TurnStarted,
+        });
+        let super::super::projection::SubscriberPoll::Event(event) =
+            state.projection.poll_subscriber(subscriber)
+        else {
+            panic!("exact replay suffix");
+        };
+        assert_eq!(event.cursor.get(), cursor.get() + 1);
+        assert!(matches!(
+            event.event,
+            RuntimeClientEvent::AttemptTurnUpdated { turn: 2, .. }
+        ));
+        assert_eq!(snapshot.attempt.as_ref().unwrap().turn, 1);
+    }
+
+    #[tokio::test]
     async fn blocked_read_materialization_does_not_own_shutdown_or_projection_drain() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let inner = fixture.host.weak_inner().upgrade().unwrap();
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
-        let (release, release_rx) = std::sync::mpsc::channel();
-        let (finished, finished_rx) = tokio::sync::oneshot::channel();
+        let reader = inner.read_store.clone();
         *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
-            entered.send(()).unwrap();
-            release_rx.recv().unwrap();
-            let _ = finished.send(());
+            reader.park_presentation_read_until_cancelled(entered);
         }));
         inner.pending.push(ConversationObservation::Event {
             attempt_id: AttemptId::new("read-cut"),
@@ -5911,10 +6030,8 @@ mod tests {
             inner.shutdown().await.unwrap(),
             RuntimeClientResult::ShutdownCompleted
         ));
-        inner.drain_projection().await.unwrap(); // Must finish before releasing Store work.
+        inner.drain_projection().await.unwrap(); // Joins the cancelled read; no test release.
         assert!(inner.pending.is_closed());
-        release.send(()).unwrap();
-        finished_rx.await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5975,6 +6092,10 @@ mod tests {
             },
         )
         .await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("attach");
         admission_gate.arm();
         probe.arm_snapshot();
         let snapshot_probe = probe.clone();
@@ -6005,10 +6126,6 @@ mod tests {
         // Release the admission: the transition commits and is observed
         // after C. Resume and receive the admission events, never a gap.
         admission_gate.release();
-        let (attachment, _) = fixture
-            .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .expect("attach");
         let subscription = attachment
             .subscribe_events(cursor)
             .expect("resume after the snapshot cursor");
@@ -6042,6 +6159,9 @@ mod tests {
     /// lock only after the fold completed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn snapshot_cursor_race_publish_wins() {
+        let (pause, control, _) =
+            crate::agent::execution::test_sync::StartBoundaryPause::install(true, false);
+        let mut control = control.unwrap();
         let probe = Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default());
         let admission_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
         let (_, fixture) = host_fixture_probe_with_runtime_gate(
@@ -6056,7 +6176,7 @@ mod tests {
                 submit_arrival: None,
                 shutdown_arrival: None,
                 mcp_failure_drain_gate: None,
-                start_boundary_pause: None,
+                start_boundary_pause: Some(pause),
                 model_arbitration_pause: None,
                 drain_linearization: None,
                 tool_start_pause: None,
@@ -6094,6 +6214,9 @@ mod tests {
         probe.arm_publish();
         admission_gate.release();
         probe.wait_publish_entered();
+        // Freeze the *next* durable transition, not the published transition
+        // under test. The snapshot need not chase request-start progress.
+        control.await_park(1).await;
         let probe_snapshot = probe.clone();
         let snapshot_host = fixture.host.clone();
         let snapshot_task = tokio::task::spawn_blocking(move || snapshot_host.snapshot());
@@ -6112,6 +6235,7 @@ mod tests {
         let subscription = attachment
             .subscribe_events(cursor)
             .expect("resume from the pre-transition cursor");
+        control.release();
         let mut saw_inbound = false;
         loop {
             let delivery = tokio::time::timeout(STREAM_LIVENESS_GUARD, subscription.next())
@@ -6269,7 +6393,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
-        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+        let (snapshot, cursor) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.background[0].state,
             BackgroundLifecycle::Running
@@ -6305,6 +6429,9 @@ mod tests {
         // proved success. Cancellation intent owns the request fact and its
         // reason, never the physical outcome (Issue #202), so the execution
         // settles as `Succeeded`, not `Cancelled`.
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("observe terminal notice attempt");
         release.send_replace(true);
         let terminal = await_background_terminal(
             fixture.runtime.tool_runtime().background(),
@@ -6313,6 +6440,12 @@ mod tests {
         )
         .await;
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        // The background notice also starts a root attempt. Its settlement is
+        // the exact authoritative boundary for the final snapshot.
+        receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Succeeded);
         assert!(snapshot.background[0].result.is_some());

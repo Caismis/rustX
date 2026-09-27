@@ -1882,6 +1882,16 @@ pub trait ConversationStore: Send + Sync + 'static {
         observer: std::sync::Arc<dyn super::presentation::JournalObserver>,
     ) -> Result<u64, ConversationStoreError>;
 
+    /// Isolated cancellation scope for presentation reads. It shares storage,
+    /// never execution ownership, and must be closed before joining its tasks.
+    fn presentation_reader(&self) -> std::sync::Arc<dyn ConversationStore>;
+
+    /// Cancel this reader's connection waits and running `SQLite` queries.
+    fn close_presentation_reader(&self);
+
+    #[cfg(test)]
+    fn park_presentation_read_until_cancelled(&self, entered: tokio::sync::oneshot::Sender<()>);
+
     /// Latest committed Journal position, read without enumerating history.
     fn presentation_frontier(&self) -> Result<u64, ConversationStoreError>;
 

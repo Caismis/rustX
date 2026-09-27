@@ -1,5 +1,10 @@
 # Issue 420 repair validation
 
+The follow-up repair of `9fbfda118b2875038974cc18a2ecb6f0533a1e47` is recorded in
+[process-lifetime-validation.md](process-lifetime-validation.md). The record below
+is historical validation of the first repair, not the current lifetime/snapshot
+contract. See [read-domains.md](read-domains.md) for the final architecture.
+
 Repair of existing PR #423, starting from authoritative clean branch
 `issue-420-incremental-projection-chat-stability` at
 `d9cf99886d09dbf6c846a8b5876fa0b6d4825531` in
@@ -125,8 +130,9 @@ separate baseline worktree. No baseline run was fabricated during this repair.
 
 - The first native cut implementation rejected a snapshot after three concurrently
   superseded reads. Focused native races exposed that normal semantic progress is
-  not a read error. Snapshot requests now retry finite read/validate cuts outside
-  projection ownership until current; Web replay recovery retains its separate
+  not a read error. That first repair retried read/validate cuts outside
+  projection ownership until current; the follow-up replaces this unbounded loop
+  with three attempts and explicit failure; Web replay recovery retains its separate
   bounded three-attempt policy.
 - The first clippy run found documentation markup and test-hook type complexity;
   both were repaired. A Web typecheck caught a missing native subscribe ACK cursor

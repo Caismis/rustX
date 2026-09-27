@@ -210,6 +210,9 @@ enum ForegroundSettlement {
 /// the projection folds the coordinator's commits in order.
 pub(crate) struct RuntimeClientProjection {
     journal_through: u64,
+    /// Latest represented prefix that changed a durable read dependency.
+    /// Trace-only progress must not starve a Session snapshot candidate.
+    read_through: u64,
     read_domains_dirty: bool,
     read_failure: Option<String>,
     read_revision: u64,
@@ -330,6 +333,7 @@ impl RuntimeClientProjection {
     ) -> Self {
         Self {
             journal_through: 0,
+            read_through: 0,
             read_domains_dirty: false,
             read_failure: None,
             read_revision: 0,
@@ -429,6 +433,7 @@ impl RuntimeClientProjection {
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
         self.journal_through = seed.journal_through;
+        self.read_through = seed.journal_through;
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
         self.snapshot.shutting_down = seed.shutting_down;
@@ -474,6 +479,7 @@ impl RuntimeClientProjection {
             return;
         }
         self.journal_through = envelope.sequence;
+        self.read_through = envelope.sequence;
         let event = &envelope.event;
         match event {
             RuntimeEvent::CompactionStarted
@@ -577,11 +583,15 @@ impl RuntimeClientProjection {
             observations,
         } = observation
         {
+            let revision = self.read_revision;
             for observation in observations {
                 self.apply(observation);
             }
             if let Some(through) = through {
                 self.journal_through = through;
+                if self.read_revision != revision {
+                    self.read_through = through;
+                }
                 // JournalBatch is released only for a represented Trace-affecting cut.
                 self.publish(RuntimeClientEvent::TraceChanged);
             } else {
@@ -591,6 +601,7 @@ impl RuntimeClientProjection {
             return;
         }
         if invalidates_read_domains(&observation) {
+            self.read_through = self.journal_through;
             self.read_domains_dirty = true;
             self.read_revision = self
                 .read_revision
@@ -1804,7 +1815,7 @@ impl RuntimeClientProjection {
     pub(crate) fn read_domain_fence(&self) -> ReadDomainCut {
         ReadDomainCut {
             revision: self.read_revision,
-            through: self.journal_through,
+            through: self.read_through,
         }
     }
 
@@ -4325,6 +4336,30 @@ mod tests {
             SubscriberPoll::Exhausted
         );
         assert_eq!(projection.cursor(), RuntimeClientCursor::new(0));
+    }
+
+    #[test]
+    fn trace_only_progress_does_not_supersede_a_durable_read_cut() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let cut = projection.read_domain_cut().unwrap();
+        projection.apply(ConversationObservation::JournalBatch {
+            through: Some(9),
+            observations: vec![event_observation(RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new("trace-only-call"),
+                tool_id: ToolId::new("tool"),
+            })],
+        });
+        assert_eq!(projection.read_domain_cut(), Some(cut));
+        assert_eq!(projection.snapshot_cut().unwrap().2, 9);
+        assert!(projection.install_read_domains(
+            cut,
+            Ok((
+                super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                None
+            )),
+            true
+        ));
     }
 
     #[test]

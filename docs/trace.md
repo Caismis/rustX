@@ -309,8 +309,10 @@ state, cursor, Trace frontier, and the lifecycle evidence used by `trace_updates
 Materialization runs outside that mutex. Runtime owners never wait for Trace.
 The semantic projection worker owns read-model state, the pending queue and the native
 Workflow read model. It cannot retain the host or runtime. A bounded in-flight durable
-read owns its Store lease outside projection synchronization until the read returns;
-closing delivery never waits for that read and prevents its installation.
+read owns its cancellable Store scope outside projection synchronization. Closing
+delivery cancels connection waits/SQLite queries and joins the read, proving terminal
+behavior before normal residency release. Late installation is forbidden; the global
+Tokio Runtime shutdown policy is unchanged.
 
 The closed classification in `runtime::observation` gates Attempt/Turn/request,
 Assistant/Tool message and execution, compaction, Background, Subagent terminal

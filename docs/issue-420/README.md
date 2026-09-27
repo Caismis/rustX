@@ -32,9 +32,11 @@ one blocking read is in flight. Its completion is installed only after queued
 semantics are folded again, the cut still matches and no native publication is
 outstanding. Installation and the event cursor allocation share the projection
 mutex. Stale reads are retired and the current dirty cut is retried. Requests that
-need authoritative snapshots perform finite read/validate cuts outside the
-mutex too. Closing delivery never joins blocking presentation I/O; the read owns
-only its Store lease, which it releases on completion, and cannot install after close.
+need authoritative snapshots perform at most three read/validate attempts outside
+the mutex, returning an explicit typed failure on exhaustion. Closing delivery cancels
+presentation connection waits and SQLite queries, then joins the worker and read task.
+The Store-only read scope cannot install after close or keep Tokio destruction waiting
+on an uncancelled operation. See the process ownership audit in read-domains.md.
 
 `PendingObservations` owns the closed Trace-anchor vocabulary and represented
 JournalBatch frontier. Every released successful JournalBatch emits one
