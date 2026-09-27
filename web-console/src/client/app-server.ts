@@ -336,7 +336,7 @@ export class AppServerClient {
       } else pending.reject(new Error('Disconnected before a response. Unsent operations were discarded.'));
     }
     this.pending.clear();
-    this.refreshes.clear(); this.traceReads.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attachmentChanges.clear();
+    this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attachmentChanges.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
@@ -786,7 +786,7 @@ export class AppServerClient {
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
-      this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), trace: replaceTrace(result.snapshot.trace, this.state.views[id]?.trace), attachment: 'attached' });
+      this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, this.state.views[id]?.trace)), attachment: 'attached' });
       attached?.(result.target);
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
@@ -832,13 +832,13 @@ export class AppServerClient {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
+        if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
         this.acquiring.add(id);
         const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot');
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates), error: undefined });
+          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
           this.reconcileInteractions(id); this.settleSubmissions(id);
           await this.refreshDisplaySummary(id);
           if (!current()) return;
@@ -860,6 +860,17 @@ export class AppServerClient {
       throw error;
     }
   }
+  // Trace authority is independent of Runtime Client cursors and cache interval
+  // epochs (an overlapping snapshot can preserve the latter).
+  private traceAuthorities = new Map<string, number>();
+  private supersedeTrace(id: string, trace: TraceCache): TraceCache {
+    this.traceAuthorities.set(id, (this.traceAuthorities.get(id) ?? 0) + 1);
+    // Old paging/detail requests may no longer complete. Release their loading
+    // markers with the new authority so explicit reads remain available.
+    return { ...trace, loading: false, details: Object.fromEntries(
+      Object.entries(trace.details).filter(([, entry]) => !entry.loading),
+    ) };
+  }
   private traceReads = new Map<string, { dirty: boolean; work: Promise<void> }>();
   private refreshTraceDomain(id: string): Promise<void> {
     const existing = this.traceReads.get(id);
@@ -871,8 +882,9 @@ export class AppServerClient {
     read.work = (async () => {
       while (read.dirty && current()) {
         read.dirty = false;
+        const authority = this.traceAuthorities.get(id);
         const result = await this.request({ method: 'session/trace', params: { target, before: null, limit: TRACE_PAGE_SIZE, records: traceInterests(this.state.views[id]?.trace) } }, 'trace');
-        if (current()) this.setSession(id, { trace: refreshTrace(this.state.views[id]?.trace, result.page, result.page.updates ?? []) });
+        if (current() && this.traceAuthorities.get(id) === authority) this.setSession(id, { trace: refreshTrace(this.state.views[id]?.trace, result.page, result.page.updates ?? []) });
       }
     })().finally(() => { if (this.traceReads.get(id) === read) this.traceReads.delete(id); });
     this.traceReads.set(id, read);
@@ -903,10 +915,12 @@ export class AppServerClient {
     const target = this.target(id);
     const generation = this.state.generation;
     const cache = this.state.views[id].trace;
+    const authority = this.traceAuthorities.get(id);
     if (!cache || cache.loading || cache.page.next_cursor == null) return;
     const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
     if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+      && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === cache.epoch;
     this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
@@ -930,8 +944,8 @@ export class AppServerClient {
    * Fetches the heavy detail of one record on demand.
    *
    * Every relevant identity fences the reply: the connection generation, the
-   * exact attachment target, and the Trace epoch the request was issued in.
-   * A reply that survives all three still belongs to the record it was asked
+   * exact attachment target, Trace authority generation and cache interval.
+   * A reply that survives those fences still belongs to the record it was asked
    * for; anything else is dropped rather than attached to a newer window.
    */
   async loadTraceDetail(id: string, record: string) {
@@ -940,11 +954,13 @@ export class AppServerClient {
     const cache = this.state.views[id]?.trace;
     if (!cache) return;
     const epoch = cache.epoch;
+    const authority = this.traceAuthorities.get(id);
     const existing = cache.details[record];
     if (existing && (existing.loading || existing.detail)) return;
     const pending = beginTraceDetail(cache, record);
     const current = () => this.current(generation)
       && sameTarget(this.state.views[id]?.target, target)
+      && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === epoch
       && this.state.views[id]?.trace?.details[record] === pending.details[record];
     this.setSession(id, { trace: pending });
@@ -960,10 +976,11 @@ export class AppServerClient {
     const view = this.state.views[id];
     if (view?.target) {
       const generation = this.state.generation, target = view.target;
-      const trace = replaceTrace({ records: [] }, view.trace);
+      const trace = this.supersedeTrace(id, replaceTrace({ records: [] }, view.trace));
+      const authority = this.traceAuthorities.get(id);
       this.setSession(id, { trace });
       void this.refreshTraceDomain(id).catch(error => {
-        if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.state.views[id]?.trace?.epoch === trace.epoch) {
+        if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.traceAuthorities.get(id) === authority && this.state.views[id]?.trace?.epoch === trace.epoch) {
           this.setSession(id, { trace: { ...this.state.views[id].trace!, error: String(error) } });
         }
       });
@@ -1207,6 +1224,7 @@ export class AppServerClient {
   private retireAttachmentWork(id: string) {
     this.acquiring.delete(id);
     this.traceReads.delete(id);
+    this.traceAuthorities.delete(id);
     this.summarySettled.delete(id);
     this.summaryObservedEpoch.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);

@@ -192,6 +192,17 @@ reports unproven native settlement; this repair adds no process-wide timeout pol
 
 ## Trace and Web handoff
 
+Web Trace reads capture a per-Session authority generation in addition to the
+connection generation and exact attachment target. Installing authoritative
+snapshot Trace data supersedes reads admitted under the prior authority, even
+when an overlapping cache merge preserves its interval epoch. Resync reset and
+explicit latest-window replacement also supersede prior reads. Tail, older-page,
+and detail responses from a superseded authority are discarded; pending paging
+and detail loading markers are released with the new authority. Runtime Client
+cursors never order Trace reads. The tail owner retains one active read and one
+coalesced dirty bit; a later invalidation reads under the current authority,
+without requiring a Session snapshot or replaying any mutation.
+
 `PendingObservations::trace_fact_requires_publication` covers Attempt/Turn/request
 (including retry and context contributions), adoption, Assistant/Tool committed
 messages and Tool execution, compaction, Background commits/terminals, Subagent

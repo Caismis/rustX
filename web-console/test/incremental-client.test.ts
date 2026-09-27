@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
+import { traceRecord } from './trace-fixture';
 import type { RuntimeClientEvent } from '../../protocol/app-server/v25';
 const servers: Server[] = [];
 const create = async () => { const s = new Server(); servers.push(s); await s.attached('A'); return s; };
@@ -161,4 +162,76 @@ it('registered native replay preceding subscribe ACK advances the cut without en
   expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: '8', attachment: 'attached' });
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(1);
+});
+
+// Await the actual coalesced owner so rejection is observed without sleeps or
+// a subsequent invalidation that could conceal a stale installation.
+it.each(['explicit refresh', 'resync'] as const)('snapshot Trace authority supersedes a held older read during %s', async mode => {
+  const s = new Server(); servers.push(s);
+  const running = traceRecord(1, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' }, message_id: null });
+  const completed = traceRecord(1, { message_id: 'terminal-message' });
+  s.snapshots.set('A', { ...s.snapshots.get('A')!, trace: { records: [running] } });
+  await s.attached('A');
+  const target = s.target('A'), epoch = s.client.getSnapshot().views.A.trace!.epoch;
+  s.held.add('session/trace'); s.held.add('session/snapshot');
+  emit(s, '1', { type: 'trace_changed' });
+  const old = await s.waitFor('session/trace', 1);
+  const oldWork = s.client['traceReads'].get('A')!.work;
+  if (mode === 'resync') s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target, after_cursor: '1', earliest_serviceable: '7' } });
+  const refreshed = mode === 'resync' ? s.client['refreshes'].get('A')! : s.client.refresh('A');
+  const request = await s.waitFor('session/snapshot', 1);
+  s.socket.success(request, { type: 'snapshot', cursor: '7', snapshot: { ...s.snapshots.get('A')!, trace: { records: [completed] } } });
+  await refreshed;
+  const authoritative = s.client.getSnapshot().views.A;
+  if (mode === 'explicit refresh') expect(authoritative.trace!.epoch).toBe(epoch);
+  expect(authoritative.trace!.page.records[0]).toEqual(completed);
+  s.socket.success(old, { type: 'trace', page: { records: [running] } });
+  await oldWork;
+  expect(s.client.getSnapshot().views.A.trace!.page.records[0].state).toBe('completed');
+  expect(s.client.getSnapshot().views.A.trace!.page.records[0].timing).toEqual(completed.timing);
+  expect(s.client.getSnapshot().views.A).toBe(authoritative);
+  expect(authoritative).toMatchObject({ target, cursor: '7', attachment: 'attached' });
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
+
+  emit(s, '8', { type: 'trace_changed' });
+  const fresh = await s.waitFor('session/trace', 2);
+  const freshWork = s.client['traceReads'].get('A')!.work;
+  s.socket.success(fresh, { type: 'trace', page: { records: [completed, traceRecord(2)] } });
+  await freshWork;
+  expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([completed, traceRecord(2)]);
+  expect(s.client.getSnapshot().views.A).toMatchObject({ target, cursor: '8', attachment: 'attached' });
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(1);
+});
+
+it('same Session attachment replacement rejects a held Trace response', async () => {
+  const s = await create(); const target = s.target('A');
+  s.held.add('session/trace'); emit(s, '1', { type: 'trace_changed' });
+  const old = await s.waitFor('session/trace', 1);
+  const oldWork = s.client['traceReads'].get('A')!.work;
+  await s.client.release('A'); await s.client.attach('A');
+  const replacement = s.client.getSnapshot().views.A;
+  expect(replacement.target).not.toEqual(target);
+  s.socket.success(old, { type: 'trace', page: { records: [traceRecord(1)] } });
+  await oldWork;
+  expect(s.client.getSnapshot().views.A).toBe(replacement);
+});
+
+it.each(['snapshot', 'latest'] as const)('%s supersession keeps a burst bounded to one active tail read and one follow-up', async owner => {
+  const s = await create(); s.held.add('session/trace');
+  emit(s, '1', { type: 'trace_changed' });
+  const old = await s.waitFor('session/trace', 1);
+  const work = s.client['traceReads'].get('A')!.work;
+  if (owner === 'snapshot') { s.cursor = 1n; await s.client.refresh('A'); }
+  else s.client.latestTrace('A');
+  const trace = s.client.getSnapshot().views.A.trace;
+  for (let cursor = 2; cursor <= 101; cursor++) emit(s, String(cursor), { type: 'trace_changed' });
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
+  s.socket.success(old, { type: 'trace', page: { records: [traceRecord(1, { state: 'running' })] } });
+  const fresh = await s.waitFor('session/trace', 2);
+  expect(s.client.getSnapshot().views.A.trace).toBe(trace);
+  s.socket.success(fresh, { type: 'trace', page: { records: [traceRecord(1)] } });
+  await work;
+  expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([traceRecord(1)]);
+  expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(owner === 'snapshot' ? 1 : 0);
 });
