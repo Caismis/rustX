@@ -348,11 +348,11 @@ pub enum ErrorData {
     JobPublicationAbandoned {
         job_id: crate::runtime::identity::ToolExecutionId,
     },
-    /// Cancellation won before Delegate could be sent; no input was delivered.
+    /// The input frame was provably not written; no input was delivered.
     AgentNotDelivered {
         agent_id: crate::runtime::identity::AgentId,
     },
-    /// Delegate may have reached the child, but canonical acceptance is unproven.
+    /// An input write was attempted, but canonical acceptance was not acknowledged.
     /// Automatic replay could duplicate user guidance.
     AgentDeliveryUnknown {
         agent_id: crate::runtime::identity::AgentId,

@@ -35,7 +35,7 @@ async fn assert_unproven_agent_stops_at_exact_activation(
         .workspace
         .clone();
     assert!(
-        workspace.acquire().await.is_err(),
+        workspace.acquire(&CancellationSignal::new()).await.is_err(),
         "physical lease must also remain closed"
     );
 }

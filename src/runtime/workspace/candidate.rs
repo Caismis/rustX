@@ -271,7 +271,7 @@ pub(super) async fn inspect_source(
         dirty: false,
     };
     manager
-        .verify_retained_workspace(owner, snapshot, &handoff)
+        .verify_retained_workspace(owner, snapshot, &handoff, None)
         .await
         .map_err(|e| e.to_string())?;
     let first = hash_source(manager, snapshot, &head).await?;
@@ -280,7 +280,7 @@ pub(super) async fn inspect_source(
         return Err("candidate changed during native source inspection".into());
     }
     manager
-        .verify_retained_workspace(owner, snapshot, &handoff)
+        .verify_retained_workspace(owner, snapshot, &handoff, None)
         .await
         .map_err(|e| e.to_string())?;
     Ok(first)

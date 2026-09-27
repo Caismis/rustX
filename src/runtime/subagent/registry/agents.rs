@@ -151,9 +151,9 @@ pub enum AgentControlError {
         "Agent is unavailable: physical settlement, canonical publication, or workspace authority requires explicit repair"
     )]
     Settlement,
-    #[error("Delegate delivery did not start; no input was delivered")]
+    #[error("input delivery did not start; no input was delivered")]
     NotDelivered,
-    #[error("child input acceptance was not acknowledged; delivery may be unknown")]
+    #[error("child input acceptance was not acknowledged; delivery is unknown")]
     DeliveryUnknown,
     #[error("activation admission task failed: {0}")]
     Admission(String),
@@ -455,7 +455,12 @@ impl SubagentRegistry {
                         SubagentLifecycle::Running => {
                             let (sequence, answer, ticket) = self
                                 .admit_guidance_locked(&mut state, &activation_id, message)
-                                .map_err(AgentControlError::Message)?;
+                                .map_err(|error| match error {
+                                    SubagentSteerError::ControlLost => {
+                                        AgentControlError::NotDelivered
+                                    }
+                                    error => AgentControlError::Message(error),
+                                })?;
                             Decision::Deliver(activation_id, sequence, answer, ticket)
                         }
                         lifecycle
@@ -513,7 +518,9 @@ impl SubagentRegistry {
                     let index = state.index[&state.agents[id].latest_activation];
                     // In-memory reservation is the message/interruption arbitration boundary.
                     // Its owner task installs recoverable authority and commits Reserved off-lock.
-                    super::publish_snapshot(&mut state, &self.state_version, index);
+                    if matches!(&decision, Decision::Resume(..)) {
+                        super::publish_snapshot(&mut state, &self.state_version, index);
+                    }
                     Some(decision)
                 }
             };
@@ -531,7 +538,7 @@ impl SubagentRegistry {
             }
         };
         match decision {
-            Decision::Deliver(activation_id, sequence, answer, _ticket) => {
+            Decision::Deliver(activation_id, sequence, answer, ticket) => {
                 drop(ownership);
                 let outcome = answer.await;
                 self.record_child_decision(&activation_id, sequence, &outcome);
@@ -555,12 +562,16 @@ impl SubagentRegistry {
                         ));
                     }
                     Err(_) => {
-                        return Err(AgentControlError::Message(
-                            SubagentSteerError::ChildRefused {
-                                detail: "the child settled before the guidance was accepted"
-                                    .to_owned(),
+                        return Err(
+                            if ticket
+                                .write_started
+                                .load(std::sync::atomic::Ordering::Acquire)
+                            {
+                                AgentControlError::DeliveryUnknown
+                            } else {
+                                AgentControlError::NotDelivered
                             },
-                        ));
+                        );
                     }
                 }
                 Ok(AgentMessageAccepted {
@@ -573,7 +584,7 @@ impl SubagentRegistry {
                 // The owner retains staging/rollback even if the caller drops
                 // its response future after the reservation committed.
                 let registry = self.clone();
-                tokio::spawn(async move {
+                let owner_task = tokio::spawn(async move {
                     let _admission = admission;
                     #[cfg(test)]
                     let mut test_gates = registry.state.lock().unwrap().resume_test_gates.take();
@@ -605,12 +616,22 @@ impl SubagentRegistry {
                             // activation ID. Its consumed allocation is already durable.
                             super::publish_snapshot(&mut state, &registry.state_version, index);
                         }
-                        // Recovered workspace verification may run native Git
-                        // commands. Complete this prerequisite before Reserved:
-                        // once the durable obligation exists, the only executable
-                        // owner is the child inheriting the physical lease.
-                        *identity.workspace_access.get_mut().unwrap() = Some(identity.workspace.acquire().await
-                            .map_err(|detail| SubagentStartError::Workspace { detail })?);
+                        // The complete recovered verification uses supervised Git.
+                        // Each helper receives durable continuation authority before spawn,
+                        // including this pre-Reserved physical lifetime.
+                        let access = crate::runtime::workspace::with_physical_settlement_authority(
+                            identity.physical_owner.clone(), identity.workspace.acquire(&cancellation),
+                        ).await;
+                        let _helper_proof = identity.physical_owner.as_ref().unwrap()
+                            .prove_continuations()
+                            .map_err(|error| SubagentStartError::Rollback { detail: error.to_string() })?
+                            .ok_or_else(|| SubagentStartError::Rollback {
+                                detail: "recovered workspace verification has unresolved physical helpers".into(),
+                            })?;
+                        if cancellation.is_cancelled() { return Err(SubagentStartError::Cancelled); }
+                        *identity.workspace_access.get_mut().unwrap() = Some(
+                            access.map_err(|detail| SubagentStartError::Workspace { detail })?
+                        );
                         #[cfg(test)]
                         let reserved_hook = registry.state.lock().unwrap().reserved_commit_hook.take();
                         #[cfg(test)]
@@ -655,14 +676,20 @@ impl SubagentRegistry {
                         let mut physical_settlement_proven = match &result {
                             Ok(SubagentStartOutcome::RolledBack) => true,
                             Err(error) => error.rollback_is_proven(),
-                            Ok(SubagentStartOutcome::Accepted(_)) => unreachable!("accepted activation never rolls back admission"),
+                            Ok(SubagentStartOutcome::Accepted(_)) => {
+                                unreachable!("accepted activation never rolls back admission")
+                            }
                         };
                         if physical_settlement_proven
                             && let Some(owner) = &identity.physical_owner
                             && let Err(error) = owner.publish_quiescent()
                         {
                             physical_settlement_proven = false;
-                            result = Err(SubagentStartError::Rollback { detail: format!("rollback recovery proof publication failed: {error}") });
+                            result = Err(SubagentStartError::Rollback {
+                                detail: format!(
+                                    "rollback recovery proof publication failed: {error}"
+                                ),
+                            });
                         }
                         let publication = async {
                             let ownership = registry.config.spawn.product_root.runtime_ownership_admission().await
@@ -676,7 +703,13 @@ impl SubagentRegistry {
                         }.await;
                         match publication {
                             Ok(receipt) => rollback_sequence = Some(receipt.sequence),
-                            Err(detail) => result = Err(SubagentStartError::Rollback { detail: format!("admission rollback proof could not be committed: {detail}") }),
+                            Err(detail) => {
+                                result = Err(SubagentStartError::Rollback {
+                                    detail: format!(
+                                        "admission rollback proof could not be committed: {detail}"
+                                    ),
+                                });
+                            }
                         }
                     }
                     {
@@ -698,9 +731,15 @@ impl SubagentRegistry {
                         } else {
                             agent.finish_resume(&identity.activation_id);
                         }
-                        let index = state.index[&state.agents[&identity.agent_id].latest_activation];
+                        let index =
+                            state.index[&state.agents[&identity.agent_id].latest_activation];
                         if let Some(sequence) = rollback_sequence {
-                            super::publish_committed_snapshot(&mut state, &registry.state_version, index, sequence);
+                            super::publish_committed_snapshot(
+                                &mut state,
+                                &registry.state_version,
+                                index,
+                                sequence,
+                            );
                         } else {
                             super::publish_snapshot(&mut state, &registry.state_version, index);
                         }
@@ -736,9 +775,14 @@ impl SubagentRegistry {
                             Err(AgentControlError::Start(SubagentStartError::Cancelled))
                         }
                     }
-                })
-                .await
-                .map_err(|error| AgentControlError::Admission(error.to_string()))?
+                });
+                #[cfg(test)]
+                {
+                    self.state.lock().unwrap().resume_owner_abort = Some(owner_task.abort_handle());
+                }
+                owner_task
+                    .await
+                    .map_err(|error| AgentControlError::Admission(error.to_string()))?
             }
         }
     }
@@ -784,10 +828,47 @@ impl SubagentRegistry {
         .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?;
         let next_ordinal = consumed
             .iter()
+            .chain(events.iter().filter_map(|envelope| match &envelope.event {
+                RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => Some(subagent_id),
+                RuntimeEvent::AgentActivationAdmission { activation_id, .. } => Some(activation_id),
+                _ => None,
+            }))
             .filter_map(|id| id.conversation_ordinal(&self.config.conversation_id))
             .map(|ordinal| ordinal.saturating_add(1))
             .max()
             .unwrap_or(1);
+        // Every allocation in a durable Agent's namespace is physical authority,
+        // even when the parent died before Reserved. Read directories off-lock.
+        let mut allocations = std::collections::BTreeMap::new();
+        let mut recorded = std::collections::BTreeSet::new();
+        for envelope in &events {
+            match &envelope.event {
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id,
+                    child_agent_id,
+                    child_conversation_id,
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    ..
+                } => {
+                    recorded.insert(subagent_id.clone());
+                    if !allocations.contains_key(child_agent_id) {
+                        let ids = super::super::physical_recovery::consumed_activation_ids(
+                            &self.config.spawn.product_root,
+                            &self.config.spawn.session_id,
+                            child_conversation_id,
+                        )
+                        .map_err(|error| {
+                            ConversationStoreError::InvalidReference(error.to_string())
+                        })?;
+                        allocations.insert(child_agent_id.clone(), ids);
+                    }
+                }
+                RuntimeEvent::AgentActivationAdmission { activation_id, .. } => {
+                    recorded.insert(activation_id.clone());
+                }
+                _ => {}
+            }
+        }
         // The I/O phase above finishes before this startup-only replay cut.
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.next_ordinal = state.next_ordinal.max(next_ordinal);
@@ -1053,6 +1134,19 @@ impl SubagentRegistry {
                     }
                 }
                 _ => {}
+            }
+        }
+        for (agent_id, ids) in allocations {
+            for activation in ids {
+                if !recorded.contains(&activation) {
+                    state.agents[&agent_id]
+                        .workspace
+                        .await_recovered_physical_proof();
+                    state
+                        .recovery_unreserved
+                        .insert(activation.clone(), agent_id.clone());
+                    state.recovery_pending.insert(activation);
+                }
             }
         }
         for (activation_id, (agent_id, origin)) in pending_admissions {

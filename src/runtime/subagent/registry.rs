@@ -584,6 +584,7 @@ struct RegistryState {
     agents: BTreeMap<AgentId, agents::AgentRecord>,
     /// Recovered generations whose exact native incarnation still owes proof.
     recovery_pending: std::collections::BTreeSet<SubagentId>,
+    recovery_unreserved: std::collections::BTreeMap<SubagentId, AgentId>,
     recovery_inflight: std::collections::BTreeSet<SubagentId>,
     terminal_inflight: std::collections::BTreeSet<SubagentId>,
     #[cfg(test)]
@@ -648,6 +649,8 @@ struct RegistryState {
     allocation_attempts: usize,
     #[cfg(test)]
     resume_test_gates: Option<ResumeTestGates>,
+    #[cfg(test)]
+    resume_owner_abort: Option<tokio::task::AbortHandle>,
     #[cfg(test)]
     reserved_commit_hook: Option<Arc<CommitBoundaryHook>>,
     #[cfg(test)]
@@ -1631,6 +1634,7 @@ pub(crate) struct GuidanceTicket {
     subagent_id: SubagentId,
     /// The ticket's own transport correlation identity.
     guidance_id: u64,
+    write_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Drop for GuidanceTicket {
@@ -1680,6 +1684,7 @@ impl SubagentRegistry {
                 next_guidance_id: 1,
                 agents: BTreeMap::new(),
                 recovery_pending: std::collections::BTreeSet::new(),
+                recovery_unreserved: std::collections::BTreeMap::new(),
                 recovery_inflight: std::collections::BTreeSet::new(),
                 terminal_inflight: std::collections::BTreeSet::new(),
                 #[cfg(test)]
@@ -1716,6 +1721,8 @@ impl SubagentRegistry {
                 allocation_attempts: 0,
                 #[cfg(test)]
                 resume_test_gates: None,
+                #[cfg(test)]
+                resume_owner_abort: None,
                 #[cfg(test)]
                 reserved_commit_hook: None,
                 #[cfg(test)]
@@ -2107,8 +2114,9 @@ impl SubagentRegistry {
 
     /// **Prepare.** Runs every fallible stage privately: input validation,
     /// identity allocation, process spawn, and the activation handshake.
-    /// Nothing is published, no capacity is consumed, and a failure leaves
-    /// no trace.
+    /// No semantic ownership is published and no capacity is committed.
+    /// Positive physical allocations retain their recovery evidence and consume
+    /// their identities even when preparation fails.
     ///
     /// `preparation_cancellation` is the invoking attempt's cancellation
     /// authority (Issue #145): it owns the *whole* pre-commit lifecycle,
@@ -2239,6 +2247,112 @@ impl SubagentRegistry {
                 || AgentId::new(format!("agent-{subagent_id}")),
                 |resume| resume.agent_id.clone(),
             );
+            #[cfg(test)]
+            let override_child = self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .staged_overrides
+                .pop_front();
+            #[cfg(test)]
+            let overridden = override_child.is_some();
+            #[cfg(not(test))]
+            let overridden = false;
+            #[cfg(test)]
+            let allocation_stage = self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .allocation_test_hook
+                .take()
+                .map(|hook| {
+                    hook.entered.send(()).unwrap();
+                    hook.stage
+                });
+            // Allocate recoverable authority before any workspace Git can start.
+            let (runtime_root, physical_owner) = if overridden {
+                (
+                    None,
+                    resume.and_then(|identity| identity.physical_owner.clone()),
+                )
+            } else {
+                #[cfg(test)]
+                let injected_failure = {
+                    let mut state = self.state.lock().unwrap();
+                    state.allocation_attempts += 1;
+                    state.allocation_failure.take()
+                };
+                let allocate = async {
+                    if resume.is_some() {
+                        self.config
+                            .spawn
+                            .allocate_activation_runtime_root(
+                                &child_conversation_id,
+                                preparation_cancellation,
+                            )
+                            .await
+                    } else {
+                        self.config
+                            .spawn
+                            .allocate_child_runtime_root(
+                                &child_conversation_id,
+                                preparation_cancellation,
+                            )
+                            .await
+                    }
+                };
+                #[cfg(test)]
+                let allocation = match injected_failure {
+                    Some(error) => {
+                        drop(allocate);
+                        Err(error)
+                    }
+                    None => allocate.await,
+                };
+                #[cfg(not(test))]
+                let allocation = allocate.await;
+                let mut runtime_root = match allocation {
+                    Ok(root) => root,
+                    Err(super::process::SpawnError::ConversationIdentityInUse { .. })
+                        if resume.is_none() && access.is_none() =>
+                    {
+                        continue;
+                    }
+                    Err(super::process::SpawnError::ConversationIdentityInUse { .. })
+                        if resume.is_some() =>
+                    {
+                        return Err(SubagentStartError::Spawn {
+                            detail:
+                                "reserved activation identity conflicts with existing allocation"
+                                    .into(),
+                        });
+                    }
+                    Err(error) => return Err(SubagentStartError::from(error)),
+                };
+                let physical_owner = if let Some(resume) = resume {
+                    resume
+                        .physical_owner
+                        .as_ref()
+                        .expect("Reserved physical authority")
+                        .clone()
+                } else {
+                    Arc::new(
+                        super::physical_recovery::ParentPhysicalLease::reserve(
+                            &self.config.spawn.product_root,
+                            &self.config.spawn.session_id,
+                            &child_conversation_id,
+                            &subagent_id,
+                        )
+                        .map_err(|error| {
+                            SubagentStartError::Durability {
+                                detail: error.to_string(),
+                            }
+                        })?,
+                    )
+                };
+                runtime_root.install_physical_owner(physical_owner.clone());
+                (Some(runtime_root), Some(physical_owner))
+            };
             // Workspace acquisition is staged child ownership. It happens
             // after resolution/freeze and before any child preparation, but
             // the lease is not durable until the commit below succeeds.
@@ -2255,16 +2369,19 @@ impl SubagentRegistry {
             } else if let Some(access) = access.take() {
                 WorkspaceUse::from(access)
             } else {
-                WorkspaceUse::from(
-                    self.config
-                        .workspace
-                        .acquire(
-                            spec.authority.resolved.workspace_policy,
-                            &subagent_id,
-                            preparation_cancellation,
-                        )
-                        .await
-                        .map_err(|error| match error {
+                let acquired = crate::runtime::workspace::with_physical_settlement_authority(
+                    physical_owner.clone(),
+                    self.config.workspace.acquire(
+                        spec.authority.resolved.workspace_policy,
+                        &subagent_id,
+                        preparation_cancellation,
+                    ),
+                )
+                .await;
+                match acquired {
+                    Ok(lease) => WorkspaceUse::from(lease),
+                    Err(error) => {
+                        let original = match error {
                             crate::runtime::workspace::WorkspaceAcquireError::Cancelled => {
                                 SubagentStartError::Cancelled
                             }
@@ -2282,8 +2399,17 @@ impl SubagentRegistry {
                             error => SubagentStartError::Workspace {
                                 detail: error.to_string(),
                             },
-                        })?,
-                )
+                        };
+                        if let Some(root) = runtime_root {
+                            root.discard_unstarted().map_err(|error| {
+                                SubagentStartError::Rollback {
+                                    detail: format!("{original}; {error}"),
+                                }
+                            })?;
+                        }
+                        return Err(original);
+                    }
+                }
             };
             let workspace_lease = match workspace_lease {
                 WorkspaceUse::Owned(lease)
@@ -2291,7 +2417,7 @@ impl SubagentRegistry {
                 {
                     let scope = crate::runtime::workspace::AgentWorkspace::new(*lease);
                     let access = scope
-                        .acquire()
+                        .acquire(preparation_cancellation)
                         .await
                         .map_err(|detail| SubagentStartError::Workspace { detail })?;
                     agent_workspace = Some(scope);
@@ -2301,12 +2427,6 @@ impl SubagentRegistry {
             };
             #[cfg(test)]
             {
-                let override_child = self
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .staged_overrides
-                    .pop_front();
                 if let Some(staged) = override_child {
                     return Ok(PreparedSubagent {
                         authority: spec.authority.clone(),
@@ -2328,106 +2448,7 @@ impl SubagentRegistry {
                     });
                 }
             }
-            #[cfg(test)]
-            let allocation_stage = self
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .allocation_test_hook
-                .take()
-                .map(|hook| {
-                    hook.entered.send(()).unwrap();
-                    hook.stage
-                });
-            #[cfg(test)]
-            let injected_failure = {
-                let mut state = self.state.lock().unwrap();
-                state.allocation_attempts += 1;
-                state.allocation_failure.take()
-            };
-            let allocate = async {
-                if resume.is_some() {
-                    self.config
-                        .spawn
-                        .allocate_activation_runtime_root(
-                            &child_conversation_id,
-                            preparation_cancellation,
-                        )
-                        .await
-                } else {
-                    self.config
-                        .spawn
-                        .allocate_child_runtime_root(
-                            &child_conversation_id,
-                            preparation_cancellation,
-                        )
-                        .await
-                }
-            };
-            #[cfg(test)]
-            let allocation = match injected_failure {
-                Some(error) => {
-                    drop(allocate);
-                    Err(error)
-                }
-                None => allocate.await,
-            };
-            #[cfg(not(test))]
-            let allocation = allocate.await;
-            let mut runtime_root = match allocation {
-                Ok(runtime_root) => runtime_root,
-                Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
-                    let borrowed = matches!(workspace_lease, WorkspaceUse::Borrowed(_));
-                    if let Err(error) = workspace_lease.settle_staged().await {
-                        return Err(SubagentStartError::Rollback {
-                            detail: error.detail,
-                        });
-                    }
-                    if resume.is_some() {
-                        return Err(SubagentStartError::Spawn {
-                            detail:
-                                "reserved activation identity conflicts with existing allocation"
-                                    .into(),
-                        });
-                    }
-                    if borrowed {
-                        return Err(SubagentStartError::Workspace {
-                            detail: "candidate child identity is already occupied".into(),
-                        });
-                    }
-                    continue;
-                }
-                Err(error) => {
-                    let start_error = SubagentStartError::from(error);
-                    return Err(settle_staged_workspace(workspace_lease, start_error).await);
-                }
-            };
-            let physical_owner = if let Some(resume) = resume {
-                resume
-                    .physical_owner
-                    .as_ref()
-                    .expect("Reserved admission owns physical authority")
-                    .clone()
-            } else {
-                match super::physical_recovery::ParentPhysicalLease::reserve(
-                    &self.config.spawn.product_root,
-                    &self.config.spawn.session_id,
-                    &child_conversation_id,
-                    &subagent_id,
-                ) {
-                    Ok(owner) => Arc::new(owner),
-                    Err(error) => {
-                        return Err(settle_staged_workspace(
-                            workspace_lease,
-                            SubagentStartError::Spawn {
-                                detail: error.to_string(),
-                            },
-                        )
-                        .await);
-                    }
-                }
-            };
-            runtime_root.install_physical_owner(physical_owner);
+            let runtime_root = runtime_root.expect("production preparation allocated its root");
             #[cfg(test)]
             if let Some(stage) = allocation_stage {
                 return Ok(PreparedSubagent {
@@ -3585,19 +3606,9 @@ impl SubagentRegistry {
                 // owns the reason; later sources can only observe it.
                 record.lifecycle = SubagentLifecycle::Cancelling;
                 record.cancel_reason = Some(reason);
-                // The same instant is the steer invalidation commit (Issue
-                // #193). Every steer ticket admitted but not yet committed
-                // is cleared here, under this mutex, in **either** phase
-                // ([`SteerTicketPhase::AwaitingChildDecision`] and
-                // [`SteerTicketPhase::ChildAcceptedPendingParentCommit`]),
-                // so no such steer can ever be reported accepted afterwards
-                // — whatever the child does with the envelope already on the
-                // wire, and even if the child's `Accepted` answer had
-                // already reached the registry but the parent acknowledgement
-                // commit was still owed. Cancellation is absorbing and
-                // outranks steering by construction rather than by transport
-                // ordering: the committed reason below is what the later
-                // steer commit observes and refuses on.
+                // Close local guidance tracking at the same cancellation cut.
+                // Clearing a ticket cannot erase canonical child acceptance or
+                // turn an unacknowledged write into proven non-delivery.
                 record.steer_tickets.clear();
                 if let Some(control) = &record.control {
                     let _ = control.send(super::process::DriverCommand::Cancel { reason });
@@ -3780,11 +3791,13 @@ impl SubagentRegistry {
             let guidance_id = state.next_guidance_id;
             state.next_guidance_id = guidance_id.saturating_add(1);
             let (outcome, receiver) = tokio::sync::oneshot::channel();
+            let write_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
             if control
                 .send(super::process::DriverCommand::Route(
                     super::process::ChildBoundRoute::Guidance {
                         guidance_id,
                         message: message.to_owned(),
+                        write_started: Arc::clone(&write_started),
                         outcome,
                     },
                 ))
@@ -3809,6 +3822,7 @@ impl SubagentRegistry {
                     state: Arc::clone(&self.state),
                     subagent_id: subagent_id.clone(),
                     guidance_id,
+                    write_started,
                 },
             ))
         }
@@ -4943,23 +4957,6 @@ impl SubagentRegistry {
     }
 }
 
-/// Settles a lease when physical child-root allocation fails before the lease
-/// can be transferred to `spawn_staged`. A clean disposable lease is removed;
-/// if physical cleanliness cannot be proven, the original start failure is
-/// strengthened to a rollback failure and the workspace manager preserves the
-/// evidence.
-async fn settle_staged_workspace(
-    workspace: WorkspaceUse,
-    original: SubagentStartError,
-) -> SubagentStartError {
-    match workspace.settle_staged().await {
-        Ok(_) => original,
-        Err(error) => SubagentStartError::Rollback {
-            detail: format!("{original}; {}", error.detail),
-        },
-    }
-}
-
 /// Revalidates a Workflow terminal candidate at the parent boundary before
 /// it is durably accepted. The child already validates against its frozen
 /// latch, but the parent owns the cross-process result and must not commit a
@@ -5554,16 +5551,26 @@ mod tests {
     }
 
     fn plane(max_active: usize) -> TestPlane {
+        plane_with_storage(max_active, false)
+    }
+
+    fn plane_with_storage(max_active: usize, on_disk: bool) -> TestPlane {
         let dir = tempfile::tempdir().expect("temp dir");
         let workspace = dir.path().join("workspace");
         let runtime_root = dir.path().join("runtime");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::create_dir_all(&runtime_root).expect("runtime root");
         let conversation_id = ConversationId::new("conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0");
-        let store = Arc::new(
+        let store = Arc::new(if on_disk {
+            crate::durable::SqliteConversationStore::open(
+                conversation_id.clone(),
+                &dir.path().join("parent.sqlite"),
+            )
+            .expect("on-disk store")
+        } else {
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
-                .expect("in-memory store"),
-        );
+                .expect("in-memory store")
+        });
         let mailbox = ConversationInboundMailbox::over_store(store.clone());
         let workspace_settlement_hook =
             Arc::new(crate::runtime::workspace::WorkspaceSettlementHook::new());
@@ -10469,23 +10476,9 @@ mod tests {
             "a terminal record never retains outstanding steering reservations"
         );
 
-        // (2) Polling the still-held steer future now completes
-        // deterministically: the driver dropped its waiter on exit, and the
-        // commit observes the cleared ticket, so the steer is refused — and
-        // the refusal is the honest child-side one, because the child never
-        // durably accepted the guidance.
+        // A write without an acknowledgement is ambiguous, even after settlement.
         let outcome = std::future::poll_fn(|cx| steer.as_mut().poll(cx)).await;
-        match outcome {
-            Err(AgentControlError::Message(SubagentSteerError::ChildRefused { detail })) => {
-                assert!(
-                    detail.contains("settled before the guidance was accepted"),
-                    "the refusal names the unanswered envelope: {detail}"
-                );
-            }
-            other => {
-                panic!("a steer whose child settled without answering is never accepted: {other:?}")
-            }
-        }
+        assert!(matches!(outcome, Err(AgentControlError::DeliveryUnknown)));
         assert_eq!(
             plane.registry.outstanding_guidance_tickets(&id),
             0,

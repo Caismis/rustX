@@ -18632,7 +18632,7 @@
           ]
         },
         {
-          "description": "Cancellation won before Delegate could be sent; no input was delivered.",
+          "description": "The input frame was provably not written; no input was delivered.",
           "type": "object",
           "properties": {
             "agent_id": {
@@ -18650,7 +18650,7 @@
           ]
         },
         {
-          "description": "Delegate may have reached the child, but canonical acceptance is unproven.\nAutomatic replay could duplicate user guidance.",
+          "description": "An input write was attempted, but canonical acceptance was not acknowledged.\nAutomatic replay could duplicate user guidance.",
           "type": "object",
           "properties": {
             "agent_id": {

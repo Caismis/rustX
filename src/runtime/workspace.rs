@@ -54,8 +54,8 @@ use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::SubagentId;
 
 tokio::task_local! {
-    /// The activation parent retains this authority while its finite workspace
-    /// epilogue starts additional native Git processes. Each helper gets its
+    /// The activation parent retains this authority throughout workspace
+    /// acquisition, recovered verification and settlement. Each helper gets its
     /// own recoverable supervisor authority before it can execute.
     static SETTLEMENT_AUTHORITY: Arc<crate::runtime::subagent::physical_recovery::ParentPhysicalLease>;
 }
@@ -1052,7 +1052,7 @@ impl WorkspaceManager {
         self.require_released(&owner)?;
         let owner_id = &owner;
         let _disposal = self.disposal_lock.lock().await;
-        self.verify_retained_workspace(owner_id, snapshot, handoff)
+        self.verify_retained_workspace(owner_id, snapshot, handoff, None)
             .await
             .map(|_| ())
     }
@@ -1281,7 +1281,7 @@ impl WorkspaceManager {
                                 ));
                             }
                         }
-                        self.verify_retained_workspace(owner_id, snapshot, handoff)
+                        self.verify_retained_workspace(owner_id, snapshot, handoff, None)
                             .await?;
                         let mut arguments = vec!["worktree".into(), "remove".into()];
                         if !require_pristine {
@@ -1476,6 +1476,7 @@ impl WorkspaceManager {
         owner_id: &WorkspaceOwner,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
+        cancellation: Option<&CancellationSignal>,
     ) -> Result<GitWorktreeSnapshot, WorkspaceDisposalError> {
         fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
             WorkspaceDisposalError::OwnershipMismatch {
@@ -1514,7 +1515,7 @@ impl WorkspaceManager {
             .git_text(
                 &worktree.source_repository_root,
                 vec!["rev-parse".into(), "--show-toplevel".into()],
-                None,
+                cancellation,
             )
             .await
             .map_err(|error| {
@@ -1538,7 +1539,7 @@ impl WorkspaceManager {
             .git_text(
                 &worktree.physical_worktree_root,
                 vec!["rev-parse".into(), "--show-toplevel".into()],
-                None,
+                cancellation,
             )
             .await
             .map_err(|error| {
@@ -1569,7 +1570,7 @@ impl WorkspaceManager {
             .git_text(
                 &worktree.source_repository_root,
                 vec!["worktree".into(), "list".into(), "--porcelain".into()],
-                None,
+                cancellation,
             )
             .await
             .map_err(|error| {
@@ -1587,7 +1588,7 @@ impl WorkspaceManager {
             .git_text(
                 &worktree.physical_worktree_root,
                 vec!["rev-parse".into(), "HEAD".into()],
-                None,
+                cancellation,
             )
             .await
             .map_err(|error| mismatch(format!("current worktree HEAD is unavailable: {error}")))?;
@@ -1602,7 +1603,7 @@ impl WorkspaceManager {
             .git_text(
                 &worktree.source_repository_root,
                 vec!["rev-parse".into(), "--verify".into(), reference.into()],
-                None,
+                cancellation,
             )
             .await
             .map_err(|error| {
@@ -2812,7 +2813,7 @@ impl WorkspaceLease {
         };
         if let Err(error) = self
             .manager
-            .verify_retained_workspace(&self.owner, &snapshot, &handoff)
+            .verify_retained_workspace(&self.owner, &snapshot, &handoff, None)
             .await
         {
             return WorkspaceSettlement::unresolved(snapshot, error.to_string());

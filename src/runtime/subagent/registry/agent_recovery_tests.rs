@@ -99,6 +99,9 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
     ));
     assert_eq!(recovered.all_snapshots().len(), 1);
     drop(lease);
+    drop(crate::runtime::subagent::physical_recovery::prove_after_release(
+        &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &admitted.subagent_id,
+    ).unwrap().expect("the exact inherited lease is released"));
     recovered.reconcile_recovered_settlements();
     assert_eq!(recovered.with_goal_idle(|| true), Some(true));
     let (agent, activation) = recovered
@@ -114,7 +117,7 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
     let workspace = recovered.state.lock().unwrap().agents[&admitted.child_agent_id]
         .workspace
         .clone();
-    workspace.acquire().await.unwrap().settle();
+    workspace.acquire(&CancellationSignal::new()).await.unwrap().settle();
     assert_eq!(events(&plane).iter().filter(|event| matches!(event, crate::events::types::RuntimeEvent::SubagentPhysicalSettlementProven { subagent_id, .. } if *subagent_id == admitted.subagent_id)).count(), 1);
     let retry = crate::runtime::subagent::physical_settlement_event(
         &plane.conversation_id,
@@ -422,7 +425,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
         let workspace = recovered.state.lock().unwrap().agents[&admitted.child_agent_id]
             .workspace
             .clone();
-        let lease = workspace.acquire().await;
+        let lease = workspace.acquire(&CancellationSignal::new()).await;
         assert_eq!(
             lease.is_ok(),
             proof == Some(true),
@@ -456,6 +459,9 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             lease.publish_quiescent().unwrap();
             assert_eq!(recovered.with_goal_idle(|| true), None);
             drop(lease);
+            drop(crate::runtime::subagent::physical_recovery::prove_after_release(
+                &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &reserved,
+            ).unwrap().expect("the exact inherited lease is released"));
             recovered.reconcile_recovered_settlements();
             assert_eq!(recovered.with_goal_idle(|| true), Some(true));
             assert_eq!(
@@ -492,5 +498,93 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                 2
             );
         }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recovered_verification_before_reserved_retains_physical_exclusion_after_parent_drop() {
+    use crate::runtime::subagent::physical_recovery::{ParentPhysicalLease, prove_after_release};
+    use std::io::{Read, Write};
+    use std::os::unix::fs::PermissionsExt;
+    for crash in [false, true] {
+    let plane = plane_with_storage(4, true);
+    make_clean_git_workspace(&plane);
+    let child = stage_exit0(&plane);
+    let mut authority = spec("durable isolated Agent");
+    authority.authority.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+        require_clean_parent: true,
+    };
+    let admitted = start(&plane, &authority).await;
+    child.complete(ChildResultStatus::Succeeded, Some("done")).await;
+    plane.registry.wait_until_settled(&admitted.subagent_id).await.unwrap();
+    let mut config = plane.registry.config.clone();
+    config.workspace = WorkspaceManager::new(plane.dir.path().join("workspace"), &plane.runtime_root);
+    let recovered = SubagentRegistry::new(config.clone());
+    recovered.restore_agents(plane.store.as_ref()).unwrap();
+    let activation = SubagentId::for_conversation(&plane.conversation_id, 2);
+    let spawn = &plane.registry.config.spawn;
+    let ready = plane.dir.path().join("git-ready");
+    let release = plane.dir.path().join("git-release");
+    assert!(std::process::Command::new("mkfifo").args([&ready, &release]).status().unwrap().success());
+    let armed = plane.dir.path().join("git-armed");
+    std::fs::write(&armed, []).unwrap();
+    let hook = plane.dir.path().join("fsmonitor");
+    std::fs::write(&hook, format!(
+        "#!/bin/sh\nif [ -f '{}' ]; then\nrm '{}'\nprintf R > '{}'\nread release < '{}'\nfi\nprintf 'token\\0/\\0'\n",
+        armed.display(), armed.display(), ready.display(), release.display(),
+    )).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+    git(&plane.dir.path().join("workspace"), &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+    let executing = tokio::task::spawn_blocking(move || {
+        let mut byte = [0];
+        std::fs::File::open(ready).unwrap().read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [b'R']);
+    });
+    let mut send = Box::pin(recovered.send_message(&admitted.child_agent_id, "resume verification",
+        AgentActivationOrigin::ClientControl, CancellationSignal::new()));
+    assert!(futures_util::poll!(&mut send).is_pending());
+    executing.await.unwrap();
+    // Real recovered-workspace Git status is executing its fsmonitor helper,
+    // blocked on an explicit pipe. Reserved has not committed.
+    assert!(!events(&plane).iter().any(|event| matches!(event,
+        crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. } if activation_id == &activation)));
+    if !crash {
+        let mut interrupt = Box::pin(recovered.interrupt_agent(&admitted.child_agent_id));
+        assert!(futures_util::poll!(&mut interrupt).is_pending());
+        assert!(matches!(send.await, Err(AgentControlError::Start(SubagentStartError::Cancelled))));
+        assert!(interrupt.await.unwrap().outcome.is_none());
+        assert_eq!(recovered.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
+        assert_eq!(recovered.all_snapshots().len(), 1);
+        // No release byte was sent: the activation signal settled real Git.
+        continue;
+    }
+    recovered.state.lock().unwrap().resume_owner_abort.take().unwrap().abort();
+    assert!(matches!(send.await, Err(AgentControlError::Admission(_))));
+    drop(recovered);
+    let store = Arc::new(crate::durable::SqliteConversationStore::open(
+        plane.conversation_id.clone(), &plane.dir.path().join("parent.sqlite"),
+    ).unwrap());
+    config.mailbox = ConversationInboundMailbox::over_store(store.clone());
+    config.workspace = WorkspaceManager::new(plane.dir.path().join("workspace"), &plane.runtime_root);
+    let reopened = SubagentRegistry::new(config);
+    reopened.restore_agents(store.as_ref()).unwrap();
+    let blocked = reopened.send_message(&admitted.child_agent_id, "blocked",
+        AgentActivationOrigin::ClientControl, CancellationSignal::new()).await;
+    assert!(matches!(blocked, Err(AgentControlError::Settlement)), "expected physical exclusion: {blocked:?}");
+    assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
+    std::fs::OpenOptions::new().write(true).open(release).unwrap().write_all(b"release\n").unwrap();
+    // The kernel lease release and exact supervisor receipts, never PID absence,
+    // establish the physical cut before reconciliation can release the workspace.
+    drop(prove_after_release(&spawn.product_root, &spawn.session_id,
+        &admitted.child_conversation_id, &activation).unwrap().unwrap());
+    reopened.reconcile_recovered_settlements();
+    assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
+    let version = *reopened.state_version.borrow();
+    reopened.reconcile_recovered_settlements();
+    assert_eq!(*reopened.state_version.borrow(), version);
+    let workspace = reopened.state.lock().unwrap().agents[&admitted.child_agent_id].workspace.clone();
+    workspace.acquire(&CancellationSignal::new()).await.unwrap().settle();
+    assert!(ParentPhysicalLease::reserve(&spawn.product_root, &spawn.session_id,
+        &admitted.child_conversation_id, &activation).is_err());
     }
 }

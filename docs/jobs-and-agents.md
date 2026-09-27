@@ -85,7 +85,10 @@ explicit activation; it is not erased or used to overwrite the first failure.
 For normal completion, if accepted work remains, the child sends `SealOpen`;
 the parent restores Active under the owner mutex and acknowledges
 `AdmissionReopened`. The child coordinator holds the next turn until that
-acknowledgement. If cancellation won, no reopening is granted. Thus an externally Active Agent cannot already have
+acknowledgement. If cancellation won, no reopening is granted. The child carries cancellation as an
+absorbing fact from terminal observation through close, seal, reopen and publication.
+A Completed observation committed before Cancel cannot authorize another turn;
+accepted pending guidance remains canonical input for a later explicit activation. Thus an externally Active Agent cannot already have
 closed message admission. A message that loses this boundary sees Stopping; a
 message that wins stays with that exact activation. Interruption or physical loss
 can still prevent later model observation, and cannot erase durable acceptance.
@@ -107,9 +110,10 @@ abandonment returns an explicit settlement error, never successful wait/interrup
 completion while the Agent remains Unavailable.
 
 `send_message` succeeds only after the child accepts input through canonical
-inbound. Active guidance uses its existing acknowledgement; resumed input uses
+inbound. Active Guidance uses `GuidanceResult::Accepted`; resumed input uses
 `DelegateAccepted` on the activation's uniquely owned control channel. Neither
-ownership commit nor writing Delegate proves acceptance. A lost acknowledgement
+ownership commit nor writing either input frame proves acceptance. A positive pre-write
+loss is not-delivered; a child `Refused` response is explicit refusal. A lost acknowledgement
 returns an explicit unknown-delivery error after settlement, never accepted;
 callers must not blindly retry an ambiguous effect. Restart reconciles the old
 activation without replaying Delegate, while the child's canonical inbox remains
@@ -146,6 +150,10 @@ it does not replace canonical child content.
 A resumed activation first reserves an exact generation under the registry mutex.
 The detached admission owner installs and fsyncs a recoverable physical authority
 before publishing that activation ID or appending `AgentActivationAdmission::Reserved`.
+The complete recovered workspace verification runs supervised Git under that physical
+owner before Reserved. Startup discovers every allocation in the durable Agent's
+physical namespace, including allocations without an admission event, and prevents
+workspace reuse until all their helpers have positive settlement proof.
 The append runs outside the mutex; interruption still captures the same reservation.
 Ownership must consume that same Agent, activation and origin. Conclusive rollback records `RolledBack` with an explicit
 physical-settlement proof. Recovery never treats the prior activation's terminal
@@ -245,7 +253,9 @@ deletion, hence survives terminal/rollback publication failure or parent death.
 
 All asynchronous workspace Git commands use the existing native command supervisor,
 so child-side preparation registers a retained process anchor before START.
-Parent-side Workflow workspace cleanup can launch Git after child settlement.
+Fresh activation workspace acquisition, recovered Agent verification before Reserved,
+and parent-side workspace cleanup all carry activation physical authority.
+Cleanup can launch Git after child settlement.
 Each such command reserves its own continuation authority under the activation,
 before spawning the existing trusted command supervisor. The supervisor owns the
 inherited lease and publishes proof only after its complete containment gate,
@@ -271,7 +281,10 @@ Later reopen retries outstanding evidence without replaying input.
 Native proof commits `SubagentPhysicalSettlementProven` for a terminal activation.
 For a reserved generation it commits the original provenance with
 `RolledBack { physical_settlement_proven: true }`. Proof locks remain held through
-that durable append and its snapshot cut. An earlier unproven rollback cannot close
+that durable append and its snapshot cut. A physical allocation without Reserved has
+no semantic admission to roll back: recovery seals its exact Unstarted/Quiescent
+receipts and retains the proof locks through workspace release. The consumed ID
+and inert physical evidence remain durable. An earlier unproven rollback cannot close
 that obligation. Independent workspace poison is not cleared by physical proof.
 Logical Interrupted and its canonical parent notice remain unchanged; the old
 activation is never reattached. Session deletion folds subsequent physical facts

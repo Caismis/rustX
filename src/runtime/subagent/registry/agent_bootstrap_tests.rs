@@ -119,7 +119,7 @@ async fn proven_child_loss_has_identical_resume_authority_before_and_after_reope
             .workspace
             .clone();
         workspace
-            .acquire()
+            .acquire(&CancellationSignal::new())
             .await
             .expect("proven settlement admits another physical lease")
             .settle();

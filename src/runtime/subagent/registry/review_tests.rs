@@ -493,3 +493,136 @@ async fn unpublished_memory_reservation_never_exposes_an_unconsumed_activation_i
         assert_eq!(plane.registry.agent_snapshot(&first.child_agent_id).unwrap().state, AgentState::Inactive);
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn active_guidance_uses_real_child_durable_acceptance_and_ack_evidence() {
+    use crate::local_runtime::subagent_child::{GUIDANCE_ACK_LOSS, serve_child_delegation};
+    use crate::local_runtime::dispatcher::ChildControlDispatcher;
+    use crate::runtime::observation::PendingObservations;
+    use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
+    for delivery in ["accepted", "unknown", "not_delivered"] {
+        let lose_ack = delivery == "unknown";
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let admitted = start(&plane, &spec("initial input")).await;
+        let child_store = Arc::new(crate::durable::SqliteConversationStore::in_memory(
+            admitted.child_conversation_id.clone()).unwrap());
+        let model = Arc::new(FakeModel::new(vec![vec![FakeStep::ParkUntilCancelled]]));
+        let mut parked = model.parked();
+        let runtime = crate::local_runtime::subagent_child::tests::child_test_runtime_full(
+            &plane.dir, None, None, None, None, None, admitted.child_conversation_id.clone(),
+            model,
+            Some(child_store.clone()),
+        ).await;
+        runtime.gate_child_turns();
+        runtime.activate();
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let serve = tokio::spawn(GUIDANCE_ACK_LOSS.scope(lose_ack, {
+            let runtime = runtime.clone();
+            let stop = stop.clone();
+            async move {
+                let (_peer, observations) = tokio::net::UnixStream::pair().unwrap();
+                let mut dispatcher = ChildControlDispatcher::start(child.peer, observations);
+                let handle = dispatcher.handle();
+                tokio::select! {
+                    result = serve_child_delegation(&mut dispatcher, &handle, AgentId::new("agent-parent"),
+                        runtime, Arc::new(PendingObservations::new()), None) => {
+                        assert!(lose_ack, "unexpected child result: {result:?}");
+                        assert!(result.is_err());
+                    }
+                    () = stop.notified() => {}
+                }
+                dispatcher.shutdown().await;
+            }
+        }));
+        while !*parked.borrow_and_update() { parked.changed().await.unwrap(); }
+        let held_control = if delivery == "not_delivered" {
+            let (control, commands) = tokio::sync::mpsc::unbounded_channel();
+            let mut state = plane.registry.state.lock().unwrap();
+            let index = state.index[&admitted.subagent_id];
+            Some((state.records[index].control.replace(control), commands))
+        } else { None };
+        let mut send = Box::pin(plane.registry.send_message(&admitted.child_agent_id, "exactly once guidance",
+            AgentActivationOrigin::ClientControl, CancellationSignal::new()));
+        if let Some((original, mut commands)) = held_control {
+            assert!(futures_util::poll!(&mut send).is_pending());
+            let command = commands.recv().await.unwrap();
+            assert!(matches!(command, super::super::process::DriverCommand::Route(
+                super::super::process::ChildBoundRoute::Guidance { .. })));
+            drop(command); // Control owner disappears before the write boundary.
+            drop(commands);
+            let mut state = plane.registry.state.lock().unwrap();
+            let index = state.index[&admitted.subagent_id];
+            state.records[index].control = original;
+        }
+        let result = send.await;
+        if delivery == "not_delivered" {
+            assert!(matches!(result, Err(AgentControlError::NotDelivered)));
+        } else if lose_ack {
+            assert!(matches!(result, Err(AgentControlError::DeliveryUnknown)));
+        } else {
+            assert!(!result.unwrap().resumed);
+        }
+        let pending = child_store.load_pending().unwrap();
+        assert_eq!(pending.len(), usize::from(delivery != "not_delivered"),
+            "only a written Guidance can add canonical input");
+        stop.notify_one();
+        serve.await.unwrap();
+        runtime.shutdown().await.unwrap();
+        plane.registry.wait_until_settled(&admitted.subagent_id).await.unwrap();
+        assert_eq!(child_store.load_pending().unwrap(), pending, "no automatic replay at settlement");
+    }
+}
+
+#[tokio::test]
+async fn explicit_guidance_refusal_remains_refusal() {
+    let plane = plane(4);
+    let mut child = stage_exit0(&plane);
+    let admitted = start(&plane, &spec("initial")).await;
+    child.accept_delegate().await;
+    let mut send = Box::pin(plane.registry.send_message(&admitted.child_agent_id, "refused",
+        AgentActivationOrigin::ClientControl, CancellationSignal::new()));
+    assert!(futures_util::poll!(&mut send).is_pending());
+    let ParentFrame::Guidance(guidance) = child.read_frame().await else { panic!("guidance"); };
+    super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::GuidanceResult(
+        super::super::ipc::GuidanceResultFrame {
+            guidance_id: guidance.guidance_id,
+            outcome: super::super::ipc::ChildGuidanceOutcome::Refused(super::super::ipc::ChildGuidanceRefusal::Settled),
+        },
+    )).await.unwrap();
+    assert!(matches!(send.await, Err(AgentControlError::Message(SubagentSteerError::ChildRefused { .. }))));
+    child.send_result(ChildResultStatus::Succeeded, Some("done")).await;
+    drop(child);
+    plane.registry.wait_until_settled(&admitted.subagent_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn guidance_control_queue_loss_before_write_is_not_delivered() {
+    let plane = plane(4);
+    let mut child = stage_exit0(&plane);
+    let admitted = start(&plane, &spec("initial")).await;
+    child.accept_delegate().await;
+    let (control, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    let original = {
+        let mut state = plane.registry.state.lock().unwrap();
+        let index = state.index[&admitted.subagent_id];
+        state.records[index].control.replace(control)
+    };
+    let mut send = Box::pin(plane.registry.send_message(&admitted.child_agent_id, "never written",
+        AgentActivationOrigin::ClientControl, CancellationSignal::new()));
+    assert!(futures_util::poll!(&mut send).is_pending());
+    let command = commands.recv().await.unwrap();
+    assert!(matches!(command, super::super::process::DriverCommand::Route(
+        super::super::process::ChildBoundRoute::Guidance { .. })));
+    drop(command); // Exact pre-write owner loss: no frame can reach the peer.
+    drop(commands);
+    assert!(matches!(send.await, Err(AgentControlError::NotDelivered)));
+    {
+        let mut state = plane.registry.state.lock().unwrap();
+        let index = state.index[&admitted.subagent_id];
+        state.records[index].control = original;
+    }
+    child.send_result(ChildResultStatus::Succeeded, Some("done")).await;
+    drop(child);
+    plane.registry.wait_until_settled(&admitted.subagent_id).await.unwrap();
+}

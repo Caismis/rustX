@@ -151,6 +151,19 @@ impl ParentPhysicalLease {
         Ok(ParentPhysicalContinuation(lease))
     }
 
+    /// The parent lock excludes new allocation while the caller proves all
+    /// helpers started during pre-admission verification. Retain the returned
+    /// locks through the durable admission or rollback decision.
+    pub(crate) fn prove_continuations(&self) -> std::io::Result<Option<RecoveredPhysicalProof>> {
+        prove_continuations_at(
+            &self.0.path,
+            &self.0.conversation,
+            &self.0.activation,
+            ProofLock::AfterSupervision,
+            RecoveredPhysicalProof { locks: Vec::new() },
+        )
+    }
+
     /// Only the staging/driver owner after its explicit full resource drain
     /// may assert this. An error or absent child alone never calls it.
     pub(crate) fn publish_quiescent(&self) -> std::io::Result<()> {
@@ -341,6 +354,7 @@ pub(crate) fn prove(
 #[derive(Clone, Copy)]
 enum ProofLock {
     Try,
+    AfterSupervision,
     #[cfg(test)]
     AwaitRelease,
 }
@@ -375,9 +389,19 @@ fn prove_with_lock(
     locking: ProofLock,
 ) -> std::io::Result<Option<RecoveredPhysicalProof>> {
     let path = evidence_path(product, session, conversation, activation)?;
-    let Some(mut proof) = prove_at(&path, conversation, activation, locking)? else {
+    let Some(proof) = prove_at(&path, conversation, activation, locking)? else {
         return Ok(None);
     };
+    prove_continuations_at(&path, conversation, activation, locking, proof)
+}
+
+fn prove_continuations_at(
+    path: &Path,
+    conversation: &ConversationId,
+    activation: &SubagentId,
+    locking: ProofLock,
+    mut proof: RecoveredPhysicalProof,
+) -> std::io::Result<Option<RecoveredPhysicalProof>> {
     // Holding the parent authority excludes any further continuation allocation
     // or spawn. Each published helper has its own explicit durable lifetime;
     // the already-quiescent child does not prove these later commands settled.
@@ -420,14 +444,28 @@ fn prove_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    match locking {
-        ProofLock::Try => match file.try_lock() {
+    // After the caller joined native supervision, a Quiescent receipt proves
+    // the helper finished. A concurrent fork can still temporarily retain a
+    // CLOEXEC duplicate until exec. Await that exact descriptor release, then
+    // re-read and validate under the lock; no PID/elapsed-time inference is used.
+    let await_release = match locking {
+        ProofLock::Try => false,
+        ProofLock::AfterSupervision => read_receipt(&path.join(RECEIPT))?.is_some_and(|receipt| {
+            receipt.activation == *activation
+                && receipt.conversation == *conversation
+                && receipt.phase == Phase::Quiescent
+        }),
+        #[cfg(test)]
+        ProofLock::AwaitRelease => true,
+    };
+    if await_release {
+        file.lock()?;
+    } else {
+        match file.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Ok(None),
             Err(TryLockError::Error(error)) => return Err(error),
-        },
-        #[cfg(test)]
-        ProofLock::AwaitRelease => file.lock()?,
+        }
     }
     let Some(mut receipt) = read_receipt(&path.join(RECEIPT))? else {
         return Ok(None);

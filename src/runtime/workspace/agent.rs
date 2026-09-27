@@ -101,7 +101,10 @@ impl AgentWorkspace {
         );
     }
 
-    pub(crate) async fn acquire(&self) -> Result<AgentWorkspaceAccess, String> {
+    pub(crate) async fn acquire(
+        &self,
+        cancellation: &super::CancellationSignal,
+    ) -> Result<AgentWorkspaceAccess, String> {
         if self.is_poisoned() {
             return Err("Agent workspace physical settlement is unresolved".into());
         }
@@ -114,6 +117,9 @@ impl AgentWorkspace {
             return Err("Agent workspace physical settlement is unresolved".into());
         }
         if lease.is_none() {
+            if cancellation.is_cancelled() {
+                return Err("Agent workspace acquisition cancelled".into());
+            }
             let Some((manager, policy, owner)) = &self.recovery else {
                 return Err("Agent workspace has been rolled back".into());
             };
@@ -122,15 +128,35 @@ impl AgentWorkspace {
             if self.snapshot.is_isolated() {
                 // Reacquire the exact admitted physical resource. Never select
                 // another base, copy parent bytes, or fall back to parent cwd.
-                let inspected = WorkspaceManager::inspect_recovered(&self.snapshot);
-                let handoff = inspected.handoff().ok_or_else(|| {
-                    inspected
-                        .error()
-                        .unwrap_or("Agent workspace cannot be proven")
-                        .to_owned()
-                })?;
+                let worktree = self.snapshot.git_worktree().expect("isolated workspace");
+                let head = manager
+                    .git_text(
+                        &worktree.physical_worktree_root,
+                        vec!["rev-parse".into(), "HEAD".into()],
+                        Some(cancellation),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let status = manager
+                    .git_text(
+                        &worktree.physical_worktree_root,
+                        super::ordinary_workspace_status_args(),
+                        Some(cancellation),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let (dirty, _) =
+                    super::workspace_change_facts(Some(&worktree.base_commit), &head, &status);
+                let handoff = super::WorkspaceHandoff {
+                    logical_workspace: self.snapshot.logical_workspace.clone(),
+                    physical_worktree_root: worktree.physical_worktree_root.clone(),
+                    branch: worktree.branch.clone(),
+                    base_commit: worktree.base_commit.clone(),
+                    head_commit: head,
+                    dirty,
+                };
                 manager
-                    .verify_retained_workspace(&owner, &self.snapshot, handoff)
+                    .verify_retained_workspace(&owner, &self.snapshot, &handoff, Some(cancellation))
                     .await
                     .map_err(|error| error.to_string())?;
                 if !manager

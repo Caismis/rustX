@@ -229,7 +229,7 @@ it('Job list returns the complete owner metadata through the Web client', async 
   expect(received.jobs.at(-1)?.job_id).toBe('exec_00000000-0000-7000-8000-000000000003');
 });
 
-it.each([['agent_not_delivered', 'no input was delivered'], ['agent_delivery_unknown', 'do not replay automatically']] as const)('send-message renders %s and preserves the unacknowledged draft', async (kind, expected) => {
+it.each([['agent_not_delivered', 'input was not delivered'], ['agent_delivery_unknown', 'do not replay automatically']] as const)('send-message renders %s and preserves the unacknowledged draft', async (kind, expected) => {
   const server = new Server(); servers.push(server); await server.attached('A');
   const s = snapshot(); const agent = { ...agentFixture(), state: 'inactive' as const, current_activation: null }; s.agents = [agent]; server.snapshots.set('A', s);
   server.handlers.set('agent/sendMessage', () => { throw new RpcFailure({ code: -32000, message: 'Delivery failed', data: { kind, agent_id: agent.agent_id } }); });

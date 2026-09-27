@@ -1,9 +1,9 @@
 # App Server protocol v26
 
 App Server v26 / Runtime Client v52 separate finite Jobs from durable Agents.
-Agent send-message success acknowledges child canonical acceptance. A captured
-activation cancelled before Delegate delivery returns `agent_not_delivered`;
-loss after Delegate may have been sent returns `agent_delivery_unknown` and
+Agent send-message success acknowledges child canonical acceptance. A Delegate or Guidance
+frame proven unwritten returns `agent_not_delivered`; acknowledgement
+loss after a write attempt returns `agent_delivery_unknown` and
 must never trigger automatic replay. Both identify the durable Agent.
 Job wait/cancel returns a canonical terminal Job or the typed
 `job_publication_abandoned { job_id }` failure when its owner has exhausted

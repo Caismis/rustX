@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
-  "activity.not-delivered": "Agent {id} was cancelled before input delivery; no input was delivered",
+  "activity.not-delivered": "Agent {id} input was not delivered",
   "activity.delivery-unknown": "Agent {id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically",
   "activity.publication-abandoned": "Job {id} terminal publication was abandoned; no durable terminal result is available",
   "activity.agent-unresolved": "Agent {id} is unavailable; physical settlement, publication, or workspace authority remains unresolved",
@@ -224,7 +224,7 @@ export const en = {
 } as const;
 export type CommonKey = keyof typeof en;
 export const zh = {
-  "activity.not-delivered": "智能体 {id} 在输入送达前被取消；没有输入被送达",
+  "activity.not-delivered": "智能体 {id} 的输入未送达",
   "activity.delivery-unknown": "智能体 {id} 的输入接收未获确认；送达情况未知，请勿自动重发",
   "activity.publication-abandoned": "作业 {id} 已放弃发布结束状态；没有可用的持久结束结果",
   "activity.agent-unresolved": "智能体 {id} 不可用；物理结束状态、发布或工作区权限仍未确认",

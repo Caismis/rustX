@@ -475,7 +475,7 @@ export function describeRpcError(error: RpcError): string {
     case "server_draining":
       return "the App Server is shutting down and no longer accepts work";
     case "agent_not_delivered":
-      return `Agent ${data.agent_id} was cancelled before input delivery; no input was delivered`;
+      return `Agent ${data.agent_id} input was not delivered`;
     case "agent_delivery_unknown":
       return `Agent ${data.agent_id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically`;
     case "job_publication_abandoned":

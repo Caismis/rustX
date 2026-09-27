@@ -254,3 +254,17 @@ test("actual child A to B navigation rejects late A without Session or control r
   assert.match(rendered, /ONLY-B/); assert.doesNotMatch(rendered, /STALE-A/);
   assert.deepEqual(h.transport.log.requests.map(request => request.method), ["initialize", "session/attach", "agent/transcript", "agent/transcript"]);
 });
+
+for (const kind of ["agent_delivery_unknown", "agent_not_delivered"] as const) {
+  test(`actual app preserves Agent guidance draft after ${kind} without replay`, async t => {
+    const h = await appHarness(t, snapshot({ agents: [subagent("worker", "frozen", "active")] }));
+    const draft = "/send-message agent-child keep this guidance";
+    h.editor.setText(draft); h.input("\r");
+    const request = await nextRequest(h, "agent/sendMessage", 0);
+    h.transport.respondError(request.id, { code: -32000, message: "Delivery failed", data: { kind, agent_id: "agent-child" } });
+    await continuation();
+    assert.equal(h.editor.getExpandedText(), draft);
+    assert.equal(h.transport.transportCount("agent/sendMessage"), 1);
+    assert.ok(h.notices.some(text => text.includes(kind === "agent_delivery_unknown" ? "delivery is unknown" : "input was not delivered")));
+  });
+}

@@ -2270,20 +2270,23 @@ impl RecoveryPlan {
         committed: &mut RecoveryReconciliation,
     ) -> Result<(), RecoveryError> {
         for class in &self.subagents {
-            // Recovery has no direct-child or nested-anchor proof, so it
-            // never removes a recorded worktree. It does inspect it to make
-            // retained work available to the recovered read model.
-            let workspace = crate::runtime::workspace::WorkspaceManager::inspect_recovered(
-                &class.evidence.workspace,
-            );
-            let workspace_resource = match class.evidence.ownership {
-                // The durable Agent still owns its workspace. An inspection
-                // handoff is evidence, never an activation disposal capability.
-                SubagentOwnershipKind::Normal if !workspace.is_unresolved() => {
-                    SubagentWorkspaceTerminalResource::None
+            // Agent recovery reconstructs ownership without starting Git. Exact
+            // workspace verification belongs to the next activation's physical
+            // authority after old containment has been positively proven.
+            let workspace = match class.evidence.ownership {
+                SubagentOwnershipKind::Normal => crate::runtime::workspace::WorkspaceSettlement {
+                    snapshot: class.evidence.workspace.clone(),
+                    disposition:
+                        crate::runtime::workspace::WorkspaceSettlementDisposition::AgentRetained,
+                },
+                SubagentOwnershipKind::Workflow => {
+                    crate::runtime::workspace::WorkspaceManager::inspect_recovered(
+                        &class.evidence.workspace,
+                    )
                 }
-                _ => crate::runtime::subagent::terminal_workspace_resource(&workspace),
             };
+            let workspace_resource =
+                crate::runtime::subagent::terminal_workspace_resource(&workspace);
             let timestamp = clock.now();
             match class.evidence.ownership {
                 SubagentOwnershipKind::Normal => {

@@ -757,7 +757,8 @@ export class RustxTuiApp {
       finally { this.#submitting = false; }
       return;
     }
-    if (!preserveDraft) this.#editor.setText("");
+    const agentMessage = /^\/send-message(?:\s|$)/.test(line);
+    if (!preserveDraft) this.#editor.setText(agentMessage ? text : "");
     try {
       if (line === "/capabilities") {
         this.#showInspection("Agent capabilities", renderResourceBanner(session.state, { workspace: this.#workspace }), lease);
@@ -775,7 +776,11 @@ export class RustxTuiApp {
       const outcome = line === "/resume" && this.#deletion.state.kind !== "idle"
         ? { kind: "choose_session" as const, ...await this.#host.listSessions(query, 0), query }
         : await this.#dispatcher.submit(text);
-      if (this.#isCurrentPresentationLease(lease)) await this.#handleOutcome(outcome, lease);
+      if (this.#isCurrentPresentationLease(lease)) {
+        if (agentMessage && !preserveDraft && outcome.kind === "transient" && outcome.level === "info"
+            && this.#editor.getExpandedText() === text) this.#editor.setText("");
+        await this.#handleOutcome(outcome, lease);
+      }
     } catch (error) {
       if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `command: ${compactDiagnostic(error)}`);
     }

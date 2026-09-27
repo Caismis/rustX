@@ -118,7 +118,7 @@ export class RpcFailure extends Error {
     let message = `${error.message} (${error.code})${data ? `: ${JSON.stringify(data)}` : ''}`;
     switch (data?.kind) {
       case 'agent_not_delivered':
-        message = `Agent ${data.agent_id} was cancelled before input delivery; no input was delivered`;
+        message = `Agent ${data.agent_id} input was not delivered`;
         break;
       case 'agent_delivery_unknown':
         message = `Agent ${data.agent_id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically`;

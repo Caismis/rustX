@@ -1301,9 +1301,7 @@ fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError
 }
 fn domain(data: ErrorData) -> RpcError {
     let message = match &data {
-        ErrorData::AgentNotDelivered { .. } => {
-            "Agent activation was cancelled before input delivery; no input was delivered"
-        }
+        ErrorData::AgentNotDelivered { .. } => "Agent input was not delivered",
         ErrorData::AgentDeliveryUnknown { .. } => {
             "Agent input acceptance was not acknowledged; delivery is unknown, do not replay automatically"
         }
@@ -1388,7 +1386,7 @@ mod capacity_tests {
                 agent_id: agent_id.clone()
             })
         );
-        assert!(missing.message.contains("no input was delivered"));
+        assert!(missing.message.contains("input was not delivered"));
         let unknown = super::client_error(
             crate::runtime_client::types::RuntimeClientError::AgentDeliveryUnknown {
                 agent_id: agent_id.clone(),

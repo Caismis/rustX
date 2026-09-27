@@ -179,7 +179,7 @@ test("/jobs renders the owner's omission counts without inferring totals", async
   h.client.close();
 });
 
-for (const [kind, expected] of [["agent_not_delivered", "no input was delivered"], ["agent_delivery_unknown", "do not replay automatically"]] as const) {
+for (const [kind, expected] of [["agent_not_delivered", "input was not delivered"], ["agent_delivery_unknown", "do not replay automatically"]] as const) {
   test(`send-message renders ${kind} without retrying or mutating owner state`, async () => {
     const agent = subagent("worker", "frozen", "inactive");
     const h = await harness(snapshot({ agents: [agent] }));

@@ -378,6 +378,21 @@ impl PhysicalChildRuntimeRoot {
         assert!(self.physical_owner.replace(owner).is_none());
     }
 
+    /// No child was spawned. Workspace helpers must still be positively
+    /// settled before their preparation root can be discarded.
+    pub(crate) fn discard_unstarted(self) -> std::io::Result<()> {
+        let _proof = self
+            .physical_owner
+            .as_ref()
+            .map(|owner| owner.prove_continuations())
+            .transpose()?
+            .flatten()
+            .ok_or_else(|| std::io::Error::other("unresolved preparation helpers"))?;
+        self.publish_quiescent()?;
+        self.remove_durable_store()?;
+        self.remove()
+    }
+
     fn publish_quiescent(&self) -> std::io::Result<()> {
         self.physical_owner
             .as_ref()
@@ -1530,9 +1545,10 @@ pub(crate) enum ChildBoundRoute {
         guidance_id: u64,
         /// The bounded parent-authored guidance text.
         message: String,
-        /// The child conversation's acceptance decision, or a dropped sender
-        /// when the child settled without answering.
+        /// The child's explicit decision. Loss of this sender is classified
+        /// using `write_started`, never inferred from terminal settlement.
         outcome: tokio::sync::oneshot::Sender<ChildGuidanceOutcome>,
+        write_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
 }
 
@@ -1684,7 +1700,7 @@ async fn drive_child_control(
     > = HashMap::new();
     // Parent-authored guidance waiters (Issue #193), keyed by the exact
     // transport correlation identity. Dropping the map at settlement resolves
-    // every unanswered waiter as a deterministic refusal.
+    // every unanswered waiter with unknown delivery after a write attempt.
     let mut guidance_waiters: HashMap<u64, tokio::sync::oneshot::Sender<ChildGuidanceOutcome>> =
         HashMap::new();
     let mut commands_open = true;
@@ -1738,7 +1754,12 @@ async fn drive_child_control(
     let mut eof = false;
     loop {
         if seal_pending && commands.is_empty() {
-            if let Err(error) = write_parent_frame(&mut control, &ParentFrame::SealGranted).await {
+            // Cancel already closes admission and permits the child to report
+            // its result. Do not race that normal completion with a stale grant.
+            if !cancellation_delivered
+                && let Err(error) =
+                    write_parent_frame(&mut control, &ParentFrame::SealGranted).await
+            {
                 violation = Some(error.to_string());
             }
             seal_pending = false;
@@ -1815,6 +1836,7 @@ async fn drive_child_control(
                         guidance_id,
                         message,
                         outcome,
+                        write_started,
                     })) => {
                         // Transport only: the registry already linearized
                         // admission against cancellation and terminal
@@ -1826,6 +1848,11 @@ async fn drive_child_control(
                             guidance_id,
                             message,
                         });
+                        if cancellation_delivered {
+                            drop(outcome);
+                            continue;
+                        }
+                        write_started.store(true, std::sync::atomic::Ordering::Release);
                         match write_parent_frame(&mut control, &frame).await {
                             Ok(()) => {
                                 if guidance_waiters.insert(guidance_id, outcome).is_some() {
@@ -1836,8 +1863,8 @@ async fn drive_child_control(
                             }
                             Err(error) => {
                                 // The waiter is dropped, which the registry
-                                // reads as a deterministic refusal: nothing
-                                // reached the child conversation.
+                                // classifies using the write boundary: partial
+                                // delivery or durable acceptance is possible.
                                 drop(outcome);
                                 violation = Some(format!(
                                     "control channel lost while delivering parent guidance: {error}"
@@ -2277,6 +2304,7 @@ mod tests {
                     guidance_id,
                     message: format!("message-{guidance_id}"),
                     outcome,
+                    write_started: std::sync::Arc::default(),
                 }))
                 .expect("every admitted message has a reliable owner queue");
             acknowledgements.push(acknowledgement);

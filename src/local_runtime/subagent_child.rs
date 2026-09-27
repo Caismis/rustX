@@ -596,16 +596,21 @@ pub(crate) async fn serve_child_delegation(
     // Workflow output settlement into a failure. The one committed
     // `workflow_output` value remains the exactly-once terminal settlement
     // through the ordinary Workflow output path below.
+    let mut cancelled = false;
     let mut observed_terminals: u64 = 0;
     let terminal = loop {
-        let terminal = await_terminal(
+        let mut terminal = await_terminal(
             dispatcher,
             &runtime,
             &observations,
             handle,
             &parent_agent_id,
+            &mut cancelled,
         )
         .await?;
+        if cancelled && !matches!(terminal, AttemptTerminal::Orphaned) {
+            terminal = AttemptTerminal::Cancelled;
+        }
         observed_terminals = observed_terminals.saturating_add(1);
         // Workflow-owned children settle on their first terminal. Orphans
         // cannot close admission with a parent that no longer exists.
@@ -614,10 +619,18 @@ pub(crate) async fn serve_child_delegation(
         // this activation: failure (including timeout/limits) and cancellation
         // are final. Any accepted, unobserved guidance remains durable input
         // owned by the Agent conversation for a later activation.
-        if workflow_output.is_some() || matches!(terminal, AttemptTerminal::Orphaned) {
+        if cancelled || workflow_output.is_some() || matches!(terminal, AttemptTerminal::Orphaned) {
             break terminal;
         }
-        if !close_parent_admission(dispatcher, handle, &runtime, &parent_agent_id).await? {
+        if !close_parent_admission(
+            dispatcher,
+            handle,
+            &runtime,
+            &parent_agent_id,
+            &mut cancelled,
+        )
+        .await?
+        {
             break AttemptTerminal::Cancelled;
         }
         if !matches!(terminal, AttemptTerminal::Completed) {
@@ -636,6 +649,7 @@ pub(crate) async fn serve_child_delegation(
                     &runtime,
                     &parent_agent_id,
                     true,
+                    &mut cancelled,
                 )
                 .await?
                 {
@@ -712,12 +726,21 @@ async fn close_parent_admission(
     handle: &ChildControlHandle,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     parent_agent_id: &crate::runtime::identity::AgentId,
+    cancelled: &mut bool,
 ) -> Result<bool, ChildExit> {
     handle
         .send_reliable(ChildFrame::SealRequested)
         .await
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
-    await_parent_admission_boundary(dispatcher, handle, runtime, parent_agent_id, false).await
+    await_parent_admission_boundary(
+        dispatcher,
+        handle,
+        runtime,
+        parent_agent_id,
+        false,
+        cancelled,
+    )
+    .await
 }
 
 async fn await_parent_admission_boundary(
@@ -726,7 +749,11 @@ async fn await_parent_admission_boundary(
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     parent_agent_id: &crate::runtime::identity::AgentId,
     reopening: bool,
+    cancelled: &mut bool,
 ) -> Result<bool, ChildExit> {
+    if *cancelled {
+        return Ok(false);
+    }
     loop {
         match dispatcher.next_event().await {
             Some(ChildControlEvent::SealGranted) if !reopening => return Ok(true),
@@ -763,6 +790,7 @@ async fn await_parent_admission_boundary(
             Some(ChildControlEvent::Cancel {
                 reason: Some(reason),
             }) => {
+                *cancelled = true;
                 let _ = runtime.cancel_current_or_next_attempt(reason);
                 // Cancellation is absorbing at BOTH admission boundaries.
                 // It cannot be consumed by close and forgotten before reopen.
@@ -922,6 +950,14 @@ async fn apply_parent_guidance(
             detail: bound_diagnostic(error.to_string()),
         }),
     };
+    #[cfg(test)]
+    if matches!(outcome, ChildGuidanceOutcome::Accepted)
+        && GUIDANCE_ACK_LOSS.try_with(|lose| *lose).unwrap_or(false)
+    {
+        return Err(ChildExit::Protocol(
+            "injected control loss after durable guidance acceptance".into(),
+        ));
+    }
     answer_guidance(handle, guidance_id, outcome).await
 }
 
@@ -995,6 +1031,7 @@ async fn await_terminal(
     observations: &Arc<PendingObservations>,
     handle: &ChildControlHandle,
     parent_agent_id: &crate::runtime::identity::AgentId,
+    cancelled: &mut bool,
 ) -> Result<AttemptTerminal, ChildExit> {
     await_terminal_inner(
         dispatcher,
@@ -1002,6 +1039,7 @@ async fn await_terminal(
         observations,
         handle,
         parent_agent_id,
+        cancelled,
         |_| {},
     )
     .await
@@ -1022,6 +1060,7 @@ async fn await_terminal_with_probe(
         observations,
         handle,
         &crate::runtime::identity::AgentId::new("agent-parent"),
+        &mut false,
         move |delivered| {
             if delivered {
                 cancellation_after_admission.notify_one();
@@ -1040,6 +1079,7 @@ async fn await_terminal_inner<F>(
     observations: &Arc<PendingObservations>,
     handle: &ChildControlHandle,
     parent_agent_id: &crate::runtime::identity::AgentId,
+    cancelled: &mut bool,
     on_cancellation: F,
 ) -> Result<AttemptTerminal, ChildExit>
 where
@@ -1079,6 +1119,9 @@ where
                                 "a semantic cancellation arrived without a reason".to_owned(),
                             ));
                         };
+                        *cancelled = true;
+                        #[cfg(test)]
+                        let _ = CANCELLATION_OBSERVED.try_with(|signal| signal.notify_one());
                         let delivered = runtime.cancel_current_or_next_attempt(reason).is_some();
                         on_cancellation(delivered);
                         // The frame is a request, not a terminal fact: the
@@ -1144,7 +1187,7 @@ where
                         ConversationObservation::Event { event, .. } => {
                             match event {
                                 RuntimeEvent::AttemptCompleted { .. } => {
-                                    return Ok(AttemptTerminal::Completed);
+                                    return Ok(if *cancelled { AttemptTerminal::Cancelled } else { AttemptTerminal::Completed });
                                 }
                                 RuntimeEvent::AttemptCancelled { .. } => {
                                     return Ok(AttemptTerminal::Cancelled);
@@ -1272,7 +1315,13 @@ fn take_observation_channel() -> std::io::Result<tokio::net::UnixStream> {
 }
 
 #[cfg(test)]
-mod tests {
+tokio::task_local! {
+    static CANCELLATION_OBSERVED: Arc<tokio::sync::Notify>;
+    pub(crate) static GUIDANCE_ACK_LOSS: bool;
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
@@ -1359,7 +1408,7 @@ mod tests {
     /// (terminal mode `WorkflowOutput`) can be composed exactly like
     /// production (`SubagentChildCore::workflow_output`).
     #[allow(clippy::too_many_arguments)] // one composition fixture
-    async fn child_test_runtime_full(
+    pub(crate) async fn child_test_runtime_full(
         dir: &tempfile::TempDir,
         start_pause: Option<StartBoundaryPause>,
         admission_gate: Option<Arc<Gate>>,
@@ -2364,6 +2413,7 @@ mod tests {
                 &observations,
                 &handle,
                 &AgentId::new("agent-parent"),
+                &mut false,
             )
             .await
             .unwrap();
@@ -2554,6 +2604,141 @@ mod tests {
             );
             assert!(store.load_pending().unwrap().is_empty());
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // One end-to-end cancellation/observation interleaving.
+    async fn cancel_before_completed_observation_never_reopens_activation() {
+        use crate::durable::ConversationStore;
+        use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
+        let dir = tempfile::tempdir().unwrap();
+        let id = ConversationId::generate();
+        let store =
+            Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+        let model = Arc::new(FakeModel::new(vec![answer("first"), answer("forbidden")]));
+        let runtime = child_test_runtime_full(
+            &dir,
+            None,
+            None,
+            None,
+            None,
+            None,
+            id.clone(),
+            model.clone(),
+            Some(store.clone()),
+        )
+        .await;
+        let committed = Arc::new(PendingObservations::new());
+        let delivered = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(committed.clone())
+            .unwrap();
+        runtime.gate_child_turns();
+        runtime.activate();
+        let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let cancelled = Arc::new(tokio::sync::Notify::new());
+        let serve = tokio::spawn(CANCELLATION_OBSERVED.scope(cancelled.clone(), {
+            let runtime = runtime.clone();
+            let delivered = delivered.clone();
+            async move {
+                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                let handle = dispatcher.handle();
+                let result = serve_child_delegation(
+                    &mut dispatcher,
+                    &handle,
+                    AgentId::new("agent-parent"),
+                    runtime,
+                    delivered,
+                    None,
+                )
+                .await;
+                dispatcher.shutdown().await;
+                result
+            }
+        }));
+        delegate(&mut parent, "first task").await;
+        let terminal = loop {
+            committed.wait().await;
+            if let Some(terminal) = committed.drain().into_iter().find(|observation| {
+                matches!(
+                    observation,
+                    ConversationObservation::Event {
+                        event: RuntimeEvent::AttemptCompleted { .. },
+                        ..
+                    }
+                )
+            }) {
+                break terminal;
+            }
+        };
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Guidance(GuidanceFrame {
+                guidance_id: 1,
+                message: "pending for a later activation".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_child_frame(&mut parent).await.unwrap(),
+            Some(ChildFrame::GuidanceResult(GuidanceResultFrame {
+                outcome: ChildGuidanceOutcome::Accepted,
+                ..
+            }))
+        ));
+        let pending = store.load_pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .unwrap();
+        cancelled.notified().await;
+        delivered.push(terminal);
+        let Some(ChildFrame::Result(result)) = read_child_frame(&mut parent).await.unwrap() else {
+            panic!("cancelled activation must report its result without reopening negotiation");
+        };
+        assert_eq!(result.status, ChildResultStatus::Cancelled);
+        assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+        serve.await.unwrap().unwrap();
+        assert_eq!(model.requests().len(), 1);
+        assert_eq!(runtime.seal_probe_calls(), 0);
+        assert_eq!(store.load_pending().unwrap(), pending);
+        let next_model = Arc::new(FakeModel::new(vec![answer("explicit continuation")]));
+        let resumed = child_test_runtime_full(
+            &dir,
+            None,
+            None,
+            None,
+            None,
+            None,
+            id,
+            next_model.clone(),
+            Some(store.clone()),
+        )
+        .await;
+        let mut next = serve_child(&resumed);
+        delegate(&mut next.parent, "explicit next activation").await;
+        assert_eq!(
+            read_result(&mut next.parent).await.status,
+            ChildResultStatus::Succeeded
+        );
+        next.serve.await.unwrap().unwrap();
+        assert_eq!(next_model.requests().len(), 1);
+        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            adopted_guidance(&resumed),
+            vec![
+                "first task",
+                "pending for a later activation",
+                "explicit next activation"
+            ]
+        );
     }
 
     /// The child has completed one turn and is waiting for `SealGranted`.
