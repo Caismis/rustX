@@ -402,7 +402,7 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
     assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
     assert!(
         marker.exists(),
-        "background cancellation TERMs the owned process group"
+        "background cancellation TERMs the owned process group: {terminal:?}"
     );
 }
 

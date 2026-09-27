@@ -2113,6 +2113,11 @@ and zero or one current finite activation (`SubagentId`). `subagent` creates it;
 `list_agents`, `send_message`, `wait_agent` and `interrupt_agent` are distinct
 Agent-domain controls. They are not Job operations or action-tagged execution
 routing. [Jobs and continuable Agents](jobs-and-agents.md) is the current contract.
+Physical allocation ownership begins before an Agent activation's Reserved journal
+fact. A pre-Reserved failure transfers the consumed allocation to registry recovery
+before releasing admission; native proof, never handle drop, releases the resulting
+availability/idle/drain fence. Destructive Session exclusion retains proof for all
+consumed allocations even when no logical admission exists.
 
 The registry mutex is the common arbitration boundary for Active delivery,
 Inactive resume reservation, child admission closure, cancellation and terminal

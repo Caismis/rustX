@@ -670,8 +670,13 @@ struct RegistryState {
     #[cfg(test)]
     reserved_commit_hook: Option<Arc<CommitBoundaryHook>>,
     #[cfg(test)]
+    resume_cleanup_hook: Option<ResumeCleanupHook>,
+    #[cfg(test)]
     authority_install_hook: Option<Arc<CommitBoundaryHook>>,
 }
+
+#[cfg(test)]
+type ResumeCleanupHook = Box<dyn FnOnce(&super::physical_recovery::ParentPhysicalLease) + Send>;
 
 #[cfg(test)]
 struct AllocationTestHook {
@@ -1741,6 +1746,8 @@ impl SubagentRegistry {
                 resume_owner_abort: None,
                 #[cfg(test)]
                 reserved_commit_hook: None,
+                #[cfg(test)]
+                resume_cleanup_hook: None,
                 #[cfg(test)]
                 authority_install_hook: None,
             })),

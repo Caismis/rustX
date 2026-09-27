@@ -270,6 +270,11 @@ impl ParentPhysicalLease {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn duplicate_lock_for_test(&self) -> std::io::Result<File> {
+        self.0.lock.try_clone()
+    }
+
     /// Only the staging/driver owner after its explicit full resource drain
     /// may assert this. An error or absent child alone never calls it.
     pub(crate) fn publish_quiescent(&self) -> std::io::Result<()> {
@@ -444,6 +449,7 @@ impl ChildPhysicalLease {
 }
 
 /// Retains the exclusive inode until the durable fact consumes the proof.
+#[derive(Debug)]
 pub(crate) struct RecoveredPhysicalProof {
     locks: Vec<File>,
 }

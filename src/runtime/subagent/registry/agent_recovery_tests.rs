@@ -30,7 +30,7 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     drop(super::super::physical_recovery::prove_after_release(
         &spawn.product_root, &spawn.session_id, &orphaned_conversation, &consumed,
     ).unwrap().unwrap());
-    recovered.reconcile_recovered_settlements();
+    recovered.wait_recovery_reconciliation().await;
     assert!(!recovered.owns_idle_work());
     assert!(recovered.unproven_settlements().is_empty());
     assert_eq!(recovered.with_goal_idle(|| true), Some(true));
@@ -122,6 +122,7 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
     // The startup reconciler owns the exact claim before native proof becomes available.
     entry.await.unwrap();
     assert!(recovered.state.try_lock().is_ok());
+    assert_start_joins_recovery_owner(&recovered);
     drop(lease);
     drop(crate::runtime::subagent::physical_recovery::prove_after_release(
         &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &admitted.subagent_id,
@@ -614,13 +615,60 @@ async fn recovered_verification_before_reserved_retains_physical_exclusion_after
     assert!(!events(&plane).iter().any(|event| matches!(event,
         crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. } if activation_id == &activation)));
     if !crash {
+        let (retained, retained_lock) = tokio::sync::oneshot::channel();
+        recovered.state.lock().unwrap().resume_cleanup_hook = Some(Box::new(move |owner| {
+            retained.send(owner.duplicate_lock_for_test().unwrap()).unwrap();
+        }));
         let mut interrupt = Box::pin(recovered.interrupt_agent(&admitted.child_agent_id));
         assert!(futures_util::poll!(&mut interrupt).is_pending());
         assert!(matches!(send.await, Err(AgentControlError::Start(SubagentStartError::Cancelled))));
-        assert!(interrupt.await.unwrap().outcome.is_none());
-        assert_eq!(recovered.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
+        let retained_lock = retained_lock.await.unwrap();
+        assert!(matches!(interrupt.await, Err(AgentControlError::Settlement)));
+        assert_eq!(recovered.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Unavailable);
+        assert_eq!(recovered.unproven_settlements(), vec![activation.clone()]);
+        assert_eq!(recovered.with_goal_idle(|| true), None);
+        assert_eq!(recovered.state.lock().unwrap().next_ordinal, 3);
+        assert!(matches!(recovered.send_message(&admitted.child_agent_id, "cannot reuse",
+            AgentActivationOrigin::ClientControl, CancellationSignal::new()).await,
+            Err(AgentControlError::Settlement)));
         assert_eq!(recovered.all_snapshots().len(), 1);
-        // No release byte was sent: the activation signal settled real Git.
+        assert!(!events(&plane).iter().any(|event| matches!(event,
+            crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. }
+            if activation_id == &activation)));
+        let (runtime, recovered) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
+            &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
+            plane.store.clone(), recovered.clone(),
+        ).await;
+        assert!(runtime.settle_child_physical_lifetime(false).await.is_err());
+        assert!(runtime.shutdown().await.is_err());
+        assert!(!runtime.is_quiescent());
+        drop(retained_lock);
+        recovered.start_recovery_reconciliation();
+        recovered.wait_recovery_reconciliation().await;
+        assert!(recovered.unproven_settlements().is_empty());
+        assert_eq!(recovered.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
+        assert_eq!(recovered.with_goal_idle(|| true), Some(true));
+        let (settled_runtime, _) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
+            &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
+            plane.store.clone(), recovered.clone(),
+        ).await;
+        settled_runtime.settle_child_physical_lifetime(false).await.unwrap();
+        settled_runtime.shutdown().await.unwrap();
+        assert!(settled_runtime.is_quiescent());
+        let store = Arc::new(crate::durable::SqliteConversationStore::open(
+            plane.conversation_id.clone(), &plane.dir.path().join("parent.sqlite"),
+        ).unwrap());
+        config.mailbox = ConversationInboundMailbox::over_store(store.clone());
+        let reopened = SubagentRegistry::new(config);
+        reopened.restore_agents(store.as_ref()).unwrap();
+        reopened.wait_recovery_reconciliation().await;
+        assert!(reopened.unproven_settlements().is_empty());
+        assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
+        assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
+        assert_eq!(reopened.all_snapshots().len(), 1);
+        assert!(!events(&plane).iter().any(|event| matches!(event,
+            crate::events::types::RuntimeEvent::AgentActivationAdmission { activation_id, .. }
+            if activation_id == &activation)));
         continue;
     }
     recovered.state.lock().unwrap().resume_owner_abort.take().unwrap().abort();
@@ -816,4 +864,11 @@ fn assert_physical_receipt_retry_is_idempotent(plane: &TestPlane, admitted: &Sub
         first_receipt,
         "a lost durable acknowledgement retries the exact committed receipt"
     );
+}
+
+fn assert_start_joins_recovery_owner(registry: &SubagentRegistry) {
+    let completion = registry.recovery_reconciliation.subscribe();
+    assert!(!*completion.borrow());
+    registry.start_recovery_reconciliation();
+    assert!(!completion.has_changed().unwrap(), "joining a parked owner must not start another completion publisher");
 }

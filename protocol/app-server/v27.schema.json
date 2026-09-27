@@ -2129,11 +2129,11 @@
       "pattern": "^exec_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "AgentId": {
-      "description": "Identifies an agent.",
+      "description": "Identifies an Agent independently of its finite activations.\nFor a continuable child, this is the durable Agent-domain identity of\nits child Conversation and remains unchanged across resume.",
       "type": "string"
     },
     "SubagentId": {
-      "description": "Identifies one conversation-owned asynchronous one-shot subagent\n(Issue #60).\n\n`SubagentId` is the logical lifecycle/delegation identity of a child\nrustX runtime. It is deliberately not an OS pid: a pid is ephemeral\nprocess state and is never durable identity, and pid reuse after a\nrestart can never prove that a surviving process is the previously\nowned child.",
+      "description": "Identifies one finite activation owned by an Agent, or one finite\nWorkflow child execution.\n\nRepeated native Agent activations have distinct `SubagentId`s while\nretaining the same durable `AgentId`. This is not an OS pid: process\nidentity or PID reuse can never establish durable ownership or proof\nof physical settlement.",
       "type": "string"
     },
     "InitializeParams": {

@@ -498,18 +498,19 @@ export type GoalMutation =
     };
 export type ToolExecutionId = string;
 /**
- * Identifies an agent.
+ * Identifies an Agent independently of its finite activations.
+ * For a continuable child, this is the durable Agent-domain identity of
+ * its child Conversation and remains unchanged across resume.
  */
 export type AgentId = string;
 /**
- * Identifies one conversation-owned asynchronous one-shot subagent
- * (Issue #60).
+ * Identifies one finite activation owned by an Agent, or one finite
+ * Workflow child execution.
  *
- * `SubagentId` is the logical lifecycle/delegation identity of a child
- * rustX runtime. It is deliberately not an OS pid: a pid is ephemeral
- * process state and is never durable identity, and pid reuse after a
- * restart can never prove that a surviving process is the previously
- * owned child.
+ * Repeated native Agent activations have distinct `SubagentId`s while
+ * retaining the same durable `AgentId`. This is not an OS pid: process
+ * identity or PID reuse can never establish durable ownership or proof
+ * of physical settlement.
  */
 export type SubagentId = string;
 /**
@@ -6268,7 +6269,9 @@ export interface UserMessageBlock {
     | {
         agent: {
           /**
-           * Identifies an agent.
+           * Identifies an Agent independently of its finite activations.
+           * For a continuable child, this is the durable Agent-domain identity of
+           * its child Conversation and remains unchanged across resume.
            */
           agent_id: string;
         };
@@ -6817,18 +6820,19 @@ export interface GoalView {
 export interface RuntimeClientAgent {
   parent_agent_id: AgentId;
   /**
-   * Identifies one conversation-owned asynchronous one-shot subagent
-   * (Issue #60).
+   * Identifies one finite activation owned by an Agent, or one finite
+   * Workflow child execution.
    *
-   * `SubagentId` is the logical lifecycle/delegation identity of a child
-   * rustX runtime. It is deliberately not an OS pid: a pid is ephemeral
-   * process state and is never durable identity, and pid reuse after a
-   * restart can never prove that a surviving process is the previously
-   * owned child.
+   * Repeated native Agent activations have distinct `SubagentId`s while
+   * retaining the same durable `AgentId`. This is not an OS pid: process
+   * identity or PID reuse can never establish durable ownership or proof
+   * of physical settlement.
    */
   activation_id: string;
   /**
-   * Identifies an agent.
+   * Identifies an Agent independently of its finite activations.
+   * For a continuable child, this is the durable Agent-domain identity of
+   * its child Conversation and remains unchanged across resume.
    */
   agent_id: string;
   /**
@@ -7394,7 +7398,9 @@ export interface UserMessageBlock1 {
     | {
         agent: {
           /**
-           * Identifies an agent.
+           * Identifies an Agent independently of its finite activations.
+           * For a continuable child, this is the durable Agent-domain identity of
+           * its child Conversation and remains unchanged across resume.
            */
           agent_id: string;
         };
@@ -8297,7 +8303,9 @@ export interface UserMessageBlock2 {
     | {
         agent: {
           /**
-           * Identifies an agent.
+           * Identifies an Agent independently of its finite activations.
+           * For a continuable child, this is the durable Agent-domain identity of
+           * its child Conversation and remains unchanged across resume.
            */
           agent_id: string;
         };
@@ -8377,14 +8385,13 @@ export interface RoutedInteraction {
       }
     | {
         /**
-         * Identifies one conversation-owned asynchronous one-shot subagent
-         * (Issue #60).
+         * Identifies one finite activation owned by an Agent, or one finite
+         * Workflow child execution.
          *
-         * `SubagentId` is the logical lifecycle/delegation identity of a child
-         * rustX runtime. It is deliberately not an OS pid: a pid is ephemeral
-         * process state and is never durable identity, and pid reuse after a
-         * restart can never prove that a surviving process is the previously
-         * owned child.
+         * Repeated native Agent activations have distinct `SubagentId`s while
+         * retaining the same durable `AgentId`. This is not an OS pid: process
+         * identity or PID reuse can never establish durable ownership or proof
+         * of physical settlement.
          */
         subagent_id: string;
         /**
@@ -9233,14 +9240,13 @@ export interface RoutedInteraction1 {
       }
     | {
         /**
-         * Identifies one conversation-owned asynchronous one-shot subagent
-         * (Issue #60).
+         * Identifies one finite activation owned by an Agent, or one finite
+         * Workflow child execution.
          *
-         * `SubagentId` is the logical lifecycle/delegation identity of a child
-         * rustX runtime. It is deliberately not an OS pid: a pid is ephemeral
-         * process state and is never durable identity, and pid reuse after a
-         * restart can never prove that a surviving process is the previously
-         * owned child.
+         * Repeated native Agent activations have distinct `SubagentId`s while
+         * retaining the same durable `AgentId`. This is not an OS pid: process
+         * identity or PID reuse can never establish durable ownership or proof
+         * of physical settlement.
          */
         subagent_id: string;
         /**
@@ -9742,7 +9748,9 @@ export interface UserMessageBlock3 {
     | {
         agent: {
           /**
-           * Identifies an agent.
+           * Identifies an Agent independently of its finite activations.
+           * For a continuable child, this is the durable Agent-domain identity of
+           * its child Conversation and remains unchanged across resume.
            */
           agent_id: string;
         };
@@ -9848,18 +9856,19 @@ export interface RuntimeClientJob1 {
 export interface RuntimeClientAgent1 {
   parent_agent_id: AgentId;
   /**
-   * Identifies one conversation-owned asynchronous one-shot subagent
-   * (Issue #60).
+   * Identifies one finite activation owned by an Agent, or one finite
+   * Workflow child execution.
    *
-   * `SubagentId` is the logical lifecycle/delegation identity of a child
-   * rustX runtime. It is deliberately not an OS pid: a pid is ephemeral
-   * process state and is never durable identity, and pid reuse after a
-   * restart can never prove that a surviving process is the previously
-   * owned child.
+   * Repeated native Agent activations have distinct `SubagentId`s while
+   * retaining the same durable `AgentId`. This is not an OS pid: process
+   * identity or PID reuse can never establish durable ownership or proof
+   * of physical settlement.
    */
   activation_id: string;
   /**
-   * Identifies an agent.
+   * Identifies an Agent independently of its finite activations.
+   * For a continuable child, this is the durable Agent-domain identity of
+   * its child Conversation and remains unchanged across resume.
    */
   agent_id: string;
   /**

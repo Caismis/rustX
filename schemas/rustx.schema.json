@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AgentId": {
-      "description": "Identifies an agent.",
+      "description": "Identifies an Agent independently of its finite activations.\nFor a continuable child, this is the durable Agent-domain identity of\nits child Conversation and remains unchanged across resume.",
       "type": "string"
     },
     "AgentProfileLayer": {

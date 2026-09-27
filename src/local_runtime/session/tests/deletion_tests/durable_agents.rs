@@ -526,3 +526,32 @@ async fn session_deletion_preserves_canonical_allocation_through_product_root_al
         .await
         .unwrap();
 }
+
+#[test]
+fn pre_reserved_allocation_blocks_destructive_deletion_until_exact_proof() {
+    use crate::local_runtime::session_deletion::DeletionExclusion;
+    use crate::runtime::local_storage::ProductRoot;
+    use crate::runtime::subagent::physical_recovery::ParentPhysicalLease;
+    let (root, catalog, _) = open_catalog();
+    let session = first_session(&catalog);
+    let (node, _) = catalog.lineage(&session, None).unwrap();
+    let parent = store_for(&catalog, &session, &node.conversation_id);
+    let child_id = child(root.path(), &parent, 1, true);
+    let product = ProductRoot::existing(root.path()).unwrap();
+    let activation = SubagentId::for_conversation(parent.conversation_id(), 2);
+    let owner = ParentPhysicalLease::reserve(&product, &session, &child_id, &activation).unwrap();
+    let duplicate = owner.duplicate_lock_for_test().unwrap();
+    drop(owner);
+    let target = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
+    let error = DeletionExclusion::acquire(root.path(), &target).unwrap_err();
+    assert!(error.to_string().contains("physical activation"), "{error}");
+    // Explicitly unlock the test-owned open-file description. Unlike drop,
+    // this also releases any transient duplicate inherited by another spawn.
+    duplicate.unlock().unwrap();
+    drop(duplicate);
+    let exclusion = DeletionExclusion::acquire(root.path(), &target).unwrap();
+    drop(exclusion);
+    assert!(!parent.read_events(None, 256).unwrap().events.iter().any(|event| matches!(
+        &event.event, RuntimeEvent::AgentActivationAdmission { activation_id, .. } if activation_id == &activation
+    )));
+}

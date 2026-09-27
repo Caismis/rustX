@@ -820,7 +820,12 @@ fn run_inner() -> i32 {
         return INNER_EXIT_NORMAL;
     }
     if let Ok(path) = std::env::var(ANCHOR_PID_FILE_ENV) {
-        let _ = std::fs::write(&path, std::process::id().to_string());
+        // File existence is the fixture's readiness event: publish complete
+        // PID bytes atomically so a concurrent reader cannot see an empty file.
+        let pending = std::path::Path::new(&path).with_extension("pending");
+        if std::fs::write(&pending, std::process::id().to_string()).is_ok() {
+            let _ = std::fs::rename(pending, path);
+        }
     }
     let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
     if stream
@@ -1522,7 +1527,7 @@ mod anchor_reaping_tests {
         // shell's exit and escalates containment, exactly like a real
         // abnormal inner completion with possibly-live owned work.
         let command = format!(
-            "sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            "sleep 30 >/dev/null 2>&1 & echo $! > {0}.pending; mv {0}.pending {0}; exit 0",
             sleep_pid_file.display()
         );
         let (mut outer, mut stream) = spawn_outer(&command, &barrier_dir, &anchor_pid_file);
@@ -1630,7 +1635,7 @@ mod anchor_reaping_tests {
         let anchor_pid_file = dir.path().join("anchor.pid");
         let sleep_pid_file = dir.path().join("sleep.pid");
         let command = format!(
-            "sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            "sleep 30 >/dev/null 2>&1 & echo $! > {0}.pending; mv {0}.pending {0}; exit 0",
             sleep_pid_file.display()
         );
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");

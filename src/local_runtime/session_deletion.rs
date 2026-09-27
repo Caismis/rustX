@@ -615,6 +615,7 @@ fn validate_handoff(
 #[derive(Debug)]
 pub struct DeletionExclusion {
     _targets: Vec<ConversationExclusion>,
+    _physical: Vec<crate::runtime::subagent::physical_recovery::RecoveredPhysicalProof>,
 }
 impl DeletionExclusion {
     /// # Errors
@@ -627,6 +628,25 @@ impl DeletionExclusion {
                 .iter()
                 .map(|c| ConversationExclusion::acquire(&root, &c.private_root))
                 .collect::<std::io::Result<Vec<_>>>()?,
+            _physical: crate::runtime::subagent::physical_recovery::consumed_session_allocations(
+                &root,
+                target.session_id(),
+            )?
+            .into_iter()
+            .map(|(activation, conversation)| {
+                crate::runtime::subagent::physical_recovery::prove(
+                    &root,
+                    target.session_id(),
+                    &conversation,
+                    &activation,
+                )?
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "physical activation {activation} remains unresolved"
+                    ))
+                })
+            })
+            .collect::<std::io::Result<Vec<_>>>()?,
         })
     }
 }

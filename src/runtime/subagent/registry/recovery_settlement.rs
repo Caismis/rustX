@@ -78,22 +78,7 @@ impl SubagentRegistry {
             Ok(owner) => Ok(owner),
             Err(error) => {
                 if error.consumed {
-                    {
-                        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                        if let Some(agent) = state
-                            .agents
-                            .values()
-                            .find(|agent| agent.conversation_id == *conversation)
-                        {
-                            agent.workspace.await_recovered_physical_proof();
-                        }
-                        state
-                            .recovery_unreserved
-                            .insert(activation.clone(), conversation.clone());
-                        state.recovery_pending.insert(activation.clone());
-                        self.state_version.send_modify(|version| *version += 1);
-                    }
-                    self.config.mailbox.wake().notify_one();
+                    self.retain_unreserved_allocation(conversation, activation);
                     // No filesystem work or proof acquisition occurs under the
                     // registry mutex. A damaged published authority stays pending.
                     self.reconcile_recovered_settlements();
@@ -105,23 +90,45 @@ impl SubagentRegistry {
         }
     }
 
+    /// Physical consumption precedes logical admission. Transfer the exact
+    /// allocation before the admission owner can release its reservation.
+    pub(super) fn retain_unreserved_allocation(
+        &self,
+        conversation: &super::ConversationId,
+        activation: &super::SubagentId,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(agent) = state
+            .agents
+            .values()
+            .find(|agent| agent.conversation_id == *conversation)
+        {
+            agent.workspace.await_recovered_physical_proof();
+        }
+        state
+            .recovery_unreserved
+            .insert(activation.clone(), conversation.clone());
+        state.recovery_pending.insert(activation.clone());
+        self.state_version.send_modify(|version| *version += 1);
+        self.config.mailbox.wake().notify_one();
+    }
+
     /// One bounded runtime owner follows old child drain completion without a
     /// client retry. The deadline limits supervision, never constitutes proof.
     /// Unresolved entries remain explicit and are reconsidered on later opens.
     pub(super) fn start_recovery_reconciliation(&self) {
-        if self
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .recovery_pending
-            .is_empty()
-        {
-            return;
-        }
         let Ok(executor) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        self.recovery_reconciliation.send_replace(false);
+        {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            // Live admission failures can join an already-running recovery owner.
+            // One completion watch must never be released by a different task.
+            if state.recovery_pending.is_empty() || !*self.recovery_reconciliation.borrow() {
+                return;
+            }
+            self.recovery_reconciliation.send_replace(false);
+        }
         let registry = self.clone();
         let completion = ReconciliationCompletion(self.recovery_reconciliation.clone());
         executor.spawn(async move {

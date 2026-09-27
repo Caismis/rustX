@@ -2710,3 +2710,91 @@ while True:
         let _ = dir;
     }
 }
+
+/// The TERM trap itself owns a pipe gate. Settlement cannot precede releasing
+/// the trap, and the recorded supervisor control must begin with owned TERM.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancellation_waits_for_pipe_gated_term_trap_before_physical_terminal() {
+    use std::io::{Read, Write};
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    let root = workspace.root();
+    let ready = root.join("term-ready");
+    let entered = root.join("term-entered");
+    let release = root.join("term-release");
+    for path in [&ready, &entered, &release] {
+        nix::unistd::mkfifo(
+            path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+    }
+    let ready_reader = tokio::task::spawn_blocking(move || {
+        let mut byte = [0];
+        std::fs::File::open(ready)
+            .unwrap()
+            .read_exact(&mut byte)
+            .unwrap();
+        assert_eq!(byte, [b'R']);
+    });
+    let entered_path = entered.clone();
+    let trap_reader = tokio::task::spawn_blocking(move || {
+        let mut byte = [0];
+        std::fs::File::open(entered_path)
+            .unwrap()
+            .read_exact(&mut byte)
+            .unwrap();
+        assert_eq!(byte, [b'T']);
+    });
+    let command = format!(
+        "trap 'printf T > {}; read release < {}; exit 0' TERM; printf R > {}; while :; do :; done",
+        entered.display(),
+        release.display(),
+        root.join("term-ready").display(),
+    );
+    let control = BashTestControl::new();
+    let cancellation = CancellationSignal::new();
+    let mut task = tokio::spawn(run_with_control(
+        command,
+        control.clone(),
+        cancellation.clone(),
+        artifacts,
+        tool_output,
+        workspace,
+        None,
+    ));
+    tokio::time::timeout(Duration::from_secs(15), ready_reader)
+        .await
+        .unwrap()
+        .unwrap();
+    cancellation.cancel();
+    tokio::time::timeout(Duration::from_secs(15), trap_reader)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        futures_util::poll!(&mut task).is_pending(),
+        "a live TERM trap still owns physical work"
+    );
+    tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(release)
+            .unwrap()
+            .write_all(b"release\n")
+            .unwrap();
+    })
+    .await
+    .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(15), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
+        "{result:?}"
+    );
+    let signals = control.recorded_signals();
+    assert_eq!(signals.first().unwrap().signal, "SIGTERM");
+    assert!(signals.first().unwrap().emitted);
+}

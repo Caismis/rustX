@@ -163,8 +163,18 @@ The complete recovered workspace verification runs supervised Git under that phy
 owner before Reserved. Startup discovers every allocation in the durable Agent's
 physical namespace, including allocations without an admission event, and prevents
 workspace reuse until all their helpers have positive settlement proof.
+Live failure before Reserved transfers the exact consumed allocation into
+`recovery_unreserved` / `recovery_pending` before clearing the admission reservation.
+The workspace recovery fence then keeps the Agent Unavailable; pending recovery
+blocks Goal idle and runtime drain. Dropping the parent handle is not proof.
+Reconciliation must acquire and retain exact authority/continuation proof through
+the in-memory release. No Reserved, RolledBack, or logical activation event is
+invented for that unadmitted allocation. Session destructive exclusion also retains
+native proof for every consumed allocation, including those absent from the journal.
+The consumed ordinal remains unavailable for reuse after success or restart.
+
 The append runs outside the mutex; interruption still captures the same reservation.
-Ownership must consume that same Agent, activation and origin. Conclusive rollback records `RolledBack` with an explicit
+Ownership must consume that same Agent, activation and origin. After Reserved has committed, conclusive rollback records `RolledBack` with an explicit
 physical-settlement proof. Recovery never treats the prior activation's terminal
 fact as proof about a later reserved generation: an unresolved reservation or
 unproven rollback keeps the Agent Unavailable with the exact reserved target and its
@@ -179,7 +189,7 @@ share and prematurely release the same receipt. This releases the observation
 journal frontier; later canonical reports cannot be stranded behind an unpublished
 admission fact.
 
-App Server v26 exposes separate `jobs` and `agents` snapshots and `job_updated`
+App Server v27 exposes separate `jobs` and `agents` snapshots and `job_updated`
 and `agent_updated` events. Agent rows carry `agent_id`, `parent_agent_id`, child
 ConversationId, `current_activation`, latest `activation_id`, `activation_state`
 and explicit Admitting/Active/Stopping/Inactive/Unavailable state. Replay folds activations into the

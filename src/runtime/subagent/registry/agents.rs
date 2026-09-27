@@ -668,10 +668,23 @@ impl SubagentRegistry {
                         registry.commit(prepared, &cancellation).await
                     }
                     .await;
+                    #[cfg(test)]
+                    if let Some(owner) = &identity.physical_owner {
+                        let hook = registry.state.lock().unwrap().resume_cleanup_hook.take();
+                        if let Some(hook) = hook {
+                            hook(owner);
+                        }
+                    }
                     // A pre-prepare cancellation may leave the verified access
                     // unconsumed. Release it before publishing Inactive so a
                     // later activation observes the same completed owner cut.
                     drop(identity.workspace_access.get_mut().unwrap().take());
+                    if !reserved && result.is_err() && identity.physical_owner.is_some() {
+                        registry.retain_unreserved_allocation(
+                            &identity.conversation_id,
+                            &identity.activation_id,
+                        );
+                    }
                     let mut rollback_sequence = None;
                     if reserved && !matches!(&result, Ok(SubagentStartOutcome::Accepted(_))) {
                         let mut physical_settlement_proven = match &result {
@@ -718,11 +731,18 @@ impl SubagentRegistry {
                             .state
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner);
+                        let unreserved = state
+                            .recovery_unreserved
+                            .contains_key(&identity.activation_id);
                         let agent = state
                             .agents
                             .get_mut(&identity.agent_id)
                             .expect("durable Agent survives activation");
-                        if matches!(&result, Err(SubagentStartError::Rollback { .. })) {
+                        if unreserved {
+                            // Recovery now owns this consumed identity. Its workspace
+                            // fence keeps the Agent unavailable without inventing Reserved.
+                            agent.finish_resume(&identity.activation_id);
+                        } else if matches!(&result, Err(SubagentStartError::Rollback { .. })) {
                             agent.workspace.poison();
                             if let Some(reservation) = &agent.resuming {
                                 reservation
@@ -745,8 +765,23 @@ impl SubagentRegistry {
                             super::publish_snapshot(&mut state, &registry.state_version, index);
                         }
                     }
+                    let had_physical_owner = identity.physical_owner.is_some();
+                    // No executable handle survives the transfer. Reconciliation must
+                    // acquire native proof; dropping the parent alone is not settlement.
+                    if !reserved && !matches!(&result, Ok(SubagentStartOutcome::Accepted(_))) {
+                        drop(identity.physical_owner.take());
+                        registry.reconcile_recovered_settlements();
+                        registry.start_recovery_reconciliation();
+                        registry.wait_recovery_reconciliation().await;
+                    }
+                    let recovery_pending = registry
+                        .state
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .recovery_pending
+                        .contains(&identity.activation_id);
                     let completion_outcome = match &result {
-                        _ if identity.physical_owner.is_none() => AdmissionSettlement::Failed,
+                        _ if recovery_pending || !had_physical_owner => AdmissionSettlement::Failed,
                         Err(SubagentStartError::Rollback { .. }) => AdmissionSettlement::Failed,
                         Ok(SubagentStartOutcome::Accepted(_)) => AdmissionSettlement::Committed,
                         _ => AdmissionSettlement::RolledBack,
