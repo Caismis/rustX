@@ -332,7 +332,7 @@ async fn agent411_crash_reconciliation_cannot_invent_physical_resume_proof() {
 async fn agent411_resume_reservation_recovery_requires_rollback_containment_proof() {
     use crate::events::types::AgentActivationAdmissionPhase;
     for proof in [None, Some(false), Some(true)] {
-        let plane = plane(4);
+        let plane = plane_with_storage(4, true);
         let child = stage_exit0(&plane);
         let admitted = start(&plane, &spec("settled before resume staging")).await;
         child
@@ -474,10 +474,48 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             lease.publish_quiescent().unwrap();
             assert_eq!(recovered.with_goal_idle(|| true), None);
             drop(lease);
-            drop(crate::runtime::subagent::physical_recovery::prove_after_release(
+            let proof = crate::runtime::subagent::physical_recovery::prove_after_release(
                 &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &reserved,
-            ).unwrap().expect("the exact inherited lease is released"));
+            ).unwrap().expect("the exact inherited lease is released");
+            // A fork between proof acquisition and drop retains the CLOEXEC
+            // descriptors until exec/exit. Park that exact window on a pipe.
+            let inherited = InheritedRecoveryProof::hold(proof);
+            assert!(crate::runtime::subagent::physical_recovery::prove(
+                &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &reserved,
+            ).unwrap().is_none(), "the fork still owns the inherited proof lock");
             recovered.reconcile_recovered_settlements();
+            {
+                let state = recovered.state.lock().unwrap();
+                assert!(state.recovery_pending.contains(&reserved));
+                assert!(state.recovery_inflight.is_empty(), "the failed probe released its claim");
+                let agent = &state.agents[&admitted.child_agent_id];
+                assert_eq!(agent.resuming.as_ref().unwrap().activation_id, reserved);
+                assert!(agent.workspace.is_poisoned());
+                assert!(!state.goal_idle_committing);
+                assert!(state.ownership_committing.is_empty());
+            }
+            assert!(recovered.all_snapshots()[0].is_settled(), "the old activation is not the idle blocker");
+            assert!(!events(&plane).iter().any(|event| matches!(event,
+                crate::events::types::RuntimeEvent::AgentActivationAdmission {
+                    activation_id, phase: AgentActivationAdmissionPhase::RolledBack { physical_settlement_proven: true }, ..
+                } if activation_id == &reserved)), "child release and an external proof are not durable rollback");
+            assert_eq!(recovered.with_goal_idle(|| true), None);
+            drop(inherited);
+            // Descriptor release is not the registry's durable settlement cut.
+            // Join the existing recovery owner; never require its next Try probe
+            // to win against a concurrent fork inheriting a CLOEXEC descriptor.
+            recovered.wait_recovery_reconciliation().await;
+            assert!(recovered.unproven_settlements().is_empty());
+            {
+                let state = recovered.state.lock().unwrap();
+                assert!(state.recovery_inflight.is_empty());
+                assert!(state.agents[&admitted.child_agent_id].resuming.is_none());
+            }
+            assert!(!workspace.is_poisoned());
+            assert_eq!(events(&plane).iter().filter(|event| matches!(event,
+                crate::events::types::RuntimeEvent::AgentActivationAdmission {
+                    activation_id, phase: AgentActivationAdmissionPhase::RolledBack { physical_settlement_proven: true }, ..
+                } if activation_id == &reserved)).count(), 1);
             assert_eq!(recovered.with_goal_idle(|| true), Some(true));
             assert_eq!(
                 recovered
@@ -494,9 +532,19 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                     ..
                 }
             ));
-            let reopened = SubagentRegistry::new(plane.registry.config.clone());
-            reopened.restore_agents(plane.store.as_ref()).unwrap();
+            let reopened_store = Arc::new(crate::durable::SqliteConversationStore::open(
+                plane.conversation_id.clone(), &plane.dir.path().join("parent.sqlite"),
+            ).unwrap());
+            let mut config = plane.registry.config.clone();
+            config.mailbox = ConversationInboundMailbox::over_store(reopened_store.clone());
+            let reopened = SubagentRegistry::new(config);
+            reopened.restore_agents(reopened_store.as_ref()).unwrap();
             assert!(reopened.unproven_settlements().is_empty());
+            assert_eq!(reopened.with_goal_idle(|| true), Some(true));
+            let agent = reopened.agent_snapshot(&admitted.child_agent_id).unwrap();
+            assert_eq!(agent.state, AgentState::Inactive);
+            assert!(agent.current_activation.is_none());
+            assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
             assert_eq!(
                 reopened.all_snapshots().len(),
                 1,
@@ -609,7 +657,11 @@ async fn recovered_verification_before_reserved_retains_physical_exclusion_after
     // establish the physical cut before reconciliation can release the workspace.
     drop(prove_after_release(&spawn.product_root, &spawn.session_id,
         &admitted.child_conversation_id, &activation).unwrap().unwrap());
-    reopened.reconcile_recovered_settlements();
+    // Shutdown joined the previous bounded owner while the helper was held.
+    // Join a fresh owner after release rather than assuming the next Try probe
+    // can reacquire a descriptor that a concurrent fork may still have inherited.
+    reopened.start_recovery_reconciliation();
+    reopened.wait_recovery_reconciliation().await;
     assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
     assert!(!reopened.owns_idle_work());
     assert!(reopened.unproven_settlements().is_empty());
@@ -763,4 +815,59 @@ fn assert_physical_receipt_retry_is_idempotent(plane: &TestPlane, admitted: &Sub
         first_receipt,
         "a lost durable acknowledgement retries the exact committed receipt"
     );
+}
+
+/// Retain a proof's open-file descriptions in a real fork until the test releases
+/// its pipe. No child Rust runtime, allocator, unwinding or competing waiter runs.
+struct InheritedRecoveryProof {
+    pid: nix::unistd::Pid,
+    release: Option<std::os::unix::net::UnixStream>,
+}
+
+impl InheritedRecoveryProof {
+    #[allow(unsafe_code)] // Test-local fork; child uses only async-signal-safe syscalls.
+    fn hold(proof: crate::runtime::subagent::physical_recovery::RecoveredPhysicalProof) -> Self {
+        use std::os::fd::AsRawFd;
+        let (release, child) = std::os::unix::net::UnixStream::pair().unwrap();
+        let release_fd = release.as_raw_fd();
+        let child_fd = child.as_raw_fd();
+        // SAFETY: all allocations precede fork. The child only closes its write
+        // endpoint, reads until parent EOF, and _exits without Rust destructors.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork: {}", std::io::Error::last_os_error());
+        if pid == 0 {
+            unsafe {
+                libc::close(release_fd);
+                let mut byte = 0u8;
+                loop {
+                    let read = libc::read(child_fd, (&raw mut byte).cast::<libc::c_void>(), 1);
+                    if read < 0 && nix::errno::Errno::last() == nix::errno::Errno::EINTR {
+                        continue;
+                    }
+                    libc::_exit(i32::from(read != 0));
+                }
+            }
+        }
+        drop(child);
+        let inherited = Self { pid: nix::unistd::Pid::from_raw(pid), release: Some(release) };
+        drop(proof);
+        inherited
+    }
+}
+
+impl Drop for InheritedRecoveryProof {
+    fn drop(&mut self) {
+        // EOF releases the parked child even when an assertion unwinds. This
+        // guard alone owns its terminal status and joins descriptor release.
+        drop(self.release.take());
+        loop {
+            match nix::sys::wait::waitpid(self.pid, None) {
+                Err(nix::errno::Errno::EINTR) => {}
+                result => {
+                    assert_eq!(result.unwrap(), nix::sys::wait::WaitStatus::Exited(self.pid, 0));
+                    break;
+                }
+            }
+        }
+    }
 }

@@ -469,7 +469,8 @@ enum ProofLock {
 /// Concurrent fork/exec in the test harness can temporarily inherit even a
 /// CLOEXEC proof descriptor. Dropping this thread's copy need not make a
 /// nonblocking reacquisition succeed immediately. Waiting changes only lock
-/// acquisition: exact identity, receipt phase, and every continuation still
+/// acquisition (including the allocation namespace): exact identity, receipt
+/// phase, and every continuation still
 /// pass through the production validator, with all proof locks retained.
 #[cfg(test)]
 pub(crate) fn prove_after_release(
@@ -500,10 +501,14 @@ fn prove_with_lock(
         return Ok(None);
     }
     let allocation = allocation_lock(parent)?;
-    match allocation.try_lock() {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return Ok(None),
-        Err(TryLockError::Error(error)) => return Err(error),
+    match locking {
+        #[cfg(test)]
+        ProofLock::AwaitRelease => allocation.lock()?,
+        ProofLock::Try | ProofLock::AfterSupervision => match allocation.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Error(error)) => return Err(error),
+        },
     }
     if !path.try_exists()? {
         let pending = parent.join(format!("{PRIVATE}{}", activation.as_str()));
