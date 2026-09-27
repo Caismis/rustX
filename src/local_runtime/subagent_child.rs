@@ -608,7 +608,10 @@ pub(crate) async fn serve_child_delegation(
             &mut cancelled,
         )
         .await?;
-        if cancelled && !matches!(terminal, AttemptTerminal::Orphaned) {
+        // Workflow completion is authoritative at its committed attempt terminal.
+        // Only a continuable Agent absorbs later cancellation across turns.
+        if cancelled && workflow_output.is_none() && !matches!(terminal, AttemptTerminal::Orphaned)
+        {
             terminal = AttemptTerminal::Cancelled;
         }
         observed_terminals = observed_terminals.saturating_add(1);
@@ -1120,9 +1123,9 @@ where
                             ));
                         };
                         *cancelled = true;
+                        let delivered = runtime.cancel_current_or_next_attempt(reason).is_some();
                         #[cfg(test)]
                         let _ = CANCELLATION_OBSERVED.try_with(|signal| signal.notify_one());
-                        let delivered = runtime.cancel_current_or_next_attempt(reason).is_some();
                         on_cancellation(delivered);
                         // The frame is a request, not a terminal fact: the
                         // canonical AttemptCancelled settles the attempt.
@@ -1187,7 +1190,7 @@ where
                         ConversationObservation::Event { event, .. } => {
                             match event {
                                 RuntimeEvent::AttemptCompleted { .. } => {
-                                    return Ok(if *cancelled { AttemptTerminal::Cancelled } else { AttemptTerminal::Completed });
+                                    return Ok(AttemptTerminal::Completed);
                                 }
                                 RuntimeEvent::AttemptCancelled { .. } => {
                                     return Ok(AttemptTerminal::Cancelled);
@@ -3322,6 +3325,161 @@ pub(crate) mod tests {
                 usage: None,
             }),
         ]
+    }
+
+    /// Runs both semantic orderings through the real reserved output tool,
+    /// durable attempt journal and child dispatcher. The registry test forwards
+    /// this actual result through its native driver and publication path.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn workflow_cancellation_ordering(late: bool) -> ResultFrame {
+        use crate::durable::ConversationStore;
+        use crate::runtime::subagent::ipc::{read_child_frame, write_parent_frame};
+        let dir = tempfile::tempdir().unwrap();
+        let id = ConversationId::generate();
+        let store =
+            Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+        let value = serde_json::json!({"summary": "committed answer"});
+        let model = Arc::new(FakeModel::new(vec![
+            workflow_output_answer(value.clone()),
+            answer("forbidden"),
+        ]));
+        let latch = Arc::new(
+            crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
+                "type": "object", "properties": {"summary": {"type": "string"}},
+                "required": ["summary"], "additionalProperties": false
+            }))
+            .unwrap(),
+        );
+        let (pause, mut before_start, _) = StartBoundaryPause::install(true, false);
+        let runtime = child_test_runtime_full(
+            &dir,
+            if late { None } else { Some(pause) },
+            None,
+            None,
+            Some(latch.clone()),
+            None,
+            id,
+            model.clone(),
+            Some(store.clone()),
+        )
+        .await;
+        let committed = Arc::new(PendingObservations::new());
+        let delivered = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(committed.clone())
+            .unwrap();
+        runtime.gate_child_turns();
+        runtime.activate();
+        runtime.arm_seal_probe_failures(1);
+        let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let cancelled = Arc::new(tokio::sync::Notify::new());
+        let serve = tokio::spawn(CANCELLATION_OBSERVED.scope(cancelled.clone(), {
+            let runtime = runtime.clone();
+            let delivered = delivered.clone();
+            let latch = latch.clone();
+            async move {
+                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                let handle = dispatcher.handle();
+                let result = serve_child_delegation(
+                    &mut dispatcher,
+                    &handle,
+                    AgentId::new("agent-parent"),
+                    runtime,
+                    delivered,
+                    Some(latch),
+                )
+                .await;
+                dispatcher.shutdown().await;
+                result
+            }
+        }));
+        delegate(&mut parent, "produce workflow output").await;
+        let held = if late {
+            loop {
+                committed.wait().await;
+                if let Some(terminal) = committed.drain().into_iter().find(|observation| {
+                    matches!(
+                        observation,
+                        ConversationObservation::Event {
+                            event: RuntimeEvent::AttemptCompleted { .. },
+                            ..
+                        }
+                    )
+                }) {
+                    break Some(terminal);
+                }
+            }
+        } else {
+            before_start.as_mut().unwrap().await_park(1).await;
+            None
+        };
+        assert_eq!(latch.committed_value(), late.then(|| value.clone()));
+        assert_eq!(
+            store
+                .read_events(None, 256)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|event| matches!(event.event, RuntimeEvent::AttemptCompleted { .. }))
+                .count(),
+            usize::from(late)
+        );
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .unwrap();
+        cancelled.notified().await;
+        if let Some(terminal) = held {
+            delivered.push(terminal);
+        } else {
+            before_start.take().unwrap().release();
+            loop {
+                committed.wait().await;
+                let observations = committed.drain();
+                let terminal = observations.iter().any(|observation| {
+                    matches!(
+                        observation,
+                        ConversationObservation::Event {
+                            event: RuntimeEvent::AttemptCancelled { .. },
+                            ..
+                        }
+                    )
+                });
+                for observation in observations {
+                    delivered.push(observation);
+                }
+                if terminal {
+                    break;
+                }
+            }
+        }
+        // Any seal/reopen frame fails this exact protocol assertion.
+        let Some(ChildFrame::Result(result)) = read_child_frame(&mut parent).await.unwrap() else {
+            panic!("Workflow must finish at its first terminal without seal negotiation");
+        };
+        assert_eq!(
+            result.status,
+            if late {
+                ChildResultStatus::Succeeded
+            } else {
+                ChildResultStatus::Cancelled
+            }
+        );
+        assert_eq!(
+            result.content,
+            late.then(|| serde_json::to_string(&value).unwrap())
+        );
+        assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+        serve.await.unwrap().unwrap();
+        assert_eq!(latch.committed_value(), late.then_some(value));
+        assert_eq!(model.requests().len(), usize::from(late));
+        assert_eq!(runtime.seal_probe_calls(), 0);
+        result
     }
 
     /// **Workflow-owned children never enter the parent-guidance terminal

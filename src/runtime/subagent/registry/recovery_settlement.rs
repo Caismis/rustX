@@ -7,8 +7,8 @@ use super::{PoisonError, SubagentRegistry, publish_committed_snapshot};
 
 struct RecoveryObligation {
     activation: super::SubagentId,
-    index: usize,
-    agent_id: super::AgentId,
+    index: Option<usize>,
+    agent_id: Option<super::AgentId>,
     conversation: super::ConversationId,
     origin: Option<super::AgentActivationOrigin>,
     unreserved: bool,
@@ -41,6 +41,23 @@ struct ReconciliationCompletion(tokio::sync::watch::Sender<bool>);
 impl Drop for ReconciliationCompletion {
     fn drop(&mut self) {
         self.0.send_replace(true);
+    }
+}
+
+impl super::RegistryState {
+    fn has_recovery_obligation_for(&self, agent_id: &super::AgentId) -> bool {
+        let agent = &self.agents[agent_id];
+        self.recovery_pending.iter().any(|id| {
+            self.recovery_unreserved.get(id) == Some(&agent.conversation_id)
+                || self
+                    .index
+                    .get(id)
+                    .is_some_and(|index| self.records[*index].child_agent_id == *agent_id)
+                || agent
+                    .resuming
+                    .as_ref()
+                    .is_some_and(|r| r.activation_id == *id)
+        })
     }
 }
 
@@ -107,8 +124,8 @@ impl SubagentRegistry {
                 if let Some(&index) = state.index.get(&activation) {
                     let record = &state.records[index];
                     (
-                        index,
-                        record.child_agent_id.clone(),
+                        Some(index),
+                        Some(record.child_agent_id.clone()),
                         record.child_conversation_id.clone(),
                         None,
                     )
@@ -119,17 +136,20 @@ impl SubagentRegistry {
                         .is_some_and(|r| r.activation_id == activation)
                 }) {
                     (
-                        state.index[&agent.latest_activation],
-                        agent_id.clone(),
+                        Some(state.index[&agent.latest_activation]),
+                        Some(agent_id.clone()),
                         agent.conversation_id.clone(),
                         Some(agent.resuming.as_ref().unwrap().origin.clone()),
                     )
-                } else if let Some(agent_id) = state.recovery_unreserved.get(&activation) {
-                    let agent = &state.agents[agent_id];
+                } else if let Some(conversation) = state.recovery_unreserved.get(&activation) {
+                    let owner = state
+                        .agents
+                        .iter()
+                        .find(|(_, agent)| &agent.conversation_id == conversation);
                     (
-                        state.index[&agent.latest_activation],
-                        agent_id.clone(),
-                        agent.conversation_id.clone(),
+                        owner.map(|(_, agent)| state.index[&agent.latest_activation]),
+                        owner.map(|(agent_id, _)| agent_id.clone()),
+                        conversation.clone(),
                         None,
                     )
                 } else {
@@ -178,34 +198,31 @@ impl SubagentRegistry {
     fn settle_unreserved_allocation(
         &self,
         activation: &super::SubagentId,
-        agent_id: &super::AgentId,
-        index: usize,
+        conversation: &super::ConversationId,
+        agent_id: Option<&super::AgentId>,
+        index: Option<usize>,
     ) {
         // No admission ever committed, so there is no SQLite admission
         // to roll back. prove() seals the exact physical authorities on
         // disk; retain all proof locks through the in-memory release.
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.recovery_unreserved.get(activation) != Some(agent_id)
+        if state.recovery_unreserved.get(activation) != Some(conversation)
             || !state.recovery_inflight.contains(activation)
         {
             return;
         }
         state.recovery_unreserved.remove(activation);
         state.recovery_pending.remove(activation);
-        let agent = &state.agents[agent_id];
-        if !state.recovery_pending.iter().any(|id| {
-            state.recovery_unreserved.get(id) == Some(agent_id)
-                || state
-                    .index
-                    .get(id)
-                    .is_some_and(|index| state.records[*index].child_agent_id == *agent_id)
-                || agent
-                    .resuming
-                    .as_ref()
-                    .is_some_and(|r| r.activation_id == *id)
-        }) {
-            agent.workspace.prove_recovered_physical_settlement();
-            super::publish_snapshot(&mut state, &self.state_version, index);
+        if let Some((agent_id, index)) = agent_id.zip(index) {
+            let agent = &state.agents[agent_id];
+            if !state.has_recovery_obligation_for(agent_id) {
+                agent.workspace.prove_recovered_physical_settlement();
+                super::publish_snapshot(&mut state, &self.state_version, index);
+            }
+        } else {
+            // There is no logical Agent snapshot to publish, but this exact
+            // physical owner still participates in idle/drain coordination.
+            self.state_version.send_modify(|version| *version += 1);
         }
         self.config.mailbox.wake().notify_one();
     }
@@ -252,9 +269,16 @@ impl SubagentRegistry {
                 continue;
             };
             if unreserved {
-                self.settle_unreserved_allocation(&activation, &agent_id, index);
+                self.settle_unreserved_allocation(
+                    &activation,
+                    &conversation,
+                    agent_id.as_ref(),
+                    index,
+                );
                 continue;
             }
+            let index = index.expect("recorded recovery has an activation record");
+            let agent_id = agent_id.expect("recorded recovery has an Agent identity");
             let event = self.recovered_settlement_event(&agent_id, &activation, origin.as_ref());
             let Ok(committed) = self
                 .config
@@ -298,17 +322,7 @@ impl SubagentRegistry {
             }
             state.recovery_pending.remove(&activation);
             if let Some(agent) = state.agents.get(&agent_id)
-                && !state.recovery_pending.iter().any(|id| {
-                    state.recovery_unreserved.get(id) == Some(&agent_id)
-                        || state
-                            .index
-                            .get(id)
-                            .is_some_and(|index| state.records[*index].child_agent_id == agent_id)
-                        || agent
-                            .resuming
-                            .as_ref()
-                            .is_some_and(|r| r.activation_id == *id)
-                })
+                && !state.has_recovery_obligation_for(&agent_id)
             {
                 agent.workspace.prove_recovered_physical_settlement();
             }

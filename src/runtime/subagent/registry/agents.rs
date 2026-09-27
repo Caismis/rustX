@@ -821,13 +821,14 @@ impl SubagentRegistry {
                 events.push(envelope);
             }
         }
-        let consumed = super::super::physical_recovery::consumed_session_activation_ids(
+        let consumed = super::super::physical_recovery::consumed_session_allocations(
             &self.config.spawn.product_root,
             &self.config.spawn.session_id,
         )
         .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?;
         let next_ordinal = consumed
             .iter()
+            .map(|(activation, _)| activation)
             .chain(events.iter().filter_map(|envelope| match &envelope.event {
                 RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => Some(subagent_id),
                 RuntimeEvent::AgentActivationAdmission { activation_id, .. } => Some(activation_id),
@@ -837,38 +838,20 @@ impl SubagentRegistry {
             .map(|ordinal| ordinal.saturating_add(1))
             .max()
             .unwrap_or(1);
-        // Every allocation in a durable Agent's namespace is physical authority,
-        // even when the parent died before Reserved. Read directories off-lock.
-        let mut allocations = std::collections::BTreeMap::new();
-        let mut recorded = std::collections::BTreeSet::new();
-        for envelope in &events {
-            match &envelope.event {
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    subagent_id,
-                    child_agent_id,
-                    child_conversation_id,
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    ..
-                } => {
-                    recorded.insert(subagent_id.clone());
-                    if !allocations.contains_key(child_agent_id) {
-                        let ids = super::super::physical_recovery::consumed_activation_ids(
-                            &self.config.spawn.product_root,
-                            &self.config.spawn.session_id,
-                            child_conversation_id,
-                        )
-                        .map_err(|error| {
-                            ConversationStoreError::InvalidReference(error.to_string())
-                        })?;
-                        allocations.insert(child_agent_id.clone(), ids);
-                    }
+        // Physical namespaces retain the Conversation even before the first
+        // logical Agent ownership exists. No absent record discharges a lease.
+        let recorded: std::collections::BTreeSet<_> = events
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => {
+                    Some(subagent_id.clone())
                 }
                 RuntimeEvent::AgentActivationAdmission { activation_id, .. } => {
-                    recorded.insert(activation_id.clone());
+                    Some(activation_id.clone())
                 }
-                _ => {}
-            }
-        }
+                _ => None,
+            })
+            .collect();
         // The I/O phase above finishes before this startup-only replay cut.
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.next_ordinal = state.next_ordinal.max(next_ordinal);
@@ -1136,18 +1119,31 @@ impl SubagentRegistry {
                 _ => {}
             }
         }
-        for (agent_id, ids) in allocations {
-            for activation in ids {
-                if !recorded.contains(&activation) {
-                    state.agents[&agent_id]
-                        .workspace
-                        .await_recovered_physical_proof();
-                    state
-                        .recovery_unreserved
-                        .insert(activation.clone(), agent_id.clone());
-                    state.recovery_pending.insert(activation);
-                }
+        for (activation, conversation) in consumed {
+            if activation
+                .conversation_ordinal(&self.config.conversation_id)
+                .is_none()
+                || recorded.contains(&activation)
+            {
+                continue;
             }
+            if let Some(agent) = state
+                .agents
+                .values()
+                .find(|agent| agent.conversation_id == conversation)
+            {
+                agent.workspace.await_recovered_physical_proof();
+            }
+            if let Some(previous) = state
+                .recovery_unreserved
+                .insert(activation.clone(), conversation.clone())
+                && previous != conversation
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "physical allocation {activation} names multiple child Conversations"
+                )));
+            }
+            state.recovery_pending.insert(activation);
         }
         for (activation_id, (agent_id, origin)) in pending_admissions {
             if let Some(agent) = state.agents.get_mut(&agent_id) {

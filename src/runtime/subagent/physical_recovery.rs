@@ -507,10 +507,10 @@ fn evidence_path(
 /// All positive activation allocations in the owning Session participate in
 /// identity consumption, including a fresh child Conversation whose parent died
 /// before ownership was committed. No missing receipt implies settlement.
-pub(crate) fn consumed_session_activation_ids(
+pub(crate) fn consumed_session_allocations(
     product: &ProductRoot,
     session: &SessionId,
-) -> std::io::Result<Vec<SubagentId>> {
+) -> std::io::Result<Vec<(SubagentId, ConversationId)>> {
     let directory = product.confined(
         &product
             .root()
@@ -529,7 +529,11 @@ pub(crate) fn consumed_session_activation_ids(
         if entry.file_type()?.is_dir() {
             let conversation =
                 ConversationId::new(entry.file_name().to_string_lossy().into_owned());
-            ids.extend(consumed_activation_ids(product, session, &conversation)?);
+            ids.extend(
+                consumed_activation_ids(product, session, &conversation)?
+                    .into_iter()
+                    .map(|activation| (activation, conversation.clone())),
+            );
         }
     }
     Ok(ids)

@@ -14,7 +14,6 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     )
     .unwrap();
     assert!(events(&plane).is_empty(), "ownership has not committed");
-    drop(owner);
 
     // No ownership event names this child Conversation. The positive durable
     // allocation fact must still prevent reuse in the parent's ordinal domain.
@@ -24,6 +23,22 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     assert!(recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents.is_empty());
     assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
     assert!(events(&plane).is_empty(), "allocation invents no logical ownership");
+    assert!(recovered.owns_idle_work());
+    assert_eq!(recovered.unproven_settlements(), vec![consumed.clone()]);
+    assert_eq!(recovered.with_goal_idle(|| true), None);
+    drop(owner);
+    drop(super::super::physical_recovery::prove_after_release(
+        &spawn.product_root, &spawn.session_id, &orphaned_conversation, &consumed,
+    ).unwrap().unwrap());
+    recovered.reconcile_recovered_settlements();
+    assert!(!recovered.owns_idle_work());
+    assert!(recovered.unproven_settlements().is_empty());
+    assert_eq!(recovered.with_goal_idle(|| true), Some(true));
+    let version = *recovered.state_version.borrow();
+    recovered.reconcile_recovered_settlements();
+    assert_eq!(*recovered.state_version.borrow(), version);
+    assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
+    assert!(events(&plane).is_empty(), "physical proof invents no logical ownership");
     assert!(
         super::super::physical_recovery::ParentPhysicalLease::reserve(
             &spawn.product_root,
@@ -502,6 +517,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One real crash, recovery and physical drain boundary.
 async fn recovered_verification_before_reserved_retains_physical_exclusion_after_parent_drop() {
     use crate::runtime::subagent::physical_recovery::{ParentPhysicalLease, prove_after_release};
     use std::io::{Read, Write};
@@ -572,6 +588,22 @@ async fn recovered_verification_before_reserved_retains_physical_exclusion_after
         AgentActivationOrigin::ClientControl, CancellationSignal::new()).await;
     assert!(matches!(blocked, Err(AgentControlError::Settlement)), "expected physical exclusion: {blocked:?}");
     assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
+    assert!(reopened.owns_idle_work());
+    assert_eq!(reopened.unproven_settlements(), vec![activation.clone()]);
+    assert_eq!(reopened.with_goal_idle(|| true), None);
+    assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Unavailable);
+    let (runtime, reopened) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
+        &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
+        store.clone(), reopened.clone(),
+    ).await;
+    // Awaiting the bounded reconciliation owner is deliberately not proof:
+    // the FIFO still owns the helper and no release byte has been sent.
+    assert!(runtime.settle_child_physical_lifetime(false).await.is_err());
+    assert!(runtime.shutdown().await.is_err());
+    assert!(!runtime.is_quiescent());
+    assert!(reopened.owns_idle_work());
+    assert_eq!(reopened.unproven_settlements(), vec![activation.clone()]);
+
     std::fs::OpenOptions::new().write(true).open(release).unwrap().write_all(b"release\n").unwrap();
     // The kernel lease release and exact supervisor receipts, never PID absence,
     // establish the physical cut before reconciliation can release the workspace.
@@ -579,9 +611,22 @@ async fn recovered_verification_before_reserved_retains_physical_exclusion_after
         &admitted.child_conversation_id, &activation).unwrap().unwrap());
     reopened.reconcile_recovered_settlements();
     assert_eq!(reopened.agent_snapshot(&admitted.child_agent_id).unwrap().state, AgentState::Inactive);
+    assert!(!reopened.owns_idle_work());
+    assert!(reopened.unproven_settlements().is_empty());
+    assert_eq!(reopened.with_goal_idle(|| true), Some(true));
+    let (settled_runtime, _) = crate::runtime::conversation_runtime::runtime_with_recovered_registry_for_test(
+        &plane.dir, &plane.conversation_id, &plane.registry.config.agent_id,
+        store.clone(), reopened.clone(),
+    ).await;
+    settled_runtime.settle_child_physical_lifetime(false).await.unwrap();
+    settled_runtime.shutdown().await.unwrap();
+    assert!(settled_runtime.is_quiescent());
+    assert_eq!(reopened.state.lock().unwrap().next_ordinal, 3);
+    let journal = events(&plane);
     let version = *reopened.state_version.borrow();
     reopened.reconcile_recovered_settlements();
     assert_eq!(*reopened.state_version.borrow(), version);
+    assert_eq!(events(&plane), journal);
     let workspace = reopened.state.lock().unwrap().agents[&admitted.child_agent_id].workspace.clone();
     workspace.acquire(&CancellationSignal::new()).await.unwrap().settle();
     assert!(ParentPhysicalLease::reserve(&spawn.product_root, &spawn.session_id,

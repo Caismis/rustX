@@ -559,6 +559,20 @@ impl Drop for GoalIdleClaim<'_> {
     }
 }
 
+impl RegistryState {
+    fn owns_idle_work(&self) -> bool {
+        self.goal_idle_committing
+            || !self.recovery_pending.is_empty()
+            || !self.ownership_committing.is_empty()
+            || self.agents.values().any(|agent| agent.resuming.is_some())
+            || self.records.iter().any(|record| {
+                (record.lifecycle.is_terminal() && !record.physical_settlement_proven)
+                    || record.lifecycle.is_active()
+                    || matches!(record.lifecycle, SubagentLifecycle::PublishingTerminal)
+            })
+    }
+}
+
 struct RegistryState {
     max_active: usize,
     /// Pins an idle Goal admission while its durable append runs off-lock.
@@ -582,9 +596,11 @@ struct RegistryState {
     /// sequence, or a lifecycle fact.
     next_guidance_id: u64,
     agents: BTreeMap<AgentId, agents::AgentRecord>,
-    /// Recovered generations whose exact native incarnation still owes proof.
+    /// Complete recovered physical obligation set, including allocations with
+    /// no Reserved event, activation record or resume reservation. Reconciler
+    /// completion never releases these runtime owners; only exact proof does.
     recovery_pending: std::collections::BTreeSet<SubagentId>,
-    recovery_unreserved: std::collections::BTreeMap<SubagentId, AgentId>,
+    recovery_unreserved: std::collections::BTreeMap<SubagentId, ConversationId>,
     recovery_inflight: std::collections::BTreeSet<SubagentId>,
     terminal_inflight: std::collections::BTreeSet<SubagentId>,
     #[cfg(test)]
@@ -3470,6 +3486,15 @@ impl SubagentRegistry {
             .collect()
     }
 
+    /// In-memory ownership read for residency. Physical reconciliation belongs
+    /// outside the caller's coordinator lock, never inside this predicate.
+    pub(crate) fn owns_idle_work(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .owns_idle_work()
+    }
+
     /// An exact idle claim excludes new ownership/resume admission while the
     /// Goal's durable frontier commits. Reads and controls retain mutex access;
     /// no filesystem or durable append runs inside the registry critical section.
@@ -3477,15 +3502,7 @@ impl SubagentRegistry {
         self.reconcile_recovered_settlements();
         {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            if state.goal_idle_committing
-                || !state.ownership_committing.is_empty()
-                || state.agents.values().any(|agent| agent.resuming.is_some())
-                || state.records.iter().any(|record| {
-                    (record.lifecycle.is_terminal() && !record.physical_settlement_proven)
-                        || record.lifecycle.is_active()
-                        || matches!(record.lifecycle, SubagentLifecycle::PublishingTerminal)
-                })
-            {
+            if state.owns_idle_work() {
                 return None;
             }
             // Linearization: a new owner must observe this claim and wait;
@@ -3496,8 +3513,16 @@ impl SubagentRegistry {
         Some(operation())
     }
 
-    /// Exact generations with unresolved physical ownership after terminal or
-    /// failed staging. Draining reports these instead of retrying a finished driver.
+    #[cfg(test)]
+    pub(crate) fn fresh_with_mailbox_for_test(&self, mailbox: ConversationInboundMailbox) -> Self {
+        let mut config = self.config.clone();
+        config.mailbox = mailbox;
+        Self::new(config)
+    }
+
+    /// Exact generations with unresolved physical ownership after terminal,
+    /// failed staging or recovery (including allocations before Reserved).
+    /// Draining reports these instead of retrying a finished driver.
     pub(crate) fn unproven_settlements(&self) -> Vec<SubagentId> {
         self.reconcile_recovered_settlements();
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -3521,6 +3546,7 @@ impl SubagentRegistry {
                     })
                     .map(|reservation| reservation.activation_id.clone())
             }))
+            .chain(state.recovery_pending.iter().cloned())
             .collect();
         targets.sort();
         targets.dedup();
@@ -6385,6 +6411,58 @@ mod tests {
                 ..
             } if *subagent_id == accepted.subagent_id
         )));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn workflow_output_committed_before_cancel_remains_successful() {
+        workflow_child_cancellation_ordering(true).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn workflow_cancel_before_output_commit_remains_cancelled() {
+        workflow_child_cancellation_ordering(false).await;
+    }
+
+    async fn workflow_child_cancellation_ordering(late: bool) {
+        let result =
+            crate::local_runtime::subagent_child::tests::workflow_cancellation_ordering(late).await;
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &workflow_spec("output cancellation ordering")).await;
+        plane
+            .registry
+            .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
+            .unwrap();
+        child
+            .cancelled_after_delegation(result.status, result.content.as_deref())
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            settled.state,
+            if late {
+                SubagentState::Succeeded
+            } else {
+                SubagentState::Cancelled
+            }
+        );
+        assert!(plane.store.select_pending_batch().unwrap().is_none());
+        assert_eq!(
+            events(&plane)
+                .iter()
+                .filter(|event| matches!(event,
+            crate::events::types::RuntimeEvent::WorkflowAgentOutputCommitted { subagent_id, .. }
+                if *subagent_id == accepted.subagent_id))
+                .count(),
+            usize::from(late)
+        );
+        assert_eq!(
+            plane.registry.workflow_agent_output(&accepted.subagent_id),
+            late.then(|| serde_json::json!({"summary": "committed answer"}))
+        );
     }
 
     #[tokio::test]

@@ -1494,7 +1494,7 @@ impl RuntimeInner {
         if self
             .subagents
             .as_ref()
-            .is_some_and(|s| !s.unsettled_snapshot().is_empty())
+            .is_some_and(crate::runtime::subagent::SubagentRegistry::owns_idle_work)
         {
             return Err(Busy::Subagent);
         }
@@ -6783,6 +6783,31 @@ impl ConversationRuntime {
 }
 
 #[cfg(test)]
+pub(crate) async fn runtime_with_recovered_registry_for_test(
+    dir: &tempfile::TempDir,
+    conversation: &ConversationId,
+    agent: &AgentId,
+    store: Arc<dyn crate::durable::ConversationStore>,
+    registry: crate::runtime::subagent::SubagentRegistry,
+) -> (
+    ConversationRuntime,
+    crate::runtime::subagent::SubagentRegistry,
+) {
+    let (_, mut config) = tests::subagent_runtime_config_with_registry(
+        dir,
+        conversation.as_str(),
+        store.clone(),
+        conversation,
+        agent,
+        agent,
+    )
+    .await;
+    let registry = registry.fresh_with_mailbox_for_test(config.tool_runtime.mailbox());
+    config.subagents = Some(registry.clone());
+    (ConversationRuntime::new(config).unwrap(), registry)
+}
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
     fn fixture_activation(
@@ -7534,7 +7559,7 @@ mod tests {
     /// Returns the registry alongside the config so a test can commit
     /// children into it before attempting construction.
     #[allow(clippy::too_many_lines)]
-    async fn subagent_runtime_config_with_registry(
+    pub(super) async fn subagent_runtime_config_with_registry(
         dir: &tempfile::TempDir,
         conversation_id: &str,
         store: Arc<dyn ConversationStore>,
