@@ -1,0 +1,13 @@
+{
+  "fixture": "200-long-reasoning-tool-v3",
+  "snapshots": 0,
+  "commits": 210,
+  "automaticWrites": 94,
+  "bottomWrites": 93,
+  "anchorWrites": 1,
+  "rowReplacements": 0,
+  "historyTop": 210,
+  "historyBottomWrites": 0,
+  "readingTopBeforeGrowth": 210,
+  "readingTopAfterGrowth": 333
+}

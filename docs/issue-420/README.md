@@ -110,6 +110,39 @@ The browser script pins Playwright 1.63.0 / Chromium and its fonts/libraries to
 Correctness assertions, counter measurements and recordings are separate lanes.
 No native attach/readiness/provider latency improvement is claimed.
 
+### Recorded results
+
+Exact implementation source commit: `8acb89249361a90dba4e4b2fc998983fd691aaae`.
+The later evidence commit changes documentation/artifacts only.
+
+| Chromium fixture observation | Before | After |
+| --- | ---: | ---: |
+| Actual Session snapshot RPCs | 209 | 0 |
+| Conversation subtree Profiler commits | 419 | 210 |
+| Automatic scroll assignments after setup | 2,413 | 94 |
+| Bottom-position assignments including setup | 1,208 | 93 |
+| Reading-anchor assignments including setup | 1,212 | 1 |
+| Message DOM seat replacements | 1 | 0 |
+| Bottom-follow assignments during history reading | 0 | 0 |
+| Position before/after asynchronous 123px growth | 210 → 333 | 210 → 333 |
+
+The previous viewport also preserved history in this fixture; the improvement is
+bounded frame ownership and fewer redundant writes, not a claim that every old
+history case failed. The independent deterministic tests cover race and prepend
+cases. Totals and classifications use the documented different setup boundaries.
+The jsdom lane reports snapshots 209→0, commits 419→210, automatic writes
+2,413→100, bottom writes 1,207→101, anchor writes 1,213→0 and seat replacements
+1→0; its mocked geometry must not be compared numerically with Chromium layout.
+
+[Before browser metrics](evidence/before/metrics.json),
+[after browser metrics](evidence/after/metrics.json),
+[before recording](evidence/before/video.webm),
+[after recording](evidence/after/video.webm),
+[before trace](evidence/before/trace.zip),
+[after trace](evidence/after/trace.zip) and final screenshots are retained with
+[SHA-256 digests](evidence/sha256.json). Recordings show the same fixed response;
+counter assertions, rather than appearance alone, establish correctness.
+
 ## Validation record
 
 The delivery record lists exact validation commands, failures, repairs and final
