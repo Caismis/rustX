@@ -448,6 +448,20 @@ pub(crate) struct RecoveredPhysicalProof {
     locks: Vec<File>,
 }
 
+#[cfg(test)]
+impl RecoveredPhysicalProof {
+    /// Retain only this proof's open-file descriptions after its original owner drops.
+    pub(crate) fn duplicate_for_test(&self) -> std::io::Result<Self> {
+        Ok(Self {
+            locks: self
+                .locks
+                .iter()
+                .map(File::try_clone)
+                .collect::<std::io::Result<Vec<_>>>()?,
+        })
+    }
+}
+
 pub(crate) fn prove(
     product: &ProductRoot,
     session: &SessionId,

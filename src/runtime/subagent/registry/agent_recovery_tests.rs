@@ -477,12 +477,13 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             let proof = crate::runtime::subagent::physical_recovery::prove_after_release(
                 &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &reserved,
             ).unwrap().expect("the exact inherited lease is released");
-            // A fork between proof acquisition and drop retains the CLOEXEC
-            // descriptors until exec/exit. Park that exact window on a pipe.
-            let inherited = InheritedRecoveryProof::hold(proof);
+            // Retain only the exact proof descriptors, without inheriting any
+            // unrelated descriptors from concurrently executing tests.
+            let duplicate = proof.duplicate_for_test().unwrap();
+            drop(proof);
             assert!(crate::runtime::subagent::physical_recovery::prove(
                 &spawn.product_root, &spawn.session_id, &admitted.child_conversation_id, &reserved,
-            ).unwrap().is_none(), "the fork still owns the inherited proof lock");
+            ).unwrap().is_none(), "the duplicated proof still owns the exact proof locks");
             recovered.reconcile_recovered_settlements();
             {
                 let state = recovered.state.lock().unwrap();
@@ -500,7 +501,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                     activation_id, phase: AgentActivationAdmissionPhase::RolledBack { physical_settlement_proven: true }, ..
                 } if activation_id == &reserved)), "child release and an external proof are not durable rollback");
             assert_eq!(recovered.with_goal_idle(|| true), None);
-            drop(inherited);
+            drop(duplicate);
             // Descriptor release is not the registry's durable settlement cut.
             // Join the existing recovery owner; never require its next Try probe
             // to win against a concurrent fork inheriting a CLOEXEC descriptor.
@@ -815,59 +816,4 @@ fn assert_physical_receipt_retry_is_idempotent(plane: &TestPlane, admitted: &Sub
         first_receipt,
         "a lost durable acknowledgement retries the exact committed receipt"
     );
-}
-
-/// Retain a proof's open-file descriptions in a real fork until the test releases
-/// its pipe. No child Rust runtime, allocator, unwinding or competing waiter runs.
-struct InheritedRecoveryProof {
-    pid: nix::unistd::Pid,
-    release: Option<std::os::unix::net::UnixStream>,
-}
-
-impl InheritedRecoveryProof {
-    #[allow(unsafe_code)] // Test-local fork; child uses only async-signal-safe syscalls.
-    fn hold(proof: crate::runtime::subagent::physical_recovery::RecoveredPhysicalProof) -> Self {
-        use std::os::fd::AsRawFd;
-        let (release, child) = std::os::unix::net::UnixStream::pair().unwrap();
-        let release_fd = release.as_raw_fd();
-        let child_fd = child.as_raw_fd();
-        // SAFETY: all allocations precede fork. The child only closes its write
-        // endpoint, reads until parent EOF, and _exits without Rust destructors.
-        let pid = unsafe { libc::fork() };
-        assert!(pid >= 0, "fork: {}", std::io::Error::last_os_error());
-        if pid == 0 {
-            unsafe {
-                libc::close(release_fd);
-                let mut byte = 0u8;
-                loop {
-                    let read = libc::read(child_fd, (&raw mut byte).cast::<libc::c_void>(), 1);
-                    if read < 0 && nix::errno::Errno::last() == nix::errno::Errno::EINTR {
-                        continue;
-                    }
-                    libc::_exit(i32::from(read != 0));
-                }
-            }
-        }
-        drop(child);
-        let inherited = Self { pid: nix::unistd::Pid::from_raw(pid), release: Some(release) };
-        drop(proof);
-        inherited
-    }
-}
-
-impl Drop for InheritedRecoveryProof {
-    fn drop(&mut self) {
-        // EOF releases the parked child even when an assertion unwinds. This
-        // guard alone owns its terminal status and joins descriptor release.
-        drop(self.release.take());
-        loop {
-            match nix::sys::wait::waitpid(self.pid, None) {
-                Err(nix::errno::Errno::EINTR) => {}
-                result => {
-                    assert_eq!(result.unwrap(), nix::sys::wait::WaitStatus::Exited(self.pid, 0));
-                    break;
-                }
-            }
-        }
-    }
 }

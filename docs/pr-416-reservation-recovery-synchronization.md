@@ -6,7 +6,8 @@ It does not change production recovery, physical proof, admission or idle policy
 
 ## Evidence and diagnosis
 
-Starting PR head: `bb99d8aeab75689a92d6eb21289c2ce0e415373e`.
+Original synchronization repair started at `bb99d8aeab75689a92d6eb21289c2ce0e415373e`.
+The descriptor-duplication follow-up starts at `37af3b4c0bf506aef870717102877e69ad69cef7`.
 Main and merge base: `ad863a24cf48fbb0d5182746e1046d4b64e8c167`.
 [Hosted run 36310624214](https://github.com/Caismis/rustX/actions/runs/36310624214)
 failed this test on macOS: Goal idle returned `None`, not `Some(true)`.
@@ -36,14 +37,20 @@ of the same outstanding obligation, not an alternative idle inference.
 
 ## Deterministic reproduction and repair
 
-The regression now forks while holding the real proof. The child inherits its
-native locks and remains parked on a Unix-stream EOF gate. The parent drops its
-copy. No elapsed-time assumption is needed: inheritance occurs at fork, and the
-child cannot exit until the parent closes the gate. Its child path only uses
-async-signal-safe native operations and `_exit`. A guard closes the gate and
-owns the exact child's `waitpid`, including during assertion unwinding.
+The regression duplicates only the lock files owned by `RecoveredPhysicalProof`
+through a small `#[cfg(test)]` `duplicate_for_test()` method using `File::try_clone`.
+The duplicate retains the same open-file descriptions after the original proof
+is dropped. It is the deterministic ownership gate: production `prove()` cannot
+reacquire the locks until the duplicate is dropped. No timing or polling is
+introduced.
 
-While the inherited proof is held, the test verifies:
+The previous raw-fork fixture also retained every unrelated descriptor in the
+parallel test process, potentially extending another test's resource lifetime.
+It has been removed entirely, including its unsafe code, child process, Unix
+stream gate and waiter. The replacement duplicates exactly the proof descriptors
+and does not create process-wide descriptor inheritance.
+
+While the duplicated proof is held, the test verifies:
 
 - Production `prove()` returns `None`.
 - A reconciliation pass leaves the exact reservation pending and resuming,
@@ -51,13 +58,12 @@ While the inherited proof is held, the test verifies:
 - The previous activation is settled; no unrelated idle commit is in progress.
 - No proven rollback exists, and Goal idle remains unavailable.
 
-Keeping the old positive assertion at this deliberately parked cut reproduced
-the failure deterministically on Linux (`None` versus `Some(true)`), before the
-test synchronization repair. This proves the invalid assumption without relying
-on repeated probabilistic failures. It does not claim an instrumented macOS
-reproduction of the original hosted execution.
+The negative assertion directly proves the original invalid assumption: the
+original proof has been dropped, but a nonblocking probe still cannot acquire
+the exact authority. This does not claim an instrumented macOS reproduction of
+the original hosted execution.
 
-After releasing and joining the descriptor holder, the test awaits the existing
+After dropping the duplicate, the test awaits the existing
 registry `wait_recovery_reconciliation()` completion watch. It then requires
 exactly one durable `RolledBack { physical_settlement_proven: true }`, the original
 `ClientControl` origin, empty pending/in-flight ownership, no resume reservation,
@@ -72,13 +78,13 @@ reservation, one historical committed activation, consumed ordinal 2 and next
 ordinal 3. All three original admission cases remain covered: Reserved, rollback
 without proof, and rollback with proof.
 
-The existing test-only `prove_after_release()` now waits for the allocation
+The existing test-only `prove_after_release()` still waits for the allocation
 namespace lock as well as the authority locks. Otherwise the same temporary
 inheritance could invalidate the helper before authority inspection. Production
 `Try` and `AfterSupervision` acquisition remain nonblocking where they were
 nonblocking; all exact identity/receipt/continuation validation is unchanged.
 
-The first broad run also failed
+During the previous synchronization repair, the first broad run also failed
 `recovered_verification_before_reserved_retains_physical_exclusion_after_parent_drop`
 with `Unavailable` versus `Inactive`. That nearby test used the same external
 proof/drop/single-probe assumption after releasing its FIFO-held Git helper.
@@ -90,34 +96,31 @@ synchronization repair; production shutdown and reconciliation remain unchanged.
 
 ## Validation
 
-Validation results below are Linux results with Rust 1.98.1 and
+The descriptor-duplication follow-up is validated on Linux with Rust 1.98.1 and
 `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. macOS is not available locally. CI and its
 platform coverage are unchanged; hosted macOS must validate the pushed SHA.
 
 | Command | Result |
 | --- | --- |
-| `cargo test --all-features runtime::subagent::registry::tests::agent411_resume_reservation_recovery_requires_rollback_containment_proof -- --exact --nocapture` | Three planned focused runs passed, one test each. Also passed in every final broader suite containing it. Repetition is a stress check, not the synchronization argument. |
-| `cargo test --all-features runtime::subagent::registry::tests::recovered_verification_before_reserved_retains_physical_exclusion_after_parent_drop -- --exact --nocapture` | Passed, one test; subsequently passed in all final broader suites containing it. |
+| `cargo test --all-features runtime::subagent::registry::tests::agent411_resume_reservation_recovery_requires_rollback_containment_proof -- --exact --nocapture` | 1 passed; 3386 library tests filtered. |
+| `cargo test --all-features runtime::subagent::registry::tests::recovered_verification_before_reserved_retains_physical_exclusion_after_parent_drop -- --exact --nocapture` | 1 passed; 3386 library tests filtered. |
+| `cargo test --lib --all-features physical_recovery::` | 6 passed; 3381 filtered. |
+| `cargo test --lib --all-features subagent` | 337 passed; 3050 filtered. |
 | `cargo fmt --all -- --check` | Passed. |
-| `cargo clippy --all-targets --all-features -- -D warnings` | Passed, no warnings. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
 | `cargo build --bins` | Passed. |
-| `cargo test --lib --all-features physical_recovery::` | 6 passed, 0 ignored, 3381 filtered. |
-| `cargo test --lib --all-features subagent` | 337 passed, 0 ignored, 3050 filtered. |
-| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 3190 passed, 3 existing ignores, 194 filtered; binary/example targets passed with zero tests. |
-| `cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::` | Exact hosted macOS unit command, executed on Linux: 2636 passed, 2 existing ignores, 749 filtered; binary targets passed with zero tests. Normal harness concurrency, no serialization override. |
-| `cargo test --all-features --test subagent` | 45 passed, 0 ignored or filtered. |
+| `cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::` | Exact hosted macOS unit command executed on Linux: 2636 passed, 2 existing ignores, 749 filtered. Binary targets passed with zero tests. |
+| `cargo test --all-features --test subagent` | 45 passed; no ignored or filtered tests. |
 | `git diff --check` and `git diff --cached --check` | Passed. |
 
-The existing ignores are `stage_profile_real_create_pipeline`,
-`issue419_measure_native_cold_load` (filtered from the hosted-command run), and
-`regenerate_committed_fixture_corpus`. No skip, ignore, deadline or CI change was
-introduced. The client/protocol/browser matrix was not rerun for this test-only
-native repair; previous integration evidence remains in its separate report.
+Both focused commands also discovered other targets with zero matching tests.
+The two existing ignores are `stage_profile_real_create_pipeline` and
+`regenerate_committed_fixture_corpus`. No new skips, ignores, serialization,
+retries, timeout changes or CI changes were introduced. All commands above passed
+on their first execution for this follow-up; no run failed or was interrupted.
+The descriptor itself supplies deterministic exclusion, not repeated execution.
 
-Development failures: the deliberately retained old positive assertion failed
-once with the fork gate held. The first broad hosted-command run failed the
-related recovered-workspace test (2635 passed, 1 failed, 2 ignored, 749 filtered).
-After repairing that test's same synchronization assumption, the entire validation
-group above was rerun successfully, not just its failing test. No final validation
-command was interrupted; the conversational interruption occurred while the
-runner continued and completed successfully.
+The previous commit's validation remains historical evidence, not validation of
+this follow-up. Client/protocol/browser suites were not rerun for this test-only
+native fixture change. Hosted macOS results for the final SHA are not claimed and
+will not be monitored after push.
