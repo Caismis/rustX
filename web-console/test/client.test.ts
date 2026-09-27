@@ -375,3 +375,31 @@ it('first-submit authority retirement drops a capacity-queued admission before d
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   expect(s.client.getSnapshot().views.A.inboundRequests).toBe(0);
 });
+
+
+it('ACK observer exceptions cannot strand a mutation or block queued request dispatch', async () => {
+  const s = server(); await s.connect();
+  s.held.add('session/create'); s.held.add('session/settings');
+  const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const facts: string[] = [];
+  const created = s.client.request({ method: 'session/create', params: { settings: { cwd: '/workspace/A' } } }, 'session_transition', result => {
+    facts.push(result.session.id);
+    throw new Error('broken presentation subscriber');
+  });
+  const reads = Array.from({ length: 8 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(7);
+  const mutation = s.requests.find(row => row.request.method === 'session/create')!.request;
+  const result = { type: 'session_transition' as const, session: { id: 'created', active_node: 'node', active_conversation_id: 'conversation', node_count: 1, created_at: '0', updated_at: '0' }, editor_content: null, durability_diagnostic: null };
+  s.socket.success(mutation, result);
+  expect((await created).session.id).toBe(facts[0]);
+  expect(facts).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(8);
+  s.socket.success(mutation, result); // Duplicate wire delivery cannot notify or dispatch again.
+  expect(facts).toHaveLength(1);
+  for (const row of s.requests.filter(row => row.request.method === 'session/settings')) s.reply(row.request);
+  await Promise.all(reads);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(s.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(diagnostic).toHaveBeenCalledOnce();
+  diagnostic.mockRestore();
+});

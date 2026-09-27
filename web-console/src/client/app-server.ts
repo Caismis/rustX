@@ -421,20 +421,33 @@ export class AppServerClient {
         this.lose(generation); return;
       }
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
-      if ('result' in value) pending.acknowledged?.(value.result);
-      const operation = pending.request;
-      if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
-        const target = operation.params.target;
-        const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.state.views[target.session_id]?.target, target)
-          ? { messageId: value.result.message_id, content: operation.params.content } : undefined;
-        // One publication hands request ownership to exact acknowledged identity.
-        // Never publish a zero count before publishing the accepted MessageId.
-        this.publishInbound(target.session_id, accepted);
-        this.settleSubmissions(target.session_id);
+      // Evidence observers run at decode time, before continuation authority
+      // checks. Their failures are local diagnostics, never a native RPC result.
+      try {
+        if ('result' in value) pending.acknowledged?.(value.result);
+      } catch (error) {
+        console.error('App Server acknowledgement observer failed', error);
       }
-      if ('error' in value) pending.reject(new RpcFailure(value.error));
-      else if ('result' in value) pending.resolve(value.result);
-      this.pump();
+      try {
+        const operation = pending.request;
+        if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
+          const target = operation.params.target;
+          const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.state.views[target.session_id]?.target, target)
+            ? { messageId: value.result.message_id, content: operation.params.content } : undefined;
+          // One publication hands request ownership to exact acknowledged identity.
+          // Never publish a zero count before publishing the accepted MessageId.
+          this.publishInbound(target.session_id, accepted);
+          this.settleSubmissions(target.session_id);
+        }
+      } catch (error) {
+        console.error('App Server response presentation failed', error);
+      } finally {
+        // The correlated wire outcome alone settles the RPC. Presentation
+        // subscribers cannot strand it or consume a request capacity slot.
+        if ('error' in value) pending.reject(new RpcFailure(value.error));
+        else if ('result' in value) pending.resolve(value.result);
+        this.pump();
+      }
       return;
     }
     if (value.method === 'configuration/changed') {
