@@ -1,152 +1,149 @@
-# Local validation ledger
+# Issue 420 repair validation
 
-All implementation/validation ran in the issue worktree. The primary worktree was
-read-only. No GitHub CI checks were watched. Commands below are the actual lanes;
-repetitions with the same arguments are grouped. Logs were retained locally under
-`/tmp/rustx-420-*.log`; durable measurements are in `evidence/`.
+Repair of existing PR #423, starting from authoritative clean branch
+`issue-420-incremental-projection-chat-stability` at
+`d9cf99886d09dbf6c846a8b5876fa0b6d4825531` in
+`/home/caismis/Documents/codes/rustX-issue-420`. Initial fetched `origin/main`:
+`ad863a24cf48fbb0d5182746e1046d4b64e8c167`. Primary development worktree was not
+modified. No issue/PR was created; no merge or post-push CI watch is part of this task.
 
-## Final results and exact commands
+The original PR's shutdown liveness failure and standard Web measurement timeout
+were PR regressions, not pre-existing failures. The process test is unchanged by
+this repair. The earlier implementation's bounded-worker Web result was not proof
+that standard `pnpm test` passed. This document supersedes those validation claims.
 
-| Command (repository root unless stated) | Result |
+## Focused regression contracts
+
+- `journal_batch_invalidates_trace_even_when_session_events_publish`: real
+  `PendingObservations` committed receipts and Published acknowledgements release
+  one JournalBatch containing Attempt start, Turn start and Tool start. All Session
+  publications remain, and one independent Trace invalidation is coalesced.
+- `failed_journal_batch_wakes_subscribers_without_inventing_a_trace_cut`: a failed
+  Journal frontier wakes subscribers and returns exhaustion without allocating a
+  fake Trace cursor.
+- `durable_read_cut_retires_stale_results_without_overwriting_semantics`: shutdown
+  does not dirty derived domains; a later durable revision rejects an older result.
+- `blocked_read_materialization_does_not_own_shutdown_or_projection_drain`:
+  single-worker Tokio test, oneshot/mpsc-gated materialization, shutdown observation,
+  actual native shutdown and delivery drain all progress before the read is released.
+- The unchanged
+  `app_server_websocket_drain_supervises_active_root_and_cold_resume` passes locally,
+  including its real SQLite `BEGIN IMMEDIATE` boundary.
+- `incremental-client.test.ts`: a resync **without an overlapping ordinary event**
+  during held explicit snapshot acquisition forces subscribe after N; attachment
+  remains resynchronizing until ACK; the old continuation cannot fold; exact RPC,
+  cursor/target/state and no-mutation-replay assertions. Replay-window refusal tests
+  cover recovery on the second acquisition and stale failure at the third refusal.
+  A separate registered-replay-before-ACK test matches native transport scheduling:
+  contiguous replay advances once while controls stay resynchronizing; old cursors
+  and duplicates do not fold.
+- `trace-cache.test.ts`: read-domain update alone issues no Trace read; 101 native
+  Trace notifications use one in-flight plus one coalesced trailing Trace RPC and
+  zero Session snapshots.
+- Native request-payload tests now leave Trace invalidation to the real batch owner.
+  Conformance/endpoint tests consume the exact contiguous read-only suffix after
+  settlement instead of equating execution settlement with the last presentation
+  cursor. The admission-fault test still proves the exact fault script, closed
+  admission, no admitted attempt/model request and no duplicate semantic failure;
+  only the already accepted input's derived publication may follow.
+- The independent native snapshot/event capture was regenerated from the real native
+  host and compared by the production DTO fold. Canonical expected state is not
+  synthesized by that TypeScript reducer.
+
+## Commands and results
+
+Commands below ran in the issue worktree; repetitions with identical arguments are
+grouped. Logs are local `/tmp/issue420-*.log`. `CARGO_BUILD_JOBS=2` was used for the
+final native build to avoid competing compiler/linker memory use on the shared
+machine; it does not change test-thread or Tokio-worker settings. Web uses its
+unchanged standard concurrency. No test timeout or screenshot threshold changed.
+
+| Actual command | Result |
 | --- | --- |
-| `git fetch origin` | Initial and bounded final synchronization; origin/main remained `ad863a24cf48fbb0d5182746e1046d4b64e8c167`. |
-| `pnpm --dir protocol/app-server install --frozen-lockfile`; equivalent installs in `tui` and `web-console` | Dependencies installed; baseline Web dependencies installed separately. |
-| `cargo check --all-targets --all-features` | Pass after implementation compile repairs. |
-| `cargo fmt --all -- --check` | Pass, including final source commit. |
-| `cargo clippy --all-targets --all-features -- -D warnings` | Pass, including final source commit. |
-| `cargo test --all-targets --all-features` | **Not green**: final run 3,334 passed, five managed-Python preparation failures, three existing ignored tests. See environment limitation below. |
-| `cargo test --test '*' --all-features` | Pass: 611 integration tests, five existing ignored fixture/measurement tests. Includes conformance, protocol contracts, actual processes and transports. |
-| `cargo test --bins --examples --all-features` | Pass; runs remaining targets separately because the all-targets command stops after library failures. |
-| `cargo build --bins` | Pass; real browser/native process lanes use built binaries. |
-| `cargo test --lib launch --all-features` | 69 passed. |
-| `cargo test --lib a_parked_projection_fold_cannot_retain_the_host_or_storage_authority --all-features -- --nocapture` | Pass after the short Store-read gate repair. |
-| `RUSTX_PROJECTION_CAPTURE=web-console/test/fixtures/incremental-native.json cargo test --lib incremental_projection_independent_snapshot_capture --all-features -- --nocapture` | Pass; native snapshots/events captured independently of the TypeScript fold. |
-| `(cd protocol/app-server && pnpm generate && pnpm check && pnpm typecheck)` | Pass; mandatory v25 schema and TypeScript have no drift. |
-| `(cd tui && pnpm typecheck && pnpm test)` | Pass: 852 tests. |
-| `(cd web-console && pnpm typecheck)` | Pass. |
-| `(cd web-console && pnpm build && pnpm check:i18n && pnpm check:provenance)` | Pass; existing bundle-size advisory remains. No missing English/Chinese strings or source attribution. |
-| `(cd web-console && pnpm test)` | Executed repeatedly. Last unrestricted concurrent run: 1,075 passed, performance fixture exceeded its unchanged 5s limit under other concurrent work. |
-| `(cd web-console && RUSTX_PERFORMANCE_OUTPUT=/tmp/rustx-420-after.json pnpm test --maxWorkers=4)` | **1,076 passed**, all 63 files. Same assertions and deadlines; bounded workers only. |
-| `(cd web-console && RUSTX_E2E_PREVIEW_PORT=15473 RUSTX_E2E_FIXTURE_PORT=15474 CONTAINER_ENGINE=podman pnpm test:e2e)` | **125 passed**, 6.5 minutes. Uses repository pinned Chromium container and actual native process lanes. |
-| `(cd web-console && RUSTX_E2E_PREVIEW_PORT=15473 RUSTX_E2E_FIXTURE_PORT=15474 CONTAINER_ENGINE=podman bash scripts/browser-tests.sh incremental.spec.ts trajectory.spec.ts trajectory-integration.spec.ts trajectory-timing.spec.ts convergence.spec.ts --output=/tmp/rustx-420-browser-after-8acb)` | Pass: **31 tests** after final independent Trace paging/recovery changes, at exact source commit `8acb8924`. |
-| `git diff --check` | Pass before implementation commit and final evidence commit. |
+| `git fetch origin`; `gh pr view 423 --json url,state,isDraft,baseRefName,headRefName,headRefOid,autoMergeRequest,body`; `gh issue view 420 --json title,body` | Verified clean authoritative worktree/branch and matching PR/remote head before edits. |
+| `cargo check --all-features` | Passed. |
+| `cargo test --lib --all-features runtime_client::projection::tests` | Final: **44 passed**, including failed-frontier wakeup. Initial direct-Trace cursor assertions were corrected to the real batch-owner contract. |
+| `cargo test --lib --all-features runtime_client::host::tests` | 61 passed; also included in the final lane below. |
+| `cargo test --lib --all-features runtime_client::` | **337 passed** before the final failed-frontier test was added, including projection, real JournalBatch, blocked materialization, native host, both transport conformance drivers and managed-Python coverage. |
+| `cargo test --lib --all-features alternating_select_adopt_failures_exhaust_one_admission_cycle -- --nocapture` | Compilation was terminated during shared-memory pressure; the corrected test passes in final all-targets. |
+| `RUSTX_PROJECTION_CAPTURE=web-console/test/fixtures/incremental-native.json cargo test --lib --all-features incremental_projection_independent_snapshot_capture -- --nocapture` | Passed; final independent native capture regenerated. |
+| `cargo test --all-features --test process app_server_websocket_drain_supervises_active_root_and_cold_resume -- --nocapture` | Passed repeatedly, unchanged; final focused run 1 passed in 4.26s. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Final passed. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features` | **Latest run not green:** 3,342 library tests passed, one managed-Python preparation failure, three existing ignored; Cargo stops after the library failure. The failure is `uv lock --no-config` fetching `https://pypi.org/simple/pyyaml/`: `Network is unreachable (os error 101)` after its normal three retries. The preceding full run passed 3,953 tests/18 targets before the final failed-Journal wakeup test was added. Remaining targets were rerun separately below; no gate was skipped or failure relabeled. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | **417 passed**, all seven external CI boundary targets. These targets also passed in the final separate integration run. |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test '*'` | **611 passed**, five existing ignored, nine targets; explicitly covers remaining targets after the environment failure. |
+| `cargo test --bins --examples --all-features` | Passed. |
+| `cargo build --bins` | Final rebuild passed. |
+| `(cd protocol/app-server && pnpm generate && pnpm check && pnpm typecheck)` | Passed; wire vocabulary unchanged, no unnecessary version bump or generated drift. |
+| `(cd tui && pnpm typecheck && pnpm test)` | Passed: **852 tests**. |
+| `(cd web-console && pnpm exec vitest run test/incremental-client.test.ts test/trace-cache.test.ts)` | 28 passed at that development cut. |
+| `(cd web-console && pnpm exec vitest run test/incremental-client.test.ts)` | 11 passed after the bounded-replay and pre-ACK replay cases were added. |
+| `(cd web-console && pnpm exec vitest run test/incremental-client.test.ts test/trace-cache.test.ts test/incremental-equivalence.test.ts test/incremental-vocabulary.test.ts test/incremental-presentation.test.tsx test/scroll.test.tsx)` | Final: **38 passed**, six files. |
+| `(cd web-console && RUSTX_PERFORMANCE_OUTPUT=/tmp/issue420-performance-final.json pnpm test:issue-420-performance)` | Passed; unchanged fixed fixture and counters. |
+| `(cd web-console && pnpm typecheck && pnpm build && pnpm test && pnpm check:i18n && pnpm check:provenance)` | Final: all passed, **1,080 tests / 62 files** with standard `pnpm test` concurrency; 143 provenance records and 131 package notices verified. Existing bundle-size advisory only. |
+| `(cd web-console && CONTAINER_ENGINE=podman RUSTX_E2E_PREVIEW_PORT=15473 RUSTX_E2E_FIXTURE_PORT=15474 pnpm test:e2e)` | Final handoff revalidation: **125/125 passed (6.3m)**, including the fixed browser measurement with unchanged counters. The preceding full run also passed 125/125; the initial run had 123 passed/two strict Settings edge failures described below. Screenshot references and tolerances remain unchanged. |
+| `git diff --check` | Passed; repeated before commit. |
 
-Focused Web commands also executed with `pnpm test` plus these file groups:
-`test/incremental-client.test.ts` (7), `test/trace-cache.test.ts` (19),
-`test/incremental-equivalence.test.ts test/incremental-vocabulary.test.ts`,
-`test/incremental-presentation.test.tsx test/agent.test.tsx` (15),
-`test/scroll.test.tsx test/incremental-vocabulary.test.ts` (4), and the performance
-fixture alone on both worktrees (1 each). All final focused runs passed; the full
-1,076-test run includes every new test. The focused browser repair run used
-`bash scripts/browser-tests.sh agent.spec.ts incremental.spec.ts` (15 passed).
-The acceptance-to-test mapping is in [README.md](README.md).
+No macOS execution was performed locally. The Linux process regression and the exact
+external targets corresponding to both relevant CI boundary jobs were executed.
+No hosted CI result is claimed and no CI watch/poll is performed after push.
 
-## Reproducible measurement commands
+## Measurement reproduction
 
-At implementation source commit `8acb89249361a90dba4e4b2fc998983fd691aaae`:
+The exact fixed `200-long-reasoning-tool-v3` fixture was renamed without content or
+assertion changes to `test/incremental-performance.measurement.tsx`. The normal
+`test/**/*.test.*` correctness discovery excludes it naturally. The six-line
+`vite.performance.config.ts` reuses the production test setup and selects only that
+fixture with one worker. No CI lane or ordinary-suite concurrency change is needed.
 
 ```sh
 cd /home/caismis/Documents/codes/rustX-issue-420/web-console
-RUSTX_PERFORMANCE_OUTPUT=/tmp/rustx-420-after-8acb.json pnpm test test/incremental-performance.test.tsx
-RUSTX_E2E_PREVIEW_PORT=15473 RUSTX_E2E_FIXTURE_PORT=15474 CONTAINER_ENGINE=podman \
-  bash scripts/browser-tests.sh incremental.spec.ts trajectory.spec.ts trajectory-integration.spec.ts trajectory-timing.spec.ts convergence.spec.ts --output=/tmp/rustx-420-browser-after-8acb
+RUSTX_PERFORMANCE_OUTPUT=/tmp/issue420-performance.json pnpm test:issue-420-performance
 ```
 
-At detached baseline `ad863a24cf48fbb0d5182746e1046d4b64e8c167`:
+Repair measurement equals the previous jsdom evidence: 0 Session snapshot RPCs,
+210 React commits, 100 automatic writes after setup, 101 bottom writes including
+setup, 0 anchor writes under mock geometry, and 0 message DOM seat replacements.
+This is not a browser-layout measurement. Original Chromium before/after evidence,
+source SHAs and recordings remain attributed to their original runs in
+[README.md](README.md); no new comparison data is invented.
 
 ```sh
-cd /home/caismis/Documents/codes/rustX-issue-420-baseline/web-console
-RUSTX_PERFORMANCE_OUTPUT=/tmp/rustx-420-before-ad863.json pnpm test test/incremental-performance.test.tsx
-RUSTX_E2E_PREVIEW_PORT=15573 RUSTX_E2E_FIXTURE_PORT=15574 CONTAINER_ENGINE=podman \
-  bash scripts/browser-tests.sh incremental.spec.ts --output=/tmp/rustx-420-browser-before-ad863
+cd /home/caismis/Documents/codes/rustX-issue-420/web-console
+CONTAINER_ENGINE=podman RUSTX_E2E_PREVIEW_PORT=15473 RUSTX_E2E_FIXTURE_PORT=15474 \
+  bash scripts/browser-tests.sh incremental.spec.ts --output=/tmp/issue420-browser
 ```
 
-To reconstruct baseline instrumentation, copy the new performance test,
-`test/fixtures/incremental.{html,tsx}`, `test/e2e/incremental.spec.ts`, and the bounded
-port Playwright configuration from the implementation commit. Change protocol
-imports from v25 to v24 and omit the new `arguments_json` property in the two fixture
-sources. In the baseline browser expectations use 209 snapshots and one row
-replacement. Do not alter fixture content, geometry, notifications or observation
-window. Build that baseline Web before running its browser lane. Baseline source
-was never reset into the original development worktree.
+The browser image/digest, baseline source, baseline instrumentation and exact
+fixture geometry are documented in [README.md](README.md). To reproduce the old
+baseline's jsdom measurement, use its existing `.test.tsx` fixture with
+`pnpm exec vitest run test/incremental-performance.test.tsx --maxWorkers=1` in the
+separate baseline worktree. No baseline run was fabricated during this repair.
 
-## Development failures, diagnosis and repair
+## Development findings and environment observations
 
-- Initial native/TypeScript compile errors reflected new DTO exhaustiveness,
-  generation imports and optional-field shapes. Generated v25 consumers and
-  fixtures were updated together. Clippy caught function length; native read
-  synchronization was factored by responsibility. Final fmt/clippy/types pass.
-- Native cursor/Goal/terminal regressions exposed initial bootstrap cursor
-  advancement and live snapshot reads replacing native decorated transcript data.
-  Bootstrap initializes without publishing; live snapshots read the established
-  cut. Settlement now follows derived read domains. Existing lifecycle regressions
-  pass in the final native library run.
-- Initial worker reads held Store authority too long, causing physical-settlement
-  and conformance storage-lock failures. A weak Store reference and short read
-  gate fix ownership. An intermediate Drop implementation joined the whole state
-  mutex and hung the parked-fold proof; only our own identified test processes
-  were stopped. Drop now joins only synchronous Store reads. The parked-fold
-  proof, launch suite and all 22 conformance tests pass.
-- Independent native equivalence initially exposed missing inbound revision,
-  omitted optional fields, transcript decorations and Tool JSON number spelling.
-  These were corrected in the actual payload/fold, without stripping Session
-  fields. Only the documented separate Trace read domain is excluded.
-- Old TUI snapshot-loop and Web snapshot-after-event assertions were replaced with
-  cursor/read-domain contracts. Early held-response tests needed to answer the
-  new independent Trace RPC; final Trace tests pass with zero Session snapshots.
-- Reasoning initially remounted because commit moved it into a different rendering
-  branch. One component path now preserves the same expanded DOM. Initial process
-  placement changed six screenshots; its keyed seat now remains after committed
-  rows and before streaming rows. Existing screenshot references were not rewritten.
-- Browser revision tests formerly waited for snapshot observations; they now wait
-  for the actual native Goal event. Full browser runs progressed from 122/124 and
-  119/125 passing to 125/125, plus the final affected rerun.
-- Default port 5173 was occupied. No unrelated process was terminated; bounded
-  environment-selected ports preserve default repository behavior.
-- Measurement fixture revisions aligned reasoning/Tool final content and disabled
-  browser CSS anchoring consistently. Only final identical v3 runs are compared.
-  Earlier exploratory recordings/counters are not delivery evidence.
-- Unrestricted Vitest concurrency caused one performance fixture timeout. Four
-  workers passed the full suite without changing the test's 5s deadline.
-- A serial native attempt (`RUST_TEST_THREADS=1 cargo test --all-targets --all-features`)
-  stalled in an existing borrowed-workspace child stdout gate: serial harness output
-  shares the marker line. Only that run's identified parent/child processes were
-  stopped; the test and assertions were untouched. Default concurrency passes it.
-  A four-thread attempt (`RUST_TEST_THREADS=4 ...`) still encountered PyPI failures.
-
-## Environment limitation (not reported as passing)
-
-The final all-target native run stops after five existing managed-Python lanes:
-
-- `boundary_suites::mcp_tasks_managed::a_real_managed_fastmcp_task_completes_through_one_tool_result`
-- `boundary_suites::mcp_mrtr_managed::a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction`
-- `boundary_suites::managed_selection::fastmcp4_availability_selection_request_and_invocation_share_one_authority`
-- `boundary_suites::runtime_client::python_capability::capability_projection_covers_native_python_and_skills`
-- `boundary_suites::runtime_client::python_capability::capability_projection_covers_python_origins`
-
-`uv lock --no-config` under CPython 3.14.7 cannot fetch
-`https://pypi.org/simple/fastmcp-tasks/` / `fastmcp/`: **Network is unreachable
-(os error 101)** after its existing retries. The other three report managed source
-preparation failure. Earlier runs had 3,339 library tests pass but a then-unfixed
-conformance ownership failure; that historical result is not presented as a green
-final all-target run. The focused managed-selection rerun also failed source
-preparation. No dependency substitution, skipped gate, deadline increase or product
-fallback was introduced. Integration targets and binaries/examples were explicitly
-run separately and passed. External hosted-provider latency and GitHub CI were not
-measured or claimed.
-
-## Final architecture review
-
-Reviewed the complete diff against origin/main. Ordinary contiguous events never
-request a Session snapshot, including non-text events; native publication suffixes
-never rebuild the durable transcript. Explicit mutation reconciliation and recovery
-remain allowed. Trace paging/latest use only Trace reads. Chat contains exactly one
-automatic scroll assignment. Exact attachment target and connection epoch fence
-both replies and events. Canonical commitment removes transient state while retaining
-one MessageSeat component path. Transcript subscribers retain unrelated references;
-controls still receive shutdown/attachment/lineage facts. No global store, provider
-assembler, compatibility decoder or old generated v24 module remains. FirstSubmissions
-changed only its protocol type import. Current architecture docs and provenance
-agree with the delivered ownership. Included recordings are the requested bounded
-performance evidence; no local configuration, unrelated cleanup, test-results tree
-or primary-worktree untracked files are included.
+- The first native cut implementation rejected a snapshot after three concurrently
+  superseded reads. Focused native races exposed that normal semantic progress is
+  not a read error. Snapshot requests now retry finite read/validate cuts outside
+  projection ownership until current; Web replay recovery retains its separate
+  bounded three-attempt policy.
+- The first clippy run found documentation markup and test-hook type complexity;
+  both were repaired. A Web typecheck caught a missing native subscribe ACK cursor
+  in the new test fixture; it was supplied.
+- An early focused native run had two managed-Python source-preparation failures.
+  A subsequent full run and external boundary runs successfully exercised them.
+  The latest full rerun independently records a concrete PyPI `pyyaml` network
+  failure above. This local network limitation is separate from the repaired
+  PR-specific shutdown and ordinary Web test regressions.
+- A standard Web run passed 1,077 tests before the final two recovery tests were
+  added. A later overlapping run hit the unchanged 5s limit in the existing product
+  remount test (not the removed performance fixture). Native/compiler/browser work
+  was then serialized for final validation; no assertion or deadline was weakened.
+- Shared RAM and swap were exhausted by simultaneous Rust compilation in this and
+  another worktree. Only this task's two overlapping compilation commands were
+  terminated; the other worktree and its processes were not modified.
+- The initial browser run reported strict Settings corner-edge screenshot differences
+  (15 pixels, max channel delta 5; 34 pixels, max delta 7). Captures were inspected;
+  screenshot references and comparator policies were not changed. Final status is
+  reported in the command table, without labeling these failures pre-existing.

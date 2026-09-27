@@ -212,8 +212,7 @@ pub(crate) struct RuntimeClientProjection {
     journal_through: u64,
     read_domains_dirty: bool,
     read_failure: Option<String>,
-    defer_settlements: bool,
-    settlements: Vec<RuntimeClientEvent>,
+    read_revision: u64,
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
     /// Set when the cursor space is exhausted: publishing stops and
@@ -236,6 +235,89 @@ pub(crate) struct RuntimeClientProjection {
     probe: Option<crate::runtime_client::test_sync::ProjectionProbe>,
 }
 
+/// Host identity is fixed for the lifetime of a live projection. Revision
+/// fences every durable-domain observation, independently of publication cursors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReadDomainCut {
+    revision: u64,
+    through: u64,
+}
+
+type ReadDomains = Result<
+    (
+        super::snapshot::RuntimeClientTranscriptPage,
+        Option<crate::context::occupancy::ContextOccupancy>,
+    ),
+    crate::durable::ConversationStoreError,
+>;
+
+impl ReadDomainCut {
+    pub(crate) fn read(self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
+        let page =
+            store.load_transcript_page(None, crate::durable::TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?;
+        let mut page = super::snapshot::transcript_page_view(page)
+            .map_err(crate::durable::ConversationStoreError::InvalidReference)?;
+        super::response::decorate_through(store, &mut page, self.through)?;
+        let occupancy = crate::context::occupancy::read(store, self.through)?;
+        Ok((page, occupancy))
+    }
+}
+
+/// Closed observation classification. Trace invalidation belongs separately to
+/// `JournalBatch`, whose source vocabulary is owned by `PendingObservations`.
+fn invalidates_read_domains(observation: &ConversationObservation) -> bool {
+    match observation {
+        ConversationObservation::Committed { .. }
+        | ConversationObservation::PublicationSettled { .. }
+        | ConversationObservation::InboundEnqueued(_)
+        | ConversationObservation::InboundDrained(_)
+        | ConversationObservation::PendingInboundChanged(_) => true,
+        ConversationObservation::InteractionPending { audit, .. }
+        | ConversationObservation::InteractionSettled { audit, .. } => audit.is_some(),
+        ConversationObservation::Event { event, .. }
+        | ConversationObservation::ManualCompactionEvent { event } => matches!(
+            event,
+            RuntimeEvent::AttemptStarted { .. }
+                | RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AttemptCancelled { .. }
+                | RuntimeEvent::AttemptFailed { .. }
+                | RuntimeEvent::AttemptTimedOut { .. }
+                | RuntimeEvent::AttemptLimitExceeded { .. }
+                | RuntimeEvent::TurnStarted
+                | RuntimeEvent::ModelRequestStarted { .. }
+                | RuntimeEvent::ModelRequestCompleted { .. }
+                | RuntimeEvent::ModelRequestFailed { .. }
+                | RuntimeEvent::AssistantMessageCommitted { .. }
+                | RuntimeEvent::ToolMessageCommitted { .. }
+                | RuntimeEvent::CompactionStarted
+                | RuntimeEvent::CompactionCompleted { .. }
+        ),
+        ConversationObservation::JournalBatch { .. }
+        | ConversationObservation::Published { .. } => {
+            unreachable!("publication envelopes are classified through their contents")
+        }
+        ConversationObservation::Workflow(_)
+        | ConversationObservation::GoalChanged(_)
+        | ConversationObservation::InboundAdopted
+        | ConversationObservation::Status(_)
+        | ConversationObservation::PublicationOpened { .. }
+        | ConversationObservation::Publication { .. }
+        | ConversationObservation::Background(_)
+        | ConversationObservation::ToolProgress { .. }
+        | ConversationObservation::SubagentLifecycle(_)
+        | ConversationObservation::SubagentWorkspace(_)
+        | ConversationObservation::SubagentActivity(_)
+        | ConversationObservation::Capability { .. }
+        | ConversationObservation::Resources { .. }
+        | ConversationObservation::AttemptAdmitted { .. }
+        | ConversationObservation::SessionModelChanged { .. }
+        | ConversationObservation::Shutdown
+        | ConversationObservation::InteractionRemoved { .. }
+        | ConversationObservation::DurableFailure { .. }
+        | ConversationObservation::DurabilityFailed { .. } => false,
+    }
+}
+
 impl RuntimeClientProjection {
     /// Creates the projection over one conversation with the current Surface
     /// working set and the initial capability view.
@@ -250,8 +332,7 @@ impl RuntimeClientProjection {
             journal_through: 0,
             read_domains_dirty: false,
             read_failure: None,
-            defer_settlements: false,
-            settlements: Vec::new(),
+            read_revision: 0,
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
@@ -496,27 +577,25 @@ impl RuntimeClientProjection {
             observations,
         } = observation
         {
-            let before = self.cursor;
             for observation in observations {
                 self.apply(observation);
             }
             if let Some(through) = through {
                 self.journal_through = through;
-                self.read_domains_dirty = true;
+                // JournalBatch is released only for a represented Trace-affecting cut.
+                self.publish(RuntimeClientEvent::TraceChanged);
             } else {
                 self.exhausted = true;
-            }
-            if self.cursor == before {
-                self.publish(RuntimeClientEvent::TraceChanged);
+                self.wake_subscribers();
             }
             return;
         }
-        if !matches!(
-            observation,
-            ConversationObservation::Publication { .. }
-                | ConversationObservation::PublicationOpened { .. }
-        ) {
+        if invalidates_read_domains(&observation) {
             self.read_domains_dirty = true;
+            self.read_revision = self
+                .read_revision
+                .checked_add(1)
+                .expect("read revision exhausted");
         }
         let published = self.fold(observation);
         #[cfg(test)]
@@ -558,9 +637,7 @@ impl RuntimeClientProjection {
             // it names, so folding it publishes no client-facing execution
             // fact. Trace's ledger gains a record, so its bounded
             // invalidation is the one signal this lane emits.
-            ConversationObservation::InboundAdopted => {
-                vec![RuntimeClientEvent::TraceChanged]
-            }
+            ConversationObservation::InboundAdopted => Vec::new(),
             ConversationObservation::Committed {
                 attempt_id,
                 block,
@@ -1089,8 +1166,8 @@ impl RuntimeClientProjection {
     ///   [`RuntimeClientProjection::fold_publication_frame`];
     /// - PROJECT: turn counting and final request usage, carrying the exact
     ///   values folded into the attempt view;
-    /// - INVALIDATE: request boundaries and retries publish only `TraceChanged`;
-    ///   their payloads stay internal and the Trace owner resolves safe reads;
+    /// - TRACE: request boundaries and retries remain internal; `JournalBatch`
+    ///   independently invalidates the represented durable Trace cut;
     /// - PROJECT: compaction start/failure and committed completion, carrying
     ///   attempt attribution when automatic and no attempt identity when
     ///   manual.
@@ -1167,12 +1244,12 @@ impl RuntimeClientProjection {
                 }
                 Vec::new()
             }
-            // Request mechanics publish only a payloadless Trace invalidation.
-            // The native Trace owner resolves safe facts on snapshot repair.
+            // Request mechanics are private. The JournalBatch owner publishes
+            // one independent Trace invalidation for the represented cut.
             RuntimeEvent::TurnCompleted
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::ModelRequestFailed { .. }
-            | RuntimeEvent::ModelRetryScheduled { .. } => vec![RuntimeClientEvent::TraceChanged],
+            | RuntimeEvent::ModelRetryScheduled { .. } => Vec::new(),
             RuntimeEvent::ContextContributionEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
                 if let Some(usage) = usage
@@ -1185,7 +1262,7 @@ impl RuntimeClientProjection {
                         usage: usage.clone(),
                     }];
                 }
-                vec![RuntimeClientEvent::TraceChanged]
+                Vec::new()
             }
             // The durable Journal event carries identity only; the projection
             // already receives the canonical body from the commit
@@ -1678,22 +1755,7 @@ impl RuntimeClientProjection {
 
     /// Allocate the client cursor, retain the bounded replay entry and wake
     /// subscribers. No subscriber owns an event queue or blocks publication.
-    pub(crate) fn begin_read_model_cut(&mut self) {
-        self.defer_settlements = true;
-    }
-
-    pub(crate) fn finish_read_model_cut(&mut self) {
-        self.defer_settlements = false;
-        for event in std::mem::take(&mut self.settlements) {
-            self.publish(event);
-        }
-    }
-
     fn publish(&mut self, event: RuntimeClientEvent) {
-        if self.defer_settlements && matches!(event, RuntimeClientEvent::AttemptSettled { .. }) {
-            self.settlements.push(event);
-            return;
-        }
         let next = self.cursor.get().checked_add(1);
         let Some(next_value) = next else {
             // Explicit exhaustion: the cursor never wraps, publication
@@ -1738,31 +1800,42 @@ impl RuntimeClientProjection {
         }
     }
 
-    /// Refresh only native durable read domains, under the same publication lock.
-    /// Publication suffixes do not dirty these domains or perform durable reads.
-    pub(crate) fn reconcile_read_domains(&mut self, store: &dyn crate::durable::ConversationStore) {
-        self.read_domains(store, true);
+    /// Capture a finite derived cut; Store work must happen outside the host lock.
+    pub(crate) fn read_domain_fence(&self) -> ReadDomainCut {
+        ReadDomainCut {
+            revision: self.read_revision,
+            through: self.journal_through,
+        }
     }
 
-    fn read_domains(&mut self, store: &dyn crate::durable::ConversationStore, publish: bool) {
-        if !self.read_domains_dirty || self.exhausted {
-            return;
+    pub(crate) fn retry_failed_read(&mut self) {
+        if self.read_failure.is_some() {
+            self.read_domains_dirty = true;
         }
-        let read = (|| {
-            let page = store
-                .load_transcript_page(None, crate::durable::TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?;
-            let mut page = super::snapshot::transcript_page_view(page)
-                .map_err(crate::durable::ConversationStoreError::InvalidReference)?;
-            super::response::decorate_through(store, &mut page, self.journal_through)?;
-            let occupancy = crate::context::occupancy::read(store, self.journal_through)?;
-            Ok::<_, crate::durable::ConversationStoreError>((page, occupancy))
-        })();
+    }
+
+    pub(crate) fn read_domain_cut(&self) -> Option<ReadDomainCut> {
+        (self.read_domains_dirty && !self.exhausted).then(|| self.read_domain_fence())
+    }
+
+    /// Installation is the linearization point. A newer semantic cut retires
+    /// both successful and failed reads, leaving the newest cut dirty for repair.
+    pub(crate) fn install_read_domains(
+        &mut self,
+        cut: ReadDomainCut,
+        read: ReadDomains,
+        publish: bool,
+    ) -> bool {
+        if self.read_domain_cut() != Some(cut) {
+            return false;
+        }
         let (transcript, occupancy) = match read {
             Ok(value) => value,
             Err(error) => {
+                self.read_domains_dirty = false;
                 self.read_failure = Some(error.to_string());
                 self.wake_subscribers();
-                return;
+                return true;
             }
         };
         self.read_failure = None;
@@ -1783,6 +1856,7 @@ impl RuntimeClientProjection {
                 });
             }
         }
+        true
     }
 
     pub(crate) fn initialize_read_domains(
@@ -1790,7 +1864,8 @@ impl RuntimeClientProjection {
         store: &dyn crate::durable::ConversationStore,
     ) {
         self.read_domains_dirty = true;
-        self.read_domains(store, false);
+        let cut = self.read_domain_cut().expect("initial read cut");
+        self.install_read_domains(cut, cut.read(store), false);
     }
 
     /// The snapshot and its cursor, linearized together.
@@ -4163,6 +4238,119 @@ mod tests {
         );
     }
 
+    #[test]
+    fn journal_batch_invalidates_trace_even_when_session_events_publish() {
+        use crate::durable::presentation::JournalObserver;
+        use crate::events::types::RuntimeEventEnvelope;
+        use crate::runtime::identity::EventId;
+        use crate::runtime::observation::PendingObservations;
+        let mut projection = projection();
+        let queue = PendingObservations::new();
+        let facts = [
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+            RuntimeEvent::TurnStarted,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new("call"),
+                tool_id: ToolId::new("tool"),
+            },
+        ];
+        for (index, event) in facts.into_iter().enumerate() {
+            let sequence = index as u64 + 1;
+            queue.committed(Some(vec![RuntimeEventEnvelope {
+                schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+                event_id: EventId::new(format!("trace-{sequence}")),
+                sequence,
+                conversation_id: projection.snapshot_ref().conversation_id.clone(),
+                attempt_id: Some(attempt()),
+                turn_id: None,
+                timestamp: chrono::DateTime::UNIX_EPOCH,
+                event: event.clone(),
+            }]));
+            queue.push(ConversationObservation::Published {
+                journal_sequence: sequence,
+                observation: Box::new(event_observation(event)),
+            });
+        }
+        let batches = queue.drain();
+        assert!(matches!(
+            batches.as_slice(),
+            [ConversationObservation::JournalBatch {
+                through: Some(3),
+                ..
+            }]
+        ));
+        for batch in batches {
+            projection.apply(batch);
+        }
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeClientEvent::ToolExecutionStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeClientEvent::AttemptStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeClientEvent::AttemptTurnUpdated { .. }))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e.event, RuntimeClientEvent::TraceChanged))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_journal_batch_wakes_subscribers_without_inventing_a_trace_cut() {
+        use futures_util::FutureExt as _;
+        let mut projection = projection();
+        let (subscriber, wake) = projection.subscribe(RuntimeClientCursor::new(0)).unwrap();
+        assert!(wake.notified().now_or_never().is_none());
+        projection.apply(ConversationObservation::JournalBatch {
+            through: None,
+            observations: Vec::new(),
+        });
+        assert!(wake.notified().now_or_never().is_some());
+        assert_eq!(
+            projection.poll_subscriber(subscriber),
+            SubscriberPoll::Exhausted
+        );
+        assert_eq!(projection.cursor(), RuntimeClientCursor::new(0));
+    }
+
+    #[test]
+    fn durable_read_cut_retires_stale_results_without_overwriting_semantics() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let old = projection.read_domain_cut().unwrap();
+        projection.apply(ConversationObservation::Shutdown);
+        assert_eq!(
+            projection.read_domain_cut(),
+            Some(old),
+            "shutdown does not invalidate durable domains"
+        );
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        assert!(!projection.install_read_domains(
+            old,
+            Ok((
+                super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                None
+            )),
+            true
+        ));
+        assert!(projection.snapshot_ref().shutting_down);
+        assert!(projection.read_domain_cut().is_some());
+    }
+
     fn stream_start() -> crate::publication::PublicationStreamStart {
         crate::publication::PublicationStreamStart {
             stream_id: crate::runtime::identity::PublicationStreamId::new("attempt-1-pub-1"),
@@ -4304,7 +4492,7 @@ mod tests {
     /// Request payloads stay internal; invalidation and compaction lifecycle and
     /// committed completion are projected as runtime-owned lifecycle facts.
     #[test]
-    fn request_payloads_stay_internal_and_trace_invalidation_is_projected() {
+    fn request_payloads_stay_internal_and_trace_is_owned_by_journal_batch() {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
@@ -4353,28 +4541,22 @@ mod tests {
             apply_event(&mut projection, event);
         }
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
-        assert_eq!(events.len(), 7);
-        assert!(
-            events[..3]
-                .iter()
-                .all(|event| matches!(event.event, RuntimeClientEvent::TraceChanged))
-        );
-        assert!(matches!(events[6].event, RuntimeClientEvent::TraceChanged));
+        assert_eq!(events.len(), 3);
         assert!(matches!(
-            &events[3].event,
+            &events[0].event,
             RuntimeClientEvent::ContextCompactionStarted { .. }
         ));
         assert!(matches!(
-            &events[4].event,
+            &events[1].event,
             RuntimeClientEvent::ContextCompacted { context, .. }
                 if context.compaction_count == 1
         ));
         assert!(matches!(
-            &events[5].event,
+            &events[2].event,
             RuntimeClientEvent::ContextCompactionFailed { error, .. } if error == "boom"
         ));
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-        assert_eq!(cursor, RuntimeClientCursor::new(7));
+        assert_eq!(cursor, RuntimeClientCursor::new(3));
         assert!(!snapshot.context.compaction_in_progress);
         assert_eq!(snapshot.context.compaction_count, 1);
         assert!(snapshot.attempt.is_none());
@@ -4444,8 +4626,7 @@ mod tests {
             },
         );
         let events = collect(&mut projection, RuntimeClientCursor::new(1));
-        assert_eq!(events.len(), 3);
-        assert!(matches!(events[1].event, RuntimeClientEvent::TraceChanged));
+        assert_eq!(events.len(), 2);
         assert_eq!(
             events[0].event,
             RuntimeClientEvent::AttemptTurnUpdated {
@@ -4454,7 +4635,7 @@ mod tests {
             }
         );
         assert_eq!(
-            events[2].event,
+            events[1].event,
             RuntimeClientEvent::AttemptUsageUpdated {
                 attempt_id: attempt(),
                 usage: ModelUsage {

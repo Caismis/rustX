@@ -27,6 +27,7 @@ it('gap retires continuation and repeated resync coalesces; snapshot cursor join
   const authoritative = { ...s.snapshots.get('A')!, attempt: { attempt_id: 'attempt', turn: 0, phase: { type: 'running' as const }, in_flight: { message_id: 'message', blocks: [{ type: 'text' as const, block_index: 0, text: 'native' }] } } };
   s.socket.success(request, { type: 'snapshot', snapshot: authoritative, cursor: '5' });
   await s.waitFor('session/subscribe', 1);
+  await new Promise<void>(resolve => { if (s.client.getSnapshot().views.A.attachment === 'attached') return resolve(); const stop = s.client.subscribe(() => { if (s.client.getSnapshot().views.A.attachment === 'attached') { stop(); resolve(); } }); });
   emit(s, '5', delta); emit(s, '6', delta);
   expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks).toEqual([{ type: 'text', block_index: 0, text: 'nativex' }]);
 });
@@ -89,4 +90,75 @@ it('notifications preceding the attach response join the returned cursor through
   emit(s, '1', started); emit(s, '2', open); emit(s, '3', delta);
   expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks?.[0]).toMatchObject({ text: 'x' });
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
+});
+
+it('resync during an explicit snapshot survives acquisition and installs an exact subscription handoff', async () => {
+  const s = await create(); emit(s, '1', started); emit(s, '2', open);
+  const target = s.target('A');
+  const authoritative = s.client.getSnapshot().views.A.snapshot!;
+  s.held.add('session/snapshot'); s.held.add('session/subscribe');
+  const refresh = s.client.refresh('A');
+  const request = await s.waitFor('session/snapshot', 1);
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target, after_cursor: '2', earliest_serviceable: '5' } });
+  expect(s.client.getSnapshot().views.A.attachment).toBe('resynchronizing');
+  expect(s.client.getSnapshot().views.A.cursor).toBe('2');
+  s.socket.success(request, { type: 'snapshot', snapshot: authoritative, cursor: '7' });
+  const subscribe = await s.waitFor('session/subscribe', 1);
+  expect(subscribe.params).toEqual({ target, after_cursor: '7' });
+  expect(s.client.getSnapshot().views.A.attachment).toBe('resynchronizing');
+  emit(s, '3', delta); // An in-flight old-registration event precedes the acquired cut.
+  expect(s.client.getSnapshot().views.A.cursor).toBe('7');
+  s.socket.success(subscribe, { type: 'subscribed', after_cursor: '7' });
+  await refresh;
+  expect(s.client.getSnapshot().views.A).toMatchObject({ target, cursor: '7', attachment: 'attached' });
+  expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks).toEqual([]);
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(1);
+  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/upload', 'session/create'].includes(row.request.method))).toBe(false);
+  emit(s, '8', delta); // Now the registered continuation advances normally.
+  expect(s.client.getSnapshot().views.A.cursor).toBe('8');
+});
+
+it.each([2, null])('acquisition-time resync uses bounded authoritative replay repair (success at %s)', async successAt => {
+  const s = await create();
+  s.held.add('session/snapshot'); s.held.add('session/subscribe');
+  const refresh = s.client.refresh('A').catch(error => error);
+  await s.waitFor('session/snapshot', 1);
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target: s.target('A'), after_cursor: '0', earliest_serviceable: '7' } });
+  const attempts = successAt ?? 3;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const snapshot = await s.waitFor('session/snapshot', attempt);
+    const cursor = String(6 + attempt);
+    s.socket.success(snapshot, { type: 'snapshot', snapshot: s.snapshots.get('A')!, cursor });
+    const subscribe = await s.waitFor('session/subscribe', attempt);
+    expect(subscribe.params).toEqual({ target: s.target('A'), after_cursor: cursor });
+    expect(s.client.getSnapshot().views.A.attachment).toBe('resynchronizing');
+    if (attempt === successAt) s.socket.success(subscribe, { type: 'subscribed', after_cursor: cursor });
+    else s.socket.deliver({ jsonrpc: '2.0', id: subscribe.id, error: { code: -32000, message: 'replay expired', data: { kind: 'resync_required' } } });
+  }
+  const result = await refresh;
+  if (!successAt) expect(result).toBeInstanceOf(Error);
+  expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: String(6 + attempts), attachment: successAt ? 'attached' : 'stale' });
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(attempts);
+  expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(attempts);
+  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/upload', 'session/create'].includes(row.request.method))).toBe(false);
+});
+
+it('registered native replay preceding subscribe ACK advances the cut without enabling controls early', async () => {
+  const s = await create(); emit(s, '1', started); emit(s, '2', open);
+  const authoritative = s.client.getSnapshot().views.A.snapshot!;
+  s.held.add('session/snapshot'); s.held.add('session/subscribe');
+  const refresh = s.client.refresh('A');
+  const snapshot = await s.waitFor('session/snapshot', 1);
+  s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target: s.target('A'), after_cursor: '2', earliest_serviceable: '5' } });
+  s.socket.success(snapshot, { type: 'snapshot', snapshot: authoritative, cursor: '7' });
+  const subscribe = await s.waitFor('session/subscribe', 1);
+  const acknowledgement = s.commit(subscribe); // Native registration precedes its response delivery.
+  emit(s, '3', delta); emit(s, '8', delta); emit(s, '8', delta);
+  expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: '8', attachment: 'resynchronizing' });
+  expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks?.[0]).toMatchObject({ text: 'x' });
+  s.socket.deliver(acknowledgement); await refresh;
+  expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: '8', attachment: 'attached' });
+  expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(1);
 });

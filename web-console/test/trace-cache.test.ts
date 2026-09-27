@@ -233,3 +233,25 @@ it('latest Trace reads its own current page and never reuses the attachment snap
   expect(server.client.getSnapshot().views.A.snapshot).toBe(session);
   expect(server.requests.filter(item => item.request.method === 'session/snapshot')).toHaveLength(0);
 });
+
+it('native TraceChanged coalesces burst reads independently of durable Session updates', async () => {
+  server = new Server(); await server.attached('A');
+  server.held.add('session/trace');
+  let cursor = 0;
+  const emit = (event: import('../../protocol/app-server/v25').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  emit({ type: 'read_domains_updated', transcript: { entries: [] } });
+  expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
+  emit({ type: 'trace_changed' });
+  const first = await server.waitFor('session/trace', 1);
+  for (let i = 0; i < 100; i++) emit({ type: 'trace_changed' });
+  expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
+  server.socket.success(first, { type: 'trace', page: { records: [entry(1)] } });
+  const second = await server.waitFor('session/trace', 2);
+  const observed = new Promise<void>(resolve => { const stop = server.client.subscribe(() => {
+    if (server.client.getSnapshot().views.A.trace?.page.records.some(row => row.id === 'trace:2')) { stop(); resolve(); }
+  }); });
+  server.socket.success(second, { type: 'trace', page: { records: [entry(1), entry(2)] } });
+  await observed;
+  expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
+});

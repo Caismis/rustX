@@ -301,13 +301,16 @@ revision gap/resync. No owner samples a later durable maximum.
 The queue releases one semantic observation batch only after every staged
 Trace-affecting receipt has been acknowledged. Thus a later owner's publication
 cannot advance the durable prefix past an earlier uninstalled transition. Under
-the host mutex the batch folds native state, publishes the ordinary invalidations,
-and advances the represented prefix. `snapshot_cut()` then copies all four: native
+the host mutex the batch folds native state, advances the represented prefix and
+publishes one `TraceChanged` even when Session events were also published. Cursor
+movement is never a proxy for Trace invalidation; `read_domains_updated` does not
+invalidate Trace. `snapshot_cut()` then copies all four: native
 state, cursor, Trace frontier, and the lifecycle evidence used by `trace_updates`.
 Materialization runs outside that mutex. Runtime owners never wait for Trace.
-The projection worker owns only read-model state, the pending queue and the native
-Workflow read model. It cannot retain the host, runtime or durable storage lease,
-even while actively folding; native resource release does not wait for a reader.
+The semantic projection worker owns read-model state, the pending queue and the native
+Workflow read model. It cannot retain the host or runtime. A bounded in-flight durable
+read owns its Store lease outside projection synchronization until the read returns;
+closing delivery never waits for that read and prevents its installation.
 
 The closed classification in `runtime::observation` gates Attempt/Turn/request,
 Assistant/Tool message and execution, compaction, Background, Subagent terminal

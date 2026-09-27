@@ -483,13 +483,21 @@ export class AppServerClient {
       this.setSession(target.session_id, { attachment: 'stale', target: undefined, error: view.deleting ? undefined : 'Session connection closed. Open the Session to inspect its current state.' });
     } else {
       if (value.method === 'session/resyncRequired') {
-        if (this.acquiring.has(target.session_id)) return;
         this.resubscribe.add(target.session_id);
+        if (this.acquiring.has(target.session_id)) {
+          this.setSession(target.session_id, { attachment: 'resynchronizing' });
+          return;
+        }
         void this.refresh(target.session_id).catch(() => {});
         return;
       }
       if (this.acquiring.has(target.session_id)) { this.resubscribe.add(target.session_id); return; } // Server replay owns overlap.
-      if (!view.snapshot || view.cursor === undefined || view.attachment !== 'attached') return;
+      // Native registration may publish replay before its RPC ACK. After the
+      // acquired cut N, an exhausted old registration cannot emit N+1: only
+      // the replacement registration can advance that immutable cursor stream.
+      // Consume its contiguous replay while controls remain resynchronizing.
+      const replaying = view.attachment === 'resynchronizing' && this.refreshes.has(target.session_id) && !this.resubscribe.has(target.session_id);
+      if (!view.snapshot || view.cursor === undefined || (view.attachment !== 'attached' && !replaying)) return;
       const cursor = BigInt(value.params.cursor), previous = BigInt(view.cursor);
       if (cursor <= previous) return;
       if (cursor !== previous + 1n) {
@@ -501,7 +509,7 @@ export class AppServerClient {
       this.setSession(target.session_id, { snapshot, cursor: value.params.cursor,
         history: snapshot.transcript === view.snapshot.transcript ? view.history : refreshTranscript(view.history, snapshot.transcript) });
       this.reconcileInteractions(target.session_id); this.settleSubmissions(target.session_id);
-      if (value.params.event.type === 'trace_changed' || value.params.event.type === 'read_domains_updated') {
+      if (value.params.event.type === 'trace_changed') {
         void this.refreshTraceDomain(target.session_id).catch(() => {});
       }
     }
@@ -836,7 +844,6 @@ export class AppServerClient {
           if (!current()) return;
         }
         this.acquiring.delete(id);
-        if (current()) this.setSession(id, { attachment: 'attached' });
         const replay = this.resubscribe.delete(id);
         if (resync || replay) {
           try { await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed'); }
@@ -846,6 +853,7 @@ export class AppServerClient {
             } else throw error;
           }
         }
+        if (current() && !this.dirty.has(id)) this.setSession(id, { attachment: 'attached' });
       }
     } catch (error) {
       if (current()) { this.acquiring.delete(id); this.resubscribe.add(id); this.setSession(id, { attachment: 'stale', error: String(error) }); }

@@ -278,7 +278,6 @@ impl ClientState {
         pending: &PendingObservations,
         workflows: Option<&crate::runtime::workflow::read_model::WorkflowReadModel>,
     ) {
-        self.projection.begin_read_model_cut();
         self.apply_pending(pending);
         if let Some(workflows) = workflows
             && !pending.has_unpublished()
@@ -370,11 +369,14 @@ pub(crate) struct ClientInner {
     /// Whether the projection worker task was spawned.
     worker_started: AtomicBool,
     worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Joins only the synchronous Store read, never a parked semantic fold.
-    store_reads: Arc<Mutex<()>>,
+    #[cfg(test)]
+    read_domain_hook: Arc<Mutex<Option<ReadDomainHook>>>,
     #[cfg(test)]
     trace_cut_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
+
+#[cfg(test)]
+type ReadDomainHook = Box<dyn FnOnce() + Send>;
 
 /// Root-side publication authority installed into the parent subagent
 /// registry. It is a weak adapter over runtime projection binding, independent
@@ -395,9 +397,6 @@ impl InteractionPublicationAuthority for RootInteractionPublicationAuthority {
 /// which is the projection worker's terminal condition.
 impl Drop for ClientInner {
     fn drop(&mut self) {
-        // Join an in-progress synchronous read cut before releasing storage.
-        // The idle worker holds only a weak Store reference.
-        let _cut = self.store_reads.lock().expect("projection Store read lock");
         self.pending.close();
     }
 }
@@ -417,36 +416,48 @@ impl ClientInner {
                 .as_ref()
                 .map(|runtime| runtime.tool_runtime().workflows()),
         );
-        if !self.pending.has_unpublished() {
-            guard.projection.reconcile_read_domains(self.store.as_ref());
-        }
-        guard.projection.finish_read_model_cut();
         guard
     }
 
-    /// Snapshot repair reads pending authority even if a committed mutation's
-    /// immediate publication failed. Lock projection first: a snapshot must
-    /// never hold native publication while waiting for the host lock.
+    /// Read pending authority outside projection synchronization. Publication
+    /// guards only the durable read; the captured semantic fence prevents a
+    /// completed read from overwriting a later mailbox observation.
     fn lock_snapshot_state(&self) -> Result<MutexGuard<'_, ClientState>, RuntimeClientError> {
-        let mut state = self.lock_state();
-        if let Some(runtime) = &self.runtime {
-            runtime
-                .tool_runtime()
-                .mailbox()
-                .with_pending_snapshot(|items| {
-                    // A background/native semantic batch can commit before its
-                    // installation publishes. Preserve the complete preceding cut.
-                    if !self.pending.has_unpublished() {
-                        // Never consult Workflow owners under this publication cut.
-                        state.apply_pending(&self.pending);
-                        state.projection.repair_pending(items);
-                    }
-                })
-                .map_err(|error| RuntimeClientError::RuntimeFailure {
-                    message: format!("durable pending snapshot failed: {error}"),
-                })?;
+        loop {
+            let fence = self.lock_state().projection.read_domain_fence();
+            let items = if let Some(runtime) = &self.runtime {
+                runtime
+                    .tool_runtime()
+                    .mailbox()
+                    .with_pending_snapshot(|items| items)
+                    .map_err(|error| RuntimeClientError::RuntimeFailure {
+                        message: format!("durable pending snapshot failed: {error}"),
+                    })?
+            } else {
+                None
+            };
+            let mut state = self.lock_state();
+            if self.pending.has_unpublished() {
+                return Ok(state);
+            }
+            if let Some(items) = items
+                && state.projection.read_domain_fence() == fence
+            {
+                state.projection.repair_pending(items);
+            }
+            state.projection.retry_failed_read();
+            let Some(cut) = state.projection.read_domain_cut() else {
+                return Ok(state);
+            };
+            drop(state);
+            let read = cut.read(self.store.as_ref());
+            let mut state = self.lock_state();
+            if !self.pending.has_unpublished()
+                && state.projection.install_read_domains(cut, read, true)
+            {
+                return Ok(state);
+            }
         }
-        Ok(state)
     }
 
     /// A bound live projection can expose interactions to a future client.
@@ -459,17 +470,16 @@ impl ClientInner {
     /// the resync boundary for an inspection attachment: no event is replayed
     /// into the live cursor ring, and no previously materialized presentation
     /// value is treated as recovery input.
-    fn refresh_durable_projection(
-        &self,
-        state: &mut ClientState,
-    ) -> Result<(), RuntimeClientError> {
+    fn refresh_durable_projection(&self) -> Result<(), RuntimeClientError> {
         debug_assert!(self.read_only);
-        state.projection =
+        let projection =
             durable_projection(self.store.as_ref(), self.replay_limit).map_err(|error| {
                 RuntimeClientError::RuntimeFailure {
                     message: error.to_string(),
                 }
             })?;
+        let mut state = self.lock_state();
+        state.projection = projection;
         // Replacing the projection invalidates the old subscriber registration
         // just as a fresh attachment would. The caller's next
         // `subscribe_events` request installs a cursor against this rebuilt
@@ -498,7 +508,8 @@ impl ClientInner {
     ///
     /// The worker owns only the projection mutex, pending observations and the
     /// native Workflow read model. It never upgrades the host and cannot retain
-    /// runtime, catalog, executor or durable storage authority even during a fold.
+    /// runtime, catalog or executor authority. One in-flight blocking read may
+    /// retain storage until that read returns, independently of delivery shutdown.
     /// Dropping the last host closes the pending queue immediately; that close
     /// wakes and terminates the worker independently of native resource release.
     pub(crate) fn ensure_worker(self: &Arc<Self>) {
@@ -512,7 +523,6 @@ impl ClientInner {
         }
         let state = self.state.clone();
         let store = Arc::downgrade(&self.store);
-        let store_reads = Arc::clone(&self.store_reads);
         let pending = Arc::clone(&self.pending);
         let workflow_state = self
             .runtime
@@ -521,7 +531,10 @@ impl ClientInner {
         let mut workflows = workflow_state
             .as_ref()
             .map(crate::runtime::workflow::read_model::WorkflowReadModel::subscribe);
+        #[cfg(test)]
+        let read_domain_hook = self.read_domain_hook.clone();
         let worker = tokio::spawn(async move {
+            let mut read = None;
             loop {
                 tokio::select! {
                     () = pending.wait() => {},
@@ -531,33 +544,62 @@ impl ClientInner {
                             None => std::future::pending::<()>().await,
                         }
                     } => {},
+                    result = async {
+                        match &mut read {
+                            Some(task) => task.await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        read = None;
+                        if let Ok((cut, domains)) = result {
+                            let mut guard = state.lock().expect("runtime client host lock poisoned");
+                            guard.repair_semantics(&pending, workflow_state.as_ref());
+                            if !pending.is_closed() && !pending.has_unpublished() {
+                                guard.projection.install_read_domains(cut, domains, true);
+                            }
+                        }
+                    },
                 }
-                let mut guard = state.lock().expect("runtime client host lock poisoned");
                 if pending.is_closed() {
                     break;
                 }
-                guard.repair_semantics(&pending, workflow_state.as_ref());
-                {
-                    let _read = store_reads.lock().expect("projection Store read lock");
-                    if pending.is_closed() {
-                        break;
+                let cut = {
+                    let mut guard = state.lock().expect("runtime client host lock poisoned");
+                    guard.repair_semantics(&pending, workflow_state.as_ref());
+                    if pending.has_unpublished() {
+                        None
+                    } else {
+                        guard.projection.read_domain_cut()
                     }
+                };
+                if read.is_none()
+                    && let Some(cut) = cut
+                {
                     let Some(store) = store.upgrade() else {
                         break;
                     };
-                    if !pending.has_unpublished() {
-                        guard.projection.reconcile_read_domains(store.as_ref());
-                    }
+                    // One bounded read in flight. It owns no host/runtime or
+                    // projection lock; semantic delivery continues while it waits.
+                    #[cfg(test)]
+                    let hook = read_domain_hook.lock().unwrap().take();
+                    read = Some(tokio::task::spawn_blocking(move || {
+                        #[cfg(test)]
+                        if let Some(hook) = hook {
+                            hook();
+                        }
+                        (cut, cut.read(store.as_ref()))
+                    }));
                 }
-                guard.projection.finish_read_model_cut();
             }
+            // Closing delivery never joins blocking presentation I/O. A running
+            // read releases its Store handle on completion and cannot install.
             #[cfg(test)]
             pending.signal_worker_exit();
         });
         *self.worker.lock().expect("projection worker mutex") = Some(worker);
     }
 
-    /// Residency shutdown joins the observer before releasing resource authority.
+    /// Residency shutdown joins semantic delivery, never blocking presentation I/O.
     /// Closing the leaf queue ends read-model delivery without retaining the host.
     pub(crate) async fn drain_projection(&self) -> Result<(), tokio::task::JoinError> {
         self.pending.close();
@@ -637,14 +679,14 @@ impl ClientInner {
         let read_only_attachment = self.read_only || read_only_attachment;
         self.ensure_session_runtime_live()?;
         self.ensure_worker();
+        if self.read_only {
+            self.refresh_durable_projection()?;
+        }
         let mut state = self.lock_snapshot_state()?;
         if !read_only_attachment && let Some(existing) = &state.control_attachment {
             return Err(RuntimeClientError::AttachmentInUse {
                 existing_attachment_id: existing.attachment_id.clone(),
             });
-        }
-        if self.read_only {
-            self.refresh_durable_projection(&mut state)?;
         }
         let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
         let next_attachment_seq = state
@@ -1000,10 +1042,10 @@ impl ClientInner {
             });
         }
         self.ensure_session_runtime_live()?;
-        let mut state = self.lock_snapshot_state()?;
         if self.read_only {
-            self.refresh_durable_projection(&mut state)?;
+            self.refresh_durable_projection()?;
         }
+        let state = self.lock_snapshot_state()?;
         let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
         drop(state);
         self.materialize_trace(&mut snapshot, through, records)?;
@@ -1020,16 +1062,25 @@ impl ClientInner {
         if let Some(hook) = self.trace_cut_hook.lock().unwrap().take() {
             hook();
         }
-        super::response::decorate_through(self.store.as_ref(), &mut snapshot.transcript, through)
+        // Live Session domains were installed at the captured client cursor.
+        // Only historical inspection enriches here; a Trace read must never
+        // silently change live Session state after its cursor was captured.
+        if self.read_only {
+            super::response::decorate_through(
+                self.store.as_ref(),
+                &mut snapshot.transcript,
+                through,
+            )
             .map_err(|error| RuntimeClientError::RuntimeFailure {
-            message: error.to_string(),
-        })?;
-        snapshot.context.last_request_occupancy =
-            crate::context::occupancy::read(self.store.as_ref(), through).map_err(|error| {
-                RuntimeClientError::RuntimeFailure {
-                    message: error.to_string(),
-                }
+                message: error.to_string(),
             })?;
+            snapshot.context.last_request_occupancy =
+                crate::context::occupancy::read(self.store.as_ref(), through).map_err(|error| {
+                    RuntimeClientError::RuntimeFailure {
+                        message: error.to_string(),
+                    }
+                })?;
+        }
         snapshot.trace = super::trace::TraceProjection::through(self.store.as_ref(), through)
             .page(None, super::trace::TRACE_PAGE_LIMIT)
             .map_err(|_| RuntimeClientError::RuntimeFailure {
@@ -1999,9 +2050,10 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
-            store_reads: Arc::new(Mutex::new(())),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
+            #[cfg(test)]
+            read_domain_hook: Arc::new(Mutex::new(None)),
         });
         // No authoritative runtime can enqueue observations into this host,
         // but using the normal worker setup keeps attachment/subscription
@@ -2130,9 +2182,10 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
-            store_reads: Arc::new(Mutex::new(())),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
+            #[cfg(test)]
+            read_domain_hook: Arc::new(Mutex::new(None)),
         });
         if let Some(runtime) = inner.runtime.as_ref() {
             runtime.set_interaction_provider_available(true);
@@ -5833,6 +5886,35 @@ mod tests {
             settled.trace_updates[0].state,
             crate::runtime_client::trace::TraceState::Completed
         );
+    }
+
+    #[tokio::test]
+    async fn blocked_read_materialization_does_not_own_shutdown_or_projection_drain() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let (finished, finished_rx) = tokio::sync::oneshot::channel();
+        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
+            entered.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let _ = finished.send(());
+        }));
+        inner.pending.push(ConversationObservation::Event {
+            attempt_id: AttemptId::new("read-cut"),
+            event: RuntimeEvent::TurnStarted,
+        });
+        entered_rx.await.unwrap(); // The derived read is blocked, with one Tokio worker.
+        inner.pending.push(ConversationObservation::Shutdown);
+        assert!(inner.lock_state().projection.snapshot_ref().shutting_down);
+        assert!(matches!(
+            inner.shutdown().await.unwrap(),
+            RuntimeClientResult::ShutdownCompleted
+        ));
+        inner.drain_projection().await.unwrap(); // Must finish before releasing Store work.
+        assert!(inner.pending.is_closed());
+        release.send(()).unwrap();
+        finished_rx.await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

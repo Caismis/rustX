@@ -13,21 +13,34 @@ was retained. Current contracts: [Chat](../../web-console/CHAT.md),
 AppServerClient attachment/correlation/generation ownership validates the complete
 target before folding exact cursor C+1. Duplicates do nothing; gaps stop incremental
 continuation. Snapshot acquisition retains no browser event queue: the bounded native
-replay ring supplies events after the acquired cursor. Repeated resync coalesces.
+replay ring supplies events after the acquired cursor. A resync received during acquisition marks the old continuation untrusted and
+retains the subscription handoff requirement. The snapshot installs its exact cursor;
+attachment becomes `attached` only after the required subscribe succeeds.
 If the replay ring moves during recovery, at most three acquisitions are attempted;
 a failed acquisition leaves stale controls and requires a later recovery. No write
 is retried. Same-Session replacement retires outstanding work.
 
-Native durable read cuts publish `read_domains_updated` only when their decorated
-transcript/occupancy changes, carrying native Todo as well. Publication suffixes do
-not dirty or reconstruct these domains. Canonical messages, transcript decorations,
-statistics and context remain native facts. Attempt settlement follows that cut.
-Exact Tool assembly uses `arguments_json`, including native number spelling. Trace
-has its own page/lifecycle read (`records` / `page.updates`), including older loaded
-identities, and cannot invalidate Chat subscriptions. A worker holds no Store lease
-while idle or while folding semantic observations. A separate short read guard joins
-only actual synchronous Store reads on release, preserving existing parked-fold and
-physical-ownership contracts.
+Native durable read cuts publish `read_domains_updated` only when the decorated
+transcript/statistics/occupancy changes, carrying current native Todo as well.
+`AttemptSettled` ends semantic execution; it does **not** await durable enrichment.
+The later read-domain event and Trace invalidation are presentation publications,
+not execution ownership. See [the repaired cut and invalidation contract](read-domains.md).
+
+The projection worker folds queued semantics under the host mutex, captures the
+read revision and represented Journal frontier, then releases the mutex. At most
+one blocking read is in flight. Its completion is installed only after queued
+semantics are folded again, the cut still matches and no native publication is
+outstanding. Installation and the event cursor allocation share the projection
+mutex. Stale reads are retired and the current dirty cut is retried. Requests that
+need authoritative snapshots perform finite read/validate cuts outside the
+mutex too. Closing delivery never joins blocking presentation I/O; the read owns
+only its Store lease, which it releases on completion, and cannot install after close.
+
+`PendingObservations` owns the closed Trace-anchor vocabulary and represented
+JournalBatch frontier. Every released successful JournalBatch emits one
+`TraceChanged`, independently of Session events in that same batch. Web refreshes
+Trace only on that signal; `read_domains_updated` is not a Trace surrogate.
+Exact Tool assembly still uses `arguments_json`, including native number spelling.
 
 Committed native content wins over transient concatenation. A single keyed
 MessageSeat → Message → AssistantMessage path preserves the message DOM and reasoning
@@ -58,7 +71,7 @@ ownership are unchanged.
 | D, gap/resync/failure | Same file: `gap retires continuation and repeated resync coalesces; snapshot cursor joins replay`; `failed snapshot remains stale until explicit recovery and never replays a mutation`. TUI `live-refresh.test.ts`: gated/coalesced gap and failed-repair retirement. |
 | E, snapshot/event overlap | Same file: `an explicit snapshot overlapping events installs its cut then replays only later cursors`; `notifications preceding the attach response join the returned cursor through native replay`. Native `snapshot_cursor_race_snapshot_wins` and its event-first companion. |
 | F, stale connection/attachment/Conversation | `incremental-client.test.ts`: same-Session replacement; existing `client.test.ts` generation/attachment/branch fencing; TUI `app-server-client.test.ts` stale incarnation/attachment and pending-read closure tests. |
-| G, real production client RPC count | `incremental-client.test.ts` drives actual AppServerClient; `incremental-performance.test.tsx` and browser `e2e/incremental.spec.ts` drive AppServerClient + ConversationLive, count actual request records. |
+| G, real production client RPC count | `incremental-client.test.ts` drives actual AppServerClient; `incremental-performance.measurement.tsx` and browser `e2e/incremental.spec.ts` drive AppServerClient + ConversationLive, count actual request records. |
 | H, single frame writer | `scroll.test.tsx`: `one frame owns 10 observer deliveries and 5 React updates; newer user intent wins`; one correction, and no write when position is already correct. |
 | I, history reading | Same test: 100 content updates cause no further writes; browser fixture independently checks zero bottom-follow during its last 100 text deltas. |
 | J, return to tail | `scroll.test.tsx`: natural return restores following; explicit latest delegates to the same frame owner. |
@@ -74,8 +87,17 @@ to make this implementation pass.
 
 ## Performance and visual evidence
 
+The normal `pnpm test` lane contains deterministic correctness contracts. The exact
+long fixture runs separately with `pnpm test:issue-420-performance`, using one worker
+and the existing timeout. This does not alter normal-suite concurrency, fixture
+content or assertions. Export its counters with
+`RUSTX_PERFORMANCE_OUTPUT=/tmp/issue420-performance.json pnpm test:issue-420-performance`.
+The existing Chromium fixture remains in browser acceptance. The repair rerun is
+recorded in [validation.md](validation.md); prior before/after evidence retains its
+original source and environment attribution.
+
 Fixture: `200-long-reasoning-tool-v3`, checked in as
-`web-console/test/incremental-performance.test.tsx` (jsdom geometry) and
+`web-console/test/incremental-performance.measurement.tsx` (jsdom geometry) and
 `web-console/test/fixtures/incremental.{html,tsx}` (Chromium layout), exercised by
 `web-console/test/e2e/incremental.spec.ts`. Both run the production client and React
 components. It emits one Attempt, reasoning, 200 long text deltas, Tool start/argument
@@ -99,7 +121,7 @@ counts describe this subtree and fixture, not total application performance.
 Reproduction (Node 24.21.0, pnpm 11.13.1, Linux x86_64):
 
 ```sh
-RUSTX_PERFORMANCE_OUTPUT=/tmp/measurement.json pnpm --dir web-console test test/incremental-performance.test.tsx
+RUSTX_PERFORMANCE_OUTPUT=/tmp/measurement.json pnpm --dir web-console test:issue-420-performance
 cd web-console
 RUSTX_E2E_PREVIEW_PORT=15473 RUSTX_E2E_FIXTURE_PORT=15474 CONTAINER_ENGINE=podman \
   bash scripts/browser-tests.sh incremental.spec.ts --output=/tmp/issue420-browser

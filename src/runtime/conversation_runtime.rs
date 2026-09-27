@@ -10764,7 +10764,7 @@ mod tests {
             "select fail -> select success -> adopt fail -> select fail"
         );
 
-        let (snapshot, _) = host.snapshot().expect("client snapshot");
+        let (snapshot, snapshot_cursor) = host.snapshot().expect("client snapshot");
         assert_eq!(
             snapshot
                 .durability_failure
@@ -10790,6 +10790,20 @@ mod tests {
             runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::DurabilityFailed { .. })
         ));
+        // Failure closes semantic admission immediately. Durable presentation
+        // of the already accepted input may finish afterwards, independently.
+        let mut cursor = failure.cursor.get();
+        while cursor < snapshot_cursor.get() {
+            let crate::runtime_client::EventDelivery::Event(event) = subscription.try_next() else {
+                panic!("snapshot cut must be replayable");
+            };
+            cursor += 1;
+            assert_eq!(event.cursor.get(), cursor);
+            assert!(matches!(
+                event.event,
+                crate::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. }
+            ));
+        }
         assert!(matches!(
             subscription.try_next(),
             crate::runtime_client::EventDelivery::Pending

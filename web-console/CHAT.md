@@ -9,8 +9,10 @@ mutation replay exists in this fold.
 Native `read_domains_updated` publishes the bounded decorated transcript, statistics,
 context occupancy and Todo view when durable observations change these domains.
 Publication suffixes do not dirty these domains. Native projection/cursor publication
-remains under the host lock. Attempt settlement is published after the cut's derived
-facts, preserving terminal order. Trace remains a separate read capability. `session/trace.records` requests bounded
+remains under the host lock, but blocking Store reads run outside it and install
+only after their revision/frontier fence validates. Attempt settlement ends execution
+independently of downstream durable enrichment. Trace remains a separate read capability.
+Only `trace_changed` triggers a Trace repair; `read_domains_updated` does not. `session/trace.records` requests bounded
 lifecycle repairs returned as `page.updates`, so older loaded records do not require
 a Session snapshot. `tool_call_assembled.arguments_json` preserves native JSON number
 spelling exactly instead of asking JavaScript to reserialize provider arguments.
@@ -18,7 +20,9 @@ spelling exactly instead of asking JavaScript to reserialize provider arguments.
 Initial attachment carries a snapshot plus cursor. Snapshot recovery discards unsafe
 incremental continuation; the native bounded replay owns events arriving during the
 read. After installing C, subscribe after C and consume C+1 onward. Events at/below C
-are no-ops. Repeated resync during acquisition coalesces; read failures leave controls
+are no-ops. Acquisition-time resync retains the required subscribe and marks the old
+continuation untrusted; attachment returns to `attached` after that subscribe succeeds.
+Repeated resync coalesces; read failures leave controls
 stale. Replacement clears acquisition work and existing exact target/generation fences
 reject late replies. Explicit readback operations never replay a write.
 
