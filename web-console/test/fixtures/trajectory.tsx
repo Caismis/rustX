@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
-import { structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v27';
+import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
+import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v28';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
@@ -41,7 +41,23 @@ const renumber = params.has('renumber');
 const structure = params.has('structure'); const toolFirst = params.has('tool');
 const mixed = params.get('mixed');
 const mixedRecords = mixed ? [request(0, mixed === 'prompt' ? 'changed' : 'previous_unavailable', mixed === 'prompt' ? 'previous_unavailable' : 'changed')] : undefined;
-const snapshot = { records: mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
+const chrome = params.has('chrome');
+const initialOnly = request(3, 'initial', 'unchanged');
+initialOnly.request!.context_additions = [];
+const chromeRecords = [
+  traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' } }),
+  traceRecord(2, { kind: 'step', request: null }), initialOnly,
+  traceRecord(10, { kind: 'attempt', request: null, location: { attempt_id: 'empty' } }),
+  traceRecord(11, { kind: 'step', request: null, location: { attempt_id: 'empty', step_id: 'empty-step' } }),
+  traceRecord(90, { kind: 'attempt', request: null, location: { attempt_id: 'navigation' } }),
+  traceRecord(91, { kind: 'user', request: null, location: { attempt_id: 'navigation' } }),
+  traceRecord(92, { kind: 'step', request: null, location: { attempt_id: 'navigation', step_id: 'navigation-step' } }),
+  ...Array.from({ length: long ? 150 : 60 }, (_, n) => traceRecord(100 + n, { location: { attempt_id: 'navigation', step_id: 'navigation-step' } })),
+];
+const ordered = params.has('ordered') || params.has('compact');
+const orderedRecords = [...(params.has('compact') ? manyStepRecords() : orderedStepRecords()), ...Array.from({ length: 150 }, (_, n) => traceRecord(800 + n, { location: { attempt_id: 'tail', step_id: 'tail-step' } }))];
+const stepLess = params.has('step-less');
+const snapshot = { records: stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
 function Fixture() {
   const [cache, setCache] = useState(() => replaceTrace(snapshot));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
@@ -53,7 +69,7 @@ function Fixture() {
     </header>
     <Trajectory cache={cache} onSelect={id => setCache(current => selectTrace(current, id))}
       latest={() => setCache(current => replaceTrace(snapshot, current))}
-      loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: renumber ? [traceRecord(50, { location: { attempt_id: 'older-attempt', step_id: 'old-step' } })] : Array.from({ length: 32 }, (_, n) => structure && n < 2 ? traceRecord(n + 50, { kind: n === 0 ? 'attempt' : 'step', request: null, location: n === 0 ? { attempt_id: 'attempt-a' } : { attempt_id: 'attempt-a', step_id: '1' } }) : request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
+      loadEarlier={() => { setPages(n => n + 1); setCache(current => prependTrace(current, { records: stepLess ? stepLessRecords().slice(0, 2) : ordered ? [traceRecord(650, { kind: 'assistant', request: null, location: { attempt_id: 'ordered-turn', step_id: 'z-first' }, preview: text('Earlier exact Step content') })] : chrome ? [request(50, 'changed', 'unchanged')] : renumber ? [traceRecord(50, { location: { attempt_id: 'older-attempt', step_id: 'old-step' } })] : Array.from({ length: 32 }, (_, n) => structure && n < 2 ? traceRecord(n + 50, { kind: n === 0 ? 'attempt' : 'step', request: null, location: n === 0 ? { attempt_id: 'attempt-a' } : { attempt_id: 'attempt-a', step_id: '1' } }) : request(n + 50, 'changed', 'unchanged')), next_cursor: null })); }}
       onLoadDetail={id => {
         setReads(n => n + 1);
         setCache(current => {

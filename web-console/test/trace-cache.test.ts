@@ -243,7 +243,7 @@ it('native TraceChanged coalesces burst reads independently of durable Session u
   server = new Server(); await server.attached('A');
   server.held.add('session/trace');
   let cursor = 0;
-  const emit = (event: import('../../protocol/app-server/v27').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  const emit = (event: import('../../protocol/app-server/v28').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
   emit({ type: 'read_domains_updated', transcript: { entries: [] } });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
   emit({ type: 'trace_changed' });
@@ -285,4 +285,16 @@ it('overlapping snapshot supersedes paging and unchanged pending detail without 
   server.held.delete('session/traceDetail');
   await server.client.loadTraceDetail('A', 'trace:10');
   expect(server.client.getSnapshot().views.A.trace!.details['trace:10'].detail).toEqual(detail(10));
+});
+
+it('421: Web consumes the generated bounded Tool vocabulary through the actual client', async () => {
+  const { fixtures } = await import('../../protocol/app-server/fixtures');
+  const fixture = fixtures.find(value => 'id' in value && value.id === 'trace-tool-summary');
+  if (!fixture || !('result' in fixture) || !fixture.result || fixture.result.type !== 'trace') throw new Error('missing native Tool fixture');
+  const page = JSON.parse(JSON.stringify(fixture.result.page));
+  server = new Server(); server.snapshots.set('A', { ...snapshot(), trace: page });
+  await server.attached('A');
+  const tool = server.client.getSnapshot().views.A.trace!.page.records[0]!.tool!;
+  expect(tool.arguments).toEqual({ text: '{"command":"bounded input', truncated: true });
+  expect(server.requests.filter(item => item.request.method === 'session/traceDetail')).toHaveLength(0);
 });

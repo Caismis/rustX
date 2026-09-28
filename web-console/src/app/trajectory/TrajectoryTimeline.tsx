@@ -22,7 +22,6 @@ import {
   type TrajectoryTimeRange,
   type TrajectoryTimelineMode,
 } from './timeline';
-import { Button } from '../../presentation/primitives/Button';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import css from './TrajectoryTimeline.module.css';
 
@@ -264,26 +263,18 @@ function TimelineInteraction({
 
   return (
     <section className={css.root} aria-label={tx('trajectory:trajectory-timeline.timing-overview')}>
-      <div className={css.legend}>
-        <span>{tx('trajectory:trajectory-timeline.overview')}</span>
-        <small>{tx('trajectory:trajectory-timeline.loaded-window-drag-to-focus-wheel-to-zoom')}</small>
-        <div className={css.controls}>
-          <Button size="sm" aria-label={tx('trajectory:trajectory-timeline.zoom-timeline-in')} onClick={() => {
-            const next = Math.max(MINIMUM_ZOOM_SPAN, span * .8);
-            if (next < span) setViewport({ start: domain.start, end: domain.start + next });
-          }}>+</Button>
-          <Button size="sm" aria-label={tx('trajectory:trajectory-timeline.reset-timeline')} onClick={() => { setViewport(null); onRangeChange(null); }}>{tx('trajectory:trajectory-timeline.reset')}</Button>
-        </div>
-      </div>
       <div
         ref={rootRef}
         className={css.canvas}
+        title={tx('trajectory:ledger.timeline-help')}
         tabIndex={0}
         aria-label={tx('trajectory:trajectory-timeline.timeline-navigation-arrow-keys-pan-escape-clears-focus')}
         data-domain-start={domain.start}
         data-domain-end={domain.end}
         onKeyDown={event => {
           if (event.key === 'Escape') { onRangeChange(null); return; }
+          if (event.key === 'Home') { setViewport(null); onRangeChange(null); return; }
+          if (event.key === '+') { const next = Math.max(MINIMUM_ZOOM_SPAN, span * .8); if (next < span) setViewport({ start: domain.start, end: domain.start + next }); return; }
           if (event.target !== event.currentTarget || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
           event.preventDefault();
           const start = Math.max(model.start, Math.min(model.end - span, domain.start + span * (event.key === 'ArrowLeft' ? -.1 : .1)));

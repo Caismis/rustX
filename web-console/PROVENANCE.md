@@ -1052,3 +1052,32 @@ independent rustX work using the existing Harness-derived composer and primitive
 Local hashes/import closures are refreshed; every upstream revision is unchanged.
 Codex startup source was inspected for ownership patterns at
 `985cf47a4eb6084b2ff6b30ebdb1216acda85bb4`; no source was copied or vendored.
+
+## #421 semantic execution ledger convergence
+
+Inspected read-only at approved Harness commit
+`477b4f420553e8a52c2fbccc464d7561b239c443`. The complete source → pattern → native
+owner → adaptation/rejection mapping is in
+[`docs/trajectory-harness-convergence.md`](../docs/trajectory-harness-convergence.md#pinned-harness-mapping).
+
+`TrajectoryTable.tsx` and its CSS supply semantic-row chrome, fold retention,
+input/result tracks and compact Inspector geometry. `trajectory-virtual-rows.ts`
+supplies measurable seat separation; rustX deliberately rejects its attachment
+of request-only separators to the next row by position. Exact Request ownership
+selects System, Context or a 10px native marker seat. `TrajectoryTurn` and
+`TrajectoryGroupHeader` hierarchy is retained as native metadata, not standalone
+content rows. `TrajectoryTimeline.module.css` supplies three compact lanes;
+native Request timing, epoch/revision and gesture ownership remain rustX's.
+Search borrows structural vocabulary, never Harness heavyweight detail indexing.
+
+New `TrajectoryLedger.tsx` and `TrajectoryRow.tsx` are bounded descendants with
+separate viewport and semantic/chrome responsibilities. No Harness runtime,
+request inference, manual resize system, subtool authority or canonical history
+is imported. Earlier per-file baselines remain; additional-source hashes identify
+this exact approved source and local hashes/import closure reflect App Server v28.
+
+The PR #424 contract repair keeps the pinned Harness revision above. Exact
+record membership repairs JSON-null Step ownership in the shared projection;
+local source hashes and import closures now reflect the mandatory v28 vocabulary.
+The #409/#411 v27 descriptions above are historical audit records. The full
+pinned-container browser acceptance passed without screenshot baseline changes.

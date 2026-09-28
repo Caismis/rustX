@@ -155,13 +155,45 @@ fn closed_peer_is_a_channel_failure() {
 }
 
 #[test]
+fn delivery_action_requires_strictly_positive_remaining_budget() {
+    let deadline = std::time::Instant::now();
+    let tick = std::time::Duration::from_nanos(1);
+    assert_eq!(
+        super::control_write_remaining(deadline.checked_sub(tick).unwrap(), deadline),
+        Ok(tick)
+    );
+    for now in [deadline, deadline + tick] {
+        assert_eq!(
+            super::control_write_remaining(now, deadline),
+            Err("control frame delivery deadline expired".to_owned())
+        );
+    }
+}
+
+#[test]
 fn expired_budget_never_attempts_another_write() {
     let mut frame = super::FrameWriter::new(MSG_PROCESS_CONTROL_FAILURE, b"failure").unwrap();
+    let mut sends = 0;
+    let mut waits = 0;
+    // A monotonic clock sample inside complete is equal to or later than this
+    // deadline. Both cases must expire; no clock tick needs to elapse.
+    let deadline = std::time::Instant::now();
     let result = frame.complete(
-        |_| panic!("expired writer must not send"),
-        |_| panic!("expired writer must not wait"),
-        std::time::Instant::now(),
+        |bytes| {
+            sends += 1;
+            Ok(bytes.len())
+        },
+        |_| {
+            waits += 1;
+            Ok(())
+        },
+        deadline,
     );
-    assert!(result.unwrap_err().contains("deadline"));
+    assert_eq!(
+        result,
+        Err("control frame delivery deadline expired".to_owned())
+    );
+    assert_eq!(sends, 0);
+    assert_eq!(waits, 0);
     assert_eq!(frame.offset, 0);
 }

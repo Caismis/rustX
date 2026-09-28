@@ -121,14 +121,11 @@ impl TraceProjection<'_> {
                 tool_call_id,
                 tool_id,
             } => {
-                if let Some(tool) = tool.as_mut() {
-                    tool.name
-                        .clone_from(&self.tool_call_name(anchor, tool_call_id, tool_id)?);
-                    if preview.is_none()
-                        && let Some(name) = tool.name.as_deref()
-                    {
-                        preview = Some(TracePreview::of(name));
-                    }
+                if let Some(tool) = tool.as_mut()
+                    && let Some((_, call)) = self.step_tool_call(anchor, tool_call_id, tool_id)?
+                {
+                    tool.arguments = Some(TracePreview::of_json(&call.arguments));
+                    tool.name = Some(call.name);
                 }
             }
             _ => {}
@@ -179,22 +176,6 @@ impl TraceProjection<'_> {
                 E::ModelRequestFailed { error, .. } => Some(error.kind),
                 _ => None,
             }))
-    }
-
-    /// The recorded model-facing name of one started Tool call.
-    ///
-    /// Read from the canonical Assistant proposal in the same logical Step,
-    /// matched on both the call identity and the Tool identity, so a reused
-    /// provider call id in another step cannot supply a name here.
-    pub(super) fn tool_call_name(
-        &self,
-        anchor: &RuntimeEventEnvelope,
-        call_id: &crate::runtime::identity::ToolCallId,
-        tool_id: &crate::runtime::identity::ToolId,
-    ) -> Result<Option<String>, ConversationStoreError> {
-        Ok(self
-            .step_tool_call(anchor, call_id, tool_id)?
-            .map(|(_, call)| call.name))
     }
 }
 

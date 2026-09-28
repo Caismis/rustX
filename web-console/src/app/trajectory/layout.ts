@@ -1,7 +1,7 @@
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v27';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v28';
 
 export type TrajectoryFacet = 'Summary' | 'System Prompt' | 'Diff' | 'Context' | 'Tools' | 'Options' | 'Usage' | 'Timing' | 'Native' | 'Content' | 'Thinking' | 'Raw' | 'Input' | 'Code' | 'Result' | 'Schema' | 'Artifacts';
 export interface TrajectorySelection {
@@ -230,8 +230,9 @@ export function matchedRecordIds(items: readonly TrajectoryDisplayItem[], matche
   return owners;
 }
 
-/** Search bypasses both collapse policies. It never performs a read. */
-export function visibleItems(tx: Translate, items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], attempts: ReadonlySet<string>, calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
+/** Search bypasses Tool-call folding; ledgerRows independently bypasses Turn
+ * folding for the same query. Neither projection performs a read. */
+export function visibleItems(tx: Translate, items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
   if (matches) {
     const owners = matchedRecordIds(items, matches)!;
     return items.filter(item => isInspectable(item) ? matches.has(item.display_key)
@@ -242,8 +243,8 @@ export function visibleItems(tx: Translate, items: readonly TrajectoryDisplayIte
   for (const owner of calls) for (const record of matching.get(owner) ?? []) hidden.add(record.id);
   return items.flatMap<TrajectoryDisplayItem>(item => {
     if (item.type === 'HistoryBoundary') return [item];
-    const attempt = isInspectable(item) ? item.record.location.attempt_id : item.attempt_id;
-    if (item.type !== 'TurnHeader' && attempt != null && attempts.has(attempt)) return [];
+    // Turn folding belongs to the semantic ledger projection, where System
+    // cells and the first main row remain visible with their native chrome.
     if (item.type === 'RecordRow' && hidden.has(item.owner_record_id)) return [];
     if (item.type === 'RecordRow' && calls.has(item.owner_record_id) && item.record.calls.length) {
       const executions = matching.get(item.owner_record_id) ?? [];
@@ -280,6 +281,123 @@ export function preferredStructure(items: readonly TrajectoryDisplayItem[], prev
     && (item.type !== 'GroupHeader' || previous.type !== 'GroupHeader' || item.step_id === previous.step_id)
     );
 }
-export function preferredDisplayItem(items: readonly TrajectoryDisplayItem[], previous: FocusableDisplayItem): FocusableDisplayItem | undefined {
-  return isInspectable(previous) ? preferredItem(items, previous.owner_record_id, previous) : preferredStructure(items, previous);
+
+/** A measurable ledger seat. Structural inspection targets are metadata, never
+ * ordinary content rows. All relationships are resolved here, before rendering. */
+export interface TrajectoryLedgerRow {
+  display_key: string;
+  kind: 'semantic' | 'marker' | 'structure' | 'summary' | 'history';
+  height: 30 | 20 | 10;
+  item?: InspectableDisplayItem;
+  turn?: Extract<StructuralDisplayItem, { type: 'TurnHeader' }>;
+  steps: Extract<StructuralDisplayItem, { type: 'GroupHeader' }>[];
+  request?: Extract<InspectableDisplayItem, { type: 'RequestBoundary' }>;
+  turnStart: boolean;
+  stepMarkers: Extract<StructuralDisplayItem, { type: 'GroupHeader' }>[];
+  summary?: string;
+}
+
+export function ledgerRows(tx: Translate, projection: TrajectoryProjection, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {
+  const turns = new Map<string, Extract<StructuralDisplayItem, { type: 'TurnHeader' }>>();
+  const steps = new Map<string, Extract<StructuralDisplayItem, { type: 'GroupHeader' }>>();
+  const requests = new Map<string, Extract<InspectableDisplayItem, { type: 'RequestBoundary' }>>();
+  for (const item of items) {
+    if (item.type === 'TurnHeader') turns.set(item.attempt_id, item);
+    if (item.type === 'GroupHeader' && item.kind === 'step') steps.set(displayKey(item.attempt_id, item.step_id), item);
+    if (isInspectable(item) && item.record.request) {
+      const marker = cellsOf(tx, item.record).find((cell): cell is Extract<InspectableDisplayItem, { type: 'RequestBoundary' }> => cell.type === 'RequestBoundary')!;
+      requests.set(item.owner_record_id, marker);
+    }
+  }
+  const cells = items.filter(isInspectable);
+  const requestSeats = new Map<string, string>();
+  for (const [owner, marker] of requests) {
+    const owned = cells.filter(cell => cell.owner_record_id === owner);
+    requestSeats.set(owner, (owned.find(cell => cell.type === 'SystemPromptCell') ?? owned.find(cell => cell.type === 'ContextRow') ?? marker).display_key);
+  }
+  const seats: TrajectoryLedgerRow[] = items.flatMap<TrajectoryLedgerRow>(item => {
+    if (item.type === 'HistoryBoundary') return [{ display_key: item.display_key, kind: 'history', height: 30, steps: [], turnStart: false, stepMarkers: [] }];
+    if (!isInspectable(item)) return [];
+    if (item.type === 'RequestBoundary' && requestSeats.get(item.owner_record_id) !== item.display_key) return [];
+    const { attempt_id: attempt, step_id: step } = item.record.location;
+    const group = steps.get(displayKey(attempt, step));
+    return [{ display_key: item.type === 'RequestBoundary' ? displayKey('marker-seat', item.display_key) : item.display_key, kind: item.type === 'RequestBoundary' ? 'marker' : 'semantic', height: item.type === 'RequestBoundary' ? 10 : item.type === 'CollapsedCallSummary' ? 20 : 30,
+      item, turn: attempt == null ? undefined : turns.get(attempt), steps: group ? [group] : [],
+      request: requestSeats.get(item.owner_record_id) === item.display_key ? requests.get(item.owner_record_id) : undefined,
+      turnStart: false, stepMarkers: [] }];
+  });
+  const rows = seats.filter(row => row.kind === 'history');
+  const isInitial = (row: TrajectoryLedgerRow) => row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial';
+  // Sections and groups are the native ordering authority. Visibility changes
+  // a group's representation, never its position relative to another group.
+  for (const section of projection.sections) {
+    if (section.kind === 'outside') {
+      rows.push(...seats.filter(row => row.item?.owner_record_id === section.record.id));
+      continue;
+    }
+    const turn = turns.get(section.nativeAttemptId);
+    if (!turn) continue;
+    const owned = seats.filter(row => row.turn === turn);
+    const collapsed = !searching && folded.has(turn.attempt_id);
+    const main = owned.find(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell');
+    // Promotion changes presentation only; the native Request/Step stays intact.
+    rows.push(...owned.filter(isInitial));
+    const body: TrajectoryLedgerRow[] = [];
+    for (const group of section.groups) {
+      const step = group.kind === 'step' ? steps.get(displayKey(turn.attempt_id, group.nativeStepId)) : undefined;
+      // Group membership was already resolved from native locations. In
+      // particular, wire null and omitted Step identities both belong to the
+      // Attempt's message group; neither creates a synthetic Step.
+      const members = new Set(group.records.map(record => record.id));
+      const segment = owned.filter(row => row.item && members.has(row.item.owner_record_id) && !isInitial(row)
+        && (!collapsed || row.item?.type === 'SystemPromptCell' || row === main));
+      // Collapsed groups expose only retained content; their hidden structure
+      // is counted once by the Turn summary, without seats or focus targets.
+      if (step && (!collapsed || segment.length)) {
+        if (!segment.length) segment.push({ display_key: displayKey('step-seat', turn.attempt_id, group.nativeStepId),
+          kind: 'structure', height: 20, turn, steps: [step], stepMarkers: [], turnStart: false });
+        segment[0]!.stepMarkers = [step];
+      }
+      body.push(...segment);
+    }
+    if (collapsed) {
+      const count = cells.filter(cell => cell.type === 'RecordRow' && cell.record.location.attempt_id === turn.attempt_id).reduce((sum, cell) => sum + cell.record.calls.length, 0);
+      body.push({ display_key: displayKey('turn-summary', turn.attempt_id), kind: 'summary', height: 20, turn, steps: [], stepMarkers: [], turnStart: false,
+        summary: tx('trajectory:ledger.fold-summary', { steps: section.groups.filter(group => group.kind === 'step').length, calls: count }) });
+    }
+    if (!body.length) body.push({ display_key: displayKey('structure-marker', turn.attempt_id), kind: 'structure', height: 20, turn,
+      steps: [], stepMarkers: [], turnStart: false });
+    body[0]!.turnStart = true;
+    for (const row of body) {
+      // A tiny Request seat cannot contain native Turn/Step controls.
+      if (row.kind === 'marker' && (row.turnStart || row.stepMarkers.length)) { row.kind = 'structure'; row.height = 20; }
+    }
+    rows.push(...body);
+  }
+  return rows;
+}
+
+export function rowOwnsKey(row: TrajectoryLedgerRow, key: string): boolean {
+  return row.display_key === key || row.request?.display_key === key || (row.turnStart && (row.turn?.display_key === key || `${row.turn?.display_key}:fold` === key))
+    || row.stepMarkers.some(step => step.display_key === key);
+}
+
+/** Logical navigation is projected from resolved native ownership, not DOM order.
+ * A Request boundary has one target, even when it owns an otherwise empty seat. */
+export interface LedgerFocusTarget {
+  display_key: string;
+  row_key: string;
+  kind: 'turn' | 'step' | 'request' | 'semantic';
+  item: FocusableDisplayItem;
+}
+export function ledgerFocusTargets(rows: readonly TrajectoryLedgerRow[]): LedgerFocusTarget[] {
+  return rows.flatMap(row => {
+    const targets: LedgerFocusTarget[] = [];
+    const add = (kind: LedgerFocusTarget['kind'], item: FocusableDisplayItem) => targets.push({ kind, item, display_key: item.display_key, row_key: row.display_key });
+    if (row.turnStart && row.turn) add('turn', row.turn);
+    for (const step of row.stepMarkers) add('step', step);
+    if (row.request) add('request', row.request);
+    if (row.item && row.item.type !== 'RequestBoundary') add('semantic', row.item);
+    return targets;
+  });
 }

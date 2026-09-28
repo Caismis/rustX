@@ -473,11 +473,16 @@ replaces the cache. Selection is presentation state, never native authority.
 
 The browser projects native `TraceRecord` summaries into a closed local
 `TrajectoryProjection` of Turn models and outside records. Each Turn owns Message
-and Step groups. Ledger flattening produces `RecordRow`, `SystemPromptCell`,
-`ContextRow`, `GroupHeader`, `RequestBoundary`, `TurnHeader`, `CollapsedCallSummary`,
-and `HistoryBoundary`. None is an invented runtime event. The dense ledger has
-Event and Content columns. Successful state/duration/check chrome is absent;
-important lifecycle, uncertainty, missing history and truncation remain visible.
+and Step groups. Inspectable structural objects remain in the selection universe;
+`ledgerRows` projects a separate measurable semantic ledger. Ordinary rows are
+`RecordRow`, `SystemPromptCell`, `ContextRow` or a Calls summary. Turn and Step
+controls are inline chrome with exact native targets, never peer content rows.
+A Request marker belongs to its own System cell, otherwise its own Context cell,
+otherwise a 10px marker-only seat. No adjacent Assistant borrows a Request.
+There are no Event/Content headings. Initial System Prompt cells precede Turn
+chrome while retaining their exact Request and Step. Collapsed Turns keep System
+cells, their first main semantic row, and a 20px Step/Tool-call count summary.
+Important lifecycle, uncertainty, missing history and truncation remain visible.
 
 The closed display model separates inspectable items from structural headers.
 Only `InspectableDisplayItem` retains a native `record` and `owner_record_id` for
@@ -550,7 +555,7 @@ Subagent, Workflow and Interaction never become Subtools. Search temporarily ove
 collapse, searches only loaded labels/previews/native identities, and performs
 no detail or history reads. Search returns only stable semantic cell keys. Turn,
 Step and Message labels are searchable context on their member cells, so structural
-queries expose actual cells, with headers reconstructed for context. Turn/Step
+queries expose actual cells, with native structural chrome carried as metadata. Turn/Step
 ordinal phrases match the complete label, not unrelated numbers in cell content.
 Ledger filtering and Timeline dimming share this membership: Timeline uses the
 native owners of matching cells, without expanding matches to sibling semantic
@@ -566,9 +571,9 @@ Request boundary. No Session-start SYSTEM is fabricated. CONTEXT retains exact
 producer/source, native family, preview and truncation with Request/Message IDs.
 
 TanStack Virtual owns ordinary virtualization with semantic keys. One display
-item + pixel-offset anchor transfers across prepend, boundary/header
-insertion/removal and the 100-display-item threshold. Sticky Turn headers remain
-mounted through TanStack range extraction and stop at outside-record boundaries. Tail follow
+seat + pixel-offset anchor transfers across prepend, boundary/header
+insertion/removal and the 100-display-item threshold. There are no sticky full-width structural rows. Native structural focus can anchor
+the inline control across a change in its semantic seat. Tail follow
 runs only at the tail; content/lifecycle-only repair does not pull a reader down.
 
 The local Inspector uses React Aria tabs and existing safe Markdown, Shiki, JSON
@@ -670,3 +675,29 @@ substitute for a provider endpoint. A silent provider can have a terminal span
 without first-output evidence. Zero is a valid measurement, not missing evidence.
 These rules govern timed spans; sequence mode uses equal units and time mode
 shows start markers intentionally.
+
+
+## Semantic ledger and bounded Tool input
+
+`TraceToolSummary.arguments` is a nullable bounded `TracePreview` of the canonical
+JSON arguments: at most 512 UTF-8 bytes, including JSON escapes. The serializer
+stops at the byte ceiling instead of allocating an unbounded encoded string.
+A cut JSON prefix is presentation text, not a complete structured JSON value.
+`truncated` explicitly distinguishes it from complete small arguments; null means
+the same-Step proposal is unavailable. `step_tool_call` resolves Attempt, Step,
+ToolCallId and ToolId once for both name and arguments. Lifecycle refresh does not
+repeat this immutable relationship. Full structured arguments retain the existing
+bounded detail path. Results remain the canonical ToolMessage preview; a Tool
+name never substitutes for an absent result.
+
+Trajectory orchestration owns selection and cache access; `TrajectoryLedger` owns
+virtual geometry and prepend anchoring; `TrajectoryRow` consumes pre-resolved
+semantic content and structural actions; `TrajectoryCell` renders bounded content.
+The Timeline has three 15px lanes in 50px chrome. Its existing projection revision,
+pointer retirement, epoch and native focus semantics remain unchanged. Keyboard
+`+` zooms and `Home` resets; wheel/drag/arrow/Escape interaction remains available.
+Native Request is the Model authority; no accepted-Assistant duplicate span or
+Context duration is introduced. Inspector sizing remains with react-resizable-panels.
+
+See [Harness convergence and validation](trajectory-harness-convergence.md) for
+pinned source mapping and deterministic evidence.

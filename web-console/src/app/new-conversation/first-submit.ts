@@ -1,6 +1,6 @@
 import { isOutcomeUncertain } from '../../client/app-server';
 import { WorkspaceHostError } from '../../workspaces/host';
-import type { SessionModelConfig, UploadReceipt } from '../../../../protocol/app-server/v27';
+import type { SessionModelConfig, UploadReceipt } from '../../../../protocol/app-server/v28';
 
 export interface FirstDraft { workspaceId: string; text: string; files: readonly File[]; model?: SessionModelConfig }
 export interface CreatedSession { id: string; node: string; conversation: string; diagnostic?: string }

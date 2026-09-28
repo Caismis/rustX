@@ -5141,6 +5141,10 @@ export interface TraceToolSummary {
    */
   name?: string | null;
   /**
+   * Bounded canonical arguments; absent only when the exact proposal is unavailable.
+   */
+  arguments?: TracePreview | null;
+  /**
    * Whether execution started, as proven by its own durable start fact.
    */
   started: boolean;

@@ -216,6 +216,26 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         }))),
     ];
+    // The same serialized bounded Tool contract is consumed by Web and TUI.
+    fixtures.push(
+        serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": "trace-tool-summary", "result": {
+                "type": "trace", "page": { "records": [{
+                    "id": "trace:7", "position": "trace:7",
+                    "location": { "attempt_id": "attempt-a", "step_id": "1" },
+                    "kind": "tool", "state": "completed",
+                    "timing": { "started_at": "2026-09-15T00:00:00Z" },
+                    "preview": { "text": "bounded result", "truncated": true },
+                    "request": null,
+                    "tool": { "call_id": "reused-call", "tool_id": "tool-bash", "name": "bash",
+                        "arguments": { "text": "{\"command\":\"bounded input", "truncated": true },
+                        "started": true, "outcome": "success", "detail": null },
+                    "calls": [], "attachments": [], "has_detail": true, "truncated": false
+                }], "next_cursor": null }
+            }
+        }))
+        .expect("bounded Tool protocol fixture"),
+    );
     for call in [
         Method::ArtifactRead {
             target: target.clone(),
@@ -667,9 +687,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v27.schema.json", "v27.ts"]);
+        assert_eq!(generations, ["v28.schema.json", "v28.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v27.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v28.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()
@@ -679,6 +699,24 @@ mod tests {
             std::fs::read_to_string(root.join("fixtures.json")).unwrap(),
             format!("{}\n", serde_json::to_string_pretty(&fixtures()).unwrap())
         );
+    }
+
+    #[test]
+    fn mandatory_tool_arguments_round_trip_with_truthful_unavailability() {
+        let wire = fixtures()
+            .into_iter()
+            .map(|fixture| serde_json::to_value(fixture).unwrap())
+            .find(|wire| wire["id"] == "trace-tool-summary")
+            .unwrap();
+        let arguments = &wire["result"]["page"]["records"][0]["tool"]["arguments"];
+        assert!(arguments["text"].as_str().unwrap().len() <= 512);
+        assert_eq!(arguments["truncated"], true);
+        let decoded: ProtocolMessage = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+        let mut unavailable = wire;
+        unavailable["result"]["page"]["records"][0]["tool"]["arguments"] = serde_json::Value::Null;
+        let decoded: ProtocolMessage = serde_json::from_value(unavailable.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), unavailable);
     }
 
     #[test]

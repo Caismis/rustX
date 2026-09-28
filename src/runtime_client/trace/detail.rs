@@ -184,6 +184,8 @@ impl TraceProjection<'_> {
         call_id: &ToolCallId,
         tool_id: &ToolId,
     ) -> Result<Option<(MessageId, ToolCall)>, ConversationStoreError> {
+        #[cfg(test)]
+        super::summary::probe::record(&super::summary::probe::TOOL_PROPOSAL);
         let (Some(attempt), Some(turn)) = (&anchor.attempt_id, &anchor.turn_id) else {
             return Ok(None);
         };

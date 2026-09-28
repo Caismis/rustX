@@ -283,6 +283,7 @@ pub(super) mod probe {
     use std::cell::Cell;
 
     thread_local! {
+        pub(in crate::runtime_client::trace) static TOOL_PROPOSAL: Cell<u32> = const { Cell::new(0) };
         /// Resolutions of the System Prompt predecessor presentation.
         pub(in crate::runtime_client::trace) static SYSTEM_PREDECESSOR: Cell<u32> =
             const { Cell::new(0) };
@@ -311,8 +312,13 @@ pub(super) mod probe {
         TOOL_RELATIONSHIP.with(Cell::get)
     }
 
+    pub(in crate::runtime_client::trace) fn proposal_count() -> u32 {
+        TOOL_PROPOSAL.with(Cell::get)
+    }
+
     /// Zeroes both counters so the next call is measured on its own.
     pub(in crate::runtime_client::trace) fn reset() {
+        TOOL_PROPOSAL.with(|count| count.set(0));
         SYSTEM_PREDECESSOR.with(|count| count.set(0));
         TOOL_RELATIONSHIP.with(|count| count.set(0));
         CONTEXT_LEDGER_JOIN.with(|count| count.set(0));
