@@ -29,34 +29,12 @@ Only test synchronization changed. Production claim exclusion, proof acquisition
 pre-Reserved ownership, `wait_recovery_settlement_for`, and registry-wide
 reconciliation execution are unchanged.
 
-## Interactive: separate semantic injection from transport
+## Interactive pre-anchor evidence
 
-`InteractiveTestControl` now has a boolean `fail_pre_anchor_reap` and a separate
-`pre_anchor_boundary_socket: Option<PathBuf>`, both cfg(test). The corresponding
-private environment keys are distinct. The socket fixture uses
-`/tmp/rx-pre-<random>/gate`, independent of Darwin's potentially long TMPDIR.
-Ordinary command environment cannot configure either; the isolation regression
-now includes the new transport key.
-
-A configured socket's connect/write/release-read failure returns a fixed
-boundary/stage/errno diagnostic, writes a process-control failure, and ends the
-fixture owner without inventing physical proof. The driver records these fixed
-messages in its test observer. The final outcome write is checked as well.
-The fixture distinguishes `inner_connected` from `conclude_pre_anchor` on timeout,
-including bounded stderr and received driver events. The normal fixture still
-requires `failure_written`, control EOF, direct-child reap and explicit unproven
-settlement, with no NoOwnership, AllChildrenReaped or server launch. Its inner is
-cleaned by the test.
-
-The new `pre_anchor_fixture_transport_failure_is_explicit` regression supplies a
-missing private socket and requires both named connection failures, an unproven
-terminal owner outcome, direct outer reap and no server launch. A semantic reap
-fault is not needed to demonstrate transport failure.
-
-The historical macOS log did not record the boundary or transport errno. The
-mixed key and swallowed errors are confirmed fixture defects; that log alone
-cannot establish whether its particular timeout was caused by socket-path
-length. Hosted Darwin validation remains necessary.
+The temporary diagnostic transports from this investigation have been removed.
+The regression now uses only semantic fault controls, received supervisor failure
+frames, control EOF, direct-child reap and explicit unproven settlement. See
+[the control-plane repair](pr-416-control-plane-pre-anchor.md) for the final design.
 
 ## Stopped anchor: native observation before cancellation
 
@@ -107,7 +85,7 @@ All local validation below ran on Linux with normal suite concurrency.
 | `cargo fmt --all -- --check` | Passed |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
 | `git diff --check` and `git diff --cached --check` | Passed |
-| `cargo test --lib --all-features <filter> -- --nocapture` for each library filter below | All 12 passed, one selected test each |
+| `cargo test --lib --all-features <filter> -- --nocapture` for each library filter below | All then-current focused tests passed, one selected test each |
 | `cargo test --all-features --test tools bash::<filter> -- --exact --nocapture` for each external filter below | All 5 passed |
 | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 3,212 passed; 3 existing opt-in tests ignored |
 | `cargo test --lib --all-features -- boundary_suites::` | 194 passed |
@@ -122,7 +100,6 @@ Library filters:
 - `parked_recovery_probe_does_not_hold_registry_mutex`
 - `reconciliation_owner_cancellation_releases_completion_without_physical_proof`
 - `unprovable_pre_anchor_reap_never_settles_physically`
-- `pre_anchor_fixture_transport_failure_is_explicit`
 - `setsid_failure_before_the_anchor_settles_by_direct_pid_reap`
 - `command_environment_cannot_configure_interactive_supervisor`
 - `post_spawn_handshake_failure_settles_without_stranding`

@@ -193,8 +193,6 @@ pub(crate) const INNER_STALL_BEFORE_ANCHOR_ENV: &str =
 /// child is never actually waited for, so the proof-carrying
 /// `MSG_NO_OWNERSHIP` must not be emitted. Independent of fixture transport.
 pub(crate) const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
-/// Passive fixture observation destination; never command environment.
-pub(crate) const PRE_ANCHOR_OBSERVATION_ENV: &str = "RUSTX_TEST_INTERACTIVE_PREANCHOR_OBSERVATION";
 
 /// Runs the outer supervisor role; returns its exit status.
 #[must_use]
@@ -930,14 +928,12 @@ fn conclude_pre_anchor(
     if let Some(message) = failure {
         let _ = write_frame(upstream, MSG_PROCESS_CONTROL_FAILURE, message.as_bytes());
     }
-    observe_pre_anchor(PreAnchorObservation::ConcludePreAnchorEntered);
     let inner_pid = i32::try_from(child.id()).unwrap_or(0);
     let _ = child.kill();
     let reaped = if std::env::var(FAIL_PRE_ANCHOR_REAP_ENV).is_ok() {
         // Test-only injection of the semantic state "the pre-anchor child
         // cleanup cannot prove the reap"; the child is deliberately not
         // waited for.
-        observe_pre_anchor(PreAnchorObservation::InjectedPreAnchorReapFailure);
         Err("injected pre-anchor reap failure".to_owned())
     } else {
         child
@@ -951,7 +947,7 @@ fn conclude_pre_anchor(
             0
         }
         Err(error) => {
-            let written = write_frame(
+            let _ = write_frame(
                 upstream,
                 MSG_PROCESS_CONTROL_FAILURE,
                 format!(
@@ -961,56 +957,8 @@ fn conclude_pre_anchor(
                 )
                 .as_bytes(),
             );
-            if written.is_ok() {
-                observe_pre_anchor(PreAnchorObservation::ProcessControlFailureWritten);
-            }
-            observe_pre_anchor(PreAnchorObservation::OuterExiting);
             1
         }
-    }
-}
-
-/// Fixed, content-free evidence for the pre-anchor regression. Like the Bash
-/// trace, attempts are bounded per dedicated supervisor. Unlike a rendezvous,
-/// observation has no acknowledgement and cannot select any lifecycle outcome.
-#[derive(Clone, Copy)]
-enum PreAnchorObservation {
-    InnerControlConnected,
-    FailSetsidPathEntered,
-    ConcludePreAnchorEntered,
-    InjectedPreAnchorReapFailure,
-    ProcessControlFailureWritten,
-    OuterExiting,
-}
-
-fn observe_pre_anchor(event: PreAnchorObservation) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static REMAINING: AtomicUsize = AtomicUsize::new(32);
-    let Some(path) = std::env::var_os(PRE_ANCHOR_OBSERVATION_ENV) else {
-        return;
-    };
-    if REMAINING
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-            left.checked_sub(1)
-        })
-        .is_err()
-    {
-        return;
-    }
-    let label: &[u8] = match event {
-        PreAnchorObservation::InnerControlConnected => b"inner_control_connected",
-        PreAnchorObservation::FailSetsidPathEntered => b"fail_setsid_path_entered",
-        PreAnchorObservation::ConcludePreAnchorEntered => b"conclude_pre_anchor_entered",
-        PreAnchorObservation::InjectedPreAnchorReapFailure => b"injected_pre_anchor_reap_failure",
-        PreAnchorObservation::ProcessControlFailureWritten => b"process_control_failure_written",
-        PreAnchorObservation::OuterExiting => b"outer_exiting",
-    };
-    // No connect/read/acknowledgement. A full queue or missing destination drops
-    // this observation immediately. Never publish observation errors upstream.
-    if let Ok(socket) = std::os::unix::net::UnixDatagram::unbound()
-        && socket.set_nonblocking(true).is_ok()
-    {
-        let _ = socket.send_to(label, path);
     }
 }
 
@@ -1185,7 +1133,6 @@ pub fn run_inner(arguments: &[String]) -> i32 {
             return 1;
         }
     };
-    observe_pre_anchor(PreAnchorObservation::InnerControlConnected);
     if let Err(error) = fcntl(&control, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
         eprintln!("interactive supervisor: cannot configure the inner control socket: {error}");
         return 1;
@@ -1206,7 +1153,6 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         }
     }
     if let Ok(pid_file) = std::env::var(FAIL_SETSID_ENV) {
-        observe_pre_anchor(PreAnchorObservation::FailSetsidPathEntered);
         let _ = std::fs::write(&pid_file, std::process::id().to_string());
         // Test-only injection: `setsid()` fails after the control
         // connection exists. This is byte-for-byte the real setsid-failure

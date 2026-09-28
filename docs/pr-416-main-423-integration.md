@@ -38,9 +38,11 @@ The existing reconciliation fixture seam now permits positive `prove_after_relea
 
 The historical macOS stall did not reproduce in the initial exact Linux run. The old fixture only waited for the final settlement, so its failure log cannot identify a stalled owner phase. No unsupported production root cause is claimed.
 
-The trusted `InteractiveTestControl` reap-failure channel now carries a fixture socket. Fixed-label handshakes causally establish inner connection before injected setsid failure and entry into the outer's `conclude_pre_anchor`. The fixture releases each boundary explicitly. It observes the failure-write result and outer conclusion, then checks the driver's exact injected-failure receipt, control EOF, direct-child wait/reap, and settlement publication. A final wait failure reports the observed boundaries. The owner must publish `TerminalityUnproven`; neither `NoOwnership` nor group terminal proof is permitted. All existing deadlines are unchanged. The unresolved inner remains test-owned cleanup, never fabricated physical proof.
-
-This is a deterministic fixture/observability repair, not evidence that the historical macOS stall's production cause has been established. Final hosted macOS evidence is still required.
+The temporary diagnostic transport used during that investigation has since been
+removed. The final regression uses only the real supervisor control messages,
+EOF, direct-child reap and explicit `TerminalityUnproven` result. See
+[the control-plane repair](pr-416-control-plane-pre-anchor.md). No production
+pre-anchor ownership rules or deadlines changed.
 
 ### MCP routing headers
 
@@ -66,7 +68,7 @@ The full conformance run exposed an aggregate deadline assumption in the shipped
 
 ## Preserved trust and physical boundaries
 
-The [supervisor-environment ownership contract](pr-416-supervisor-environment-ownership.md) remains intact. Ordinary ToolEnvironment entries are encoded command data, applied only to Bash/server spawn after clearing the child's environment; private controls are configured by the runner/test owner. Same-named child variables cannot arm diagnostic gates, tracing, faults or physical authority. The interactive fixture socket uses an already-private test-control key, not command environment input. Physical continuation remains typed/private descriptor authority.
+The [supervisor-environment ownership contract](pr-416-supervisor-environment-ownership.md) remains intact. Ordinary ToolEnvironment entries are encoded command data, applied only to Bash/server spawn after clearing the child's environment; private controls are configured by the runner/test owner. Same-named child variables cannot arm diagnostic gates, tracing, faults or physical authority. Interactive semantic fault controls remain test-owned, never command environment input. Physical continuation remains typed/private descriptor authority.
 
 Exact activation recovery, pre-Reserved physical allocation transfer, `recovery_unreserved`/`recovery_pending`, consumed ordinals, workspace fencing, deletion proof and Goal-idle exclusion remain native ownership responsibilities. This integration does not restore Execution compatibility, duplicate projections, old protocol generations, retries, larger timeouts or broad suite serialization.
 
