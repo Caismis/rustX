@@ -1,10 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness virtual ledger; see PROVENANCE.md. */
-import { useImperativeHandle, useLayoutEffect, useEffect, useRef, type Ref } from 'react';
+import { useMemo, useImperativeHandle, useLayoutEffect, useEffect, useRef, type Ref } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 import { TrajectoryRow } from './TrajectoryRow';
-import { rowOwnsKey, type FocusableDisplayItem, type TrajectoryLedgerRow } from './layout';
+import { ledgerFocusTargets, rowOwnsKey, type FocusableDisplayItem, type TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
 
 export interface LedgerHandle { loadEarlier: () => void; latest: () => void }
@@ -15,6 +15,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   loadEarlier: () => void; canLoadEarlier: boolean; loading: boolean; searching: boolean; onOffTail: (off: boolean) => void;
 }) {
   const tx = useTranslation();
+  const targets = useMemo(() => ledgerFocusTargets(rows), [rows]);
   const viewport = useRef<HTMLDivElement>(null);
   const followsTail = useRef(true);
   const prepend = useRef<{ first?: string; key: string; offset: number } | null>(null);
@@ -65,7 +66,9 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
     const node = Array.from(viewport.current?.querySelectorAll<HTMLElement>('[data-display-key]') ?? []).find(node => node.dataset.displayKey === focusKey);
     const bounds = viewport.current?.getBoundingClientRect();
     const box = node?.getBoundingClientRect();
-    if (virtualized && (!box || !bounds || box.top < bounds.top || box.bottom > bounds.bottom)) virtualizer.scrollToIndex(index, { align: 'auto' });
+    // scrollTop rounds fractional control offsets; do not replace an exact
+    // prepend anchor with row alignment for a subpixel edge difference.
+    if (virtualized && (!box || !bounds || box.top < bounds.top - 1 || box.bottom > bounds.bottom + 1)) virtualizer.scrollToIndex(index, { align: 'auto' });
     if (node) { node.focus({ preventScroll: virtualized }); onFocused(); }
   });
   const rendered = virtualized ? virtualizer.getVirtualItems().map(item => ({ row: rows[item.index]!, index: item.index, start: item.start })) : rows.map((row, index) => ({ row, index, start: 0 }));
@@ -76,11 +79,16 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
       {rendered.map(({ row, index, start }) => {
         const style = { height: row.height, ...(virtualized ? { position: 'absolute' as const, top: 0, left: 0, width: '100%', transform: `translateY(${start}px)` } : {}) };
         if (row.kind === 'history') return <div key={row.display_key} data-display-key={row.display_key} className={css.loadRow} style={style}><Button size="sm" disabled={!canLoadEarlier} onClick={requestOlder}>{loading ? tx('trajectory:trajectory.loading-earlier-records') : tx('trajectory:trajectory.load-earlier-records')}</Button></div>;
-        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, folded, calls, focusedIds, select, toggleTurn, toggleCalls }} onKeyDown={event => {
-          if (event.key === 'Escape') { close(); return; }
-          if (event.target !== event.currentTarget) return;
-          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); const target = row.item ?? row.turn; if (target) select(target); }
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]; const target = next?.item ?? next?.turn; if (target) select(target); }
+        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, folded, calls, focusedIds, select, toggleTurn, toggleCalls }} onKeyDown={(event, key) => {
+          if (event.key === 'Escape') { event.stopPropagation(); close(); return; }
+          const current = targets.findIndex(target => target.display_key === key);
+          if (current < 0) return;
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); select(targets[current]!.item); }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault(); event.stopPropagation();
+            const next = targets[current + (event.key === 'ArrowDown' ? 1 : -1)];
+            if (next) select(next.item);
+          }
         }} />;
       })}
     </div>

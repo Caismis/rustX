@@ -286,7 +286,7 @@ export function preferredStructure(items: readonly TrajectoryDisplayItem[], prev
  * ordinary content rows. All relationships are resolved here, before rendering. */
 export interface TrajectoryLedgerRow {
   display_key: string;
-  kind: 'semantic' | 'marker' | 'summary' | 'history';
+  kind: 'semantic' | 'marker' | 'structure' | 'summary' | 'history';
   height: 30 | 20 | 10;
   item?: InspectableDisplayItem;
   turn?: Extract<StructuralDisplayItem, { type: 'TurnHeader' }>;
@@ -326,6 +326,16 @@ export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[
       request: requestSeats.get(item.owner_record_id) === item.display_key ? requests.get(item.owner_record_id) : undefined,
       turnStart: false, stepMarkers: [] }];
   });
+  // Empty Turns have no content anchor. Keep their seats in native Turn order,
+  // using the same insertion rule for expanded structure and folded summaries.
+  const turnSeatIndex = (attempt: string) => {
+    const last = rows.map(row => row.turn?.attempt_id).lastIndexOf(attempt);
+    if (last >= 0) return last + 1;
+    const order = [...turns.keys()];
+    const later = new Set(order.slice(order.indexOf(attempt) + 1));
+    const next = rows.findIndex(row => row.turn && later.has(row.turn.attempt_id));
+    return next < 0 ? rows.length : next;
+  };
   // Native classification, not text or position, promotes the initial prompt.
   // The cell's Request and Step identities remain untouched.
   for (const turn of turns.values()) {
@@ -343,16 +353,13 @@ export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[
       const count = cells.filter(cell => cell.type === 'RecordRow' && cell.record.location.attempt_id === turn.attempt_id).reduce((sum, cell) => sum + cell.record.calls.length, 0);
       const summary: TrajectoryLedgerRow = { display_key: displayKey('turn-summary', turn.attempt_id), kind: 'summary', height: 20, turn, steps: turnSteps, turnStart: false, stepMarkers: [],
         summary: tx('trajectory:ledger.fold-summary', { steps: turnSteps.length, calls: count }) };
-      const first = rows.findIndex(row => row.turn?.attempt_id === turn.attempt_id);
       rows = rows.filter(row => row.turn?.attempt_id !== turn.attempt_id || retained.has(row));
-      const last = rows.map(row => row.turn?.attempt_id).lastIndexOf(turn.attempt_id);
-      rows.splice(last >= 0 ? last + 1 : Math.max(0, first), 0, summary);
+      rows.splice(turnSeatIndex(turn.attempt_id), 0, summary);
     } else {
-      const missingSteps = [...steps.values()].filter(step => step.attempt_id === turn.attempt_id && !owned.some(row => row.steps.includes(step)));
+      const missingSteps = [...steps.values()].filter(step => step.attempt_id === turn.attempt_id && !owned.some(row => !initial.includes(row) && row.steps.includes(step)));
       const needsTurn = !owned.some(row => !(row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial'));
       if (missingSteps.length || needsTurn) {
-        const last = rows.map(row => row.turn?.attempt_id).lastIndexOf(turn.attempt_id);
-        rows.splice(last < 0 ? rows.length : last + 1, 0, { display_key: displayKey('structure-marker', turn.attempt_id), kind: 'marker', height: 10, turn,
+        rows.splice(turnSeatIndex(turn.attempt_id), 0, { display_key: displayKey('structure-marker', turn.attempt_id), kind: 'structure', height: 20, turn,
           steps: missingSteps, turnStart: false, stepMarkers: [] });
       }
     }
@@ -364,8 +371,10 @@ export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[
     // Initial System Prompt precedes Turn chrome, even though it is Step-owned.
     const initial = row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial';
     if (row.turn && !initial && !seenTurns.has(row.turn.attempt_id)) { row.turnStart = true; seenTurns.add(row.turn.attempt_id); }
-    row.stepMarkers = row.steps.filter(step => !seenSteps.has(step.display_key));
-    for (const step of row.steps) seenSteps.add(step.display_key);
+    row.stepMarkers = initial ? [] : row.steps.filter(step => !seenSteps.has(step.display_key));
+    for (const step of row.stepMarkers) seenSteps.add(step.display_key);
+    // A tiny Request seat cannot contain native Turn/Step controls.
+    if (row.kind === 'marker' && (row.turnStart || row.stepMarkers.length)) { row.kind = 'structure'; row.height = 20; }
   }
   return rows;
 }
@@ -373,4 +382,24 @@ export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[
 export function rowOwnsKey(row: TrajectoryLedgerRow, key: string): boolean {
   return row.display_key === key || row.request?.display_key === key || (row.turnStart && (row.turn?.display_key === key || `${row.turn?.display_key}:fold` === key))
     || row.stepMarkers.some(step => step.display_key === key);
+}
+
+/** Logical navigation is projected from resolved native ownership, not DOM order.
+ * A Request boundary has one target, even when it owns an otherwise empty seat. */
+export interface LedgerFocusTarget {
+  display_key: string;
+  row_key: string;
+  kind: 'turn' | 'step' | 'request' | 'semantic';
+  item: FocusableDisplayItem;
+}
+export function ledgerFocusTargets(rows: readonly TrajectoryLedgerRow[]): LedgerFocusTarget[] {
+  return rows.flatMap(row => {
+    const targets: LedgerFocusTarget[] = [];
+    const add = (kind: LedgerFocusTarget['kind'], item: FocusableDisplayItem) => targets.push({ kind, item, display_key: item.display_key, row_key: row.display_key });
+    if (row.turnStart && row.turn) add('turn', row.turn);
+    for (const step of row.stepMarkers) add('step', step);
+    if (row.request) add('request', row.request);
+    if (row.item && row.item.type !== 'RequestBoundary') add('semantic', row.item);
+    return targets;
+  });
 }

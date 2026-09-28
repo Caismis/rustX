@@ -53,11 +53,11 @@ start markers and compact summary. The renderer never discovers these relations
 from its neighbors or DOM position.
 
 * Content seats are 30px; Calls and collapsed Turn summaries are 20px;
-  request-only and otherwise empty native-structure seats are 10px.
+  Request-only seats are 10px; seats containing Turn or Step chrome are 20px.
 * Initial System cells move visually before Turn chrome using native
   `system_prompt.state === initial`; their Request/Step identities do not change.
 * Turn ordinal/fold/inspection and Step state/inspection are inline controls.
-  Empty native Steps remain actionable through tiny seats. No full-width Turn,
+  Empty native Steps remain actionable through 20px structural seats. No full-width Turn,
   Group/Step or Request row and no Event/Content headings remain.
 * Each Request selects its own native record. The marker prioritizes its own
   System cell, then its own Context cell; otherwise it owns a marker seat.
@@ -138,7 +138,7 @@ Paths are under `packages/client/ui-trajectory/src/client/`.
 | --- | --- | --- |
 | `TrajectoryTable.tsx` (`TableRecord`, `collapseTurnRecords`) | Semantic record + Turn/group chrome; preserve System and first content on fold | `layout.ts::ledgerRows`, `TrajectoryRow.tsx`; native Attempt/Step/Request replaces Harness Turn/group inference |
 | `TrajectoryTable.module.css` | 30px density, 122px English / 84px Chinese role track, input/result split, 20px folded summary | `Trajectory.module.css`; 50px narrow role track and compact stacked input name/preview, existing rustX tokens |
-| `trajectory-virtual-rows.ts` | Measurable stable seats and 9px terminal boundaries | `TrajectoryLedger.tsx`, `TrajectoryLedgerRow`; 10px exact-owner seats. Reject attaching request-only records to the next content by list position |
+| `trajectory-virtual-rows.ts` | Measurable stable seats and 9px terminal boundaries | `TrajectoryLedger.tsx`, `TrajectoryLedgerRow`; 10px Request-only seats and 20px structural seats. Reject attaching request-only records to the next content by list position |
 | `TrajectoryTurn.tsx`, `TrajectoryTurn.module.css`, `TrajectoryGroupHeader.tsx` | Turn and Step hierarchy | Exact grouping retained; reject full standalone headers and padded card bodies |
 | `TrajectoryCell.module.css` | Semantic role colors | Neutral System/Compaction, green Context, violet Assistant, amber Tool; native User convention remains blue rather than Harness green |
 | `TrajectoryTimeline.module.css`, existing attributed `TrajectoryTimeline.tsx` | Three lanes / 50px plot / 44px labels | Existing rustX Timeline gesture and native timing owners; no Harness timing inference, no Context or duplicate Assistant span |
@@ -258,3 +258,143 @@ No unrelated screenshot changes are included.
   was introduced.
 
 No required validation lane was omitted for an environment limitation.
+
+
+## PR #424 review repair
+
+The repair starts at `1e7e15e77422b471e081b9ecb034a2e3f0321103`, independently
+based on `a64e8ae79b2fa03da87d9995038670f179434845`. The primary worktree's
+untracked `.playwright-mcp/` remains untouched. The existing Issue #421 worktree
+and branch are reused. Initial audit found all seven PR CI checks green, the PR
+open and non-draft, and auto-merge disabled. #416 remains unrelated.
+
+### Explicit logical focus
+
+`layout.ts::ledgerFocusTargets` projects a closed ordered list from resolved
+ledger rows. Each target contains its exact display key, owning seat key, kind
+(Turn, Step, Request, semantic) and inspectable object. Within a seat the order is
+Turn → Step(s) → Request → semantic cell; seats retain presentation order.
+A Request-only seat has one Request target, never an additional row alias.
+Fold toggles retain ordinary Tab focus and their distinct display keys.
+
+`TrajectoryRow` supplies the exact target key from each control to one Ledger
+keyboard handler. Arrows select the previous/next logical target, including when
+focus is on a nested structural button. DOM lookup only locates the chosen key
+for focus; it never establishes target ordering or ownership. Existing selection
+ownership still clears semantic selection for Turn/Step and loads details only
+for exact semantic/Request selection. Inspector close restores the exact target,
+with the exact Turn target as the fallback when a selected child is folded away.
+
+### Hierarchy and measurable seats
+
+Promoted Initial System keeps its original record, Request, Attempt and Step.
+It does not consume Step chrome. The first eligible non-initial seat receives
+Turn chrome; each Step's first eligible seat receives its own Step chrome. When
+only initial cells exist for a Step, a structural fallback after Turn begins
+carries that Step. Search and fold use the same rule. Empty Turns retain their
+native ordering. Structure is never attached to an unrelated neighboring record.
+
+A Request-only marker remains 10px. A marker acquiring Turn/Step controls becomes
+a 20px structural seat. Semantic content remains 30px; collapsed summaries remain
+20px. Structural seats render chrome only, not Request preview text. The fold
+control is 18px and Step controls have a 14px line box, contained by the seat.
+The row model is the single source for both inline height and virtual estimate.
+Focus restoration accounts for integer scroll rounding before deciding that a
+nested control needs whole-row scrolling; it must not undo the exact prepend
+anchor for a subpixel edge difference.
+
+### Repair regression map
+
+* `424: logical arrows visit exact Turn, Step, Request and semantic targets without
+  structural detail reads` proves ordering, both arrow directions, exact native
+  Step evidence, zero structural detail reads and explicit Request detail reads.
+* `424: promoted System defers exact Step chrome and truthful fallback geometry`
+  covers five controlled projections: only System, loaded native Step, Context,
+  search hiding the later seat, and collapsed Turn. Native ownership stays exact.
+* `424: structural-only seats and request-only seats have distinct exact navigation
+  and height contracts` distinguishes 20px structural and 10px Request-only seats.
+* Browser `424: exact structural arrows, seat geometry and prepend plain/virtual`
+  compares actual control/row bounding boxes, model heights and neighboring row
+  bounds; traverses exact structural/Request targets; preserves Step key, focus,
+  Inspector and the original sub-2px anchor through structural-to-semantic
+  regrouping; and asserts detail-read counters before and after Request selection.
+* `424: Inspector close restores the exact structural key after folding hides a semantic target`
+  proves that closing a hidden semantic selection focuses the exact Turn control,
+  arrow navigation reaches the retained semantic cell and folded Step, and closing
+  structural Inspector restores that exact Step key without a detail read.
+* The four `421: semantic ledger acceptance` cases now compare System/Turn/Step
+  Y positions in expanded, folded and searched states, including search that
+  removes the usual post-System semantic seats. Their pinned-container baselines
+  retain the 1440/390 × English/Chinese coverage.
+* Existing threshold prepend coverage includes the first structural Request seat
+  as the anchor while its chrome moves away and its height becomes 10px. It does
+  not mistakenly track the following sibling, whose position legitimately changes
+  when the anchored seat shrinks. Its sub-2px tolerance is unchanged.
+
+No Rust, wire schema, Tool proposal, Timeline, Trace cache, Chat, i18n vocabulary
+or Inspector data owner changes are required. Runtime Client remains 51 and App
+Server remains 26. Pinned Harness provenance is unchanged; descendant hashes
+are refreshed. The native Tool proposal counter and lifecycle regression remains
+part of the passing full Rust suite.
+
+### Repair validation record
+
+Commands ran in the dedicated worktree; package commands below use the named
+package directory. No environment limitation has blocked a required lane.
+
+| Command | Repair result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
+| `cargo test --all-targets --all-features` | Pass: 3,968 tests; eight existing ignored tests. Includes the native one-proposal-resolution / zero-lifecycle-resolution regression |
+| `pnpm generate && pnpm check && pnpm typecheck` (protocol/app-server) | Pass; generated 51/26 contract has no drift |
+| `pnpm typecheck && pnpm test` (tui) | Pass: 852 tests |
+| `pnpm typecheck` (web-console) | Pass after correcting new test options described below |
+| `pnpm build` (web-console) | Pass; existing Vite large-chunk advisory only |
+| `pnpm test` (web-console) | Pass: 1,105 tests in 62 files, including final empty-Turn fold ordering assertion |
+| `pnpm check:i18n` (web-console) | Pass |
+| `pnpm check:provenance` (web-console) | Pass: 145 source records and 131 production-package notices |
+| `pnpm exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts test/trace-cache.test.ts` (web-console) | Pass: 133 tests |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts --grep '424:'` (web-console) | Final focused run: 2 passed (plain and virtual); intermediate failures below |
+| `CONTAINER_ENGINE=podman RUSTX_SCREENSHOT_UPDATE=1 bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` (web-console) | Final update run: 35 passed; prior run: 34 passed / 1 anchor-selector failure, corrected below |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` (web-console) | Pass: 35 tests against the final build, screenshot comparison enabled |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` (web-console) | Pass: all 131 browser tests, screenshot comparison enabled, including #419/#420 integration and all new structural regressions |
+| `git diff --check` (root) | Pass |
+
+Intermediate repair failures were retained as evidence, not suppressed:
+
+* The first focused unit run passed 131 tests and failed the only-System case:
+  its assertion asked for a loaded native Step fact when the fixture deliberately
+  had no native Step record. The corrected assertion checks exact Step identity
+  on the control and checks native record evidence only in the loaded cases.
+* Web typecheck rejected Playwright's `exact` option used in four new Testing
+  Library calls. Testing Library's exact string role-name matcher is used instead.
+* Initial filtered browser invocations used the wrong working directory / had
+  not yet written the test file. They produced a missing-script error and a
+  no-tests-found result respectively; the commands were rerun from web-console.
+* The first sparse fixture could not preserve an anchor because removing the
+  history affordance required negative scrollTop. It now has controlled scroll
+  extent in both plain and virtual modes and places the actual Step at the top.
+  The original `< 2px` assertion is unchanged.
+* That exposed a real virtual-only 8.5px movement: fractional scroll rounding
+  caused focus restoration to align the whole row after exact Step anchoring.
+  The visibility check now tolerates only the browser's subpixel rounding edge;
+  both browser modes pass the unchanged anchor assertion.
+* A diagnostic virtual-only run reproduced that failure; a diagnostic
+  `--grep 'semantic prepend.*threshold'` run separately proved the 10px difference
+  came from anchoring a 20px seat that became 10px while the test tracked its next
+  sibling. The existing test now includes structural seats in its anchor selector,
+  tracks the same persistent seat, and still enforces `< 2px` through virtualization.
+* Visual inspection caught Request preview text in a newly classified structural
+  seat. Semantic preview rendering is now restricted to semantic seats; a unit
+  assertion prevents Request text from returning as ordinary row content.
+
+There are no new skips, sleeps as ordering proof, arbitrary timeout increases,
+weakened prepend tolerances or suite serialization changes. The repository's
+existing immutable Playwright container and worker configuration remain the
+browser authority. All 12 acceptance baselines (expanded/folded/Inspector at
+1440 English, 1440 Chinese, 390 English and 390 Chinese) were visually inspected.
+System precedes Turn, Step chrome starts after its own Turn, Request retries stay
+compact and exact, and narrow/Inspector layouts retain the native controls.
+
+Final repair fetch confirmed main remained at `a64e8ae79b2fa03da87d9995038670f179434845`; no integration or rebase was required. Final source review confirmed explicit logical target ordering, exact structural/Request selection, contained seat geometry, and unchanged Tool/protocol/Timeline/cache owners.

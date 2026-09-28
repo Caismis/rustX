@@ -119,7 +119,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       const attempt = structure ? structure.attempt_id : selected?.location.attempt_id;
       const target = rows.find(row => rowOwnsKey(row, key))
         ?? rows.find(row => row.turnStart && row.turn?.attempt_id === attempt);
-      setPendingFocus(target && rowOwnsKey(target, key) ? key : target?.display_key);
+      setPendingFocus(target && rowOwnsKey(target, key) ? key : target?.turn?.display_key);
     }
     select();
   };
