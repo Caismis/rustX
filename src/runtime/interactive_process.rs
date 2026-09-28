@@ -1936,7 +1936,13 @@ mod interactive_tests {
             .await
             .unwrap_or_else(|_| {
                 panic!(
-                    "pre-anchor owner did not settle; driver: {:?}; stderr: {}",
+                    "pre-anchor owner did not settle; inner_pid_file_exists: {}; outer_pid: {:?}; outer_observation: {:?}; driver: {:?}; stderr: {}",
+                    inner_pid_file.exists(),
+                    process.supervisor_child_pid,
+                    process.supervisor_child_pid.map(|pid| crate::runtime::process_wait::waitid(
+                        crate::runtime::process_wait::Id::Pid(nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap())),
+                        nix::sys::wait::WaitPidFlag::WNOHANG | nix::sys::wait::WaitPidFlag::WEXITED | nix::sys::wait::WaitPidFlag::WNOWAIT,
+                    )),
                     control.observed_events(),
                     process.stderr_preview()
                 )

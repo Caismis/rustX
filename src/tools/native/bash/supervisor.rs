@@ -273,7 +273,7 @@ use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::{Pid, read, write};
+use nix::unistd::{Pid, read};
 
 use crate::runtime::process_wait::{Id, waitid};
 #[cfg(target_os = "macos")]
@@ -1202,14 +1202,7 @@ impl ControlStream {
     /// Writes one length-prefixed frame: `[u32 LE length][kind][payload]`.
     #[allow(clippy::unused_self)] // the handle exists to be explicit about the control stream
     fn write_frame(&mut self, kind: u8, payload: &[u8]) -> Result<(), String> {
-        let mut frame = Vec::with_capacity(4 + 1 + payload.len());
-        let frame_len = u32::try_from(1 + payload.len())
-            .map_err(|_| "the control frame is too large".to_owned())?;
-        frame.extend_from_slice(&frame_len.to_le_bytes());
-        frame.push(kind);
-        frame.extend_from_slice(payload);
-        write(std::io::stdin(), &frame)
-            .map_err(|error| format!("cannot write to the control channel: {error}"))?;
+        crate::runtime::supervised_unit::write_frame(&mut std::io::stdin(), kind, payload)?;
         match kind {
             MSG_ALL_CHILDREN_REAPED => trace(TraceEvent::TerminalPublished),
             MSG_PROCESS_CONTROL_FAILURE => trace(TraceEvent::ControlFailure),

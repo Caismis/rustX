@@ -57,13 +57,6 @@ pub(crate) fn command_environment() -> Result<Vec<(String, String)>, String> {
     serde_json::from_str(&encoded).map_err(|error| format!("invalid command environment: {error}"))
 }
 
-/// The nix Unix stream used by the supervisor control channels. The
-/// `socket` feature of `nix` is not enabled for the whole crate; the
-/// interactive supervisor unit binds/accepts with `std::os::unix::net`
-/// and converts, so this module only needs the stream type alias.
-#[cfg(unix)]
-pub(crate) type ControlStream = std::os::unix::net::UnixStream;
-
 /// The outer supervisor role name.
 pub(crate) const ROLE_OUTER: &str = "outer";
 /// The inner supervisor role name.
@@ -636,21 +629,97 @@ impl FrameReader {
     }
 }
 
-/// Writes one length-prefixed control frame: `[u32 LE length][kind][payload]`.
+/// Maximum time owned by a single control-frame delivery. A peer that stops
+/// draining must not strand the synchronous lifecycle owner. Expiry fails the
+/// channel, never proves physical terminality, and is unrelated to TERM grace.
+const CONTROL_WRITE_BUDGET: Duration = Duration::from_secs(1);
+
+/// Owns an encoded frame until all its bytes commit or the channel fails.
+struct FrameWriter {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl FrameWriter {
+    fn new(kind: u8, payload: &[u8]) -> Result<Self, String> {
+        let len = payload
+            .len()
+            .checked_add(1)
+            .and_then(|len| u32::try_from(len).ok())
+            .ok_or("the control frame is too large")?;
+        let mut bytes = Vec::with_capacity(4 + len as usize);
+        bytes.extend_from_slice(&len.to_le_bytes());
+        bytes.push(kind);
+        bytes.extend_from_slice(payload);
+        Ok(Self { bytes, offset: 0 })
+    }
+
+    fn complete(
+        &mut self,
+        mut send: impl FnMut(&[u8]) -> Result<usize, Errno>,
+        mut writable: impl FnMut(Duration) -> Result<(), String>,
+        deadline: std::time::Instant,
+    ) -> Result<(), String> {
+        while self.offset < self.bytes.len() {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or("control frame delivery deadline expired")?;
+            match send(&self.bytes[self.offset..]) {
+                Ok(0) => return Err("control channel closed during frame delivery".to_owned()),
+                Ok(count) => self.offset += count,
+                Err(Errno::EINTR) => {}
+                Err(Errno::EAGAIN) => writable(remaining)?,
+                Err(error) => return Err(format!("cannot write the control frame: {error}")),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn wait_control_writable(
+    socket: &impl std::os::fd::AsFd,
+    remaining: Duration,
+) -> Result<(), String> {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    let mut fds = [PollFd::new(socket.as_fd(), PollFlags::POLLOUT)];
+    let timeout = PollTimeout::try_from(remaining).map_err(|error| error.to_string())?;
+    match poll(&mut fds, timeout) {
+        Ok(0) => Err("control frame delivery deadline expired".to_owned()),
+        Ok(_)
+            if fds[0]
+                .revents()
+                .unwrap_or_else(PollFlags::empty)
+                .intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) =>
+        {
+            Err("control channel failed while awaiting writable readiness".to_owned())
+        }
+        Ok(_) | Err(Errno::EINTR) => Ok(()), // readiness is a hint; retry the outstanding bytes
+        Err(error) => Err(format!("cannot await control channel readiness: {error}")),
+    }
+}
+
+/// Commits one complete frame, or shuts down the channel on delivery failure.
+/// No caller can append another frame after an abandoned partial prefix.
+/// Per-send nonblocking mode also bounds calls made before `O_NONBLOCK` is set.
 pub(crate) fn write_frame(
-    stream: &mut ControlStream,
+    socket: &mut impl std::os::fd::AsFd,
     kind: u8,
     payload: &[u8],
 ) -> Result<(), String> {
-    let mut frame = Vec::with_capacity(4 + 1 + payload.len());
-    let frame_len = u32::try_from(1 + payload.len())
-        .map_err(|_| "the control frame is too large".to_owned())?;
-    frame.extend_from_slice(&frame_len.to_le_bytes());
-    frame.push(kind);
-    frame.extend_from_slice(payload);
-    nix::unistd::write(stream, &frame)
-        .map_err(|error| format!("cannot write the control frame: {error}"))?;
-    Ok(())
+    use nix::sys::socket::{MsgFlags, Shutdown, send, shutdown};
+    use std::os::fd::AsRawFd;
+    let mut writer = FrameWriter::new(kind, payload)?;
+    let fd = socket.as_fd().as_raw_fd();
+    // Rust supervisor binaries ignore SIGPIPE; report peer failure as an error.
+    let result = writer.complete(
+        |bytes| send(fd, bytes, MsgFlags::MSG_DONTWAIT),
+        |remaining| wait_control_writable(socket, remaining),
+        std::time::Instant::now() + CONTROL_WRITE_BUDGET,
+    );
+    if result.is_err() {
+        let _ = shutdown(fd, Shutdown::Both);
+    }
+    result
 }
 
 /// The explicit outcome of catastrophic emergency containment.
@@ -1017,3 +1086,6 @@ mod signal_contract_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod frame_tests;

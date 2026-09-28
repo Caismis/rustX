@@ -1,17 +1,15 @@
-# PR #416: real pre-anchor supervisor proof-theft fixture
+# PR #416: complete supervisor control-frame ownership
 
-Repository: `Caismis/rustX`. Worktree:
+Repository: `Caismis/rustX`; worktree:
 `/home/caismis/Documents/codes/rustX-issue-411`.
 Branch: `issue-411-jobs-continuable-subagents`.
-Starting HEAD: `9132d94c039883e9f0c35228ac7ab50ff6272c05`.
-Fetched main: `a64e8ae79b2fa03da87d9995038670f179434845`, already the merge
-base and ancestor (25 ahead / 0 behind at start). No history rewrite or main
-integration was performed.
+Starting HEAD: `36b2568e44de610d80c8049223a5faa4a7b087bc`.
+Main: `a64e8ae79b2fa03da87d9995038670f179434845`, already the merge base
+and ancestor (26 ahead / 0 behind at start). No integration or history rewrite.
 
-## Hosted evidence
+## Confirmed defect versus historical hypothesis
 
-Run `36383023274` on the starting HEAD passed every required job except macOS.
-Its only failing test was
+Live run `36389802926` failed only its macOS job. Its sole failing test was
 `unprovable_pre_anchor_reap_never_settles_physically`:
 
 ```
@@ -20,79 +18,89 @@ driver: ["owner_attached"];
 stderr:
 ```
 
-Normal setsid-failure cleanup, exact recovery waiting and Bash stopped-anchor
-passed on that same hosted Darwin run. Earlier runs `36371768937`,
-`36374808352` also failed this regression. Earlier Linux success did not
-establish Darwin correctness. The latest log does not identify the native
-stalled transition; no more precise historical native trace is claimed.
+The same run passed normal setsid-failure cleanup, exact recovery waiting and
+Bash stopped-anchor. Previous fixture hypotheses did not establish the cause
+of the hosted stall, and this report does not reinterpret them as proven.
 
-The previous test-harness outer and fixture polling override changed the
-scenario: an inner that did not send its expected frame could exit without the
-outer observing it. Both have been deleted, including the ignored subprocess
-entry and serialized launch arguments. No diagnostic transport or compatibility
-path replaces them.
+Before changing either production writer, a real Unix socket-pair regression
+requested a 4 KiB send buffer, made the sender nonblocking, and attempted
+a 1 MiB payload while the receiver did not drain. The existing writer returned
+`Ok(())` after committing **8,064 of 1,048,581 encoded bytes**. The real
+`FrameReader` could not reconstruct a frame and the regression failed.
 
-## Real process topology and fault ownership
+This confirms the protocol defect, not the historical Darwin root cause. The
+control-frame writer used a single raw write on an O_NONBLOCK Unix stream and
+treated syscall success as whole-frame commit. The repair gives encoded-frame
+bytes explicit writer ownership until complete delivery or conclusive channel
+failure. The hosted FAIL_SETSID messages are much smaller than the deliberately
+oversized regression; the historical log contains no native write result.
 
-Both roles now use the ordinary `interactive-supervisor` binary:
+A lost setup-ending frame is a plausible explanation because the proof-theft
+inner remains alive, leaving no child-exit fallback. A future timeout now
+passively reports PID-file existence, outer PID, non-consuming `waitid` status,
+driver events and stderr. That inspection cannot reap or establish settlement.
+No new diagnostic IPC was introduced.
 
-```
-rustX driver -> interactive-supervisor outer -> interactive-supervisor inner
-```
+## Writer contract and liveness
 
-Role arguments, stdio, environment isolation, direct parentage and signal
-behavior are the normal execution path. Both pre-anchor state machines call
-`child.try_wait()` without a fixture override.
+`FrameWriter` owns one encoded `[u32 length][kind][payload]` buffer and its byte
+offset. Success requires offset == encoded length. It is local to one synchronous
+control owner; there is no background queue or second writer.
 
-Only `InteractiveTestControl` configures the existing private
-`RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP` semantic switch after `env_clear`.
-It is inherited by the real inner. Its fixture support must be compiled into
-the real binary; the runtime's configuration seam remains `cfg(test)`.
-Ordinary `ToolEnvironment` entries remain serialized command data, never
-supervisor configuration. No new key, public setting or reserved-name rule
-was added. The collision regression retains this key and checks that user
-values are visible to the command without activating supervisor capabilities.
+- Positive short sends advance only by the returned count.
+- EINTR preserves the offset and resumes the same frame.
+- EAGAIN / EWOULDBLOCK waits for POLLOUT with the existing nix polling primitive.
+  Readiness and interrupted polls are hints; the next send resumes outstanding
+  bytes. EWOULDBLOCK aliases EAGAIN on the supported Linux/Darwin targets.
+- Sends use MSG_DONTWAIT, including startup calls before O_NONBLOCK is installed.
+  The Rust supervisor binaries retain their existing ignored SIGPIPE behavior,
+  so a broken peer is reported as an error.
+- Zero sends, fatal send/poll errors, peer hangup, or budget expiry fail delivery.
+  The socket is shut down in both directions before returning failure, even if
+  no caller acts on the error. A partial prefix cannot be followed by a later
+  frame on a still-live channel.
 
-## Deterministic proof theft
+A dedicated **one-second per-frame delivery budget** bounds the synchronous
+owner when a peer never drains. It is an absolute deadline, not refreshed after
+partial progress or EINTR. Bounded channel failure is necessary because writable
+readiness alone may never arrive. This is not a physical-proof deadline, a test
+deadline, TERM grace, or a retry of a lifecycle operation. Expiry closes the
+control channel and existing failure/containment ownership remains responsible
+for settlement. No sleep was added.
 
-Only when both semantic injections are configured, the real inner:
+The nix socket feature supplies safe nonblocking send, shutdown and fixture
+socket-buffer configuration; its lockfile adds the transitive memoffset crate.
+No protocol version, wire format, shared public type or generated artifact changed.
 
-1. Connects its ordinary supervisor control socket and enters FAIL_SETSID.
-2. Writes the known-PID fixture best-effort, sends the fixed injected setsid
-   failure and its setup-ending `MSG_NO_OWNERSHIP` candidate.
-3. Enters a `thread::park()` loop until killed. Spurious returns cannot cause
-   natural exit. There is no elapsed-time synchronization or observer release.
+## Shared Bash boundary
 
-Thus ordinary pre-anchor polling naturally sees a live child and cannot cache
-its terminal status. The outer consumes the setup-ending candidate through its
-normal protocol path; that candidate is not forwarded as physical proof.
+Bash had the identical single-write defect on its fd-0 Unix control socket.
+Its small wrapper now calls the same framing primitive, then records existing
+bounded trace events only after complete commit. No Bash signal ordering,
+TERM/grace/KILL, group ownership, containment or terminal-proof code changed.
 
-The real outer then performs:
+## Pre-anchor semantics preserved
 
-```
-child.kill()
--> exact waitpid(inner_pid, None) by the semantic fault seam
--> require Signaled(exact_inner_pid, SIGKILL)
--> ordinary child.wait()
--> require actual OS ECHILD
--> ordinary process-control failure, annotated with the injected-failure marker
-```
+Both outer and inner remain the real `interactive-supervisor` executable.
+`attach_inner_control` and `await_anchor_commit` retain ordinary `child.try_wait()`.
+No test-executable supervisor, polling override or observation side channel exists.
 
-No synthetic wait error is returned. The exact foreign wait consumes the child
-before the designated owner attempts its proof. There is no process-wide wait,
-orphan, Linux subreaper dependency, or subsequent test-side cleanup. The PID
-file is not read as physical proof. The old fixture had confused an unreaped
-physical child with a designated owner lacking proof; these are distinct facts.
+Only the existing private semantic controls from `InteractiveTestControl` arm
+the proof-theft scenario. Ordinary `ToolEnvironment` is still opaque command
+data and cannot configure the supervisors. Typed physical continuation is untouched.
 
-Without the proof-theft switch, FAIL_SETSID still sends its setup-ending frames
-and exits normally. Ordinary cleanup remains `child.kill(); child.wait()`, and
-only a successful designated reap permits `MSG_NO_OWNERSHIP(reaped_pid)`.
-Anchor commit, group ownership, emergency containment and driver reap are
-unchanged.
+The FAIL_SETSID branch now requires both its injected process-control failure
+and its setup-ending candidate to commit successfully. On failure it emits a
+bounded stderr diagnostic and exits via the existing failure exit code; it
+cannot enter its permanent park. No transport error manufactures ownership proof.
 
-## Required regression evidence
+After both commits, only the proof-theft inner parks until the real outer kills
+it. Normal FAIL_SETSID still exits normally. The real outer's fault seam consumes
+only the exact inner PID's terminal status, requires SIGKILL for that PID, calls
+ordinary `Child::wait()`, and requires actual ECHILD before annotating its error.
+No synthetic wait error, process-wide reaper, orphan adoption or test-side cleanup.
 
-The existing real control channel and driver observer require this order:
+The real control-plane observer still requires:
 
 1. `owner_attached`
 2. `injected_setsid_failure_received`
@@ -103,39 +111,55 @@ The existing real control channel and driver observer require this order:
 7. `terminality_unproven_publication`
 8. `settlement_publication`
 
-The fault marker is emitted only after the exact SIGKILL status and real ECHILD
-checks. The test requires stored `UnitSettlement::TerminalityUnproven` and a
-returned error naming the pre-anchor unproven state. It forbids `NoOwnership`,
-`AllChildrenReaped`, `AnchorReady`, and server launch. No assertion or deadline
-was weakened; the 20-second timeout remains only a deadlock guard.
+The regression requires stored `TerminalityUnproven` and a returned error naming
+the pre-anchor state. It rejects `NoOwnership`, `AllChildrenReaped`, `AnchorReady`
+and server launch. Its existing 20-second deadlock guard is unchanged. Ordinary
+successful direct-child reap remains the prerequisite for proof-carrying
+`NoOwnership(pid)`. Recovery, Jobs/Agents, Runtime Client, App Server v27,
+TUI/Web and their public protocols are unchanged.
 
-Recovery, Bash, MCP, incremental Runtime Client, App Server v27, protocol,
-TUI and Web sources are untouched. No sleeps, retries, longer deadlines,
-broad-suite serialization, diagnostic IPC or test-executable supervisor remain.
+## Deterministic framing regressions
+
+- A non-draining real socket cannot produce successful partial commit. Delivery
+  now fails explicitly and the socket cannot accept another frame.
+- A real socket is filled until EAGAIN. The receiver waits on a channel until
+  the frame writer itself observes EAGAIN, then drains. The real FrameReader
+  reconstructs exactly ProcessControlFailure plus its payload, then NoOwnership,
+  with no duplicate or trailing bytes.
+- Scripted EINTR, short sends and EAGAIN retain the exact byte offset.
+- A closed peer produces a channel failure.
+- An expired absolute budget cannot attempt another write.
+
+Tests use kernel backpressure and channels for ordering, not sleeps or elapsed
+threshold assertions. New timeouts serve only as deadlock guards or the explicit
+production control-channel failure budget.
 
 ## Validation and delivery
 
-Local validation ran on Linux with normal suite concurrency. Final hosted macOS
-on the pushed SHA is still required; Linux results do not establish Darwin
-correctness. The final SHA, topology and one post-push CI snapshot are reported
-in the delivery message. PR #416 is not merged and auto-merge is not enabled.
+Local validation passed on Linux with normal suite concurrency. Linux does not establish
+Darwin correctness. The exact final SHA still requires hosted macOS success.
+One post-push CI snapshot is reported in the delivery message. PR #416 is not
+merged and auto-merge is not enabled.
 
 
 | Command | Result |
 | --- | --- |
-| `cargo build --bins` | Passed |
-| `cargo test --lib --all-features <filter> -- --nocapture` (nine filters below) | All passed |
+| `cargo test --lib --all-features runtime::supervised_unit::frame_tests -- --nocapture` | 5 passed |
+| `cargo test --lib --all-features <interactive/closed filter> -- --nocapture` | All 9 requested filters passed |
 | `cargo test --lib --all-features runtime::interactive_process::` | 20 passed |
-| `cargo test --lib --all-features runtime::interactive_supervisor::` | 2 passed, no ignored fixture entry |
-| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 3,211 passed; 3 existing opt-in tests ignored |
+| `cargo test --lib --all-features runtime::interactive_supervisor::` | 2 passed |
+| `cargo test --lib --all-features tools::native::bash::tests` | 37 passed |
+| `cargo test --all-features --test tools bash::<filter> -- --exact --nocapture` | All 3 cancellation filters below passed |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 3,216 passed; 3 existing opt-in tests ignored |
 | `cargo test --lib --all-features -- boundary_suites::` | 194 passed |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | durable 129, process 63, subagent 45, tools 133, conformance 22, CFG 26 + 5; all passed |
 | `cargo test --test contracts --test provider --all-features` | contracts 28; provider 166 passed, 5 live opt-in tests ignored |
 | `cargo fmt --all -- --check` | Passed |
-| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed after the doc-comment formatting correction |
+| `cargo build --bins` | Passed, including final build |
 | `git diff --check` and `git diff --cached --check` | Passed |
 
-Focused filters:
+Interactive and closed filters:
 
 - `unprovable_pre_anchor_reap_never_settles_physically`
 - `setsid_failure_before_the_anchor_settles_by_direct_pid_reap`
@@ -147,10 +171,28 @@ Focused filters:
 - `pre_reserved_wait_settles_independently_of_another_agents_recovery`
 - `stopped_anchor_supervisor_is_contained_by_the_outer`
 
-No local build, test, quality check or diagnostic run failed or was interrupted
-in this repair. The passing deterministic suite retained its existing
-archive-cancelled cleanup diagnostic. The hosted failure above is historical
-Darwin evidence, not a local Darwin reproduction. No protocol/client sources
-or generated artifacts changed, so no local client regeneration or rerun was
-needed. The removed fixture launch and polling symbols have no remaining
-source or documentation references.
+Bash cancellation filters:
+
+- `background_cancel_records_term_before_trap_and_physical_terminal`
+- `bash_background_cancellation_uses_the_same_process_group_path`
+- `bash_kill_escalates_when_term_is_ignored`
+
+Failed diagnostics and corrections:
+
+- The original-writer regression intentionally failed: success with only 8,064
+  of 1,048,581 bytes committed. This was observed before production writer changes.
+- The first new-writer compile rejected `PollFlags::default`; replaced with the
+  actual `PollFlags::empty` API.
+- A now-unused stream alias produced a warning and was removed.
+- Initial Clippy rejected an unquoted O_NONBLOCK identifier in a doc comment;
+  formatting was corrected and the full Clippy command passed afterward.
+- Two initial `git fetch origin main` attempts failed DNS resolution. A later
+  fetch succeeded and confirmed unchanged main; authenticated CI reads succeeded.
+- No test failed after the writer repair, and no diagnostic run was interrupted.
+  No retry-until-green test procedure, sleep, existing deadline increase, or
+  broad-suite serialization was used.
+
+Client/protocol sources and generated inputs were unchanged; no local client
+regeneration or protocol version change was needed. Final pushed SHA, clean
+worktree/topology and the single post-push hosted snapshot are in the delivery
+message. Final-SHA hosted macOS success remains mandatory.

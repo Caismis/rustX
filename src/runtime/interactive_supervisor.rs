@@ -1171,12 +1171,16 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         // connection exists. Like the real setsid-failure path below,
         // the inner stays in its parent's process group and
         // its pid is provably not a process-group id.
-        let _ = write_frame(
+        let published = write_frame(
             &mut control,
             MSG_PROCESS_CONTROL_FAILURE,
             b"injected setsid failure after the inner control connection",
-        );
-        let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
+        )
+        .and_then(|()| write_frame(&mut control, MSG_NO_OWNERSHIP, &[]));
+        if let Err(error) = published {
+            eprintln!("interactive supervisor: cannot publish injected setup failure: {error}");
+            return INNER_EXIT_CONTAINMENT;
+        }
         if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
             // Keep this exact child alive until the outer's SIGKILL. Normal
             // try_wait therefore observes None without suppressing polling.
