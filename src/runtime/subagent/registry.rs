@@ -605,6 +605,8 @@ struct RegistryState {
     terminal_inflight: std::collections::BTreeSet<SubagentId>,
     #[cfg(test)]
     recovery_probe_hook: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg(test)]
+    recovery_proof_wait: std::collections::BTreeSet<SubagentId>,
     records: Vec<SubagentRecord>,
     index: HashMap<SubagentId, usize>,
     /// Live routed interactions owned by child coordinators. This is a root
@@ -1710,6 +1712,8 @@ impl SubagentRegistry {
                 terminal_inflight: std::collections::BTreeSet::new(),
                 #[cfg(test)]
                 recovery_probe_hook: None,
+                #[cfg(test)]
+                recovery_proof_wait: std::collections::BTreeSet::new(),
                 records: Vec::new(),
                 index: HashMap::new(),
                 routed_interactions: HashMap::new(),

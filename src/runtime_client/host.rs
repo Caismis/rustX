@@ -4298,6 +4298,18 @@ mod tests {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
+        // Attempt settlement is a semantic event, not completion of the
+        // independently owned presentation read. Capture the equivalence cut
+        // only after the terminal response's decorated domain was published.
+        let terminal_read = |event: &RuntimeClientProtocolEvent| {
+            matches!(
+                &event.event, RuntimeClientEvent::ReadDomainsUpdated { transcript, .. }
+                    if transcript.entries.iter().any(|entry| entry.completed_response.is_some())
+            )
+        };
+        if !events.iter().any(terminal_read) {
+            events.extend(receive_until(&subscription, terminal_read).await);
+        }
         let (expected, n) = fixture.host.snapshot().unwrap();
         while events.last().is_none_or(|event| event.cursor < n) {
             let EventDelivery::Event(event) = subscription.next().await else {

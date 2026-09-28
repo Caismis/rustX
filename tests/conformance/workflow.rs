@@ -789,9 +789,19 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
     };
     let driver = Driver::reference(&emulator, true).await;
     let original = std::fs::read(driver.root.path().join("workspace/greeting.py")).unwrap();
+    let (writer_started, mut writer_starts) = tokio::sync::watch::channel(0usize);
     driver.submit();
     let release_writers = async {
         for iteration in 1..=iterations {
+            // The provider guard owns provider readiness, not the previous
+            // writer's physical settlement/check/workspace transitions. The
+            // native event loop below already owns their liveness guard.
+            while *writer_starts.borrow_and_update() < iteration {
+                writer_starts
+                    .changed()
+                    .await
+                    .expect("native writer start publication");
+            }
             emulator
                 .await_gate(&format!("reference-writer-{iteration}"))
                 .await;
@@ -821,6 +831,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
         }
     };
     let interact = async {
+        let writer_started = writer_started;
         let mut reviews = 0;
         let mut approvals = 0;
         let mut questions = 0;
@@ -835,6 +846,21 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
                 panic!("events")
             };
             match event.event {
+                RuntimeClientEvent::WorkflowsUpdated { workflows } => {
+                    let started = workflows
+                        .runs
+                        .iter()
+                        .flat_map(|run| &run.instances)
+                        .filter(|row| {
+                            row.node.as_deref() == Some("implement")
+                                && matches!(
+                                    row.state,
+                                    WorkflowState::Running | WorkflowState::Settled { .. }
+                                )
+                        })
+                        .count();
+                    writer_started.send_modify(|count| *count = (*count).max(started));
+                }
                 RuntimeClientEvent::InteractionPending { interaction } => {
                     let response = match interaction.request.kind {
                         InteractionKind::Questionnaire {

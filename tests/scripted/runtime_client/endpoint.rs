@@ -452,7 +452,8 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     // id, strictly contiguous.
     let mut expected = cursor;
     let mut settled = false;
-    while !settled {
+    let mut decorated = false;
+    while !settled || !decorated {
         // Liveness guard only: the notification wait itself is exact.
         let frame = tokio::time::timeout(std::time::Duration::from_mins(2), adapter.notification())
             .await
@@ -464,7 +465,18 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
             frame.get("id").is_none(),
             "notifications never fabricate request ids"
         );
-        settled = frame["event"]["type"] == "attempt_settled";
+        settled |= frame["event"]["type"] == "attempt_settled";
+        // A settled attempt can still have its finite presentation read in
+        // flight. Observe that owner's terminal-response publication before
+        // asserting that detach/reconnect sees an unchanged cursor.
+        decorated |= frame["event"]["type"] == "read_domains_updated"
+            && frame["event"]["transcript"]["entries"]
+                .as_array()
+                .is_some_and(|entries| {
+                    entries
+                        .iter()
+                        .any(|entry| entry.get("completed_response").is_some())
+                });
     }
 
     let response = adapter.exchange(r#"{"method":"capability_get","id":4}"#);

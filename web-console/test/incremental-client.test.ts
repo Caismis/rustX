@@ -332,6 +332,9 @@ it('Agent and Job domains join cursor replay after resync without snapshot polli
   emit(s, '1', { type: 'agent_updated', agent: incrementalAgent() });
   emit(s, '2', { type: 'job_updated', job: { job_id: 'job-1', tool_id: 'bash', tool_name: 'bash', state: 'running' } });
   const captured = s.client.getSnapshot().views.A.snapshot!;
+  s.held.add('agent/wait');
+  const waiting = s.client.request({ method: 'agent/wait', params: { target: s.target('A'), agent_id: 'durable-child' } }, 'agent_wait');
+  const waitRequest = await s.waitFor('agent/wait', 1);
   expect(s.requests.filter(row => ['session/snapshot', 'session/trace'].includes(row.request.method))).toHaveLength(0);
   s.held.add('session/snapshot');
   emit(s, '4', { type: 'agent_updated', agent: incrementalAgent('activation-2') });
@@ -343,12 +346,18 @@ it('Agent and Job domains join cursor replay after resync without snapshot polli
   emit(s, '3', { type: 'job_updated', job: { job_id: 'job-1', tool_id: 'bash', tool_name: 'bash', state: 'succeeded' } });
   emit(s, '4', { type: 'agent_updated', agent: incrementalAgent('activation-2') });
   emit(s, '4', { type: 'agent_updated', agent: incrementalAgent() }); // duplicate cannot retarget
+  s.socket.success(waitRequest, { type: 'agent_wait', agent_id: 'durable-child', activation_id: 'activation-1', outcome: 'succeeded', agent: incrementalAgent() });
+  expect((await waiting).activation_id).toBe('activation-1');
+  expect(s.requests.filter(row => row.request.method === 'agent/wait')).toHaveLength(1);
   const current = s.client.getSnapshot().views.A.snapshot!;
   expect(current.agents![0].activation_id).toBe('activation-2');
   expect(captured.agents![0].activation_id).toBe('activation-1');
   expect(current.jobs![0].state).toBe('succeeded');
   expect(current.messages).toBe(installed.messages); expect(current.transcript).toBe(installed.transcript);
   expect(s.client.getSnapshot().views.A.cursor).toBe('4');
+  emit(s, '5', { type: 'read_domains_updated', transcript: current.transcript, todos: current.todos });
+  expect(s.client.getSnapshot().views.A.snapshot?.agents).toBe(current.agents);
+  expect(s.client.getSnapshot().views.A.snapshot?.jobs).toBe(current.jobs);
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
 });

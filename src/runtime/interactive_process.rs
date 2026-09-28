@@ -533,6 +533,7 @@ async fn drive_interactive_unit(
     )
     .await;
     let _ = std::fs::remove_file(&socket_path);
+    record_event(&test_control, "settlement_publication");
     settlement.publish(outcome);
 }
 
@@ -760,6 +761,10 @@ async fn run_interactive_unit(
                 )) => {}
                 Ok(Some(SupervisorEvent::ProcessControlFailure { message })) => {
                     record_event(test_control, "process_control_failure");
+                    #[cfg(test)]
+                    if message.contains("injected pre-anchor reap failure") {
+                        record_event(test_control, "injected_reap_failure_received");
+                    }
                     if control_failure.is_none() {
                         control_failure = Some(message);
                     }
@@ -796,12 +801,14 @@ async fn run_interactive_unit(
     }
     // The direct supervisor child is reaped before physical settlement is
     // published, on every path.
+    record_event(test_control, "direct_child_wait");
     if let Err(error) = child.wait().await {
         return UnitSettlement::TerminalityUnproven(unproven_reason(
             &format!("cannot reap the direct interactive supervisor child: {error}"),
             control_failure.as_deref(),
         ));
     }
+    record_event(test_control, "direct_child_reaped");
     // Release the parent's retained anchor only against this unit's own
     // proven physical terminality; an unproven settlement deliberately
     // keeps the parent's retention alive.
@@ -1898,11 +1905,15 @@ mod interactive_tests {
     /// proof-carrying `NoOwnership`, so no successful physical settlement
     /// is ever published.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // One causal inner/outer/driver ownership scenario.
     async fn unprovable_pre_anchor_reap_never_settles_physically() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let fixture = Fixture::new();
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
+        let diagnostic_path = fixture.path("pre-anchor.sock");
+        let diagnostic = tokio::net::UnixListener::bind(&diagnostic_path).unwrap();
         let control = InteractiveTestControl::new();
         let process = fixture
             .spawn_with_control(
@@ -1912,16 +1923,52 @@ mod interactive_tests {
                         FAIL_SETSID_ENV.to_owned(),
                         inner_pid_file.display().to_string(),
                     ),
-                    (FAIL_PRE_ANCHOR_REAP_ENV.to_owned(), "1".to_owned()),
+                    (
+                        FAIL_PRE_ANCHOR_REAP_ENV.to_owned(),
+                        diagnostic_path.display().to_string(),
+                    ),
                 ],
                 control.clone(),
             )
             .expect("spawn");
-        let settlement = published_settlement(
-            &process,
-            "the driver must publish an explicit settlement, never hang",
-        )
-        .await;
+        // Each phase has the existing deadlock guard, with causal socket
+        // evidence identifying which owner has reached its boundary.
+        for label in [
+            b"inner_connected".as_slice(),
+            b"conclude_pre_anchor".as_slice(),
+        ] {
+            let (mut peer, _) = tokio::time::timeout(DEADLINE, diagnostic.accept())
+                .await
+                .expect("supervisor must reach the next pre-anchor boundary")
+                .unwrap();
+            let mut observed = vec![0; label.len()];
+            tokio::time::timeout(DEADLINE, peer.read_exact(&mut observed))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(observed, label, "exact inner/outer boundary order");
+            assert!(
+                process.settlement.observed().is_none(),
+                "gated owner has not concluded"
+            );
+            peer.write_all(&[1]).await.unwrap();
+            if label == b"conclude_pre_anchor" {
+                let mut outcome = Vec::new();
+                tokio::time::timeout(DEADLINE, peer.read_to_end(&mut outcome))
+                    .await
+                    .expect("outer must write the failure and leave conclude_pre_anchor")
+                    .unwrap();
+                assert_eq!(outcome, b"failure_written");
+            }
+        }
+        let settlement = tokio::time::timeout(DEADLINE, process.wait_for_settlement())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "outer concluded but driver did not publish settlement; exact boundaries: {:?}",
+                    control.observed_events()
+                )
+            });
         let reason = settlement.expect_err(
             "a pre-anchor child whose reap cannot be proven is never a physical settlement",
         );
@@ -1930,6 +1977,20 @@ mod interactive_tests {
             "the settlement must name the unproven pre-anchor state: {reason}"
         );
         let events = control.observed_events();
+        for expected in [
+            "owner_attached",
+            "injected_reap_failure_received",
+            "control_eof",
+            "direct_child_wait",
+            "direct_child_reaped",
+            "settlement_publication",
+        ] {
+            assert!(
+                events.iter().any(|event| event == expected),
+                "missing {expected}: {events:?}"
+            );
+        }
+
         assert!(
             events
                 .iter()

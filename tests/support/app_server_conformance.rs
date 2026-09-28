@@ -66,25 +66,27 @@ pub async fn representative_scenario(
     sessions: [SessionId; 2],
 ) {
     assert_ne!(sessions[0], sessions[1]);
-    let mismatch_id = RequestId::String("version-mismatch".into());
-    let Response::Failure(failure) = driver
-        .request(Request {
-            jsonrpc: JsonRpcVersion::V2,
-            id: mismatch_id.clone(),
-            call: initialize(6),
-        })
-        .await
-    else {
-        panic!("unsupported version accepted")
-    };
-    assert_eq!(failure.id, Some(mismatch_id));
-    assert_eq!(
-        failure.error.data,
-        Some(ErrorData::UnsupportedVersion {
-            supported: APP_SERVER_PROTOCOL_VERSION,
-            requested: 6,
-        })
-    );
+    for version in [6, 25, 26] {
+        let mismatch_id = RequestId::String(format!("version-mismatch-{version}"));
+        let Response::Failure(failure) = driver
+            .request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: mismatch_id.clone(),
+                call: initialize(version),
+            })
+            .await
+        else {
+            panic!("unsupported version accepted")
+        };
+        assert_eq!(failure.id, Some(mismatch_id));
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::UnsupportedVersion {
+                supported: APP_SERVER_PROTOCOL_VERSION,
+                requested: version,
+            })
+        );
+    }
     assert!(matches!(
         call(driver, 0, initialize(APP_SERVER_PROTOCOL_VERSION)).await,
         MethodResult::Initialized {

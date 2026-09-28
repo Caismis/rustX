@@ -315,6 +315,29 @@ impl SubagentRegistry {
         self.config.mailbox.wake().notify_one();
     }
 
+    /// Run the existing off-lock barrier and select positive acquisition only
+    /// for fixture-named exact obligations. No production proof policy changes.
+    #[cfg(test)]
+    fn prepare_test_recovery_proof(
+        &self,
+        activation: &crate::runtime::identity::SubagentId,
+    ) -> bool {
+        let hook = self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recovery_probe_hook
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recovery_proof_wait
+            .remove(activation)
+    }
+
     /// A bounded reconciliation pass at startup, Goal idle and runtime drain.
     /// Missing evidence leaves the concrete obligation available for the next
     /// pass/reopen. No inspection of a PID or clean Git tree substitutes for it.
@@ -336,19 +359,14 @@ impl SubagentRegistry {
             unreserved,
         } in obligations
         {
+            let prove = super::super::physical_recovery::prove;
             #[cfg(test)]
-            {
-                let hook = self
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .recovery_probe_hook
-                    .take();
-                if let Some(hook) = hook {
-                    hook();
-                }
-            }
-            let Ok(Some(_proof)) = super::super::physical_recovery::prove(
+            let prove = if self.prepare_test_recovery_proof(&activation) {
+                super::super::physical_recovery::prove_after_release
+            } else {
+                prove
+            };
+            let Ok(Some(_proof)) = prove(
                 &self.config.spawn.product_root,
                 &self.config.spawn.session_id,
                 &conversation,

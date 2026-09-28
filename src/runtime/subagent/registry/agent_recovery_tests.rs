@@ -898,6 +898,7 @@ async fn pre_reserved_wait_settles_independently_of_another_agents_recovery() {
         &agents[0].child_conversation_id, &x).unwrap();
     let x_lock = x_owner.duplicate_lock_for_test().unwrap();
     registry.retain_unreserved_allocation(&agents[0].child_conversation_id, &x);
+    registry.state.lock().unwrap().recovery_proof_wait.insert(x.clone());
     drop(x_owner);
     let (entered, entry) = tokio::sync::oneshot::channel();
     let (release, released) = std::sync::mpsc::channel();
@@ -935,9 +936,20 @@ async fn pre_reserved_wait_settles_independently_of_another_agents_recovery() {
     assert!(futures_util::poll!(&mut wait).is_pending());
     // Explicit unlock releases this test-owned description even if an unrelated
     // spawn transiently inherited a duplicate. No drop=>next-Try assumption.
+    registry.state.lock().unwrap().recovery_proof_wait.insert(y.clone());
     y_lock.unlock().unwrap();
     drop(y_lock);
-    registry.reconcile_recovered_settlements();
+    // The positive proof and its retained locks flow through the real exact
+    // obligation settlement while X's independent worker remains parked.
+    let proof_registry = registry.clone();
+    tokio::task::spawn_blocking(move || proof_registry.reconcile_recovered_settlements())
+        .await.unwrap();
+    {
+        let state = registry.state.lock().unwrap();
+        assert!(!state.recovery_pending.contains(&y));
+        assert!(!state.recovery_inflight.contains(&y));
+        assert!(state.recovery_pending.contains(&x));
+    }
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), &mut wait).await.unwrap().unwrap();
     assert_eq!(result.activation_id, Some(y.clone()));
     assert!(result.outcome.is_none());

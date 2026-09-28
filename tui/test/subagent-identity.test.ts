@@ -155,10 +155,11 @@ it("incremental resync keeps Jobs and Agents at one cut and replay preserves ear
   const base = { ...snapshot(), agents: [original], jobs: [{ job_id: "job", tool_id: "bash", tool_name: "bash", state: "running" as const }] };
   const captured = replaceFromSnapshot(base, runtimeCursor(10));
   let live = replaceFromSnapshot(base, runtimeCursor(10));
+  const transcript = live.transcript;
   live = reduce(live, { cursor: runtimeCursor(11), event: { type: "agent_updated", agent: { ...original, activation_id: "later", current_activation: "later" } } });
   live = reduce(live, { cursor: runtimeCursor(12), event: { type: "job_updated", job: { ...base.jobs[0]!, state: "succeeded" } } });
   assert.equal(live.agents[0]?.activation_id, "later");
   assert.equal(captured.agents[0]?.activation_id, original.activation_id);
   assert.equal(live.jobs[0]?.state, "succeeded");
-  assert.equal(live.transcript, captured.transcript);
+  assert.equal(live.transcript, transcript);
 });

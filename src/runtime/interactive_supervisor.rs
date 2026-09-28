@@ -191,7 +191,8 @@ pub(crate) const INNER_STALL_BEFORE_ANCHOR_ENV: &str =
 /// Test-only injection: the outer's pre-anchor cleanup cannot prove the
 /// direct inner reap. This injects the semantic state only — the direct
 /// child is never actually waited for, so the proof-carrying
-/// `MSG_NO_OWNERSHIP` must not be emitted.
+/// `MSG_NO_OWNERSHIP` must not be emitted. The value names the private
+/// fixture socket that synchronizes the connected inner and outer conclusion.
 pub(crate) const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
 
 /// Runs the outer supervisor role; returns its exit status.
@@ -928,6 +929,7 @@ fn conclude_pre_anchor(
     if let Some(message) = failure {
         let _ = write_frame(upstream, MSG_PROCESS_CONTROL_FAILURE, message.as_bytes());
     }
+    let mut diagnostic = pre_anchor_fixture_boundary(b"conclude_pre_anchor");
     let inner_pid = i32::try_from(child.id()).unwrap_or(0);
     let _ = child.kill();
     let reaped = if std::env::var(FAIL_PRE_ANCHOR_REAP_ENV).is_ok() {
@@ -947,7 +949,7 @@ fn conclude_pre_anchor(
             0
         }
         Err(error) => {
-            let _ = write_frame(
+            let written = write_frame(
                 upstream,
                 MSG_PROCESS_CONTROL_FAILURE,
                 format!(
@@ -957,9 +959,31 @@ fn conclude_pre_anchor(
                 )
                 .as_bytes(),
             );
+            if let Some(stream) = &mut diagnostic {
+                use std::io::Write;
+                let label: &[u8] = if written.is_ok() {
+                    b"failure_written"
+                } else {
+                    b"failure_write_failed"
+                };
+                let _ = stream.write_all(label);
+            }
             1
         }
     }
+}
+
+/// An explicit fixture socket, supplied only by `InteractiveTestControl`. The
+/// two fixed boundary labels contain no command, output or environment data.
+/// This channel never supplies physical proof or selects a lifecycle outcome.
+fn pre_anchor_fixture_boundary(label: &[u8]) -> Option<std::os::unix::net::UnixStream> {
+    use std::io::{Read, Write};
+    let path = std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV)?;
+    let mut stream = std::os::unix::net::UnixStream::connect(path).ok()?;
+    stream.write_all(label).ok()?;
+    let mut release = [0];
+    stream.read_exact(&mut release).ok()?;
+    Some(stream)
 }
 
 /// Relays one post-anchor inner control frame upstream.
@@ -1153,6 +1177,7 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         }
     }
     if let Ok(pid_file) = std::env::var(FAIL_SETSID_ENV) {
+        let _fixture = pre_anchor_fixture_boundary(b"inner_connected");
         // Test-only injection: `setsid()` fails after the control
         // connection exists. This is byte-for-byte the real setsid-failure
         // path below, so the inner stays in its parent's process group and
