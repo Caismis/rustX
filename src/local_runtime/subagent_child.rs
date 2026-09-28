@@ -42,10 +42,10 @@
 //! External capability materialization can start an MCP process, negotiate a
 //! protocol revision, and prepare the fingerprint-keyed uv environment of a
 //! managed Python tool package (Issue #174). Composition therefore races the
-//! attempt-derived cancellation and the control channel's EOF: a settled
-//! preparation drops the composition, the child never answers `Ready`, no
-//! semantic work begins, and the parent settles the terminal from the
-//! child's physical outcome.
+//! attempt-derived cancellation and the control channel's EOF: the owner
+//! cancels and awaits composition, then drains its retained physical owners.
+//! The child never answers `Ready`, no semantic work begins, and the parent
+//! settles the terminal from the child's physical outcome.
 //!
 //! # Message-bus invariant (child side)
 //!
@@ -83,7 +83,9 @@ use futures_util::future::BoxFuture;
 
 use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
-use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
+#[cfg(test)]
+use crate::message::types::MessageBlock;
+use crate::message::types::{UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::conversation_runtime::{InboundAdmissionError, ParentGuidanceSeal};
 use crate::runtime::interaction::{
@@ -241,7 +243,20 @@ pub async fn run_subagent_child() -> i32 {
         return 2;
     }
 
-    let code = match Box::pin(run_child(&mut dispatcher, &handle, spec)).await {
+    let physical_lease =
+        match crate::runtime::subagent::physical_recovery::ChildPhysicalLease::acquire(&spec) {
+            Ok(lease) => lease,
+            Err(error) => {
+                let _ = handle
+                    .send_reliable(ChildFrame::StartupError(DiagnosticFrame {
+                        message: format!("physical incarnation lease: {error}"),
+                    }))
+                    .await;
+                dispatcher.shutdown().await;
+                return 2;
+            }
+        };
+    let code = match Box::pin(run_child(&mut dispatcher, &handle, spec, &physical_lease)).await {
         Ok(()) => 0,
         // A startup failure was already reported through `StartupError`
         // by `run_child` when the channel allowed.
@@ -277,6 +292,54 @@ async fn run_child(
     dispatcher: &mut ChildControlDispatcher,
     handle: &ChildControlHandle,
     spec: SubagentChildSpec,
+    physical_lease: &crate::runtime::subagent::physical_recovery::ChildPhysicalLease,
+) -> Result<(), ChildExit> {
+    let mut lifetime = ChildPhysicalLifetime::new(handle);
+    let result = Box::pin(run_child_inner(dispatcher, handle, spec, &mut lifetime)).await;
+    // Every normal return, including validation, composition and protocol
+    // failure, reaches this one proof-producing epilogue. Aborting this owner
+    // emits no proof. A failed drain retains uncertainty regardless of the
+    // logical result or whether any process happens to remain observable.
+    match lifetime.settle(handle.parent_lost()).await {
+        Ok(()) => physical_lease.publish_quiescent().map_err(|error| {
+            ChildExit::Protocol(format!("publish physical settlement receipt: {error}"))
+        })?,
+        Err(failures) => {
+            eprintln!(
+                "subagent child: physical settlement unproven: {}",
+                failures.join("; ")
+            );
+        }
+    }
+    result
+}
+
+struct ChildPhysicalLifetime {
+    preparation: ChildPreparation,
+    runtime: Option<crate::runtime::conversation_runtime::ConversationRuntime>,
+}
+
+impl ChildPhysicalLifetime {
+    fn new(handle: &ChildControlHandle) -> Self {
+        Self {
+            preparation: ChildPreparation::new(CancellationSignal::new(), handle.clone()),
+            runtime: None,
+        }
+    }
+
+    async fn settle(self, parent_lost: bool) -> Result<(), Vec<String>> {
+        match self.runtime {
+            Some(runtime) => runtime.settle_child_physical_lifetime(parent_lost).await,
+            None => self.preparation.settle().await,
+        }
+    }
+}
+
+async fn run_child_inner(
+    dispatcher: &mut ChildControlDispatcher,
+    handle: &ChildControlHandle,
+    spec: SubagentChildSpec,
+    lifetime: &mut ChildPhysicalLifetime,
 ) -> Result<(), ChildExit> {
     if let Err(error) = spec.workspace_snapshot.validate() {
         return Err(ChildExit::Startup(format!(
@@ -288,11 +351,11 @@ async fn run_child(
             "the child workspace policy and immutable workspace snapshot disagree".to_owned(),
         ));
     }
-    let Some(core) = Box::pin(compose_cancellably(dispatcher, handle, &spec)).await? else {
-        // Preparation settled (cancellation or parent loss) before the child
-        // was owned: nothing composed, nothing started, no result. The
-        // parent settles the cancelled/interrupted terminal itself from the
-        // physical outcome.
+    let Some(core) = Box::pin(compose_cancellably(dispatcher, handle, &spec, lifetime)).await?
+    else {
+        // No semantic delegation began. Composition may already have owned
+        // physical resources; the common lifetime epilogue must still drain
+        // those before publishing proof for the parent's settlement.
         return Ok(());
     };
     let workflow_output = core.workflow_output();
@@ -362,7 +425,7 @@ async fn run_child(
             dispatcher,
             handle,
             spec.parent_agent_id,
-            runtime,
+            runtime.clone(),
             observations,
             workflow_output,
         )
@@ -443,12 +506,17 @@ pub(crate) async fn serve_child_delegation(
                 let _ = runtime.shutdown().await;
                 return Ok(());
             }
+            Some(ChildControlEvent::SealGranted | ChildControlEvent::AdmissionReopened) => {
+                return Err(ChildExit::Protocol("unexpected seal grant".to_owned()));
+            }
             Some(ChildControlEvent::ProtocolViolation(message)) => {
                 return Err(ChildExit::Protocol(message));
             }
         }
     };
     runtime.set_interaction_provider_available(delegate.interaction_provider_available);
+
+    runtime.gate_child_turns();
 
     // The delegated task enters through the child's ordinary durable
     // inbound path. IPC transports the envelope; it never appends.
@@ -480,6 +548,12 @@ pub(crate) async fn serve_child_delegation(
         )
         .await;
     }
+
+    handle
+        .send_reliable(ChildFrame::DelegateAccepted)
+        .await
+        .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+    runtime.release_child_turn();
 
     // Observe the attempt to its canonical terminal event while serving
     // Cancel frames through the ordinary cancellation path.
@@ -514,39 +588,80 @@ pub(crate) async fn serve_child_delegation(
     //
     // The seal is steering-specific terminal machinery. A Workflow-owned
     // `AgentRun` (`workflow_output` latch present) is structurally not
-    // steerable — `SubagentRegistry::steer` refuses it from the ownership
-    // fact alone, before any `Guidance` frame exists — so no accepted
+    // messageable — it has no durable native Agent identity in the parent
+    // registry, so `send_message` rejects it before any frame exists. No accepted
     // generic guidance can ever be pending in its conversation, and the
     // steering-specific seal must have **no semantic effect** on its
-    // lifecycle or terminal result. Its natural completion is therefore its
-    // terminal: the loop breaks on the first `Completed` without consulting
-    // the seal, so a seal durable-probe failure can never convert a valid
+    // lifecycle or terminal result. The first attempt terminal is final,
+    // regardless of outcome: the loop never consults the seal, so a seal
+    // durable-probe failure can never convert a valid
     // Workflow output settlement into a failure. The one committed
     // `workflow_output` value remains the exactly-once terminal settlement
     // through the ordinary Workflow output path below.
+    let mut cancelled = false;
     let mut observed_terminals: u64 = 0;
     let terminal = loop {
-        let terminal = await_terminal(
+        let mut terminal = await_terminal(
             dispatcher,
             &runtime,
             &observations,
             handle,
             &parent_agent_id,
+            &mut cancelled,
         )
         .await?;
+        // Workflow completion is authoritative at its committed attempt terminal.
+        // Only a continuable Agent absorbs later cancellation across turns.
+        if cancelled && workflow_output.is_none() && !matches!(terminal, AttemptTerminal::Orphaned)
+        {
+            terminal = AttemptTerminal::Cancelled;
+        }
         observed_terminals = observed_terminals.saturating_add(1);
-        // A cancelled, failed, or orphaned child settles immediately: a
-        // cancellation intent supersedes every pending semantic input, and
-        // an orphaned child has no parent left to report to. A
-        // Workflow-owned child settles on its first natural completion too:
-        // it never participates in the generic parent-guidance terminal
-        // protocol (see above).
-        if !matches!(terminal, AttemptTerminal::Completed) || workflow_output.is_some() {
+        // Workflow-owned children settle on their first terminal. Orphans
+        // cannot close admission with a parent that no longer exists.
+        // Every other child first drains the parent's already-admitted FIFO
+        // guidance into its durable inbox. Only natural completion may reopen
+        // this activation: failure (including timeout/limits) and cancellation
+        // are final. Any accepted, unobserved guidance remains durable input
+        // owned by the Agent conversation for a later activation.
+        if cancelled || workflow_output.is_some() || matches!(terminal, AttemptTerminal::Orphaned) {
+            break terminal;
+        }
+        if !close_parent_admission(
+            dispatcher,
+            handle,
+            &runtime,
+            &parent_agent_id,
+            &mut cancelled,
+        )
+        .await?
+        {
+            break AttemptTerminal::Cancelled;
+        }
+        if !matches!(terminal, AttemptTerminal::Completed(_)) {
             break terminal;
         }
         match runtime.seal_parent_guidance(observed_terminals).await {
             ParentGuidanceSeal::Sealed => break terminal,
-            ParentGuidanceSeal::Open => {}
+            ParentGuidanceSeal::Open => {
+                handle
+                    .send_reliable(ChildFrame::SealOpen)
+                    .await
+                    .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+                if !await_parent_admission_boundary(
+                    dispatcher,
+                    handle,
+                    &runtime,
+                    &parent_agent_id,
+                    true,
+                    &mut cancelled,
+                )
+                .await?
+                {
+                    break AttemptTerminal::Cancelled;
+                }
+                runtime.release_child_turn();
+            }
             // Fail closed: an unverifiable pending inbox is not an empty
             // one. The runtime already committed its absorbing
             // durability-failure fact; the completed attempt's answer is
@@ -559,14 +674,14 @@ pub(crate) async fn serve_child_delegation(
         }
     };
     let frame = match terminal {
-        AttemptTerminal::Completed => {
+        AttemptTerminal::Completed(attempt_id) => {
             let answer = workflow_output.as_ref().and_then(|latch| {
                 latch
                     .committed_value()
                     .and_then(|value| serde_json::to_string(&value).ok())
             });
             let answer = if workflow_output.is_none() {
-                final_answer(&runtime)
+                final_answer(&runtime, &attempt_id)
             } else {
                 answer
             };
@@ -599,17 +714,104 @@ pub(crate) async fn serve_child_delegation(
             diagnostic: Some(bound_diagnostic(diagnostic)),
         },
         AttemptTerminal::Orphaned => {
-            // The reliable parent control path is gone: drop the child
-            // runtime without ordinary semantic shutdown. Ordinary shutdown
-            // would synthesize `InteractionSettled(Cancelled)` for any other
-            // live child interaction, while process loss must leave only the
-            // historical requested facts and let the parent classify the
-            // physical child as interrupted. No waiter is reconstructed by
-            // recovery.
+            // The reliable parent control path is gone. Return to run_child's
+            // parent-loss drain: it abandons interaction waiters as ControlLost
+            // before native cancellation, preserving requested audit facts and
+            // proving physical containment without inventing a human outcome.
             return Ok(());
         }
     };
     report_and_drain(handle, &runtime, frame).await
+}
+
+/// The registry closes admission before the child can seal its inbox. Its grant
+/// follows every message admitted before the close, on the same FIFO control lane.
+async fn close_parent_admission(
+    dispatcher: &mut ChildControlDispatcher,
+    handle: &ChildControlHandle,
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    parent_agent_id: &crate::runtime::identity::AgentId,
+    cancelled: &mut bool,
+) -> Result<bool, ChildExit> {
+    handle
+        .send_reliable(ChildFrame::SealRequested)
+        .await
+        .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+    await_parent_admission_boundary(
+        dispatcher,
+        handle,
+        runtime,
+        parent_agent_id,
+        false,
+        cancelled,
+    )
+    .await
+}
+
+async fn await_parent_admission_boundary(
+    dispatcher: &mut ChildControlDispatcher,
+    handle: &ChildControlHandle,
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    parent_agent_id: &crate::runtime::identity::AgentId,
+    reopening: bool,
+    cancelled: &mut bool,
+) -> Result<bool, ChildExit> {
+    if *cancelled {
+        return Ok(false);
+    }
+    loop {
+        match dispatcher.next_event().await {
+            Some(ChildControlEvent::SealGranted) if !reopening => return Ok(true),
+            Some(ChildControlEvent::AdmissionReopened) if reopening => return Ok(true),
+            Some(ChildControlEvent::SealGranted | ChildControlEvent::AdmissionReopened) => {
+                return Err(ChildExit::Protocol(
+                    "out-of-order admission boundary".into(),
+                ));
+            }
+            Some(ChildControlEvent::Guidance {
+                guidance_id,
+                message,
+            }) => {
+                apply_parent_guidance(handle, runtime, parent_agent_id, guidance_id, message)
+                    .await?;
+            }
+            Some(ChildControlEvent::InteractionProviderAvailable { available }) => {
+                runtime.set_interaction_provider_available(available);
+            }
+            Some(ChildControlEvent::InteractionRespond {
+                response_id,
+                interaction,
+                response,
+            }) => {
+                send_interaction_response_result(
+                    handle,
+                    runtime,
+                    response_id,
+                    interaction,
+                    response,
+                )
+                .await?;
+            }
+            Some(ChildControlEvent::Cancel {
+                reason: Some(reason),
+            }) => {
+                *cancelled = true;
+                let _ = runtime.cancel_current_or_next_attempt(reason);
+                // Cancellation is absorbing at BOTH admission boundaries.
+                // It cannot be consumed by close and forgotten before reopen.
+                return Ok(false);
+            }
+            Some(ChildControlEvent::ProtocolViolation(message)) => {
+                return Err(ChildExit::Protocol(message));
+            }
+            Some(ChildControlEvent::Delegate(_) | ChildControlEvent::Cancel { reason: None })
+            | None => {
+                return Err(ChildExit::Protocol(
+                    "parent lost while closing message admission".to_owned(),
+                ));
+            }
+        }
+    }
 }
 
 /// Composes the child runtime as **cancellable owned work** (Issue #145).
@@ -618,7 +820,7 @@ pub(crate) async fn serve_child_delegation(
 /// old base-only startup — an MCP process start plus protocol negotiation, a
 /// fingerprint-keyed uv environment build of a managed Python tool package
 /// (Issue #174). Three things therefore race here, and the composition
-/// future is dropped the instant any of them wins:
+/// owner is cancelled and awaited when either control authority wins:
 ///
 /// ```text
 /// Cancel from the parent   the spawn attempt no longer wants this child
@@ -626,52 +828,45 @@ pub(crate) async fn serve_child_delegation(
 /// composition completes    the child may answer Ready
 /// ```
 ///
-/// `Ok(None)` means the preparation settled: nothing was composed, no
-/// semantic work began, and the parent settles the terminal from the child's
-/// physical outcome.
+/// `Ok(None)` means semantic preparation was cancelled before Ready. Any
+/// physical owner created while composing remains in the lifetime epilogue;
+/// only its explicit drain permits a physical receipt.
 async fn compose_cancellably(
     dispatcher: &mut ChildControlDispatcher,
     handle: &ChildControlHandle,
     spec: &SubagentChildSpec,
+    lifetime: &mut ChildPhysicalLifetime,
 ) -> Result<Option<LocalConversationCore>, ChildExit> {
-    let cancellation = CancellationSignal::new();
-    let preparation = ChildPreparation::new(cancellation.clone(), handle.clone());
+    let preparation = &lifetime.preparation;
+    let cancellation = preparation.cancellation();
     let dependencies = LocalRuntimeDependencies::default();
     let composition =
-        LocalConversationCore::compose_subagent_child(spec, &dependencies, &preparation);
+        LocalConversationCore::compose_subagent_child(spec, &dependencies, preparation);
     let mut composition = std::pin::pin!(composition);
     let mut events_open = true;
+    let mut protocol_error = None;
     let composed = loop {
         tokio::select! {
-            event = dispatcher.next_event(), if events_open => match event {
-                Some(ChildControlEvent::Cancel { .. }) => cancellation.cancel(),
-                Some(ChildControlEvent::Delegate(_)) => {
-                    return Err(ChildExit::Protocol(
-                        "a delegation arrived before the child answered Ready".to_owned(),
-                    ));
-                }
-                Some(ChildControlEvent::InteractionProviderAvailable { .. }) => {}
-                Some(ChildControlEvent::Guidance { .. }) => {
-                    // The parent routes guidance only to a committed,
-                    // delegated child; one arriving during composition is a
-                    // control-protocol violation of the parent.
-                    return Err(ChildExit::Protocol(
-                        "guidance arrived before the child was delegated".to_owned(),
-                    ));
-                }
-                Some(ChildControlEvent::InteractionRespond { .. }) => {
-                    return Err(ChildExit::Protocol(
-                        "an interaction response arrived before the child answered Ready"
-                            .to_owned(),
-                    ));
-                }
-                Some(ChildControlEvent::ProtocolViolation(message)) => {
-                    return Err(ChildExit::Protocol(message));
-                }
-                None => {
-                    // The control channel is finished. The preparation
-                    // guard observes the same fact and settles; the arm is
-                    // disabled so the loop cannot spin.
+            event = dispatcher.next_event(), if events_open => {
+                let violation = match event {
+                    Some(ChildControlEvent::Cancel { .. }) => {
+                        cancellation.cancel();
+                        None
+                    }
+                    Some(ChildControlEvent::InteractionProviderAvailable { .. }) => None,
+                    None => {
+                        events_open = false;
+                        cancellation.cancel();
+                        None
+                    }
+                    Some(ChildControlEvent::ProtocolViolation(message)) => Some(message),
+                    Some(_) => Some("control frame arrived before the child answered Ready".into()),
+                };
+                if let Some(message) = violation {
+                    // A protocol failure ends semantic admission, not physical
+                    // ownership. Await the cancelled composition so its owner
+                    // is available to the common settlement epilogue.
+                    protocol_error = Some(message);
                     events_open = false;
                     cancellation.cancel();
                 }
@@ -679,6 +874,14 @@ async fn compose_cancellably(
             composed = &mut composition => break composed,
         }
     };
+    if let Ok(core) = &composed {
+        // Retain before any conversion/route bind can consume the core and
+        // fail. From this cut onward the runtime owns the physical drain.
+        lifetime.runtime = Some(core.runtime().clone());
+    }
+    if let Some(message) = protocol_error {
+        return Err(ChildExit::Protocol(message));
+    }
     match composed {
         Ok(core) => {
             // The final stretch of composition after the last guarded step
@@ -688,9 +891,7 @@ async fn compose_cancellably(
             // settle the composed runtime — its physical capability
             // runtimes included — and report the settled preparation.
             if cancellation.is_cancelled() || handle.parent_lost() {
-                let runtime = core.runtime().clone();
                 drop(core);
-                let _ = runtime.shutdown().await;
                 Ok(None)
             } else {
                 Ok(Some(core))
@@ -750,21 +951,26 @@ async fn apply_parent_guidance(
         Err(InboundAdmissionError::GuidanceSealed) => {
             ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Settled)
         }
-        Err(InboundAdmissionError::GuidanceCancelled) => {
-            ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Cancelled)
-        }
         Err(error) => ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Refused {
             detail: bound_diagnostic(error.to_string()),
         }),
     };
+    #[cfg(test)]
+    if matches!(outcome, ChildGuidanceOutcome::Accepted)
+        && GUIDANCE_ACK_LOSS.try_with(|lose| *lose).unwrap_or(false)
+    {
+        return Err(ChildExit::Protocol(
+            "injected control loss after durable guidance acceptance".into(),
+        ));
+    }
     answer_guidance(handle, guidance_id, outcome).await
 }
 
 /// Answers exactly one parent-authored guidance envelope over the reliable
 /// control lane (Issue #193).
 ///
-/// The child conversation is the acceptance authority, so this answer — not
-/// any parent-side timing — is what the parent's `execution(steer)` reports.
+/// The parent owns admission; this child answer proves canonical durability
+/// before the parent's `send_message` acknowledgement completes.
 /// Every envelope receives exactly one answer; an envelope the child can no
 /// longer serve is refused by the driver task dropping its waiter, never by
 /// silence that the parent could mistake for acceptance.
@@ -806,10 +1012,10 @@ async fn send_interaction_response_result(
         .map_err(|error| ChildExit::Protocol(error.to_string()))
 }
 
-/// The canonical terminal of the child's one attempt.
+/// The canonical terminal and identity of one child attempt.
 enum AttemptTerminal {
     /// `AttemptCompleted`.
-    Completed,
+    Completed(crate::runtime::identity::AttemptId),
     /// `AttemptCancelled`.
     Cancelled,
     /// `AttemptFailed`, `AttemptTimedOut`, or `AttemptLimitExceeded`, with
@@ -830,6 +1036,7 @@ async fn await_terminal(
     observations: &Arc<PendingObservations>,
     handle: &ChildControlHandle,
     parent_agent_id: &crate::runtime::identity::AgentId,
+    cancelled: &mut bool,
 ) -> Result<AttemptTerminal, ChildExit> {
     await_terminal_inner(
         dispatcher,
@@ -837,6 +1044,7 @@ async fn await_terminal(
         observations,
         handle,
         parent_agent_id,
+        cancelled,
         |_| {},
     )
     .await
@@ -857,6 +1065,7 @@ async fn await_terminal_with_probe(
         observations,
         handle,
         &crate::runtime::identity::AgentId::new("agent-parent"),
+        &mut false,
         move |delivered| {
             if delivered {
                 cancellation_after_admission.notify_one();
@@ -875,6 +1084,7 @@ async fn await_terminal_inner<F>(
     observations: &Arc<PendingObservations>,
     handle: &ChildControlHandle,
     parent_agent_id: &crate::runtime::identity::AgentId,
+    cancelled: &mut bool,
     on_cancellation: F,
 ) -> Result<AttemptTerminal, ChildExit>
 where
@@ -914,7 +1124,10 @@ where
                                 "a semantic cancellation arrived without a reason".to_owned(),
                             ));
                         };
+                        *cancelled = true;
                         let delivered = runtime.cancel_current_or_next_attempt(reason).is_some();
+                        #[cfg(test)]
+                        let _ = CANCELLATION_OBSERVED.try_with(|signal| signal.notify_one());
                         on_cancellation(delivered);
                         // The frame is a request, not a terminal fact: the
                         // canonical AttemptCancelled settles the attempt.
@@ -954,7 +1167,10 @@ where
                         )
                         .await?;
                     }
-                    Some(ChildControlEvent::ProtocolViolation(message)) => {
+                    Some(ChildControlEvent::SealGranted | ChildControlEvent::AdmissionReopened) => {
+                return Err(ChildExit::Protocol("unexpected seal grant".to_owned()));
+            }
+            Some(ChildControlEvent::ProtocolViolation(message)) => {
                         return Err(ChildExit::Protocol(message));
                     }
                     None => return Ok(AttemptTerminal::Orphaned),
@@ -975,8 +1191,8 @@ where
                     match observation {
                         ConversationObservation::Event { event, .. } => {
                             match event {
-                                RuntimeEvent::AttemptCompleted { .. } => {
-                                    return Ok(AttemptTerminal::Completed);
+                                RuntimeEvent::AttemptCompleted { attempt_id, .. } => {
+                                    return Ok(AttemptTerminal::Completed(attempt_id));
                                 }
                                 RuntimeEvent::AttemptCancelled { .. } => {
                                     return Ok(AttemptTerminal::Cancelled);
@@ -1014,30 +1230,19 @@ where
 /// The bounded final assistant answer of the settled attempt.
 fn final_answer(
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    attempt_id: &crate::runtime::identity::AttemptId,
 ) -> Option<String> {
-    // The terminal observation fires on the durable commit inside the
-    // attempt, before the coordinator's in-memory conversation state is
-    // restored — so the answer must be read from the durable authority,
-    // where the committed assistant message already exists by definition.
-    let ledger = runtime.durable_ledger()?;
-    let answer = ledger.iter().rev().find_map(|message| match message {
-        MessageBlock::Assistant(assistant) => {
-            let text: String = assistant
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    crate::message::types::AssistantContentBlock::Text(text) => {
-                        Some(text.text.as_str())
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            if text.is_empty() { None } else { Some(text) }
-        }
-        _ => None,
-    })?;
-    Some(bound_utf8(answer, MAX_RESULT_CONTENT_BYTES))
+    let assistant = runtime.durable_final_assistant(attempt_id)?;
+    let answer = assistant
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            crate::message::types::AssistantContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    (!answer.is_empty()).then(|| bound_utf8(answer, MAX_RESULT_CONTENT_BYTES))
 }
 
 /// Caps one diagnostic at the result-content bound.
@@ -1104,7 +1309,13 @@ fn take_observation_channel() -> std::io::Result<tokio::net::UnixStream> {
 }
 
 #[cfg(test)]
-mod tests {
+tokio::task_local! {
+    static CANCELLATION_OBSERVED: Arc<tokio::sync::Notify>;
+    pub(crate) static GUIDANCE_ACK_LOSS: bool;
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
@@ -1158,6 +1369,8 @@ mod tests {
             None,
             conversation_id,
             model,
+            None,
+            None,
         )
         .await
     }
@@ -1180,6 +1393,8 @@ mod tests {
             Some(model_arbitration_pause),
             conversation_id,
             model,
+            None,
+            None,
         )
         .await
     }
@@ -1189,7 +1404,7 @@ mod tests {
     /// (terminal mode `WorkflowOutput`) can be composed exactly like
     /// production (`SubagentChildCore::workflow_output`).
     #[allow(clippy::too_many_arguments)] // one composition fixture
-    async fn child_test_runtime_full(
+    pub(crate) async fn child_test_runtime_full(
         dir: &tempfile::TempDir,
         start_pause: Option<StartBoundaryPause>,
         admission_gate: Option<Arc<Gate>>,
@@ -1198,29 +1413,37 @@ mod tests {
         model_arbitration_pause: Option<crate::agent::execution::test_sync::ModelArbitrationPause>,
         conversation_id: ConversationId,
         model: Arc<FakeModel>,
+        store: Option<Arc<crate::durable::SqliteConversationStore>>,
+        tools: Option<ToolRegistry>,
     ) -> ConversationRuntime {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = ConversationToolRuntime::from_config(
-            conversation_id.clone(),
-            crate::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace,
-                dir.path().join("artifacts"),
-            )
-            .with_extensions(
-                crate::extensions::NativeAgentExtensions::with_agent_status(
-                    crate::context::AgentStatusConfig::default(),
-                ),
-            ),
+        let mut config = crate::tools::runtime::ConversationRuntimeConfig::new(
+            &workspace,
+            dir.path().join("artifacts"),
         )
-        .expect("tool runtime");
+        .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
+            crate::context::AgentStatusConfig::default(),
+        ));
+        config.durable_binding =
+            store.map(|store| crate::durable::ConversationStoreBinding::new(store));
+        let tool_runtime = ConversationToolRuntime::from_config(conversation_id.clone(), config)
+            .expect("tool runtime");
+        let mut activation = crate::capabilities::AgentActivation::default();
+        if let Some(tools) = &tools {
+            activation.profile.tools.builtin = tools
+                .definitions()
+                .into_iter()
+                .map(|tool| tool.name.clone())
+                .collect();
+        }
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             conversation_id: conversation_id.clone(),
             workspace: tool_runtime.workspace().clone(),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(tools.unwrap_or_default()),
             extension_tools: tool_runtime.extension_tool_plane(),
-            agent_activation: crate::capabilities::AgentActivation::default(),
+            agent_activation: activation,
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
@@ -1619,18 +1842,12 @@ mod tests {
         runtime.shutdown().await.expect("child runtime drains");
     }
 
-    /// The Issue #145 local race, deterministically in-process (the e2e
-    /// module covers the cross-process ordering; see
-    /// `local_runtime::preparation_e2e`): a `Cancel` event sets
-    /// the one preparation cancellation signal, and only THEN the guarded
-    /// external-preparation step completes. The gate is deliberately
-    /// biased to let the completed step win its internal race, so the
-    /// composition's own settlement checks are what must hold: the
-    /// composition must never be publishable as `Ready`.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)] // complete child composition and ownership fixture
-    async fn a_step_completing_after_cancellation_never_publishes_ready() {
-        let dir = tempfile::tempdir().expect("temp root");
+    fn preparation_fixture(
+        dir: &tempfile::TempDir,
+    ) -> (
+        SubagentChildSpec,
+        crate::runtime::local_storage::ProductRoot,
+    ) {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let spec = SubagentChildSpec {
@@ -1698,6 +1915,173 @@ mod tests {
         .unwrap()
         .join(&spec.incarnation);
         std::fs::create_dir_all(&allocation).unwrap();
+        (spec, product)
+    }
+
+    fn child_physical_lease(
+        spec: &SubagentChildSpec,
+    ) -> crate::runtime::subagent::physical_recovery::ChildPhysicalLease {
+        use crate::runtime::subagent::physical_recovery::{
+            ChildPhysicalLease, ParentPhysicalLease,
+        };
+        let product =
+            crate::runtime::local_storage::ProductRoot::existing(&spec.product_root).unwrap();
+        let parent = ParentPhysicalLease::reserve(
+            &product,
+            &spec.session_id,
+            &spec.child_conversation_id,
+            &spec.subagent_id,
+        )
+        .unwrap();
+        // Duplicate the real pre-admission authority, then enter the same
+        // Running transition as fd2 acquisition in a child process.
+        ChildPhysicalLease::acquire_from_parent(spec, &parent).unwrap()
+    }
+
+    #[tokio::test]
+    async fn composed_child_rollback_drains_without_semantic_activation() {
+        let dir = tempfile::tempdir().unwrap();
+        let (spec, _product) = preparation_fixture(&dir);
+        let (_parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+        let handle = dispatcher.handle();
+        let mut lifetime = ChildPhysicalLifetime::new(&handle);
+        let core = compose_cancellably(&mut dispatcher, &handle, &spec, &mut lifetime)
+            .await
+            .unwrap()
+            .unwrap();
+        let runtime = core.runtime().clone();
+        drop(core);
+        assert!(!runtime.is_activated());
+        lifetime.settle(false).await.unwrap();
+        assert_eq!(
+            runtime.lifecycle_state(),
+            crate::runtime::types::ConversationLifecycleState::Quiescent
+        );
+        assert!(!runtime.has_current_attempt());
+        assert!(runtime.durable_ledger().unwrap().is_empty());
+        dispatcher.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn composition_error_publishes_proof_through_the_physical_epilogue() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut spec, product) = preparation_fixture(&dir);
+        // This is checked AFTER capability materialization and commit, before
+        // constructing a ConversationRuntime. The retained preparation owner
+        // must drain even though no runtime exists to perform shutdown.
+        spec.terminal = crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
+            output_schema: serde_json::json!({"type": "invalid-schema-type"}),
+        };
+        let activation = spec.subagent_id.clone();
+        let conversation = spec.child_conversation_id.clone();
+        let session = spec.session_id.clone();
+        let lease = child_physical_lease(&spec);
+        let (_parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+        let handle = dispatcher.handle();
+        let result = run_child(&mut dispatcher, &handle, spec, &lease).await;
+        assert!(
+            matches!(&result, Err(ChildExit::Startup(message))
+            if message.contains("output") && message.contains("schema")),
+            "{result:?}"
+        );
+        dispatcher.shutdown().await;
+        drop(lease);
+        assert!(
+            crate::runtime::subagent::physical_recovery::prove_after_release(
+                &product,
+                &session,
+                &conversation,
+                &activation,
+            )
+            .unwrap()
+            .is_some()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn protocol_failure_awaits_composition_before_publishing_physical_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let (spec, product) = preparation_fixture(&dir);
+        let gate = crate::local_runtime::composition::arm_test_preparation_drain_gate(
+            &spec.runtime_root().unwrap(),
+        );
+        let activation = spec.subagent_id.clone();
+        let conversation = spec.child_conversation_id.clone();
+        let session = spec.session_id.clone();
+        let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let child = tokio::spawn(async move {
+            let lease = child_physical_lease(&spec);
+            let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+            let handle = dispatcher.handle();
+            let result = run_child(&mut dispatcher, &handle, spec, &lease).await;
+            dispatcher.shutdown().await;
+            (result, lease)
+        });
+        gate.entered().await;
+        crate::runtime::subagent::ipc::write_parent_frame(
+            &mut parent,
+            &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                task: "too early".into(),
+                context: None,
+                interaction_provider_available: false,
+            }),
+        )
+        .await
+        .unwrap();
+        // The exact composition signal proves the protocol violation has been
+        // consumed; the guarded owner still cannot complete before release.
+        gate.cancellation().cancelled().await;
+        assert!(!child.is_finished());
+        let receipt = crate::runtime::subagent::child_conversation_store_path(
+            product.root(),
+            &session,
+            &conversation,
+        )
+        .parent()
+        .unwrap()
+        .join("physical-settlement")
+        .join(activation.as_str())
+        .join("physical-settlement.json");
+        let evidence: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
+        assert_eq!(
+            evidence["phase"], "running",
+            "cancellation cannot publish proof before the held preparation drains"
+        );
+        gate.release();
+        let (result, lease) = child.await.unwrap();
+        assert!(matches!(result, Err(ChildExit::Protocol(_))));
+        drop(lease);
+        assert!(
+            crate::runtime::subagent::physical_recovery::prove_after_release(
+                &product,
+                &session,
+                &conversation,
+                &activation,
+            )
+            .unwrap()
+            .is_some()
+        );
+    }
+
+    /// The Issue #145 local race, deterministically in-process (the e2e
+    /// module covers the cross-process ordering; see
+    /// `local_runtime::preparation_e2e`): a `Cancel` event sets
+    /// the one preparation cancellation signal, and only THEN the guarded
+    /// external-preparation step completes. The gate is deliberately
+    /// biased to let the completed step win its internal race, so the
+    /// composition's own settlement checks are what must hold: the
+    /// composition must never be publishable as `Ready`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // complete child composition and ownership fixture
+    async fn a_step_completing_after_cancellation_never_publishes_ready() {
+        let dir = tempfile::tempdir().expect("temp root");
+        let (spec, product) = preparation_fixture(&dir);
         let runtime_root = spec.runtime_root().unwrap();
         let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);
 
@@ -1706,16 +2090,20 @@ mod tests {
             tokio::net::UnixStream::pair().expect("observation pair");
         let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
         let handle = dispatcher.handle();
+        let activation = spec.subagent_id.clone();
+        let conversation = spec.child_conversation_id.clone();
+        let session = spec.session_id.clone();
         let mut composed = tokio::spawn(async move {
-            let outcome = Box::pin(compose_cancellably(&mut dispatcher, &handle, &spec)).await;
-            (outcome, dispatcher)
+            let lease = child_physical_lease(&spec);
+            let outcome = Box::pin(run_child(&mut dispatcher, &handle, spec, &lease)).await;
+            (outcome, dispatcher, lease)
         });
 
         // 1. The child is provably inside external preparation.
         tokio::select! {
             () = gate.entered() => {},
             result = &mut composed => panic!("composition exited before preparation gate: {:?}",
-                result.map(|(outcome, _)| outcome.map(|core| core.is_some()))),
+                result.map(|(outcome, _, _)| outcome)),
         }
 
         // 2. The parent's Cancel frame is written...
@@ -1743,15 +2131,34 @@ mod tests {
 
         // 5. The composition is never publishable: it settles instead of
         //    becoming a runtime the driver would answer `Ready` for.
-        let (outcome, dispatcher) =
+        let (outcome, dispatcher, lease) =
             tokio::time::timeout(std::time::Duration::from_secs(30), composed)
                 .await
                 .expect("liveness: the settled composition must complete")
                 .expect("the composition task must not panic");
-        let outcome = outcome.expect("the settled composition is not a startup failure");
+        outcome.expect("the settled composition is not a startup failure");
+        // The real early-exit epilogue wrote this evidence, while the writer
+        // remains excluded until its physical lease is released.
         assert!(
-            outcome.is_none(),
-            "once pre-commit cancellation has won, Ready is impossible"
+            crate::runtime::subagent::physical_recovery::prove(
+                &product,
+                &session,
+                &conversation,
+                &activation,
+            )
+            .unwrap()
+            .is_none()
+        );
+        drop(lease);
+        assert!(
+            crate::runtime::subagent::physical_recovery::prove_after_release(
+                &product,
+                &session,
+                &conversation,
+                &activation,
+            )
+            .unwrap()
+            .is_some()
         );
         // No child frame at all was written: not Ready, not anything. The
         // dispatcher's explicit shutdown makes the EOF deterministic.
@@ -1804,13 +2211,67 @@ mod tests {
         runtime: &ConversationRuntime,
         workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
     ) -> SealFixture {
-        let (parent, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        serve_child_with_reopen_gate(runtime, workflow_output, None)
+    }
+
+    fn serve_child_with_reopen_gate(
+        runtime: &ConversationRuntime,
+        workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
+        reopen_gate: Option<Arc<Gate>>,
+    ) -> SealFixture {
+        let (parent, relay) = tokio::net::UnixStream::pair().expect("test parent pair");
+        let (driver, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        let (mut driver_read, driver_write) = driver.into_split();
+        let driver_write = Arc::new(tokio::sync::Mutex::new(driver_write));
+        let (mut relay_read, mut relay_write) = relay.into_split();
+        let writer = Arc::clone(&driver_write);
+        tokio::spawn(async move {
+            use crate::runtime::subagent::ipc::{read_parent_frame, write_parent_frame};
+            while let Ok(Some(frame)) = read_parent_frame(&mut relay_read).await {
+                if write_parent_frame(&mut *writer.lock().await, &frame)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        tokio::spawn(async move {
+            use crate::runtime::subagent::ipc::{
+                read_child_frame, write_child_frame, write_parent_frame,
+            };
+            while let Ok(Some(frame)) = read_child_frame(&mut driver_read).await {
+                // These tests isolate child-local durable sealing. Registry
+                // tests separately prove arbitration before granting this frame.
+                let result = if matches!(frame, ChildFrame::SealRequested) {
+                    write_parent_frame(&mut *driver_write.lock().await, &ParentFrame::SealGranted)
+                        .await
+                } else if matches!(frame, ChildFrame::SealOpen) {
+                    if let Some(gate) = &reopen_gate {
+                        tokio::task::block_in_place(|| gate.enter());
+                    }
+                    write_parent_frame(
+                        &mut *driver_write.lock().await,
+                        &ParentFrame::AdmissionReopened,
+                    )
+                    .await
+                } else {
+                    write_child_frame(&mut relay_write, &frame).await
+                };
+                if result.is_err() {
+                    break;
+                }
+            }
+        });
         let (_observation_parent, observation_child) =
             tokio::net::UnixStream::pair().expect("observation pair");
         let observations = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(Arc::clone(&observations))
             .expect("observation bridge");
+        // Match production composition: historical pending guidance cannot
+        // admit a turn between activation and the Delegate handshake.
+        runtime.gate_child_turns();
         runtime.activate();
         let child_runtime = runtime.clone();
         let serve = tokio::spawn(async move {
@@ -1842,6 +2303,553 @@ mod tests {
         )
         .await
         .expect("parent delegates");
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_child_frame(parent)
+                .await
+                .unwrap(),
+            Some(ChildFrame::DelegateAccepted)
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn delegation_durable_acceptance_failure_never_acknowledges_input() {
+        use crate::durable::ConversationStore;
+        let dir = tempfile::tempdir().unwrap();
+        let id = ConversationId::generate();
+        let store =
+            Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+        let model = Arc::new(FakeModel::new(vec![answer("must not run")]));
+        let runtime = child_test_runtime_full(
+            &dir,
+            None,
+            None,
+            None,
+            None,
+            None,
+            id,
+            model.clone(),
+            Some(store.clone()),
+            None,
+        )
+        .await;
+        let mut fixture = serve_child(&runtime);
+        // Fault the exact durable acceptance transaction before any Delegate arrives.
+        store.arm_fail_next_accept_commit();
+        crate::runtime::subagent::ipc::write_parent_frame(
+            &mut fixture.parent,
+            &ParentFrame::Delegate(crate::runtime::subagent::ipc::DelegationFrame {
+                task: "input that cannot commit".into(),
+                context: None,
+                interaction_provider_available: false,
+            }),
+        )
+        .await
+        .unwrap();
+        // The first reliable response must be failure, never DelegateAccepted.
+        let result = read_result(&mut fixture.parent).await;
+        assert_eq!(result.status, ChildResultStatus::Failed);
+        assert!(
+            result
+                .diagnostic
+                .unwrap()
+                .contains("delegated task was refused")
+        );
+        assert!(store.load_pending().unwrap().is_empty());
+        assert!(store.load_canonical().unwrap().is_empty());
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                crate::runtime::subagent::ipc::read_child_frame(&mut fixture.parent),
+            )
+            .await
+            .expect("control close liveness")
+            .unwrap()
+            .is_none()
+        );
+        fixture.serve.await.unwrap().unwrap();
+        assert!(model.requests().is_empty());
+    }
+
+    /// Receiver-contract coverage for the typed terminal vocabulary: the
+    /// current Agent Loop emits Completed/Cancelled/Failed only. These typed
+    /// terminal facts are nevertheless part of the native observation contract
+    /// and must enter the same absorbing Failed branch exercised end to end by
+    /// `failed_activation_preserves_admitted_guidance_for_the_next_activation`.
+    #[tokio::test]
+    async fn time_and_turn_limit_terminal_observations_map_to_failed_activation() {
+        use crate::events::types::AttemptLimit;
+        use crate::runtime::identity::AttemptId;
+
+        let attempt_id = AttemptId::new("bounded-attempt");
+        let events = [
+            RuntimeEvent::AttemptTimedOut {
+                attempt_id: attempt_id.clone(),
+            },
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: attempt_id.clone(),
+                limit: AttemptLimit::MaxTurns,
+            },
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: attempt_id.clone(),
+                limit: AttemptLimit::MaxToolCalls,
+            },
+            RuntimeEvent::AttemptLimitExceeded {
+                attempt_id: attempt_id.clone(),
+                limit: AttemptLimit::MaxRuntimeSeconds,
+            },
+        ];
+        for event in events {
+            let dir = tempfile::tempdir().unwrap();
+            let model = Arc::new(FakeModel::new(Vec::new()));
+            let runtime =
+                child_test_runtime(&dir, None, None, ConversationId::generate(), model.clone())
+                    .await;
+            let (_parent, child) = tokio::net::UnixStream::pair().unwrap();
+            let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+            let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+            let handle = dispatcher.handle();
+            let observations = Arc::new(PendingObservations::new());
+            observations.push(ConversationObservation::Event {
+                attempt_id: attempt_id.clone(),
+                event,
+            });
+            let terminal = await_terminal(
+                &mut dispatcher,
+                &runtime,
+                &observations,
+                &handle,
+                &AgentId::new("agent-parent"),
+                &mut false,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(terminal, AttemptTerminal::Failed(_)));
+            assert_eq!(runtime.seal_probe_calls(), 0);
+            assert!(model.requests().is_empty());
+            dispatcher.shutdown().await;
+        }
+    }
+
+    /// The failed attempt has already committed when `SealRequested` arrives.
+    /// Guidance that won parent admission is then flushed on that same FIFO
+    /// lane before `SealGranted`. Its durable acknowledgement cannot reopen the
+    /// failed activation; the later activation owns the still-pending input.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // One failed activation and its durable continuation proof.
+    async fn failed_activation_preserves_admitted_guidance_for_the_next_activation() {
+        use crate::durable::ConversationStore;
+        use crate::model::event::ModelEvent;
+        use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
+
+        for (terminal, request_count) in [
+            (
+                ModelEvent::Failed {
+                    error: crate::model::ModelError {
+                        kind: crate::model::ModelErrorKind::InvalidRequest,
+                        message: "first failure is final".into(),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
+                        retry_after_ms: None,
+                        provider_code: None,
+                        context_overflow: None,
+                        malformed_tool_proposal: None,
+                        timeout_phase: None,
+                        generation: None,
+                    },
+                },
+                1,
+            ),
+            (
+                ModelEvent::Completed {
+                    finish_reason: crate::model::finish::ModelFinishReason::Length,
+                    usage: None,
+                },
+                2,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let id = ConversationId::generate();
+            let store =
+                Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+            // A length failure owns one bounded corrective generation inside
+            // its ordinary attempt. Exhaust it before testing activation reopen.
+            let mut scripts = vec![
+                vec![
+                    FakeStep::Emit(ModelEvent::Started),
+                    FakeStep::Emit(terminal)
+                ];
+                request_count
+            ];
+            scripts.push(answer("a failed activation must never consume this turn"));
+            let model = Arc::new(FakeModel::new(scripts));
+            let runtime = child_test_runtime_full(
+                &dir,
+                None,
+                None,
+                None,
+                None,
+                None,
+                id.clone(),
+                model.clone(),
+                Some(store.clone()),
+                None,
+            )
+            .await;
+            let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+            let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+            let observations = Arc::new(PendingObservations::new());
+            runtime
+                .install_observation_bridge(observations.clone())
+                .unwrap();
+            runtime.gate_child_turns();
+            runtime.activate();
+            let serving_runtime = runtime.clone();
+            let serve = tokio::spawn(async move {
+                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                let handle = dispatcher.handle();
+                let result = serve_child_delegation(
+                    &mut dispatcher,
+                    &handle,
+                    AgentId::new("agent-parent"),
+                    serving_runtime,
+                    observations,
+                    None,
+                )
+                .await;
+                dispatcher.shutdown().await;
+                result
+            });
+            delegate(&mut parent, "failed delegated task").await;
+            assert!(matches!(
+                read_child_frame(&mut parent).await.unwrap(),
+                Some(ChildFrame::SealRequested)
+            ));
+            assert_eq!(model.requests().len(), request_count);
+
+            // The parent has closed its admission arbiter. These are the two
+            // messages that won admission before the close, delivered FIFO.
+            for (guidance_id, message) in [
+                (1, "first accepted guidance"),
+                (2, "second accepted guidance"),
+            ] {
+                write_parent_frame(
+                    &mut parent,
+                    &ParentFrame::Guidance(GuidanceFrame {
+                        guidance_id,
+                        message: message.into(),
+                    }),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    read_child_frame(&mut parent).await.unwrap(),
+                    Some(ChildFrame::GuidanceResult(GuidanceResultFrame {
+                        guidance_id,
+                        outcome: ChildGuidanceOutcome::Accepted,
+                    }))
+                );
+            }
+            write_parent_frame(&mut parent, &ParentFrame::SealGranted)
+                .await
+                .unwrap();
+            let failed = read_result(&mut parent).await;
+            assert_eq!(failed.status, ChildResultStatus::Failed);
+            assert!(failed.content.is_none());
+            assert!(failed.diagnostic.unwrap().contains("child attempt failed"));
+            assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+            serve.await.unwrap().unwrap();
+            assert_eq!(
+                model.requests().len(),
+                request_count,
+                "failure cannot spend another turn"
+            );
+            assert_eq!(
+                runtime.seal_probe_calls(),
+                0,
+                "failed attempts never inspect a reopen seal"
+            );
+            let pending = store.load_pending().unwrap();
+            assert_eq!(
+                pending.len(),
+                2,
+                "accepted guidance survives physical drain"
+            );
+            assert_eq!(adopted_guidance(&runtime), vec!["failed delegated task"]);
+
+            let resumed_model = Arc::new(FakeModel::new(vec![answer("later activation answer")]));
+            let resumed = child_test_runtime_full(
+                &dir,
+                None,
+                None,
+                None,
+                None,
+                None,
+                id,
+                resumed_model.clone(),
+                Some(store.clone()),
+                None,
+            )
+            .await;
+            let mut fixture = serve_child(&resumed);
+            // This synchronous admission attempt has returned through the real
+            // pre-Delegate permit check. Absence of a request is not a timeout.
+            resumed.admit_now_for_test();
+            assert!(!resumed.has_current_attempt());
+            assert!(resumed_model.requests().is_empty());
+            assert_eq!(store.load_pending().unwrap(), pending);
+            delegate(&mut fixture.parent, "later activation task").await;
+            let later = read_result(&mut fixture.parent).await;
+            assert_eq!(later.status, ChildResultStatus::Succeeded);
+            fixture.serve.await.unwrap().unwrap();
+            assert_eq!(resumed_model.requests().len(), 1);
+            assert_eq!(
+                adopted_guidance(&resumed),
+                vec![
+                    "failed delegated task",
+                    "first accepted guidance",
+                    "second accepted guidance",
+                    "later activation task",
+                ]
+            );
+            assert!(store.load_pending().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // One end-to-end cancellation/observation interleaving.
+    async fn cancel_before_completed_observation_never_reopens_activation() {
+        use crate::durable::ConversationStore;
+        use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
+        let dir = tempfile::tempdir().unwrap();
+        let id = ConversationId::generate();
+        let store =
+            Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+        let model = Arc::new(FakeModel::new(vec![answer("first"), answer("forbidden")]));
+        let runtime = child_test_runtime_full(
+            &dir,
+            None,
+            None,
+            None,
+            None,
+            None,
+            id.clone(),
+            model.clone(),
+            Some(store.clone()),
+            None,
+        )
+        .await;
+        let committed = Arc::new(PendingObservations::new());
+        let delivered = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(committed.clone())
+            .unwrap();
+        runtime.gate_child_turns();
+        runtime.activate();
+        let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let cancelled = Arc::new(tokio::sync::Notify::new());
+        let serve = tokio::spawn(CANCELLATION_OBSERVED.scope(cancelled.clone(), {
+            let runtime = runtime.clone();
+            let delivered = delivered.clone();
+            async move {
+                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                let handle = dispatcher.handle();
+                let result = serve_child_delegation(
+                    &mut dispatcher,
+                    &handle,
+                    AgentId::new("agent-parent"),
+                    runtime,
+                    delivered,
+                    None,
+                )
+                .await;
+                dispatcher.shutdown().await;
+                result
+            }
+        }));
+        delegate(&mut parent, "first task").await;
+        let terminal = loop {
+            committed.wait().await;
+            if let Some(terminal) = committed.drain().into_iter().find(|observation| {
+                matches!(
+                    observation,
+                    ConversationObservation::Event {
+                        event: RuntimeEvent::AttemptCompleted { .. },
+                        ..
+                    }
+                )
+            }) {
+                break terminal;
+            }
+        };
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Guidance(GuidanceFrame {
+                guidance_id: 1,
+                message: "pending for a later activation".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_child_frame(&mut parent).await.unwrap(),
+            Some(ChildFrame::GuidanceResult(GuidanceResultFrame {
+                outcome: ChildGuidanceOutcome::Accepted,
+                ..
+            }))
+        ));
+        let pending = store.load_pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .unwrap();
+        cancelled.notified().await;
+        delivered.push(terminal);
+        let Some(ChildFrame::Result(result)) = read_child_frame(&mut parent).await.unwrap() else {
+            panic!("cancelled activation must report its result without reopening negotiation");
+        };
+        assert_eq!(result.status, ChildResultStatus::Cancelled);
+        assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+        serve.await.unwrap().unwrap();
+        assert_eq!(model.requests().len(), 1);
+        assert_eq!(runtime.seal_probe_calls(), 0);
+        assert_eq!(store.load_pending().unwrap(), pending);
+        let next_model = Arc::new(FakeModel::new(vec![answer("explicit continuation")]));
+        let resumed = child_test_runtime_full(
+            &dir,
+            None,
+            None,
+            None,
+            None,
+            None,
+            id,
+            next_model.clone(),
+            Some(store.clone()),
+            None,
+        )
+        .await;
+        let mut next = serve_child(&resumed);
+        delegate(&mut next.parent, "explicit next activation").await;
+        assert_eq!(
+            read_result(&mut next.parent).await.status,
+            ChildResultStatus::Succeeded
+        );
+        next.serve.await.unwrap().unwrap();
+        assert_eq!(next_model.requests().len(), 1);
+        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            adopted_guidance(&resumed),
+            vec![
+                "first task",
+                "pending for a later activation",
+                "explicit next activation"
+            ]
+        );
+    }
+
+    /// The child has completed one turn and is waiting for `SealGranted`.
+    /// Parent FIFO input admits guidance, then Cancel, then the stale grant.
+    /// Cancel must finish this activation immediately; no second Cancel or
+    /// `AdmissionReopened` response is sent by the fixture.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancel_during_close_admission_is_absorbing_and_preserves_guidance() {
+        use crate::durable::ConversationStore;
+        use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
+
+        let dir = tempfile::tempdir().unwrap();
+        let id = ConversationId::generate();
+        let store =
+            Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+        let model = Arc::new(FakeModel::new(vec![
+            answer("first answer"),
+            answer("must not run"),
+        ]));
+        let runtime = child_test_runtime_full(
+            &dir,
+            None,
+            None,
+            None,
+            None,
+            None,
+            id,
+            model.clone(),
+            Some(store.clone()),
+            None,
+        )
+        .await;
+        let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let observations = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(observations.clone())
+            .unwrap();
+        runtime.gate_child_turns();
+        runtime.activate();
+        let serving_runtime = runtime.clone();
+        let serve = tokio::spawn(async move {
+            let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+            let handle = dispatcher.handle();
+            let result = serve_child_delegation(
+                &mut dispatcher,
+                &handle,
+                AgentId::new("agent-parent"),
+                serving_runtime,
+                observations,
+                None,
+            )
+            .await;
+            dispatcher.shutdown().await;
+            result
+        });
+        delegate(&mut parent, "first task").await;
+        assert!(matches!(
+            read_child_frame(&mut parent).await.unwrap(),
+            Some(ChildFrame::SealRequested)
+        ));
+        assert_eq!(model.requests().len(), 1);
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Guidance(GuidanceFrame {
+                guidance_id: 17,
+                message: "accepted for a later activation".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read_child_frame(&mut parent).await.unwrap(),
+            Some(ChildFrame::GuidanceResult(GuidanceResultFrame {
+                guidance_id: 17,
+                outcome: ChildGuidanceOutcome::Accepted
+            },))
+        );
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .unwrap();
+        write_parent_frame(&mut parent, &ParentFrame::SealGranted)
+            .await
+            .unwrap();
+        let result = read_result(&mut parent).await;
+        assert_eq!(result.status, ChildResultStatus::Cancelled);
+        assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+        serve.await.unwrap().unwrap();
+        assert_eq!(model.requests().len(), 1);
+        assert_eq!(
+            runtime.seal_probe_calls(),
+            0,
+            "cancel cannot reach the reopen probe"
+        );
+        assert_eq!(store.load_pending().unwrap().len(), 1);
+        assert_eq!(adopted_guidance(&runtime), vec!["first task"]);
     }
 
     /// Reads the child's one terminal result frame.
@@ -1915,7 +2923,9 @@ mod tests {
             model.clone(),
         )
         .await;
-        let mut fixture = serve_child(&runtime);
+        let reopen_gate = Arc::new(Gate::default());
+        reopen_gate.arm();
+        let mut fixture = serve_child_with_reopen_gate(&runtime, None, Some(reopen_gate.clone()));
 
         seal_gate.arm();
         delegate(&mut fixture.parent, "delegated task").await;
@@ -1942,6 +2952,18 @@ mod tests {
             )
             .expect("guidance accepted before the seal commits");
         seal_gate.release();
+        tokio::task::spawn_blocking({
+            let gate = reopen_gate.clone();
+            move || gate.wait_entered()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "no continued model turn before parent Active acknowledgement"
+        );
+        reopen_gate.release();
 
         let result = read_result(&mut fixture.parent).await;
         assert_eq!(result.status, ChildResultStatus::Succeeded);
@@ -2202,29 +3224,11 @@ mod tests {
         );
     }
 
-    /// A committed one-shot cancellation intent refuses guidance under the
-    /// very lock that committed it: a cancelled child is never steered, and
-    /// nothing moves it back toward running.
-    ///
-    /// # Why the attempt is held at an exact barrier
-    ///
-    /// Guidance is refused when the coordinator can still *read* a committed
-    /// cancellation: a one-shot intent, or a current attempt whose signal is
-    /// cancelled. `cancel_current_or_next_attempt` on a live attempt takes
-    /// the second form — and the Agent Loop's provider arbitration settles a
-    /// cancelled attempt as soon as its stream is merely pending, which
-    /// clears the current-attempt slot and with it the fact this test reads.
-    /// Waiting on `model.parked()` proved the attempt *started*, never that
-    /// it was still there one statement later, so the refusal was a race the
-    /// test usually won.
-    ///
-    /// [`ModelArbitrationPause`] holds the attempt inside its stream loop,
-    /// after the provider's first item and before the next
-    /// provider/cancellation arbitration, so it provably cannot settle while
-    /// this test exercises the coordinator. Both admission decisions below
-    /// are then about a runtime that is structurally unable to move.
+    /// Parent admission is authoritative. Child-local cancellation cannot
+    /// reject a message that already won the registry arbiter. An exact model
+    /// arbitration gate holds the attempt while both messages are persisted.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn guidance_after_the_committed_cancellation_intent_is_refused() {
+    async fn parent_admitted_guidance_remains_durable_after_child_cancellation_intent() {
         use crate::agent::execution::test_sync::ModelArbitrationPause;
 
         let dir = tempfile::tempdir().expect("temp root");
@@ -2279,7 +3283,7 @@ mod tests {
         // The cancellation intent commits under the one coordinator lock.
         runtime.cancel_current_or_next_attempt(CancellationReason::UserRequested);
 
-        let refused = runtime
+        runtime
             .submit_parent_guidance(
                 UserSource::Agent {
                     agent_id: AgentId::new("agent-parent"),
@@ -2288,11 +3292,7 @@ mod tests {
                     text: "after cancellation".to_owned(),
                 })],
             )
-            .expect_err("a cancelled child refuses guidance");
-        assert!(
-            matches!(refused, InboundAdmissionError::GuidanceCancelled),
-            "the refusal names the committed cancellation intent: {refused:?}"
-        );
+            .expect("parent-admitted guidance cannot be rejected by child-local cancellation");
         // Only now may the held attempt observe its cancellation and settle.
         let _ = model_pause_release.send(());
         runtime.shutdown().await.expect("child runtime drains");
@@ -2302,6 +3302,173 @@ mod tests {
     // Workflow-owned children are isolated from the generic-steering
     // terminal machinery (Issue #193 architecture review blocker 1)
     // -----------------------------------------------------------------
+
+    /// A real semantic activation over the same on-disk child conversation.
+    /// Registry tests forward its emitted Result through the parent publisher.
+    #[allow(clippy::too_many_lines)] // One persistent child/IPC/commit interleaving.
+    pub(crate) async fn persistent_answer_activation(
+        dir: &tempfile::TempDir,
+        id: ConversationId,
+        mode: &str,
+    ) -> ResultFrame {
+        use crate::durable::ConversationStore;
+        use crate::message::types::ContentBlockIndex;
+        use crate::model::event::ModelEvent;
+        use crate::model::finish::ModelFinishReason;
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::open(
+                id.clone(),
+                &dir.path().join("answer-child.sqlite"),
+            )
+            .unwrap(),
+        );
+        let refusal = vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::RefusalDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "Current refusal".into(),
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Refusal,
+                usage: None,
+            }),
+        ];
+        let scripts = match mode {
+            "refusal" => vec![refusal],
+            "narration" => {
+                let mut narration = workflow_output_answer(serde_json::json!({}));
+                for step in &mut narration {
+                    match step {
+                        FakeStep::Emit(ModelEvent::ToolCallStarted { block_index, call }) => {
+                            *block_index = ContentBlockIndex::new(1);
+                            call.name = "inspect".into();
+                            call.tool_id = crate::runtime::identity::ToolId::new("tool-inspect");
+                        }
+                        FakeStep::Emit(ModelEvent::ToolCallCompleted { block_index, call }) => {
+                            *block_index = ContentBlockIndex::new(1);
+                            call.name = "inspect".into();
+                            call.tool_id = crate::runtime::identity::ToolId::new("tool-inspect");
+                        }
+                        _ => {}
+                    }
+                }
+                // Ordinary committed tool narration precedes a valid refusal
+                // in a later generation of this same attempt.
+                narration.insert(
+                    1,
+                    FakeStep::Emit(ModelEvent::TextDelta {
+                        block_index: ContentBlockIndex::new(0),
+                        text: "Earlier tool narration".into(),
+                    }),
+                );
+                vec![narration, refusal]
+            }
+            "guidance" => vec![
+                answer("Earlier guidance attempt"),
+                answer("Concluding answer"),
+            ],
+            text => vec![answer(text)],
+        };
+        let model = Arc::new(FakeModel::new(scripts));
+        let seal = (mode == "guidance").then(|| Arc::new(Gate::default()));
+        let mut tools = ToolRegistry::new();
+        crate::scripted_suites::support::fake::FakeTool::new(
+            crate::scripted_suites::common::tool("inspect", "tool-inspect"),
+            crate::scripted_suites::support::fake::success_result("inspected"),
+        )
+        .register(&mut tools);
+        let runtime = child_test_runtime_full(
+            dir,
+            None,
+            None,
+            seal.clone(),
+            None,
+            None,
+            id,
+            model.clone(),
+            Some(store.clone()),
+            Some(tools),
+        )
+        .await;
+        let restore = Arc::new(Gate::default());
+        let _restore_release = restore.arm_scoped();
+        if let Some(seal) = &seal {
+            seal.arm();
+        } else {
+            runtime.install_before_restore_gate(restore.clone());
+        }
+        let mut fixture = serve_child(&runtime);
+        delegate(&mut fixture.parent, "current task").await;
+        if let Some(seal) = seal {
+            tokio::task::spawn_blocking({
+                let gate = seal.clone();
+                move || gate.wait_entered()
+            })
+            .await
+            .unwrap();
+            runtime
+                .submit_parent_guidance(
+                    UserSource::Agent {
+                        agent_id: AgentId::new("agent-parent"),
+                    },
+                    vec![UserContentBlock::Text(TextBlock {
+                        text: "accepted guidance".into(),
+                    })],
+                )
+                .unwrap();
+            seal.release();
+        } else {
+            tokio::task::spawn_blocking({
+                let gate = restore.clone();
+                move || gate.wait_entered()
+            })
+            .await
+            .unwrap();
+            assert!(
+                runtime.has_current_attempt(),
+                "coordinator has not restored state"
+            );
+            let terminal = store
+                .read_events(None, 1024)
+                .unwrap()
+                .events
+                .into_iter()
+                .rev()
+                .find_map(|event| match event.event {
+                    RuntimeEvent::AttemptCompleted { attempt_id, .. } => Some(attempt_id),
+                    _ => None,
+                })
+                .unwrap();
+            let answer = final_answer(&runtime, &terminal);
+            restore.release();
+            assert_eq!(
+                answer.as_deref(),
+                if matches!(mode, "refusal" | "narration") {
+                    None
+                } else {
+                    Some(mode)
+                }
+            );
+        }
+        let result = read_result(&mut fixture.parent).await;
+        assert_eq!(
+            crate::runtime::subagent::ipc::read_child_frame(&mut fixture.parent)
+                .await
+                .unwrap(),
+            None
+        );
+        fixture.serve.await.unwrap().unwrap();
+        assert_eq!(
+            model.requests().len(),
+            if matches!(mode, "narration" | "guidance") {
+                2
+            } else {
+                1
+            }
+        );
+        assert!(store.load_pending().unwrap().is_empty());
+        result
+    }
 
     /// Scripts the one model turn of a Workflow `AgentRun` child: a single
     /// reserved `workflow_output(value)` tool-shaped call (never an
@@ -2333,6 +3500,162 @@ mod tests {
                 usage: None,
             }),
         ]
+    }
+
+    /// Runs both semantic orderings through the real reserved output tool,
+    /// durable attempt journal and child dispatcher. The registry test forwards
+    /// this actual result through its native driver and publication path.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn workflow_cancellation_ordering(late: bool) -> ResultFrame {
+        use crate::durable::ConversationStore;
+        use crate::runtime::subagent::ipc::{read_child_frame, write_parent_frame};
+        let dir = tempfile::tempdir().unwrap();
+        let id = ConversationId::generate();
+        let store =
+            Arc::new(crate::durable::SqliteConversationStore::in_memory(id.clone()).unwrap());
+        let value = serde_json::json!({"summary": "committed answer"});
+        let model = Arc::new(FakeModel::new(vec![
+            workflow_output_answer(value.clone()),
+            answer("forbidden"),
+        ]));
+        let latch = Arc::new(
+            crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
+                "type": "object", "properties": {"summary": {"type": "string"}},
+                "required": ["summary"], "additionalProperties": false
+            }))
+            .unwrap(),
+        );
+        let (pause, mut before_start, _) = StartBoundaryPause::install(true, false);
+        let runtime = child_test_runtime_full(
+            &dir,
+            if late { None } else { Some(pause) },
+            None,
+            None,
+            Some(latch.clone()),
+            None,
+            id,
+            model.clone(),
+            Some(store.clone()),
+            None,
+        )
+        .await;
+        let committed = Arc::new(PendingObservations::new());
+        let delivered = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(committed.clone())
+            .unwrap();
+        runtime.gate_child_turns();
+        runtime.activate();
+        runtime.arm_seal_probe_failures(1);
+        let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
+        let cancelled = Arc::new(tokio::sync::Notify::new());
+        let serve = tokio::spawn(CANCELLATION_OBSERVED.scope(cancelled.clone(), {
+            let runtime = runtime.clone();
+            let delivered = delivered.clone();
+            let latch = latch.clone();
+            async move {
+                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                let handle = dispatcher.handle();
+                let result = serve_child_delegation(
+                    &mut dispatcher,
+                    &handle,
+                    AgentId::new("agent-parent"),
+                    runtime,
+                    delivered,
+                    Some(latch),
+                )
+                .await;
+                dispatcher.shutdown().await;
+                result
+            }
+        }));
+        delegate(&mut parent, "produce workflow output").await;
+        let held = if late {
+            loop {
+                committed.wait().await;
+                if let Some(terminal) = committed.drain().into_iter().find(|observation| {
+                    matches!(
+                        observation,
+                        ConversationObservation::Event {
+                            event: RuntimeEvent::AttemptCompleted { .. },
+                            ..
+                        }
+                    )
+                }) {
+                    break Some(terminal);
+                }
+            }
+        } else {
+            before_start.as_mut().unwrap().await_park(1).await;
+            None
+        };
+        assert_eq!(latch.committed_value(), late.then(|| value.clone()));
+        assert_eq!(
+            store
+                .read_events(None, 256)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|event| matches!(event.event, RuntimeEvent::AttemptCompleted { .. }))
+                .count(),
+            usize::from(late)
+        );
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested),
+            },
+        )
+        .await
+        .unwrap();
+        cancelled.notified().await;
+        if let Some(terminal) = held {
+            delivered.push(terminal);
+        } else {
+            before_start.take().unwrap().release();
+            loop {
+                committed.wait().await;
+                let observations = committed.drain();
+                let terminal = observations.iter().any(|observation| {
+                    matches!(
+                        observation,
+                        ConversationObservation::Event {
+                            event: RuntimeEvent::AttemptCancelled { .. },
+                            ..
+                        }
+                    )
+                });
+                for observation in observations {
+                    delivered.push(observation);
+                }
+                if terminal {
+                    break;
+                }
+            }
+        }
+        // Any seal/reopen frame fails this exact protocol assertion.
+        let Some(ChildFrame::Result(result)) = read_child_frame(&mut parent).await.unwrap() else {
+            panic!("Workflow must finish at its first terminal without seal negotiation");
+        };
+        assert_eq!(
+            result.status,
+            if late {
+                ChildResultStatus::Succeeded
+            } else {
+                ChildResultStatus::Cancelled
+            }
+        );
+        assert_eq!(
+            result.content,
+            late.then(|| serde_json::to_string(&value).unwrap())
+        );
+        assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+        serve.await.unwrap().unwrap();
+        assert_eq!(latch.committed_value(), late.then_some(value));
+        assert_eq!(model.requests().len(), usize::from(late));
+        assert_eq!(runtime.seal_probe_calls(), 0);
+        result
     }
 
     /// **Workflow-owned children never enter the parent-guidance terminal
@@ -2387,6 +3710,8 @@ mod tests {
             None,
             ConversationId::new("conv_65454923-c390-7329-8410-7a51296c305b"),
             model.clone(),
+            None,
+            None,
         )
         .await;
         let mut fixture = serve_child_with_output(&runtime, Some(Arc::clone(&latch)));

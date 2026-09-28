@@ -390,6 +390,8 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
 pub(crate) struct ChildPreparation {
     cancellation: crate::runtime::cancellation::CancellationSignal,
     parent_lost: Option<crate::local_runtime::dispatcher::ChildControlHandle>,
+    // Installed before external preparation can create physical resources.
+    capability: std::sync::Mutex<Option<CapabilityCoordinator>>,
 }
 
 impl ChildPreparation {
@@ -402,6 +404,7 @@ impl ChildPreparation {
         Self {
             cancellation,
             parent_lost: Some(parent_lost),
+            capability: std::sync::Mutex::new(None),
         }
     }
 
@@ -412,6 +415,39 @@ impl ChildPreparation {
         Self {
             cancellation: crate::runtime::cancellation::CancellationSignal::new(),
             parent_lost: None,
+            capability: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn retain_capability(&self, capability: CapabilityCoordinator) {
+        let mut owner = self
+            .capability
+            .lock()
+            .expect("child preparation owner lock");
+        assert!(
+            owner.is_none(),
+            "one capability owner per child preparation"
+        );
+        *owner = Some(capability);
+    }
+
+    /// Called only after composition has returned. Its physical owners have
+    /// completed preparation, but their retirement proof still belongs here
+    /// even when no `ConversationRuntime` could be constructed.
+    pub(crate) async fn settle(&self) -> Result<(), Vec<String>> {
+        self.cancellation.cancel();
+        let capability = self
+            .capability
+            .lock()
+            .expect("child preparation owner lock")
+            .clone();
+        match capability {
+            Some(capability) => {
+                capability.cancel_conversation_preparation();
+                capability.drain_conversation_owned().await
+            }
+            // The composition has not crossed the resource-creation boundary.
+            None => Ok(()),
         }
     }
 
@@ -523,6 +559,7 @@ const TEST_PREPARATION_GATE_ENV: &str = "RUSTX_ISSUE145_PREPARATION_GATE";
 /// race: Cancel consumed (signal set), then the step completes.
 #[cfg(test)]
 pub(crate) struct TestPreparationGate {
+    hold_cancelled: bool,
     entered: tokio::sync::watch::Sender<bool>,
     release: tokio::sync::watch::Sender<bool>,
     cancellation: std::sync::Mutex<Option<crate::runtime::cancellation::CancellationSignal>>,
@@ -541,9 +578,27 @@ static TEST_PREPARATION_GATES: std::sync::Mutex<
 pub(crate) fn arm_test_preparation_gate(
     runtime_root: &std::path::Path,
 ) -> std::sync::Arc<TestPreparationGate> {
+    arm_preparation_gate(runtime_root, false)
+}
+
+/// Models owned preparation whose cancellation has been observed but whose
+/// physical rollback still awaits the test's explicit release.
+#[cfg(test)]
+pub(crate) fn arm_test_preparation_drain_gate(
+    runtime_root: &std::path::Path,
+) -> std::sync::Arc<TestPreparationGate> {
+    arm_preparation_gate(runtime_root, true)
+}
+
+#[cfg(test)]
+fn arm_preparation_gate(
+    runtime_root: &std::path::Path,
+    hold_cancelled: bool,
+) -> std::sync::Arc<TestPreparationGate> {
     let (entered, _) = tokio::sync::watch::channel(false);
     let (release, _) = tokio::sync::watch::channel(false);
     let gate = std::sync::Arc::new(TestPreparationGate {
+        hold_cancelled,
         entered,
         release,
         cancellation: std::sync::Mutex::new(None),
@@ -622,7 +677,7 @@ impl TestPreparationGate {
                     )),
                 ),
             },
-            () = cancellation.cancelled() => Err(
+            () = cancellation.cancelled(), if !self.hold_cancelled => Err(
                 crate::capabilities::CapabilityPreparationError::PreparationSettled(
                     "the preparation cancellation settled the gated external step".to_owned(),
                 ),
@@ -1650,6 +1705,7 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;
+            preparation.retain_capability(capability.clone());
             // 10-11. Materialization. A child with no external requirement takes
             // the deterministic base-only path it always did; a child with one
             // takes the selected-only realization path, which is cancellable
@@ -1919,6 +1975,7 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Observation {
                 detail: error.to_string(),
             })?;
+        runtime.runtime().gate_child_turns();
         runtime.activate();
         Ok((runtime, observations))
     }
@@ -2041,8 +2098,9 @@ impl LocalSessionClient {
             let result = match catalog.recover_delete(&id) {
                 Ok(work) => {
                     // No catalog borrow or global ownership guard spans removal.
-                    let cleanup = work.run();
-                    catalog.finish_delete(&work.record, cleanup)
+                    let record = work.record.clone();
+                    let cleanup = work.settle().await;
+                    catalog.finish_delete(&record, cleanup)
                 }
                 Err(result) => result,
             };
@@ -2955,6 +3013,86 @@ chat_reasoning_replay = "omit"
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         }
+    }
+
+    /// The production child binding installs its existing turn permit gate
+    /// before activate's synchronous admission attempt. Historical guidance
+    /// is durable pending input, but no Delegate has released a turn permit.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn child_binding_gates_historical_guidance_before_activation() {
+        use crate::durable::ConversationStore;
+        use crate::message::{content::TextBlock, types::UserContentBlock};
+
+        let dir = lab();
+        let child_spec = spec(dir.path(), Vec::new(), Vec::new(), Vec::new());
+        let path = crate::runtime::subagent::child_conversation_store_path(
+            dir.path(),
+            &child_spec.session_id,
+            &child_spec.child_conversation_id,
+        );
+        let store = crate::durable::SqliteConversationStore::open(
+            child_spec.child_conversation_id.clone(),
+            &path,
+        )
+        .unwrap();
+        let accepted = crate::durable::ConversationInboundCapability::accept_inbound(
+            &store,
+            crate::durable::InboundDraft {
+                message_id: None,
+                source: crate::message::types::UserSource::Agent {
+                    agent_id: child_spec.parent_agent_id.clone(),
+                },
+                kind: crate::message::types::InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "historical guidance".into(),
+                })],
+                timestamp: chrono::Utc::now(),
+                correlation: None,
+            },
+        )
+        .unwrap();
+        let core = LocalConversationCore::compose_subagent_child(
+            &child_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .unwrap();
+        let (_parent, control) = tokio::net::UnixStream::pair().unwrap();
+        let (_observation_parent, observation) = tokio::net::UnixStream::pair().unwrap();
+        let dispatcher =
+            crate::local_runtime::dispatcher::ChildControlDispatcher::start(control, observation);
+        let (child, _) = core
+            .into_subagent_child_with_route(Arc::new(
+                crate::local_runtime::subagent_child::ChildInteractionRoute::new(
+                    dispatcher.handle(),
+                ),
+            ))
+            .unwrap();
+        // activate already attempted admission synchronously. Exercise another
+        // wake synchronously too: neither boundary may pass without Delegate.
+        child.runtime().admit_now_for_test();
+        assert!(child.runtime().is_activated());
+        assert!(!child.runtime().has_current_attempt());
+        assert_eq!(
+            store.load_pending().unwrap()[0].message_id,
+            accepted.message_id
+        );
+        assert!(store.load_canonical().unwrap().is_empty());
+        assert!(
+            !store
+                .read_events(None, 128)
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| matches!(
+                    event.event,
+                    crate::events::types::RuntimeEvent::AttemptStarted { .. }
+                ))
+        );
+        child.runtime().shutdown().await.unwrap();
+        dispatcher.shutdown().await;
+        assert_eq!(store.load_pending().unwrap().len(), 1);
     }
 
     /// Issue #259 regressions 7 and 8: a Todo-enabled child composes **its
@@ -4424,13 +4562,16 @@ mod conversation_inspection_tests {
         )
         .unwrap();
         let child = ConversationId::generate();
-        store
-            .append_event(crate::runtime::subagent::ownership_event(
+        let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
+            crate::runtime::subagent::ownership_event(
+                &crate::runtime::identity::AgentId::new("agent-parent"),
                 &parent.conversation_id,
                 &crate::runtime::identity::SubagentId::for_conversation(&parent.conversation_id, 1),
                 &crate::runtime::identity::AgentId::new("child"),
                 &child,
-                &crate::runtime::identity::ToolCallId::new("delegation"),
+                &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("delegation"),
+                },
                 &crate::runtime::subagent::SubagentName::parse("worker").unwrap(),
                 &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
                 &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
@@ -4438,8 +4579,9 @@ mod conversation_inspection_tests {
                 crate::events::types::SubagentOwnershipKind::Normal,
                 &crate::runtime::workspace::WorkspaceSnapshot::shared(workspace.to_path_buf()),
                 chrono::Utc::now(),
-            ))
-            .unwrap();
+            ),
+        );
+        store.append_agent_admission(event, &authority).unwrap();
         let database = catalog.database_path(&session, &child);
         std::fs::create_dir_all(database.parent().unwrap()).unwrap();
         (session, child, database)
@@ -4878,7 +5020,7 @@ compat = { chat_reasoning_replay = "omit" }
             fixture
                 .runtime
                 .runtime()
-                .subagents()
+                .subagent_registry()
                 .expect("parent subagent registry")
                 .all_snapshots()
                 .is_empty()

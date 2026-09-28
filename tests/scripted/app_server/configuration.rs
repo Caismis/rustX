@@ -540,6 +540,7 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
         let settlement = runtime.settlement_signal();
         fixture.gates[0].release();
         settlement.notified().await;
+        runtime.wait_for_configuration_admissions().await;
         let requests = fixture.provider.request_bodies();
         assert_eq!(requests.len(), 2);
         for body in &requests {
@@ -1167,7 +1168,11 @@ async fn t11_background_execution_busy_settles_into_eligible_adoption() {
         started.wait_for(|entered| *entered).await.unwrap();
         // Attribution: no foreground attempt and no subagent owns work; the
         // background registry alone owns the Busy lifecycle.
-        assert!(runtime.subagents().is_none_or(|s| !s.configuration_busy()));
+        assert!(
+            runtime
+                .subagent_registry()
+                .is_none_or(|s| !s.configuration_busy())
+        );
         assert!(runtime.tool_runtime().background().configuration_busy());
         assert_eq!(
             runtime.idle_epoch(),

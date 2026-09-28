@@ -142,6 +142,23 @@ impl SettlementCell {
 #[cfg(unix)]
 #[derive(Clone)]
 pub(crate) struct InteractiveTestControl {
+    #[cfg(test)]
+    outer_fail: Option<String>,
+    #[cfg(test)]
+    fail_signal: Option<String>,
+    #[cfg(test)]
+    anchor_pid_file: Option<String>,
+    #[cfg(test)]
+    inner_exit_before_connect: Option<String>,
+    #[cfg(test)]
+    fail_setsid: Option<String>,
+    #[cfg(test)]
+    inner_stall_before_anchor: Option<String>,
+    #[cfg(test)]
+    fail_pre_anchor_reap: bool,
+    /// Enables the supervisors' passive stderr lifecycle trace.
+    #[cfg(test)]
+    trace: bool,
     /// Forces the emergency containment of a lost unit to report
     /// [`EmergencyContainment::AnchorUnavailable`].
     #[cfg(test)]
@@ -166,6 +183,14 @@ impl InteractiveTestControl {
     #[cfg(test)]
     fn new() -> Self {
         Self {
+            outer_fail: None,
+            fail_signal: None,
+            anchor_pid_file: None,
+            inner_exit_before_connect: None,
+            fail_setsid: None,
+            inner_stall_before_anchor: None,
+            fail_pre_anchor_reap: false,
+            trace: false,
             force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             force_accept_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             observed_events: Arc::new(Mutex::new(Vec::new())),
@@ -178,6 +203,55 @@ impl InteractiveTestControl {
     #[cfg(not(test))]
     fn new() -> Self {
         Self {}
+    }
+
+    #[cfg(test)]
+    fn configure_supervisor(&self, supervisor: &mut tokio::process::Command) {
+        if let Some(value) = &self.outer_fail {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::OUTER_FAIL_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.fail_signal {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::FAIL_SIGNAL_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.anchor_pid_file {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::ANCHOR_PID_FILE_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.inner_exit_before_connect {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::INNER_EXIT_BEFORE_CONNECT_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.fail_setsid {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::FAIL_SETSID_ENV,
+                value,
+            );
+        }
+        if let Some(value) = &self.inner_stall_before_anchor {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV,
+                value,
+            );
+        }
+        if self.fail_pre_anchor_reap {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
+                "1",
+            );
+        }
+        if self.trace {
+            supervisor.env(crate::runtime::interactive_supervisor::TRACE_ENV, "1");
+        }
     }
 
     /// The observed supervisor events, in arrival order.
@@ -314,18 +388,19 @@ impl SupervisedInteractiveProcess {
         let mut supervisor = tokio::process::Command::new(
             crate::runtime::process_runner::interactive_supervisor_binary(),
         );
+        supervisor.arg("outer").arg(&program).args(&args);
         supervisor
-            .arg("outer")
-            .arg(&program)
-            .args(&args)
             .current_dir(&cwd)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        for (key, value) in &environment {
-            supervisor.env(key, value);
-        }
+        supervisor.env(
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+            serde_json::to_string(&environment).map_err(|error| error.to_string())?,
+        );
+        #[cfg(test)]
+        test_control.configure_supervisor(&mut supervisor);
         supervisor.env(RUSTX_CONTROL_ENV, &socket_path);
         let mut child = supervisor
             .spawn()
@@ -463,6 +538,11 @@ async fn drive_interactive_unit(
     )
     .await;
     let _ = std::fs::remove_file(&socket_path);
+    #[cfg(test)]
+    if matches!(outcome, UnitSettlement::TerminalityUnproven(..)) {
+        record_event(&test_control, "terminality_unproven_publication");
+    }
+    record_event(&test_control, "settlement_publication");
     settlement.publish(outcome);
 }
 
@@ -608,7 +688,7 @@ async fn run_interactive_unit(
             biased;
             command = shutdown_rx.recv(), if lifecycle != UnitLifecycle::Terminal => {
                 if command.is_some() {
-                    let () = send_terminate(&mut control_write).await;
+                    let _ = send_terminate(&mut control_write).await;
                 }
                 // A dropped sender is not a shutdown request: the business
                 // handle requests shutdown explicitly.
@@ -630,7 +710,7 @@ async fn run_interactive_unit(
                         if control_failure.is_none() {
                             control_failure = Some(error.to_string());
                         }
-                        let () = send_terminate(&mut control_write).await;
+                        let _ = send_terminate(&mut control_write).await;
                     }
                 }
             }
@@ -690,6 +770,15 @@ async fn run_interactive_unit(
                 )) => {}
                 Ok(Some(SupervisorEvent::ProcessControlFailure { message })) => {
                     record_event(test_control, "process_control_failure");
+                    // Test evidence from the actual failure frame, never lifecycle state.
+                    #[cfg(test)]
+                    if message == "injected setsid failure after the inner control connection" {
+                        record_event(test_control, "injected_setsid_failure_received");
+                    }
+                    #[cfg(test)]
+                    if message.contains("injected pre-anchor reap failure") {
+                        record_event(test_control, "injected_reap_failure_received");
+                    }
                     if control_failure.is_none() {
                         control_failure = Some(message);
                     }
@@ -726,12 +815,14 @@ async fn run_interactive_unit(
     }
     // The direct supervisor child is reaped before physical settlement is
     // published, on every path.
+    record_event(test_control, "direct_child_wait");
     if let Err(error) = child.wait().await {
         return UnitSettlement::TerminalityUnproven(unproven_reason(
             &format!("cannot reap the direct interactive supervisor child: {error}"),
             control_failure.as_deref(),
         ));
     }
+    record_event(test_control, "direct_child_reaped");
     // Release the parent's retained anchor only against this unit's own
     // proven physical terminality; an unproven settlement deliberately
     // keeps the parent's retention alive.
@@ -845,12 +936,6 @@ mod interactive_tests {
     use std::time::{Duration, Instant};
 
     use super::{InteractiveProcessSpec, InteractiveTestControl, SupervisedInteractiveProcess};
-    #[cfg(target_os = "linux")]
-    use crate::runtime::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV;
-    use crate::runtime::interactive_supervisor::{
-        ANCHOR_PID_FILE_ENV, FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV, FAIL_SIGNAL_ENV,
-        INNER_EXIT_BEFORE_CONNECT_ENV, OUTER_FAIL_ENV,
-    };
     use crate::runtime::process_runner::MAX_PROCESS_OUTPUT_BYTES;
     use std::sync::Arc;
 
@@ -905,23 +990,19 @@ mod interactive_tests {
             self.dir.path().join(name)
         }
 
-        fn spawn(
-            &self,
-            script: &str,
-            extra_env: Vec<(String, String)>,
-        ) -> Result<SupervisedInteractiveProcess, String> {
-            self.spawn_with_control(script, extra_env, InteractiveTestControl::new())
+        fn spawn(&self, script: &str) -> Result<SupervisedInteractiveProcess, String> {
+            self.spawn_with_control(script, InteractiveTestControl::new())
         }
 
+        /// Spawns the real supervisor unit with typed fixture controls.
+        /// Controls are never selected by environment-variable name here, so
+        /// no platform-gated constant can turn into a catch-all match arm.
         fn spawn_with_control(
             &self,
             script: &str,
-            extra_env: Vec<(String, String)>,
             control: InteractiveTestControl,
         ) -> Result<SupervisedInteractiveProcess, String> {
-            let mut environment =
-                vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
-            environment.extend(extra_env);
+            let environment = vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
             let spec = InteractiveProcessSpec {
                 program: PathBuf::from("/bin/sh"),
                 args: vec!["-c".to_owned(), script.to_owned()],
@@ -997,9 +1078,7 @@ mod interactive_tests {
             gate: gate.clone(),
         }));
         let script = format!("echo started > {}; exec sleep 30", marker.display());
-        let process = fixture
-            .spawn_with_control(&script, Vec::new(), control)
-            .expect("spawn");
+        let process = fixture.spawn_with_control(&script, control).expect("spawn");
 
         let (unit, pgid) = tokio::time::timeout(DEADLINE, offers.recv())
             .await
@@ -1066,10 +1145,27 @@ mod interactive_tests {
         stat[close + 2..].split_whitespace().nth(2)?.parse().ok()
     }
 
+    /// The kernel state letter of `pid`, or `None` once no process-table
+    /// entry remains (the pid was reaped; a zombie still has one).
+    #[cfg(target_os = "linux")]
     fn proc_state(pid: i32) -> Option<char> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let close = stat.rfind(')')?;
         stat[close + 2..].chars().next()
+    }
+
+    /// macOS has no `/proc`: its absence must never read as "reaped", so the
+    /// process table is queried through `ps`, which still lists zombies.
+    #[cfg(target_os = "macos")]
+    fn proc_state(pid: i32) -> Option<char> {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps queries the process table");
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .chars()
+            .next()
     }
 
     fn wait_for_reaped(pid: i32, description: &str) {
@@ -1101,11 +1197,116 @@ mod interactive_tests {
             .unwrap_or_else(|_| panic!("{description}"))
     }
 
+    /// Passive timeout evidence: a `ps` row (state, wait channel, process
+    /// group) for the outer supervisor and each of its direct children and,
+    /// on macOS, one `sample` call graph of each. It reads process tables
+    /// and stacks only; it never waits for, signals, or reaps a unit process.
+    fn process_snapshot(outer_pid: u32, scratch: &Path) -> String {
+        let table = match std::process::Command::new("ps")
+            .args(["-A", "-o", "pid=,ppid=,pgid=,stat=,wchan=,command="])
+            .output()
+        {
+            Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+            Err(error) => return format!("ps unavailable: {error}"),
+        };
+        let mut snapshot = String::from("pid ppid pgid stat wchan command\n");
+        let mut pids = Vec::new();
+        for row in table.lines() {
+            let mut fields = row.split_whitespace().map(str::parse::<u32>);
+            if let (Some(Ok(pid)), Some(Ok(ppid))) = (fields.next(), fields.next())
+                && (pid == outer_pid || ppid == outer_pid)
+            {
+                pids.push(pid);
+                snapshot.push_str(row.trim());
+                snapshot.push('\n');
+            }
+        }
+        #[cfg(target_os = "macos")]
+        for pid in pids {
+            let report = scratch.join(format!("sample-{pid}.txt"));
+            let sampled = std::process::Command::new("sample")
+                .arg(pid.to_string())
+                .arg("1")
+                .arg("-file")
+                .arg(&report)
+                .output();
+            let graph = std::fs::read_to_string(&report).map_or_else(
+                |error| format!("no sample report ({sampled:?}): {error}"),
+                |text| {
+                    text.lines()
+                        .skip_while(|line| !line.starts_with("Call graph:"))
+                        .take(80)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                },
+            );
+            let _ =
+                std::fmt::Write::write_fmt(&mut snapshot, format_args!("sample {pid}:\n{graph}\n"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (pids, scratch);
+        snapshot
+    }
+
     #[cfg(target_os = "linux")]
     fn python_available() -> bool {
         ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
             .iter()
             .any(|path| Path::new(path).is_file())
+    }
+
+    #[tokio::test]
+    async fn command_environment_cannot_configure_interactive_supervisor() {
+        use crate::tools::environment::ToolEnvironment;
+        use std::fmt::Write;
+        use tokio::io::AsyncReadExt;
+        let fixture = Fixture::new();
+        let keys = [
+            "RUSTX_INTERACTIVE_CONTROL",
+            "RUSTX_INTERACTIVE_INNER_CONTROL",
+            "RUSTX_TEST_INTERACTIVE_OUTER_FAIL",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SERVER_SPAWN",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SIGNAL",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SIGTERM",
+            "RUSTX_INTERACTIVE_ANCHOR_PID_FILE",
+            "RUSTX_TEST_INTERACTIVE_INNER_EXIT_BEFORE_CONNECT",
+            "RUSTX_TEST_INTERACTIVE_FAIL_SETSID",
+            "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR",
+            "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP",
+            "RUSTX_TEST_INTERACTIVE_TRACE",
+            "RUSTX_COMMAND_ENVIRONMENT",
+            "RUSTX_PHYSICAL_CONTINUATION",
+        ];
+        let environment = ToolEnvironment::from_authorized(
+            keys.iter()
+                .map(|key| ((*key).to_owned(), "user-value".to_owned())),
+        )
+        .unwrap();
+        let mut script = String::new();
+        for key in keys {
+            write!(script, "test \"${key}\" = user-value || exit 9; ").unwrap();
+        }
+        script.push_str("printf isolated");
+        let mut process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
+            program: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), script],
+            cwd: fixture.dir.path().to_path_buf(),
+            environment: environment.child_environment(fixture.dir.path()),
+        })
+        .unwrap();
+        let mut output = String::new();
+        process
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        published_settlement(&process, "isolated server must settle")
+            .await
+            .unwrap();
+        assert_eq!(output, "isolated");
+        assert!(!fixture.path("user-value").exists());
     }
 
     /// Normal server shutdown: `request_shutdown` runs the TERM sequence and
@@ -1115,7 +1316,7 @@ mod interactive_tests {
         let fixture = Fixture::new();
         let marker = fixture.path("started");
         let script = format!("echo started > {}; sleep 30", marker.display());
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         settle(&mut process).await;
     }
@@ -1133,7 +1334,7 @@ mod interactive_tests {
             child_pid_file.display(),
             marker.display()
         );
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let child_pid = read_pid(&child_pid_file);
         settle(&mut process).await;
@@ -1171,7 +1372,7 @@ mod interactive_tests {
             escaped = escaped.display().to_string(),
         );
         let script = format!("python3 -c {}", shell_single_quote(&program));
-        let process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let process = fixture.spawn(&script).expect("spawn");
         // The reached marker precedes the syscall. Requesting shutdown there
         // races with classification and can kill a correctly contained child.
         // Natural process settlement is the barrier after the result is written.
@@ -1232,7 +1433,7 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         settle(&mut process).await;
@@ -1254,15 +1455,9 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let process = fixture
-            .spawn(
-                &script,
-                vec![(
-                    ANCHOR_PID_FILE_ENV.to_owned(),
-                    anchor_pid_file.display().to_string(),
-                )],
-            )
-            .expect("spawn");
+        let mut control = InteractiveTestControl::new();
+        control.anchor_pid_file = Some(anchor_pid_file.display().to_string());
+        let process = fixture.spawn_with_control(&script, control).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         let inner_pid = read_pid(&anchor_pid_file);
@@ -1293,7 +1488,7 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         drop(process);
@@ -1305,11 +1500,10 @@ mod interactive_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn post_spawn_handshake_failure_settles_without_stranding() {
         let fixture = Fixture::new();
+        let mut control = InteractiveTestControl::new();
+        control.outer_fail = Some("1".to_owned());
         let process = fixture
-            .spawn(
-                "sleep 30",
-                vec![(OUTER_FAIL_ENV.to_owned(), "1".to_owned())],
-            )
+            .spawn_with_control("sleep 30", control)
             .expect("spawn");
         published_settlement(&process, "the driver must settle a handshake-failed unit")
             .await
@@ -1323,7 +1517,7 @@ mod interactive_tests {
         let fixture = Fixture::new();
         let marker = fixture.path("started");
         let script = format!("echo started > {}; sleep 30", marker.display());
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let supervisor_pid = i32::try_from(
             process
@@ -1347,7 +1541,7 @@ mod interactive_tests {
             "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             marker.display()
         );
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         // The marker appears only if the stderr pipe keeps being drained
         // past the 64 KiB preview bound; a drain that stopped at the bound
         // would block the server on a full pipe forever.
@@ -1372,9 +1566,9 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let mut process = fixture
-            .spawn(&script, vec![(FAIL_SIGNAL_ENV.to_owned(), "1".to_owned())])
-            .expect("spawn");
+        let mut control = InteractiveTestControl::new();
+        control.fail_signal = Some("1".to_owned());
+        let mut process = fixture.spawn_with_control(&script, control).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         settle(&mut process).await;
@@ -1404,19 +1598,13 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
         control
             .force_emergency_anchor_unavailable
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        control.anchor_pid_file = Some(anchor_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    ANCHOR_PID_FILE_ENV.to_owned(),
-                    anchor_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
@@ -1491,16 +1679,10 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.inner_exit_before_connect = Some(inner_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    INNER_EXIT_BEFORE_CONNECT_ENV.to_owned(),
-                    inner_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1562,7 +1744,7 @@ mod interactive_tests {
             .force_accept_failure
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let process = fixture
-            .spawn_with_control(&script, Vec::new(), control.clone())
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1603,16 +1785,10 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.fail_setsid = Some(inner_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    FAIL_SETSID_ENV.to_owned(),
-                    inner_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1677,16 +1853,10 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.inner_stall_before_anchor = Some(inner_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    INNER_STALL_BEFORE_ANCHOR_ENV.to_owned(),
-                    inner_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1753,6 +1923,42 @@ mod interactive_tests {
             .expect("reap the adopted pre-anchor inner");
     }
 
+    /// Fixture controls reach the supervisor as exactly the seams a test
+    /// selected, on every platform. The macOS proof-theft regression once
+    /// armed the inner stall instead of the reap theft: its controls were
+    /// dispatched by environment-variable name, and a Linux-only constant
+    /// import turned one match arm into a catch-all binding on macOS.
+    #[test]
+    fn fixture_controls_configure_exactly_the_selected_supervisor_seams() {
+        use crate::runtime::interactive_supervisor::{FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV};
+        use std::collections::BTreeMap;
+        let mut control = InteractiveTestControl::new();
+        control.fail_setsid = Some("/fixture/inner.pid".to_owned());
+        control.fail_pre_anchor_reap = true;
+        let mut supervisor = tokio::process::Command::new("/bin/true");
+        control.configure_supervisor(&mut supervisor);
+        let configured: BTreeMap<String, Option<String>> = supervisor
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            configured,
+            BTreeMap::from([
+                (FAIL_PRE_ANCHOR_REAP_ENV.to_owned(), Some("1".to_owned())),
+                (
+                    FAIL_SETSID_ENV.to_owned(),
+                    Some("/fixture/inner.pid".to_owned())
+                ),
+            ])
+        );
+    }
+
     /// A pre-anchor cleanup that cannot prove the direct-inner reap.
     ///
     /// The injected seam models exactly the forbidden state: the outer's
@@ -1761,30 +1967,46 @@ mod interactive_tests {
     /// proof-carrying `NoOwnership`, so no successful physical settlement
     /// is ever published.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // One causal inner/outer/driver ownership scenario.
     async fn unprovable_pre_anchor_reap_never_settles_physically() {
         let fixture = Fixture::new();
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.fail_setsid = Some(inner_pid_file.display().to_string());
+        control.fail_pre_anchor_reap = true;
+        control.trace = true;
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![
-                    (
-                        FAIL_SETSID_ENV.to_owned(),
-                        inner_pid_file.display().to_string(),
-                    ),
-                    (FAIL_PRE_ANCHOR_REAP_ENV.to_owned(), "1".to_owned()),
-                ],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
-        let settlement = published_settlement(
-            &process,
-            "the driver must publish an explicit settlement, never hang",
-        )
-        .await;
+        let outer_pid = process
+            .supervisor_child_pid
+            .expect("test-only supervisor pid");
+        let settlement = tokio::time::timeout(DEADLINE, process.wait_for_settlement())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "pre-anchor owner did not settle; inner_pid_file_exists: {}; outer_pid: \
+                     {outer_pid}; outer_observation: {:?}; driver: {:?}; stderr:\n{}\nprocesses:\n{}",
+                    inner_pid_file.exists(),
+                    crate::runtime::process_wait::waitid(
+                        crate::runtime::process_wait::Id::Pid(nix::unistd::Pid::from_raw(
+                            i32::try_from(outer_pid).unwrap()
+                        )),
+                        nix::sys::wait::WaitPidFlag::WNOHANG
+                            | nix::sys::wait::WaitPidFlag::WEXITED
+                            | nix::sys::wait::WaitPidFlag::WNOWAIT,
+                    ),
+                    control.observed_events(),
+                    process.stderr_preview(),
+                    process_snapshot(outer_pid, fixture.dir.path()),
+                )
+            });
+        assert!(matches!(
+            process.settlement.observed(),
+            Some(super::UnitSettlement::TerminalityUnproven(_))
+        ));
         let reason = settlement.expect_err(
             "a pre-anchor child whose reap cannot be proven is never a physical settlement",
         );
@@ -1793,6 +2015,23 @@ mod interactive_tests {
             "the settlement must name the unproven pre-anchor state: {reason}"
         );
         let events = control.observed_events();
+        let mut ordered = events.iter();
+        for expected in [
+            "owner_attached",
+            "injected_setsid_failure_received",
+            "injected_reap_failure_received",
+            "control_eof",
+            "direct_child_wait",
+            "direct_child_reaped",
+            "terminality_unproven_publication",
+            "settlement_publication",
+        ] {
+            assert!(
+                ordered.any(|event| event == expected),
+                "missing/out-of-order {expected}: {events:?}"
+            );
+        }
+
         assert!(
             events
                 .iter()
@@ -1811,13 +2050,11 @@ mod interactive_tests {
             !server_marker.exists(),
             "no server-owned process tree may exist before the anchor commit point"
         );
-        // Test-side cleanup: the outer deliberately did not consume its
-        // direct child, so the pre-anchor inner is adopted by rustX.
-        let inner_pid = read_pid(&inner_pid_file);
-        let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(inner_pid),
-            nix::sys::signal::Signal::SIGKILL,
+        assert!(
+            !events.iter().any(|event| event == "anchor_ready"),
+            "no anchor commit may occur in the pre-anchor failure: {events:?}"
         );
-        let _ = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(inner_pid), None);
+        // The exact foreign reaper consumed the inner before the owner's
+        // failing wait. There is no orphan or test-side cleanup obligation.
     }
 }

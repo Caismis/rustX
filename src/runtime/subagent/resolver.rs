@@ -616,14 +616,14 @@ pub enum SubagentResolutionError {
         /// The structural violation.
         error: SubagentOverrideError,
     },
-    /// The effective extension composition names an extension a one-shot
+    /// The effective extension composition names an extension a headless
     /// child cannot own. Authorization and child-scope support are
     /// independent checks, and this one fails even for a fully entitled
     /// caller.
     ExtensionScopeUnsupported {
         /// The offending extension.
         extension: String,
-        /// The bounded reason the one-shot child scope cannot own it.
+        /// The bounded reason the headless child scope cannot own it.
         reason: String,
     },
 }
@@ -685,7 +685,7 @@ impl core::fmt::Display for SubagentResolutionError {
             }
             Self::ExtensionScopeUnsupported { extension, reason } => write!(
                 formatter,
-                "Plugin {extension:?} is not supported by one-shot subagent execution: \
+                "Plugin {extension:?} is not supported by headless child activation: \
                  {reason}"
             ),
         }
@@ -809,7 +809,7 @@ impl SubagentResolver {
     /// 3. replacement        effective[d] = override[d] if present else definition[d]
     /// 4. dependency         do the EFFECTIVE selections resolve in this generation
     /// 5. authorization      may this caller delegate the effective selections
-    /// 6. child scope        can a one-shot child own the effective extensions
+    /// 6. child scope        can a headless child own the effective extensions
     /// 7. freeze             model, instructions, guidance, materialization, digest
     /// ```
     ///
@@ -2148,7 +2148,7 @@ mod tests {
         // visibility is intentionally not an input or a capability ceiling.
     }
 
-    /// Agent Status and Todo support one-shot child scope; Goal is root-only.
+    /// Agent Status and Todo support headless child scope; Goal is root-only.
     #[test]
     fn sub258_every_supported_extension_is_child_scope_supported() {
         for composition in [

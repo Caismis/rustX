@@ -438,7 +438,7 @@ mod tests {
         AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                &crate::runtime::subagent::AgentCatalog::empty(),
+                Some(&crate::runtime::subagent::AgentCatalog::empty()),
             )
             .into_iter()
             .map(|(definition, _)| definition),
@@ -688,7 +688,7 @@ mod composition_tests {
         .unwrap();
         let definitions = crate::tools::native::definitions(
             crate::tools::native::NativeToolPolicies::default(),
-            &catalog,
+            Some(&catalog),
         )
         .into_iter()
         .map(|(definition, _)| definition)
@@ -764,7 +764,7 @@ mod composition_tests {
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                &crate::runtime::subagent::AgentCatalog::empty(),
+                Some(&crate::runtime::subagent::AgentCatalog::empty()),
             )
             .into_iter()
             .map(|(definition, _)| definition),
@@ -846,7 +846,7 @@ mod composition_tests {
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                &crate::runtime::subagent::AgentCatalog::empty(),
+                Some(&crate::runtime::subagent::AgentCatalog::empty()),
             )
             .into_iter()
             .map(|(definition, _)| definition),
@@ -949,7 +949,7 @@ mod composition_tests {
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
-                &crate::runtime::subagent::AgentCatalog::empty(),
+                Some(&crate::runtime::subagent::AgentCatalog::empty()),
             )
             .into_iter()
             .map(|(definition, _)| definition),

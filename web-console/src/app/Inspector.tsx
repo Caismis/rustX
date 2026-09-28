@@ -31,7 +31,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
       : tx('inspector:missing'),
     cursor: view?.cursor, cwd: view?.settings?.cwd,
     attempt: snapshot?.attempt, pending_interactions: snapshot?.pending_interactions,
-    background_count: snapshot?.background?.length ?? 0, subagent_count: snapshot?.subagents?.length ?? 0,
+    job_count: snapshot?.jobs?.length ?? 0, agent_count: snapshot?.agents?.length ?? 0,
     workflows: snapshot?.workflows, model: snapshot?.model,
     settings_evidence: snapshot?.settings_evidence,
     resource_revision: snapshot?.resources?.revision, capability_revision: snapshot?.capabilities.revision,
@@ -41,7 +41,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     inbound_requests: view?.inboundRequests, interactions: Object.fromEntries(Object.entries(state.interactionOperations).filter(([, operation]) => view && operation.sessionId === view.id)),
     uncertain_operations: state.uncertain.filter(operation => view && operation.sessionId === view.id), model_mutation: view?.modelMutation,
     goal: snapshot?.goal, todos: snapshot?.todos, statuses: snapshot?.statuses,
-    background: snapshot?.background, subagents: snapshot?.subagents,
+    jobs: snapshot?.jobs, agents: snapshot?.agents,
     trace: view?.trace,
     connection_error: state.error, session_error: view?.error,
   };
@@ -53,7 +53,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     <SettingsCard title={tx('inspector:inspector.identity')}><Facts rows={[[tx('inspector:copy.session-id'), view?.id], [tx('inspector:copy.conversation-id'), facts.ConversationId], ["cwd", facts.cwd]]} /></SettingsCard>
     <SettingsCard title={tx('inspector:inspector.execution')}><Facts rows={[[tx('inspector:copy.attempt-id'), snapshot?.attempt?.attempt_id], [tx('inspector:copy.exact-phase'), snapshot?.attempt?.phase.type], [tx('inspector:copy.exact-outcome'), snapshot?.attempt?.phase.type === 'settled' ? snapshot.attempt.phase.outcome.type : undefined], [tx('inspector:copy.cancellation-request'), view?.cancellation?.status]]} />
       <details><summary>{tx('inspector:inspector.attempt-and-cancellation-evidence')}</summary><pre>{json({ attempt: snapshot?.attempt, cancellation: view?.cancellation })}</pre></details>
-      <details><summary>{tx('inspector:copy.tools-subagents-and-workflows')}</summary><pre>{json({ background: facts.background, subagents: facts.subagents, workflows: facts.workflows })}</pre></details>
+      <details><summary>{tx('inspector:copy.jobs-agents-and-workflows')}</summary><pre>{json({ jobs: facts.jobs, agents: facts.agents, workflows: facts.workflows })}</pre></details>
       {/* `statuses` is the runtime's bounded window of past compositions, oldest
           first — not one current Agent Status value, and not current Todo, Goal or
           Queue state. The raw facts, including each composition's `rendered` text,

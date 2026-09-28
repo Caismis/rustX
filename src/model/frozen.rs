@@ -249,6 +249,22 @@ impl FrozenModelSpec {
             export(&mut invocation.binding, "SUMMARY");
         }
     }
+    /// Rehydrate only the private credential capture committed with this authority.
+    pub(crate) fn restore_admitted_credentials(
+        &mut self,
+        credentials: &dyn CredentialEnvironment,
+    ) -> Result<(), ModelInvocationError> {
+        self.primary.binding.resolved_credential = Some(resolve_frozen_credential(
+            &self.primary.binding,
+            credentials,
+        )?);
+        if let FrozenSummaryModel::Explicit(invocation) = &mut self.summary {
+            invocation.binding.resolved_credential =
+                Some(resolve_frozen_credential(&invocation.binding, credentials)?);
+        }
+        Ok(())
+    }
+
     /// Freezes one desired configuration against an already-admitted
     /// binding registry.
     ///

@@ -1,7 +1,7 @@
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v25';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v27';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isAgentStatusContext, statusesAt } from '../src/bindings/agent-status';
@@ -115,7 +115,7 @@ describe('single-anchor Agent Status placement', () => {
   });
 
   it('renders only typed sections and never parses the rendered prose', () => {
-    const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Ship the dock'), { type: 'background_executions', executions: [{ execution_id: 'e1', tool_id: 'bash', tool_name: 'bash', state: 'running' }], omitted_count: 1 }])])} />);
+    const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Ship the dock'), { type: 'background_executions', executions: [{ job_id: 'e1', tool_id: 'bash', tool_name: 'bash', state: 'running' }], omitted_count: 1 }])])} />);
     const note = screen.getByRole('note', { name: 'Agent Status' });
     expect(note.textContent).toContain('todo 1 · background 2');
     expect(ui.container.textContent).not.toContain('rendered prose');
@@ -252,7 +252,7 @@ it('background Agent Status translates every lifecycle label while preserving ex
     timed_out: ['timed out', '已超时'], outcome_unknown: ['outcome unknown', '结果未知'],
   } as const;
   for (const state of Object.keys(labels) as (keyof typeof labels)[]) {
-    const composition = status('status-native', fresh('u1'), [{ type: 'background_executions', executions: [{ execution_id: 'e-native', tool_id: 'native-id', tool_name: tool, state }], omitted_count: 0 }]);
+    const composition = status('status-native', fresh('u1'), [{ type: 'background_executions', executions: [{ job_id: 'e-native', tool_id: 'native-id', tool_name: tool, state }], omitted_count: 0 }]);
     const before = structuredClone(composition);
     for (const [index, locale] of (['en', 'zh'] as const).entries()) {
       expect(agentStatusFacets(translator(locale), composition)[0].values).toEqual([`${tool} · ${labels[state][index]}`]);

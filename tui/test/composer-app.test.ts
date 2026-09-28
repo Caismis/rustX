@@ -213,11 +213,11 @@ test("pasted token extensions and a pasted leading slash remain literal Agent in
 
 test("child inspection preserves exact parent draft and cursor; Esc sends no request", async t => {
   const child = subagent("researcher", "sha256:child");
-  const h = await appHarness(t, snapshot({ subagents: [child] }));
+  const h = await appHarness(t, snapshot({ agents: [child] }));
   h.editor.setText("draft中👩‍💻e\u0301"); h.input("\x1b[D");
   const parent = h.session.state;
   h.input("\x1b[1;5B"); h.input("\r");
-  const read = await nextRequest(h, "subagent/transcript", 0);
+  const read = await nextRequest(h, "agent/transcript", 0);
   h.transport.respond(read.id, { type: "transcript", page: { entries: [] } }); await continuation();
   assert.ok(h.focus instanceof PopupFrame);
   assert.match(h.focus.render(100).join("\n"), /read only/);
@@ -228,20 +228,20 @@ test("child inspection preserves exact parent draft and cursor; Esc sends no req
   assert.equal(h.session.state, parent);
   h.input("\x7f"); assert.equal(h.editor.getExpandedText(), "draft中e\u0301");
   assert.equal(h.transport.transportCount("session/attach"), 1);
-  for (const method of ["turn/start", "turn/steer", "subagent/cancel", "interaction/respond"]) assert.equal(h.transport.transportCount(method), 0);
+  for (const method of ["turn/start", "turn/steer", "agent/interrupt", "interaction/respond"]) assert.equal(h.transport.transportCount(method), 0);
 });
 
 
 test("actual child A to B navigation rejects late A without Session or control requests", async t => {
-  const children = [subagent("researcher", "sha256:a", "running", { subagent_id: "A" }), subagent("planner", "sha256:b", "succeeded", { subagent_id: "B" })];
-  const h = await appHarness(t, snapshot({ subagents: children }));
+  const children = [subagent("researcher", "sha256:a", "active", { agent_id: "A" }), subagent("planner", "sha256:b", "inactive", { agent_id: "B" })];
+  const h = await appHarness(t, snapshot({ agents: children }));
   h.input("\x1b[1;5B"); h.input("\r");
-  const a = await nextRequest(h, "subagent/transcript", 0);
+  const a = await nextRequest(h, "agent/transcript", 0);
   const previousView = h.focus;
   h.input("\x1b"); h.input("\x1b[1;5B"); h.input("\r");
-  const b = await nextRequest(h, "subagent/transcript", 1);
-  assert.equal((a.params as { subagent_id: string }).subagent_id, "A");
-  assert.equal((b.params as { subagent_id: string }).subagent_id, "B");
+  const b = await nextRequest(h, "agent/transcript", 1);
+  assert.equal((a.params as { agent_id: string }).agent_id, "A");
+  assert.equal((b.params as { agent_id: string }).agent_id, "B");
   h.transport.respond(b.id, { type: "transcript", page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("b", "ONLY-B") } }] } });
   await continuation();
   h.transport.respond(a.id, { type: "transcript", page: { entries: [{ cursor: "1", item: { type: "message", message: userMessage("a", "STALE-A") } }] } });
@@ -250,5 +250,55 @@ test("actual child A to B navigation rejects late A without Session or control r
   assert.ok(h.focus instanceof PopupFrame);
   const rendered = h.focus.render(100).join("\n");
   assert.match(rendered, /ONLY-B/); assert.doesNotMatch(rendered, /STALE-A/);
-  assert.deepEqual(h.transport.log.requests.map(request => request.method), ["initialize", "session/attach", "subagent/transcript", "subagent/transcript"]);
+  assert.deepEqual(h.transport.log.requests.map(request => request.method), ["initialize", "session/attach", "agent/transcript", "agent/transcript"]);
+});
+
+for (const kind of ["agent_delivery_unknown", "agent_not_delivered"] as const) {
+  test(`actual app preserves Agent guidance draft after ${kind} without replay`, async t => {
+    const h = await appHarness(t, snapshot({ agents: [subagent("worker", "frozen", "active")] }));
+    const draft = "/send-message agent-child keep this guidance";
+    h.editor.setText(draft); h.input("\r");
+    const request = await nextRequest(h, "agent/sendMessage", 0);
+    h.transport.respondError(request.id, { code: -32000, message: "Delivery failed", data: { kind, agent_id: "agent-child" } });
+    await continuation();
+    assert.equal(h.editor.getExpandedText(), draft);
+    assert.equal(h.transport.transportCount("agent/sendMessage"), 1);
+    assert.ok(h.notices.some(text => text.includes(kind === "agent_delivery_unknown" ? "delivery is unknown" : "input was not delivered")));
+  });
+}
+
+for (const outcome of ["success", "agent_not_delivered", "agent_delivery_unknown"] as const) {
+  for (const edited of [false, true]) {
+    test(`one Agent message submission owns its pending draft: ${outcome}, edited=${edited}`, async t => {
+      const h = await appHarness(t, snapshot({ agents: [subagent("worker", "frozen", "active")] }));
+      const draft = "/send-message agent-child one guidance";
+      h.editor.setText(draft); h.input("\r");
+      const request = await nextRequest(h, "agent/sendMessage", 0);
+      h.input("\r"); await continuation();
+      assert.equal(h.transport.transportCount("agent/sendMessage"), 1, "Enter cannot duplicate the pending submission");
+      if (edited) h.editor.setText("new user typing");
+      if (outcome === "success") h.transport.respond(request.id, { type: "agent_message", agent_id: "agent-child", activation_id: "activation-1", resumed: false });
+      else h.transport.respondError(request.id, { code: -32000, message: "Delivery failed", data: { kind: outcome, agent_id: "agent-child" } });
+      await continuation();
+      assert.equal(h.editor.getExpandedText(), edited ? "new user typing" : outcome === "success" ? "" : draft);
+      assert.equal(h.transport.transportCount("agent/sendMessage"), 1, "classification never replays input");
+      if (outcome === "agent_delivery_unknown") assert.ok(h.notices.some(text => text.includes("delivery is unknown")));
+    });
+  }
+}
+
+test("pending Agent message leaves explicit interruption admissible", async t => {
+  const agent = subagent("worker", "frozen", "active");
+  const h = await appHarness(t, snapshot({ agents: [agent] }));
+  h.editor.setText("/send-message agent-child guidance"); h.input("\r");
+  const message = await nextRequest(h, "agent/sendMessage", 0);
+  h.editor.setText("/interrupt-agent agent-child"); h.input("\r");
+  const interrupt = await nextRequest(h, "agent/interrupt", 0);
+  h.transport.respond(interrupt.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: "cancelled", agent });
+  await continuation();
+  h.editor.setText("next prompt");
+  h.transport.respond(message.id, { type: "agent_message", agent_id: agent.agent_id, activation_id: agent.activation_id, resumed: false });
+  await continuation();
+  assert.equal(h.editor.getExpandedText(), "next prompt");
+  assert.equal(h.transport.transportCount("agent/sendMessage"), 1);
 });

@@ -492,7 +492,7 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
         other => panic!("expected JSON accepted content, got {other:?}"),
     };
     let execution_id: rustx::runtime::identity::ToolExecutionId =
-        serde_json::from_value(accepted_json["execution"]["id"].clone()).unwrap();
+        serde_json::from_value(accepted_json["job_id"].clone()).unwrap();
     assert!(
         accepted_json["output_path"]
             .as_str()
@@ -500,9 +500,9 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
             .ends_with(&format!("tasks/{execution_id}.output"))
     );
     assert_eq!(
-        accepted_json["execution"],
-        serde_json::json!({"kind": "tool", "id": execution_id.as_str()}),
-        "the accepted background result returns the typed execution handle"
+        accepted_json["job_id"],
+        serde_json::json!(execution_id.as_str()),
+        "the accepted background result returns the finite Job ID"
     );
     assert_eq!(accepted_json["state"], "starting");
     assert_eq!(accepted_json["tool"], "beta");
@@ -659,17 +659,14 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         other => panic!("expected JSON, got {other:?}"),
     };
     let execution_id: rustx::runtime::identity::ToolExecutionId =
-        serde_json::from_value(accepted["execution"]["id"].clone()).unwrap();
+        serde_json::from_value(accepted["job_id"].clone()).unwrap();
     assert!(
         accepted["output_path"]
             .as_str()
             .unwrap()
             .ends_with(&format!("tasks/{execution_id}.output"))
     );
-    assert_eq!(
-        accepted["execution"],
-        serde_json::json!({"kind": "tool", "id": execution_id.as_str()})
-    );
+    assert_eq!(accepted["job_id"], serde_json::json!(execution_id.as_str()));
     assert!(matches!(
         messages[2].result.status,
         ToolExecutionStatus::Cancelled {

@@ -58,9 +58,9 @@
 //!
 //! # Test seams
 //!
-//! [`RunnerTestControl`] is a `#[cfg(test)]`-only seam bundle mirroring the
-//! M5 Bash seams; in non-test builds it is an uninhabited shell, so no
-//! production behavior is affected.
+//! [`RunnerTestControl`] owns private fixture configuration, separate from command data.
+//! Fault injection is compiled only in tests; external diagnostic fixtures
+//! explicitly supply the bounded trace/gate capability.
 
 use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
@@ -117,8 +117,8 @@ pub(crate) struct SupervisedCommandSpec {
     pub command: String,
     /// The explicit working directory of the supervisor unit.
     pub cwd: PathBuf,
-    /// The full explicit child environment (`env_clear()` + these entries).
-    pub environment: Vec<(String, String)>,
+    /// Only the executed command receives these entries; never the supervisor.
+    pub command_environment: Vec<(String, String)>,
     /// The finite invocation deadline; `None` means no deadline.
     pub timeout: Option<Duration>,
     /// The runtime cancellation signal owning the invocation.
@@ -620,8 +620,9 @@ pub(crate) use crate::runtime::supervised_unit::{
 
 /// The test-only control seams of one owned invocation.
 ///
-/// In non-test builds this type is an empty shell, so no production
-/// behavior is affected. The seams exist so in-crate regressions can
+/// In non-test builds only the explicit external diagnostic fixture capability
+/// remains; ordinary tool environment data can never construct this control.
+/// The seams exist so in-crate regressions can
 /// observe the exact shell-exit boundary, deterministically inject
 /// supervisor setup / wait / signal / command-spawn failures, model the
 /// ownership release transition, record every process-group signal attempt,
@@ -630,6 +631,9 @@ pub(crate) use crate::runtime::supervised_unit::{
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
 #[derive(Clone)]
 pub(crate) struct RunnerTestControl {
+    #[cfg(test)]
+    pub(crate) anchor_stop_socket: Option<std::path::PathBuf>,
+    pub(crate) diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
     #[cfg(test)]
     pub(crate) pause_at_shell_exit: bool,
     #[cfg(test)]
@@ -642,6 +646,8 @@ pub(crate) struct RunnerTestControl {
     pub(crate) fail_signal: bool,
     #[cfg(test)]
     pub(crate) fail_wait: bool,
+    #[cfg(test)]
+    pub(crate) interrupt_direct_wait: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     pub(crate) fail_sigterm_handler: bool,
     #[cfg(test)]
@@ -678,6 +684,9 @@ impl RunnerTestControl {
     #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self {
+            anchor_stop_socket: None,
+            diagnostics:
+                crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
             pause_at_shell_exit: false,
             lifecycle: RunnerLifecycleHook::new(),
             nested_authority: None,
@@ -685,6 +694,7 @@ impl RunnerTestControl {
             fail_command_spawn: false,
             fail_signal: false,
             fail_wait: false,
+            interrupt_direct_wait: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             fail_sigterm_handler: false,
             fail_subreaper_init: false,
             force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -696,12 +706,15 @@ impl RunnerTestControl {
         }
     }
 
-    /// A control bundle without failures (non-test build: fieldless shell).
+    /// A control bundle with external diagnostics disabled.
     #[cfg_attr(not(test), allow(dead_code))] // test-only seams
     #[must_use]
     #[cfg(not(test))]
     pub(crate) fn new() -> Self {
-        Self {}
+        Self {
+            diagnostics:
+                crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
+        }
     }
 
     #[cfg(test)]
@@ -742,6 +755,7 @@ pub(crate) struct SupervisedCommandRunner {
     settled: Option<Settled>,
     exit_status: Option<ExitStatus>,
     terminate_sent: bool,
+    trace: Option<crate::tools::native::bash_supervisor::diagnostics::Trace>,
     terminate_deadline: Option<tokio::time::Instant>,
     terminal_event_held: bool,
     /// The nested containment gate of this unit (Issue #145).
@@ -755,6 +769,12 @@ pub(crate) struct SupervisedCommandRunner {
 }
 
 impl SupervisedCommandRunner {
+    fn trace_event(&mut self, event: crate::tools::native::bash_supervisor::diagnostics::Event) {
+        if let Some(trace) = &mut self.trace {
+            trace.record(event);
+        }
+    }
+
     /// Spawns the supervisor unit for one owned command.
     ///
     /// The runtime child-subreaper capability is a pre-ownership
@@ -771,6 +791,28 @@ impl SupervisedCommandRunner {
     pub(crate) fn spawn(
         spec: &SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
+    ) -> Result<
+        (
+            Self,
+            Option<tokio::process::ChildStdout>,
+            Option<tokio::process::ChildStderr>,
+        ),
+        RunnerSpawnError,
+    > {
+        Self::spawn_with_continuation(spec, control, None)
+    }
+
+    /// Retains one durable activation continuation in the trusted supervisor.
+    /// It writes proof only after the same native group containment gate used
+    /// by ordinary commands; the command never owns the authority descriptor.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn spawn_with_continuation(
+        spec: &SupervisedCommandSpec,
+        control: Option<RunnerTestControl>,
+        continuation: Option<
+            &crate::runtime::subagent::physical_recovery::ParentPhysicalContinuation,
+        >,
     ) -> Result<
         (
             Self,
@@ -809,8 +851,20 @@ impl SupervisedCommandRunner {
         let mut supervisor = tokio::process::Command::new(supervisor_binary());
         supervisor.current_dir(&spec.cwd);
         supervisor.env_clear();
-        for (key, value) in &spec.environment {
-            supervisor.env(key, value);
+        supervisor.env(
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+            serde_json::to_string(&spec.command_environment)
+                .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+        );
+        if let Some(control) = &control {
+            control.diagnostics.configure(&mut supervisor);
+            #[cfg(test)]
+            if let Some(path) = &control.anchor_stop_socket {
+                supervisor.env(
+                    crate::tools::native::bash_supervisor::diagnostics::ANCHOR_STOP_GATE_ENV,
+                    path,
+                );
+            }
         }
         supervisor.env(SUPERVISOR_ROLE_ENV, ROLE_OUTER);
         supervisor.env(COMMAND_ENV, &spec.command);
@@ -840,7 +894,20 @@ impl SupervisedCommandRunner {
         }
         supervisor.stdin(Stdio::from(OwnedFd::from(stream_b)));
         supervisor.stdout(Stdio::piped());
-        supervisor.stderr(Stdio::piped());
+        if let Some(continuation) = continuation {
+            supervisor.env(
+                "RUSTX_PHYSICAL_CONTINUATION",
+                serde_json::to_string(&continuation.spec())
+                    .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+            );
+            supervisor.stderr(Stdio::from(
+                continuation
+                    .inherited_file()
+                    .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+            ));
+        } else {
+            supervisor.stderr(Stdio::piped());
+        }
         #[cfg(test)]
         if let Some(control) = &control
             && control.fail_supervisor_spawn
@@ -873,6 +940,10 @@ impl SupervisedCommandRunner {
                 settled: None,
                 exit_status: None,
                 terminate_sent: false,
+                trace: control
+                    .as_ref()
+                    .and_then(|control| control.diagnostics.trace.as_ref())
+                    .map(crate::tools::native::bash_supervisor::diagnostics::Trace::new),
                 terminate_deadline: None,
                 terminal_event_held: false,
                 anchor_gate: crate::runtime::nested_containment::AnchorGate::Idle,
@@ -915,8 +986,9 @@ impl SupervisedCommandRunner {
                 biased;
                 () = self.cancellation.cancelled(), if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::Cancelled);
-                    send_terminate(&mut self.stream).await;
+                    let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = async {
@@ -926,14 +998,16 @@ impl SupervisedCommandRunner {
                     }
                 }, if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::TimedOut);
-                    send_terminate(&mut self.stream).await;
+                    let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = wait_for_forced_timeout(self.control.as_ref()), if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::TimedOut);
-                    send_terminate(&mut self.stream).await;
+                    let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 event = read_supervisor_event(&mut self.stream), if self.supervisor_channel == SupervisorChannel::Connected => match event {
@@ -994,6 +1068,7 @@ impl SupervisedCommandRunner {
                         }
                     }
                     Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
+                        self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminalObserved);
                         send_terminal_ack(&mut self.stream).await;
                         #[cfg(test)]
                         if let Some(control) = self.control.as_ref() {
@@ -1052,6 +1127,7 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
+                                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
@@ -1078,6 +1154,7 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
+                                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
@@ -1099,8 +1176,9 @@ impl SupervisedCommandRunner {
                             // terminal.
                             self.failure = Some(error.to_string());
                             if !self.terminate_sent {
-                                send_terminate(&mut self.stream).await;
+                                let sent = send_terminate(&mut self.stream).await;
                                 self.terminate_sent = true;
+                                self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                                 self.terminate_deadline = Some(
                                     tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION,
                                 );
@@ -1141,9 +1219,29 @@ impl SupervisedCommandRunner {
         // point. Reaping the already-terminal direct child is semantically
         // required; it is never abandoned.
         if !self.direct_child_reaped {
-            match self.child.wait().await {
+            let wait = loop {
+                #[cfg(test)]
+                let interrupted = self.control.as_ref().is_some_and(|control| {
+                    control
+                        .interrupt_direct_wait
+                        .swap(false, std::sync::atomic::Ordering::SeqCst)
+                });
+                #[cfg(not(test))]
+                let interrupted = false;
+                let result = if interrupted {
+                    Err(std::io::ErrorKind::Interrupted.into())
+                } else {
+                    self.child.wait().await
+                };
+                match result {
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    result => break result,
+                }
+            };
+            match wait {
                 Ok(_) => {
                     self.direct_child_reaped = true;
+                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
                     #[cfg(test)]
                     if let Some(control) = self.control.as_ref() {
                         control.lifecycle.mark_direct_child_reaped();
@@ -1284,9 +1382,9 @@ pub(crate) fn interactive_supervisor_binary() -> PathBuf {
 /// terminal child-set events are already in flight or were received; the
 /// supervision loop's read side remains authoritative.
 #[cfg(unix)]
-pub(crate) async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
+pub(crate) async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) -> bool {
     let frame = [1u8, 0, 0, 0, MSG_TERMINATE];
-    let _ = stream.write_all(&frame).await;
+    stream.write_all(&frame).await.is_ok()
 }
 
 #[cfg(unix)]
@@ -1547,7 +1645,10 @@ mod tests {
         SupervisedCommandSpec {
             command: command.to_owned(),
             cwd: std::env::temp_dir(),
-            environment: vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())],
+            command_environment: vec![(
+                "PATH".to_owned(),
+                "/usr/local/bin:/usr/bin:/bin".to_owned(),
+            )],
             timeout: Some(Duration::from_secs(30)),
             cancellation,
         }
@@ -1564,6 +1665,95 @@ mod tests {
         )
         .await
         .expect("rustX must reap the direct supervisor child");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn physical_continuation_survives_parent_control_loss_and_rejects_supervisor_death() {
+        use crate::runtime::identity::{ConversationId, SessionId, SubagentId};
+        use crate::runtime::local_storage::ProductRoot;
+        use crate::runtime::subagent::physical_recovery::{
+            ParentPhysicalLease, prove, prove_after_release,
+        };
+        use tokio::io::AsyncReadExt;
+
+        for kill_supervisor in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let product = ProductRoot::create(directory.path()).unwrap();
+            let session = SessionId::new("ses_01900000-0000-7000-8000-000000000001");
+            let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000002");
+            let activation = SubagentId::new("activation:1");
+            let owner =
+                ParentPhysicalLease::reserve(&product, &session, &conversation, &activation)
+                    .unwrap();
+            // The activation itself has no child here; its later native helper
+            // is the real production lifetime under test.
+            owner.publish_quiescent().unwrap();
+            let helper = owner.reserve_continuation().unwrap();
+            let fifo = directory.path().join("gate");
+            nix::unistd::mkfifo(
+                &fifo,
+                nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+            )
+            .unwrap();
+            let mut specification = spec("printf ready; exec cat gate", CancellationSignal::new());
+            specification.cwd = directory.path().to_path_buf();
+            let (mut runner, stdout, _) = super::SupervisedCommandRunner::spawn_with_continuation(
+                &specification,
+                None,
+                Some(&helper),
+            )
+            .unwrap();
+            let mut stdout = stdout.unwrap();
+            let mut ready = [0_u8; 5];
+            tokio::select! {
+                result = stdout.read_exact(&mut ready) => { result.unwrap(); }
+                result = runner.settle() => panic!("helper settled before its command gate: {result:?}"),
+            }
+            assert_eq!(&ready, b"ready");
+            let pgid = match runner.lifecycle {
+                super::ProcessLifecycle::OwnershipPossible { pgid }
+                | super::ProcessLifecycle::Owned { pgid } => pgid,
+                other => panic!("missing retained command anchor: {other:?}"),
+            };
+            // The output gate proves START crossed and the trusted outer has
+            // installed Running. Parent descriptor/control loss cannot remove
+            // its lock or create a proof. Command code never inherits the fd.
+            drop(helper);
+            drop(owner);
+            assert!(
+                prove(&product, &session, &conversation, &activation)
+                    .unwrap()
+                    .is_none()
+            );
+            let super::SupervisedCommandRunner {
+                mut child, stream, ..
+            } = runner;
+            if kill_supervisor {
+                child.start_kill().unwrap();
+            }
+            drop(stream); // exact parent-death control boundary
+            tokio::time::timeout(Duration::from_secs(15), child.wait())
+                .await
+                .unwrap()
+                .unwrap();
+            let proof =
+                prove_after_release(&product, &session, &conversation, &activation).unwrap();
+            assert_eq!(proof.is_some(), !kill_supervisor);
+            if kill_supervisor {
+                // Cleanup uses the structural group anchor, not a vanished PID
+                // heuristic. It deliberately cannot rewrite the lost proof.
+                assert!(matches!(
+                    crate::runtime::supervised_unit::emergency_contain_group(pgid, false),
+                    Ok(crate::runtime::supervised_unit::EmergencyContainment::TerminalProven)
+                ));
+                assert!(
+                    prove(&product, &session, &conversation, &activation)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
     }
 
     // ---- Issue #145: the nested containment gate ----
@@ -1690,7 +1880,7 @@ mod tests {
                         SupervisedCommandSpec {
                             command: format!("touch {}", marker.display()),
                             cwd: std::env::temp_dir(),
-                            environment: vec![(
+                            command_environment: vec![(
                                 "PATH".to_owned(),
                                 "/usr/local/bin:/usr/bin:/bin".to_owned(),
                             )],
@@ -1755,7 +1945,7 @@ mod tests {
                         SupervisedCommandSpec {
                             command: format!("touch {}", marker.display()),
                             cwd: std::env::temp_dir(),
-                            environment: vec![(
+                            command_environment: vec![(
                                 "PATH".to_owned(),
                                 "/usr/local/bin:/usr/bin:/bin".to_owned(),
                             )],
@@ -1806,7 +1996,7 @@ mod tests {
                 SupervisedCommandSpec {
                     command: format!("touch {}", marker.display()),
                     cwd: std::env::temp_dir(),
-                    environment: vec![(
+                    command_environment: vec![(
                         "PATH".to_owned(),
                         "/usr/local/bin:/usr/bin:/bin".to_owned(),
                     )],
@@ -1899,7 +2089,7 @@ mod tests {
                 SupervisedCommandSpec {
                     command: "printf runner-result".to_owned(),
                     cwd: std::env::temp_dir(),
-                    environment: vec![(
+                    command_environment: vec![(
                         "PATH".to_owned(),
                         "/usr/local/bin:/usr/bin:/bin".to_owned(),
                     )],

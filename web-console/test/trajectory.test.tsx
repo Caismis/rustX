@@ -11,7 +11,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v25';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v27';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -1221,4 +1221,40 @@ it('folded Turn preview and summary Status localize native lifecycle states with
   expect(preview()).toBe('running · failed · waiting · outcome unknown');
   expect(owners()).toEqual(visible);
   expect([load, older, select, latest].map(fn => fn.mock.calls.length)).toEqual(calls);
+});
+
+it('Agent activations retain separate trace records correlated to one durable Agent across replay', () => {
+  const records = ['activation-a', 'activation-b', 'activation-c'].map((activation_id, n) => traceRecord(n, {
+    kind: 'subagent', request: null, agent_id: 'durable-agent', activation_id, native_id: activation_id,
+    activation_origin: n === 0 ? { kind: 'creation_tool', tool_call_id: 'actual-create-call' } : n === 1 ? { kind: 'message_tool', tool_call_id: 'actual-message-call' } : { kind: 'client_control' },
+    originating_tool_call_id: n === 0 ? 'actual-create-call' : n === 1 ? 'actual-message-call' : null,
+  }));
+  const ui = show(cacheOf(records));
+  for (const record of records) {
+    fireEvent.click(row('RecordRow', record.id));
+    fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
+    const panel = within(screen.getByRole('tabpanel'));
+    expect(panel.getByText('durable-agent')).toBeTruthy();
+    expect(panel.getAllByText(record.activation_id!)).not.toHaveLength(0);
+    expect(panel.getByText(record.activation_origin?.kind === 'client_control' ? 'Client control' : record.activation_origin?.kind === 'creation_tool' ? 'Creation Tool' : 'Message Tool')).toBeTruthy();
+  }
+  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop}/>);
+  expect(document.querySelectorAll('[data-display-type="RecordRow"]')).toHaveLength(3);
+});
+
+
+it('finite Workflow activation origin has no fabricated Tool call or Message Tool label', () => {
+  const record = traceRecord(0, {
+    kind: 'subagent', request: null, activation_id: 'workflow-activation', native_id: 'workflow-activation',
+    activation_origin: { kind: 'workflow', node_id: { node: 'review', visit: 1, block: {
+      run: { conversation_id: 'parent', attempt_id: 'attempt-a', invocation: '1' },
+      definition: { workflow_id: 'review-workflow', blocks: [] }, invocations: [0],
+    } } }, originating_tool_call_id: null,
+  });
+  show(cacheOf([record]));
+  fireEvent.click(row('RecordRow', record.id));
+  fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
+  const panel = within(screen.getByRole('tabpanel'));
+  expect(panel.getByText('Workflow', { exact: true })).toBeTruthy();
+  expect(panel.queryByText('Message Tool', { exact: true })).toBeNull();
 });

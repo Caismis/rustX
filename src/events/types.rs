@@ -600,6 +600,12 @@ pub enum RuntimeEvent {
     /// The fact carries no attempt identity: a committed child deliberately
     /// outlives the attempt that started it.
     SubagentOwnershipCommitted {
+        /// Stable parent lineage, independent of any activation.
+        parent_agent_id: AgentId,
+        /// Opaque reference to private executable authority, present only on Agent
+        /// creation. Must match `child_agent_id`; no configuration or secrets
+        /// are serializable through this public Event Journal fact.
+        admitted_authority: Option<AgentId>,
         /// The allocated subagent identity.
         subagent_id: SubagentId,
         /// The child agent identity (the provenance of the child's later
@@ -608,7 +614,7 @@ pub enum RuntimeEvent {
         /// The child's own durable conversation identity.
         child_conversation_id: ConversationId,
         /// The model-issued tool call that delegated the work.
-        tool_call_id: ToolCallId,
+        origin: crate::runtime::subagent::AgentActivationOrigin,
         /// The canonical named-agent identity frozen at start (Issue #144).
         agent: String,
         /// The deterministic definition digest frozen at start (Issue
@@ -646,6 +652,14 @@ pub enum RuntimeEvent {
         /// ownership fact committed.
         workspace: WorkspaceSnapshot,
     },
+    /// One exact inactive-Agent resume reservation and its physical rollback.
+    /// This execution fact carries no task content or admitted authority.
+    AgentActivationAdmission {
+        agent_id: AgentId,
+        activation_id: SubagentId,
+        origin: crate::runtime::subagent::AgentActivationOrigin,
+        phase: AgentActivationAdmissionPhase,
+    },
     /// A subagent child's terminal publication was durably accepted. The
     /// event is committed in the same transaction as the Pending Inbound
     /// row and references that row by `MessageId`; it never embeds the
@@ -664,10 +678,21 @@ pub enum RuntimeEvent {
         message_id: MessageId,
         /// The terminal state represented by the publication.
         state: SubagentTerminalState,
+        /// Direct child and nested ownership physically settled before publication.
+        /// Crash reconciliation cannot invent this proof from a logical terminal.
+        physical_settlement_proven: bool,
         /// The post-terminal workspace resource disposition. This is
         /// execution evidence, not model-authored output, and is committed
         /// with the terminal fact so recovery cannot lose physical ownership.
         workspace_resource: SubagentWorkspaceTerminalResource,
+    },
+
+    /// Recovery proved an old activation's physical incarnation quiescent.
+    /// This closes its resource obligation without changing its logical outcome
+    /// or publishing another terminal message.
+    SubagentPhysicalSettlementProven {
+        subagent_id: SubagentId,
+        child_agent_id: AgentId,
     },
 
     /// A Workflow-owned subagent reached native terminal settlement without
@@ -681,6 +706,9 @@ pub enum RuntimeEvent {
         child_agent_id: AgentId,
         /// The terminal state reached by the native child.
         state: SubagentTerminalState,
+        /// Independent physical proof from the exact finite process owner.
+        /// Recovery interruptions remain false until native reconciliation proves it.
+        physical_settlement_proven: bool,
         /// The post-terminal workspace resource disposition.
         workspace_resource: SubagentWorkspaceTerminalResource,
     },
@@ -958,8 +986,14 @@ pub fn contribution_emission_event_id(
     ))
 }
 
-/// The durable terminal outcome of an asynchronous one-shot subagent child
-/// (Issue #60).
+/// Durable precommit physical-staging boundary for one Agent activation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentActivationAdmissionPhase {
+    Reserved,
+    RolledBack { physical_settlement_proven: bool },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentTerminalState {

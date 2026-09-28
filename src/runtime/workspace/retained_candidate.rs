@@ -205,7 +205,7 @@ impl WorkspaceManager {
                 } => self.verify_unresolved_workspace(&owner, snapshot).await?,
                 _ => return Err(mismatch("candidate has unresolved physical containment")),
             };
-            self.verify_retained_workspace(&owner, snapshot, &handoff)
+            self.verify_retained_workspace(&owner, snapshot, &handoff, None)
                 .await?;
             commit(
                 store,
@@ -226,6 +226,7 @@ impl WorkspaceManager {
                 facts.phase,
                 true,
                 Some(content_proof),
+                false,
             )
             .await?;
         if facts.disposed {

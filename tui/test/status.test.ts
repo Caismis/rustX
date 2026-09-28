@@ -369,7 +369,7 @@ describe("footer", () => {
   it("does not duplicate pending inbound, background, and approval activity", () => {
     const rendered = footer(
       stateOf({
-        background: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
+        jobs: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
         pending_interactions: [approvalInteraction()],
         inbound: {
           pending: [
@@ -418,7 +418,7 @@ describe("footer", () => {
         model: attemptModel("beta/model-b"),
         last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
       }),
-      background: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
+      jobs: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
       capabilities: { revision: "9" },
     });
 
@@ -528,7 +528,7 @@ describe("activity area", () => {
     const rendered = plainText(
       renderBackgroundSection(
         stateOf({
-          background: [
+          jobs: [
             backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running", {
               progress: { message: "step 2" },
             }),
@@ -538,7 +538,7 @@ describe("activity area", () => {
         prefs(),
       ),
     );
-    assert.match(rendered, /Background · 1 active of 2 known/);
+    assert.match(rendered, /Jobs · 1 active of 2 known/);
     assert.match(rendered, /running exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb/);
     assert.match(rendered, /succeeded exec_5d3d6a95-5f18-7b68-afa6-8d669cc7692d/);
     assert.match(rendered, /step 2/);
@@ -585,7 +585,7 @@ describe("activity area", () => {
     // registry still owns durable publication. `timed_out` and
     // `outcome_unknown` are proven terminal states and leave the active set.
     const state = stateOf({
-      background: [
+      jobs: [
         backgroundExecution("exec_533a7ee2-9c1a-7b20-8e75-370fd586217a", "running"),
         backgroundExecution("exec_7fb469e5-9b06-7cd0-a415-1043762abefb", "publishing_terminal"),
         backgroundExecution("exec_c8fe6ab2-de4c-73e9-a357-07bf8b340edb", "timed_out"),
@@ -593,12 +593,12 @@ describe("activity area", () => {
       ],
     });
     assert.deepEqual(
-      activeBackground(state).map((execution) => execution.execution_id),
+      activeBackground(state).map((execution) => execution.job_id),
       ["exec_533a7ee2-9c1a-7b20-8e75-370fd586217a", "exec_7fb469e5-9b06-7cd0-a415-1043762abefb"],
     );
     assert.match(
       plainText(renderBackgroundSection(state, prefs())),
-      /Background · 2 active of 4 known/,
+      /Jobs · 2 active of 4 known/,
     );
   });
 
@@ -778,7 +778,7 @@ describe("client collapse is finite and reversible", () => {
   it("expands a background reason and body under one expansion state", () => {
     // The bug this replaces: the body honoured the execution's expansion
     // preference while the reason was rendered through a permanently
-    // collapsed context, so `/expand background <id>` revealed half the card.
+    // collapsed context, so `/expand job <id>` revealed half the card.
     const result = {
       status: { type: "failed" as const, error: HUGE },
       content: [{ type: "text" as const, text: `${HUGE}TAIL` }],

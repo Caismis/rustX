@@ -136,6 +136,30 @@ impl SubagentSpawnPlan {
         )
     }
 
+    pub(crate) async fn allocate_activation_runtime_root(
+        &self,
+        conversation_id: &ConversationId,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<PhysicalChildRuntimeRoot, SpawnError> {
+        let ownership = self
+            .product_root
+            .runtime_ownership_admission()
+            .await
+            .map_err(|error| SpawnError::WorkspaceSetup {
+                detail: error.to_string(),
+            })?;
+        if cancellation.is_cancelled() {
+            return Err(SpawnError::Cancelled);
+        }
+        PhysicalChildRuntimeRoot::allocate_inner(
+            &self.product_root,
+            &ownership,
+            &self.session_id,
+            conversation_id,
+            true,
+        )
+    }
+
     /// The one typed startup specification of a child.
     ///
     /// The spawn plan contributes only launch-scoped physical locations and
@@ -209,6 +233,7 @@ pub(crate) struct PhysicalChildRuntimeRoot {
     /// The stable child Message Ledger/Event Journal database, when this is a
     /// production-allocated root. Test-only roots do not own a durable store.
     durable_store: Option<PathBuf>,
+    physical_owner: Option<std::sync::Arc<super::physical_recovery::ParentPhysicalLease>>,
 }
 
 impl PhysicalChildRuntimeRoot {
@@ -216,9 +241,20 @@ impl PhysicalChildRuntimeRoot {
     /// fresh incarnation directory beneath it.
     fn allocate(
         product: &crate::runtime::local_storage::ProductRoot,
+        ownership: &crate::runtime::local_storage::OwnershipMutation,
+        session_id: &crate::runtime::identity::SessionId,
+        conversation_id: &ConversationId,
+    ) -> Result<Self, SpawnError> {
+        Self::allocate_inner(product, ownership, session_id, conversation_id, false)
+    }
+
+    #[allow(clippy::too_many_lines)] // Keep allocation and rollback ownership in one transaction.
+    fn allocate_inner(
+        product: &crate::runtime::local_storage::ProductRoot,
         _ownership: &crate::runtime::local_storage::OwnershipMutation,
         session_id: &crate::runtime::identity::SessionId,
         conversation_id: &ConversationId,
+        existing: bool,
     ) -> Result<Self, SpawnError> {
         if !super::is_safe_child_conversation_component(conversation_id) {
             return Err(SpawnError::WorkspaceSetup {
@@ -241,12 +277,47 @@ impl PhysicalChildRuntimeRoot {
             })?;
         let durable_store =
             super::child_conversation_store_path(parent, session_id, conversation_id);
-        // Identity consumption is the storage owner's exclusive reservation and
-        // precedes any child directory creation. A consumed child identity is
-        // reported as in-use so the caller retries with a fresh identity; the
-        // prior reservation is never overwritten.
-        product
-            .reserve_conversation(conversation_id)
+        if existing {
+            if !durable_store.is_file() {
+                return Err(SpawnError::WorkspaceSetup {
+                    detail: "admitted Agent conversation history is missing".into(),
+                });
+            }
+        } else {
+            // Identity consumption is the storage owner's exclusive reservation and
+            // precedes any child directory creation. A consumed child identity is
+            // reported as in-use so the caller retries with a fresh identity; the
+            // prior reservation is never overwritten.
+            product
+                .reserve_conversation(conversation_id)
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        SpawnError::ConversationIdentityInUse {
+                            conversation_id: conversation_id.clone(),
+                            path: semantic_root.clone(),
+                        }
+                    } else {
+                        SpawnError::WorkspaceSetup {
+                            detail: error.to_string(),
+                        }
+                    }
+                })?;
+            for path in [
+                durable_store.clone(),
+                PathBuf::from(format!("{}-wal", durable_store.display())),
+                PathBuf::from(format!("{}-shm", durable_store.display())),
+            ] {
+                if path.exists() {
+                    return Err(SpawnError::ConversationIdentityInUse {
+                        conversation_id: conversation_id.clone(),
+                        path,
+                    });
+                }
+            }
+            crate::local_runtime::session::SessionCatalog::create_conversation_allocation(
+                product,
+                &semantic_root,
+            )
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::AlreadyExists {
                     SpawnError::ConversationIdentityInUse {
@@ -259,34 +330,7 @@ impl PhysicalChildRuntimeRoot {
                     }
                 }
             })?;
-        for path in [
-            durable_store.clone(),
-            PathBuf::from(format!("{}-wal", durable_store.display())),
-            PathBuf::from(format!("{}-shm", durable_store.display())),
-        ] {
-            if path.exists() {
-                return Err(SpawnError::ConversationIdentityInUse {
-                    conversation_id: conversation_id.clone(),
-                    path,
-                });
-            }
         }
-        crate::local_runtime::session::SessionCatalog::create_conversation_allocation(
-            product,
-            &semantic_root,
-        )
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                SpawnError::ConversationIdentityInUse {
-                    conversation_id: conversation_id.clone(),
-                    path: semantic_root.clone(),
-                }
-            } else {
-                SpawnError::WorkspaceSetup {
-                    detail: error.to_string(),
-                }
-            }
-        })?;
 
         for _ in 0..INCARNATION_ALLOCATION_ATTEMPTS {
             let mut token = [0u8; INCARNATION_TOKEN_BYTES];
@@ -302,7 +346,8 @@ impl PhysicalChildRuntimeRoot {
                 Ok(()) => {
                     return Ok(Self {
                         path,
-                        durable_store: Some(durable_store),
+                        durable_store: (!existing).then_some(durable_store),
+                        physical_owner: None,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -324,6 +369,34 @@ impl PhysicalChildRuntimeRoot {
                 INCARNATION_ALLOCATION_ATTEMPTS
             ),
         })
+    }
+
+    pub(crate) fn install_physical_owner(
+        &mut self,
+        owner: std::sync::Arc<super::physical_recovery::ParentPhysicalLease>,
+    ) {
+        assert!(self.physical_owner.replace(owner).is_none());
+    }
+
+    /// No child was spawned. Workspace helpers must still be positively
+    /// settled before their preparation root can be discarded.
+    pub(crate) fn discard_unstarted(self) -> std::io::Result<()> {
+        let _proof = self
+            .physical_owner
+            .as_ref()
+            .map(|owner| owner.prove_continuations())
+            .transpose()?
+            .flatten()
+            .ok_or_else(|| std::io::Error::other("unresolved preparation helpers"))?;
+        self.publish_quiescent()?;
+        self.remove_durable_store()?;
+        self.remove()
+    }
+
+    fn publish_quiescent(&self) -> std::io::Result<()> {
+        self.physical_owner
+            .as_ref()
+            .map_or(Ok(()), |owner| owner.publish_quiescent())
     }
 
     /// The exact path handed to the child and used by its private stores.
@@ -383,6 +456,7 @@ impl PhysicalChildRuntimeRoot {
         Self {
             path,
             durable_store: None,
+            physical_owner: None,
         }
     }
 }
@@ -578,10 +652,30 @@ impl std::error::Error for RollbackError {}
 pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
-    runtime_root: PhysicalChildRuntimeRoot,
+    mut runtime_root: PhysicalChildRuntimeRoot,
     workspace: WorkspaceUse,
     preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
 ) -> Result<StagedChild, SpawnError> {
+    if runtime_root.physical_owner.is_none() {
+        match super::physical_recovery::ParentPhysicalLease::reserve(
+            &plan.product_root,
+            &plan.session_id,
+            &spec.child_conversation_id,
+            &spec.subagent_id,
+        ) {
+            Ok(owner) => runtime_root.install_physical_owner(std::sync::Arc::new(owner)),
+            Err(error) => {
+                return Err(discard_unstaged_resources(
+                    runtime_root,
+                    workspace,
+                    SpawnError::WorkspaceSetup {
+                        detail: error.to_string(),
+                    },
+                )
+                .await);
+            }
+        }
+    }
     if preparation_cancellation.is_cancelled() {
         return Err(
             discard_unstaged_resources(runtime_root, workspace, SpawnError::Cancelled).await,
@@ -653,7 +747,7 @@ pub(crate) async fn spawn_staged(
     }
     let spawned = match spawn_process(
         plan,
-        runtime_root.path(),
+        &runtime_root,
         workspace.logical_workspace(),
         &credentials,
     ) {
@@ -720,14 +814,17 @@ async fn discard_unstaged_resources(
     let durable_error = runtime_root.remove_durable_store().err().map(|cleanup| {
         format!("could not remove unowned durable child conversation store for {path}: {cleanup}")
     });
+    let physical_owner = runtime_root.physical_owner.clone();
     let root_error = runtime_root.remove().err().map(|cleanup| {
         format!("could not remove unowned physical child runtime root {path}: {cleanup}")
     });
-    let workspace_error = workspace
-        .settle_staged()
-        .await
-        .err()
-        .map(|error| error.detail);
+    let workspace_error = crate::runtime::workspace::with_physical_settlement_authority(
+        physical_owner,
+        workspace.settle_staged(),
+    )
+    .await
+    .err()
+    .map(|error| error.detail);
     match (durable_error, root_error, workspace_error) {
         (None, None, None) => error,
         (durable_error, root_error, workspace_error) => SpawnError::Rollback {
@@ -747,7 +844,7 @@ async fn discard_unstaged_resources(
 /// the disposable observation channel inherited as fd 1 (Issue #178).
 fn spawn_process(
     plan: &SubagentSpawnPlan,
-    runtime_root: &Path,
+    runtime_root: &PhysicalChildRuntimeRoot,
     project_workspace: &Path,
     credentials: &[(String, String)],
 ) -> Result<SpawnedProcess, SpawnError> {
@@ -778,15 +875,18 @@ fn spawn_process(
                 detail: format!("observation channel: {error}"),
             })?;
     let observation_stdio: Stdio = std::os::fd::OwnedFd::from(observation_child_std).into();
-    // The child's diagnostics never travel through a pipe to the parent: a
-    // hard parent death must not turn the child's stderr writes into
-    // SIGPIPE. They land in a child-private diagnostics log instead.
-    let diagnostics = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(runtime_root.join("diagnostics.log"))
+    // fd 2 carries the same locked open-file description into the child.
+    // The child duplicates it CLOEXEC before composition, then restores its
+    // diagnostic sink. There is no spawn-to-lease ownership gap.
+    let inherited_owner = runtime_root
+        .physical_owner
+        .as_ref()
+        .ok_or_else(|| SpawnError::WorkspaceSetup {
+            detail: "physical settlement authority is missing".into(),
+        })?
+        .inherited_file()
         .map_err(|error| SpawnError::WorkspaceSetup {
-            detail: format!("diagnostics log: {error}"),
+            detail: error.to_string(),
         })?;
     let mut command = tokio::process::Command::new(&plan.program);
     command.envs(credentials.iter().map(|(key, value)| (key, value)));
@@ -798,7 +898,7 @@ fn spawn_process(
         .arg("--subagent-child")
         .stdin(child_stdio)
         .stdout(observation_stdio)
-        .stderr(Stdio::from(diagnostics));
+        .stderr(Stdio::from(inherited_owner));
     #[cfg(unix)]
     command.process_group(0);
     let child = command.spawn().map_err(|error| SpawnError::Spawn {
@@ -948,7 +1048,10 @@ impl StagedChild {
             workspace,
             retained,
         } = self;
-        let (command_tx, command_rx) = tokio::sync::mpsc::channel(16);
+        // The registry admits bounded messages under its lifecycle mutex.
+        // Enqueue must be synchronous and reliable while the driver lives:
+        // queue pressure cannot revoke an Active admission or drop Cancel.
+        let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
         // The driver owns the OS handle immediately after this call, but it
         // cannot send Delegate until the registry has installed its command
         // handle and resolved any cancellation intent that committed during
@@ -1055,7 +1158,12 @@ impl StagedChild {
         let settlement = contain_retained(self.retained.take()).await;
         let workspace_result = if let Some(workspace) = self.workspace.take() {
             if settlement.unproven.is_empty() {
-                workspace.settle_after_child().await.workspace
+                crate::runtime::workspace::with_physical_settlement_authority(
+                    self.runtime_root.physical_owner.clone(),
+                    workspace.settle_after_child(),
+                )
+                .await
+                .workspace
             } else {
                 workspace.preserve_after_unresolved_nested(
                     "a nested supervised process anchor remains physically unresolved",
@@ -1075,6 +1183,14 @@ impl StagedChild {
         let runtime_root = self.runtime_root;
         remove_inspection_liveness_marker(&runtime_root);
         let runtime_root_cleanup_error = if settlement.unproven.is_empty() {
+            // Reaping the direct child and containing every retained anchor
+            // prove physical quiescence. Dirty retained work or Git cleanup
+            // failure remains a rollback error below, but cannot erase that
+            // independent positive proof when the child needed escalation.
+            let proof_error = runtime_root
+                .publish_quiescent()
+                .err()
+                .map(|error| format!("publish staged physical settlement proof: {error}"));
             let path = runtime_root.path().display().to_string();
             let durable_error = runtime_root.remove_durable_store().err().map(|error| {
                 format!("remove uncommitted durable child conversation store for {path}: {error}")
@@ -1083,7 +1199,7 @@ impl StagedChild {
                 .remove()
                 .err()
                 .map(|error| format!("remove child runtime root {path}: {error}"));
-            [durable_error, root_error]
+            [proof_error, durable_error, root_error]
                 .into_iter()
                 .flatten()
                 .reduce(|left, right| format!("{left}; {right}"))
@@ -1285,7 +1401,7 @@ async fn handshake_core(
                 Ok(Some(ChildFrame::Diagnostic(_))) => {}
                 // Guidance is only ever routed to a committed, delegated
                 // child, so an acceptance answer cannot precede `Ready`.
-                Ok(Some(ChildFrame::GuidanceResult(_))) => {
+                Ok(Some(ChildFrame::SealRequested | ChildFrame::SealOpen | ChildFrame::DelegateAccepted | ChildFrame::GuidanceResult(_))) => {
                     return Err(SpawnError::Handshake {
                         detail: "the child answered guidance before Ready".to_owned(),
                     });
@@ -1365,7 +1481,7 @@ async fn answer_anchor_offer(
 /// control stream stay inside the driver task, the sole process owner.
 #[derive(Debug)]
 pub(crate) struct ChildDriver {
-    commands: tokio::sync::mpsc::Sender<DriverCommand>,
+    commands: tokio::sync::mpsc::UnboundedSender<DriverCommand>,
     start: tokio::sync::oneshot::Sender<Option<CancellationReason>>,
     task: tokio::task::JoinHandle<PhysicalSettlement>,
 }
@@ -1429,9 +1545,10 @@ pub(crate) enum ChildBoundRoute {
         guidance_id: u64,
         /// The bounded parent-authored guidance text.
         message: String,
-        /// The child conversation's acceptance decision, or a dropped sender
-        /// when the child settled without answering.
+        /// The child's explicit decision. Loss of this sender is classified
+        /// using `write_started`, never inferred from terminal settlement.
         outcome: tokio::sync::oneshot::Sender<ChildGuidanceOutcome>,
+        write_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
 }
 
@@ -1442,7 +1559,7 @@ impl ChildDriver {
     pub(crate) fn split(
         self,
     ) -> (
-        tokio::sync::mpsc::Sender<DriverCommand>,
+        tokio::sync::mpsc::UnboundedSender<DriverCommand>,
         tokio::sync::oneshot::Sender<Option<CancellationReason>>,
         tokio::task::JoinHandle<PhysicalSettlement>,
     ) {
@@ -1494,7 +1611,7 @@ async fn drive_child(
     runtime_root: PhysicalChildRuntimeRoot,
     workspace: Option<WorkspaceUse>,
     delegate: super::ipc::DelegationFrame,
-    commands: tokio::sync::mpsc::Receiver<DriverCommand>,
+    commands: tokio::sync::mpsc::UnboundedReceiver<DriverCommand>,
     cancelled_before_start: Option<CancellationReason>,
     // The registry's live-activity sink (Issue #178). `None` only in tests
     // that drive the physical pipeline without a registry.
@@ -1567,7 +1684,7 @@ async fn drive_child_control(
     runtime_root: PhysicalChildRuntimeRoot,
     workspace: Option<WorkspaceUse>,
     mut delegate: super::ipc::DelegationFrame,
-    mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<DriverCommand>,
     cancelled_before_start: Option<CancellationReason>,
     interactions: Option<SubagentInteractionSink>,
     mut provider_available: Option<tokio::sync::watch::Receiver<bool>>,
@@ -1583,7 +1700,7 @@ async fn drive_child_control(
     > = HashMap::new();
     // Parent-authored guidance waiters (Issue #193), keyed by the exact
     // transport correlation identity. Dropping the map at settlement resolves
-    // every unanswered waiter as a deterministic refusal.
+    // every unanswered waiter with unknown delivery after a write attempt.
     let mut guidance_waiters: HashMap<u64, tokio::sync::oneshot::Sender<ChildGuidanceOutcome>> =
         HashMap::new();
     let mut commands_open = true;
@@ -1613,6 +1730,9 @@ async fn drive_child_control(
         if let Some(provider_available) = provider_available.as_ref() {
             delegate.interaction_provider_available = *provider_available.borrow();
         }
+        if let Some(owner) = &interactions {
+            owner.begin_delegate();
+        }
         if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await
         {
             return settle_after_driver_loss(
@@ -1627,11 +1747,23 @@ async fn drive_child_control(
             .await;
         }
     }
+    let mut seal_pending = false;
     let mut result: Option<ResultFrame> = None;
     let mut violation: Option<String> = None;
     let mut kill_deadline: Option<tokio::time::Instant> = None;
     let mut eof = false;
     loop {
+        if seal_pending && commands.is_empty() {
+            // Cancel already closes admission and permits the child to report
+            // its result. Do not race that normal completion with a stale grant.
+            if !cancellation_delivered
+                && let Err(error) =
+                    write_parent_frame(&mut control, &ParentFrame::SealGranted).await
+            {
+                violation = Some(error.to_string());
+            }
+            seal_pending = false;
+        }
         if result.is_some() || violation.is_some() || eof {
             break;
         }
@@ -1704,6 +1836,7 @@ async fn drive_child_control(
                         guidance_id,
                         message,
                         outcome,
+                        write_started,
                     })) => {
                         // Transport only: the registry already linearized
                         // admission against cancellation and terminal
@@ -1715,6 +1848,11 @@ async fn drive_child_control(
                             guidance_id,
                             message,
                         });
+                        if cancellation_delivered {
+                            drop(outcome);
+                            continue;
+                        }
+                        write_started.store(true, std::sync::atomic::Ordering::Release);
                         match write_parent_frame(&mut control, &frame).await {
                             Ok(()) => {
                                 if guidance_waiters.insert(guidance_id, outcome).is_some() {
@@ -1725,8 +1863,8 @@ async fn drive_child_control(
                             }
                             Err(error) => {
                                 // The waiter is dropped, which the registry
-                                // reads as a deterministic refusal: nothing
-                                // reached the child conversation.
+                                // classifies using the write boundary: partial
+                                // delivery or durable acceptance is possible.
                                 drop(outcome);
                                 violation = Some(format!(
                                     "control channel lost while delivering parent guidance: {error}"
@@ -1740,6 +1878,21 @@ async fn drive_child_control(
             }
             frame = read_child_frame(&mut control) => {
                 match frame {
+                    Ok(Some(ChildFrame::DelegateAccepted)) => {
+                        if let Some(owner) = &interactions { owner.accept_delegate(); }
+                    }
+                    Ok(Some(ChildFrame::SealOpen)) => {
+                        if interactions.as_ref().is_some_and(super::registry::SubagentInteractionSink::reopen_admission)
+                            && let Err(error) = write_parent_frame(&mut control, &ParentFrame::AdmissionReopened).await {
+                            violation = Some(error.to_string());
+                        }
+                        // Cancellation won: its already-owned FIFO command answers
+                        // the child instead; never grant a new semantic turn.
+                    }
+                    Ok(Some(ChildFrame::SealRequested)) => {
+                        if let Some(owner) = &interactions { owner.begin_seal(); }
+                        seal_pending = true;
+                    }
                     Ok(Some(ChildFrame::Result(frame))) => result = Some(frame),
                     Ok(Some(ChildFrame::Diagnostic(_))) => {}
                     // The nested anchor protocol stays live for the whole
@@ -1936,7 +2089,13 @@ async fn settle_nested(
     // nested process may still hold or mutate the worktree after the direct
     // child exits; only the complete physical settlement permits cleanup.
     let workspace = match workspace {
-        Some(lease) if nested.unproven.is_empty() => lease.settle_after_child().await,
+        Some(lease) if nested.unproven.is_empty() => {
+            crate::runtime::workspace::with_physical_settlement_authority(
+                runtime_root.physical_owner.clone(),
+                lease.settle_after_child(),
+            )
+            .await
+        }
         Some(lease) => lease
             .preserve_after_unresolved_nested(
                 "a nested supervised process anchor remains physically unresolved",
@@ -1947,12 +2106,19 @@ async fn settle_nested(
         ))
         .into(),
     };
-    let runtime_root_cleanup_error = if nested.unproven.is_empty() {
+    let runtime_root_cleanup_error = if nested.unproven.is_empty()
+        && !matches!(outcome, PhysicalOutcome::ControlFailure { .. })
+    {
         let path = runtime_root.path().display().to_string();
-        runtime_root
+        let proof_error = runtime_root
+            .publish_quiescent()
+            .err()
+            .map(|error| format!("publish child physical settlement proof: {error}"));
+        let cleanup_error = runtime_root
             .remove()
             .err()
-            .map(|error| format!("remove child runtime root {path}: {error}"))
+            .map(|error| format!("remove child runtime root {path}: {error}"));
+        proof_error.or(cleanup_error)
     } else {
         // An unproven nested unit may still be alive, so keep its mutable
         // namespace rather than deleting it before physical settlement is
@@ -2102,6 +2268,124 @@ mod tests {
             runtime_root: dir.path().join("child"),
             _dir: dir,
         }
+    }
+
+    /// The start gate makes saturation deterministic: no driver command can
+    /// be consumed until all 32 messages and cancellation have been admitted.
+    /// Reliable admission and FIFO order must not depend on the old capacity 16.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One gated admission-to-physical-settlement regression.
+    async fn queued_guidance_and_cancellation_survive_more_than_sixteen_admissions() {
+        use super::{ChildBoundRoute, DriverCommand};
+        use crate::runtime::subagent::ipc::{
+            ChildGuidanceOutcome, ChildResultStatus, DelegationFrame, GuidanceResultFrame,
+            ResultFrame,
+        };
+        use crate::runtime::types::CancellationReason;
+
+        let mut harness = stage();
+        let pid = harness.staged.child.id().expect("owned direct process");
+        let driver = harness.staged.into_driver(
+            DelegationFrame {
+                task: "ordered admission".to_owned(),
+                context: None,
+                interaction_provider_available: false,
+            },
+            None,
+            None,
+            None,
+        );
+        let (commands, start, mut settlement) = driver.split();
+        let mut acknowledgements = Vec::new();
+        for guidance_id in 1..=32 {
+            let (outcome, acknowledgement) = tokio::sync::oneshot::channel();
+            commands
+                .send(DriverCommand::Route(ChildBoundRoute::Guidance {
+                    guidance_id,
+                    message: format!("message-{guidance_id}"),
+                    outcome,
+                    write_started: std::sync::Arc::default(),
+                }))
+                .expect("every admitted message has a reliable owner queue");
+            acknowledgements.push(acknowledgement);
+        }
+        commands
+            .send(DriverCommand::Cancel {
+                reason: CancellationReason::UserRequested,
+            })
+            .expect("cancellation cannot be dropped behind queued messages");
+        assert!(
+            futures_util::poll!(&mut settlement).is_pending(),
+            "enqueueing cancellation is not physical settlement"
+        );
+        start.send(None).expect("release driver start gate");
+        assert!(matches!(
+            read_parent_frame(&mut harness.child).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        for expected in 1..=32 {
+            let Some(ParentFrame::Guidance(guidance)) =
+                read_parent_frame(&mut harness.child).await.unwrap()
+            else {
+                panic!("guidance precedes cancellation in admission order")
+            };
+            assert_eq!(guidance.guidance_id, expected);
+            assert_eq!(guidance.message, format!("message-{expected}"));
+            write_child_frame(
+                &mut harness.child,
+                &ChildFrame::GuidanceResult(GuidanceResultFrame {
+                    guidance_id: guidance.guidance_id,
+                    outcome: ChildGuidanceOutcome::Accepted,
+                }),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(matches!(
+            read_parent_frame(&mut harness.child).await.unwrap(),
+            Some(ParentFrame::Cancel {
+                reason: Some(CancellationReason::UserRequested)
+            })
+        ));
+        for acknowledgement in acknowledgements {
+            assert!(matches!(
+                acknowledgement.await.unwrap(),
+                ChildGuidanceOutcome::Accepted
+            ));
+        }
+        write_child_frame(
+            &mut harness.child,
+            &ChildFrame::Result(ResultFrame {
+                status: ChildResultStatus::Cancelled,
+                content: None,
+                diagnostic: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let settled = tokio::time::timeout(DEADLINE, settlement)
+            .await
+            .expect("driver physical settlement liveness")
+            .expect("driver task");
+        assert!(matches!(
+            settled.outcome,
+            PhysicalOutcome::Completed(ResultFrame {
+                status: ChildResultStatus::Cancelled,
+                ..
+            })
+        ));
+        assert!(settled.nested.unproven.is_empty());
+        assert!(
+            matches!(
+                nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap()),
+                    None
+                ),
+                Err(nix::errno::Errno::ESRCH)
+            ),
+            "the direct process was reaped before settlement"
+        );
+        assert!(!harness.runtime_root.exists());
     }
 
     fn allocation_plan(runtime_root: impl AsRef<Path>) -> SubagentSpawnPlan {
@@ -2370,8 +2654,23 @@ mod tests {
         std::fs::write(workspace.join("staged-work.txt"), "retain me\n")
             .expect("staged project work");
 
-        let harness = stage();
+        let mut harness = stage();
         let runtime_root = harness.runtime_root.clone();
+        let product = crate::runtime::local_storage::ProductRoot::create(artifacts.path()).unwrap();
+        let session = crate::runtime::identity::SessionId::generate();
+        let conversation = ConversationId::generate();
+        let activation = SubagentId::new("staged-workspace-handoff:1");
+        let owner = super::super::physical_recovery::ParentPhysicalLease::reserve(
+            &product,
+            &session,
+            &conversation,
+            &activation,
+        )
+        .unwrap();
+        harness
+            .staged
+            .runtime_root
+            .install_physical_owner(std::sync::Arc::new(owner));
         let error = tokio::time::timeout(
             DEADLINE,
             harness
@@ -2387,6 +2686,29 @@ mod tests {
         assert!(
             !runtime_root.exists(),
             "the disposable child-private root is removed independently"
+        );
+        let receipt_path =
+            super::super::child_conversation_store_path(product.root(), &session, &conversation)
+                .parent()
+                .unwrap()
+                .join("physical-settlement")
+                .join(activation.as_str())
+                .join("physical-settlement.json");
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(receipt_path).unwrap()).unwrap();
+        assert_eq!(
+            receipt["phase"], "quiescent",
+            "native rollback preserves its physical proof despite retained user work"
+        );
+        assert!(
+            super::super::physical_recovery::prove_after_release(
+                &product,
+                &session,
+                &conversation,
+                &activation,
+            )
+            .unwrap()
+            .is_some()
         );
 
         // The test owns the retained worktree and can make it clean before

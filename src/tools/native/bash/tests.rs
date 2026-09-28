@@ -1897,46 +1897,121 @@ async fn quiescence_watchdog_cannot_bypass_process_terminality() {
 /// confirmation path is never reached.
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One exact native stop/containment/reap scenario.
 async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
+    use super::supervisor::diagnostics::{Entry, Event};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let socket_dir = tempfile::Builder::new()
+        .prefix("rx-stop-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = socket_dir.path().join("gate");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let trace = socket_dir.path().join("trace");
     let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
-    let shell_pid_file = root.join("shell.pid");
     let anchor_pid_file = root.join("anchor.pid");
-    // The fixture freezes its own supervisor: bash's parent is the
-    // inner supervisor (the invocation's anchor). `sleep 30` keeps the
-    // owned group alive while the anchor is stopped.
+    let ready = root.join("ready");
+    let hold = root.join("hold");
+    for fifo in [&ready, &hold] {
+        nix::unistd::mkfifo(
+            fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+    }
+    let notification = tokio::task::spawn_blocking(move || std::fs::read(ready).unwrap());
+    // The FIFO handshake establishes a live owned command before the test
+    // freezes its anchor. Opening the second FIFO blocks until containment.
     let command = format!(
-        "echo $$ > {}; kill -STOP $PPID; sleep 30",
-        shell_pid_file.display()
+        "printf ready > '{}'; cat '{}'",
+        root.join("ready").display(),
+        hold.display()
     );
     let cancellation = CancellationSignal::new();
     let cancelling = cancellation.clone();
     let task = tokio::spawn(run_with_control(
         command,
-        BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+        BashTestControl::new()
+            .anchor_pid_file(anchor_pid_file.clone())
+            .stopped_anchor_fixture(trace.clone(), socket),
         cancellation,
         artifacts.clone(),
         tool_output.clone(),
         workspace.clone(),
         None,
     ));
-    for _ in 0..1000 {
-        if shell_pid_file.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+    assert_eq!(notification.await.unwrap(), b"ready");
+    let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(anchor_pid),
+        nix::sys::signal::Signal::SIGSTOP,
+    )
+    .unwrap();
+    let (mut stopped, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "outer did not observe stopped anchor: {}",
+                std::fs::read_to_string(&trace).unwrap_or_default()
+            )
+        })
+        .unwrap();
+    let mut label = [0];
+    tokio::time::timeout(Duration::from_secs(20), stopped.read_exact(&mut label))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&label, b"S");
+    // Cancellation follows the exact native stop observation. The outer is
+    // parked only by this private fixture; no scheduler race selects the path.
     cancelling.cancel();
+    stopped.write_all(&[1]).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(20), task)
         .await
-        .expect("the invocation settles")
+        .unwrap_or_else(|_| {
+            panic!(
+                "the invocation must settle; native evidence: {}",
+                std::fs::read_to_string(&trace).unwrap_or_default()
+            )
+        })
         .expect("executor task");
     assert!(
         matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
         "a frozen anchor must still settle the owned group as Cancelled, got {:?}",
         result.status
     );
+    let evidence = std::fs::read_to_string(&trace).unwrap();
+    eprintln!("stopped-anchor native sequence:\n{evidence}");
+    let events: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut ordered = events.iter();
+    for boundary in [
+        |event: &Event| matches!(event, Event::AnchorStopObserved),
+        |event: &Event| matches!(event, Event::AnchorUnwedgeKillAttempt { result: 0 }),
+        |event: &Event| matches!(event, Event::AnchorTerminalObserved),
+        |event: &Event| matches!(event, Event::FallbackContainment),
+        #[cfg(target_os = "macos")]
+        |event: &Event| matches!(event, Event::GroupAbsenceProven),
+        |event: &Event| matches!(event, Event::TerminalPublished),
+        |event: &Event| matches!(event, Event::DirectChildReaped),
+    ] {
+        assert!(
+            ordered.any(|entry| boundary(&entry.event)),
+            "missing/out-of-order native boundary: {evidence}"
+        );
+    }
+    // Publication logging is after the frame write, so receiver logging may
+    // precede it. Assert each owner's causal order, not cross-process file I/O.
+    let mut runner_events = events.iter();
+    assert!(runner_events.any(|entry| matches!(entry.event, Event::TerminalObserved)));
+    assert!(runner_events.any(|entry| matches!(entry.event, Event::DirectChildReaped)));
     let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
         .expect("anchor pid file")
         .trim()
@@ -2696,4 +2771,92 @@ while True:
         wait_for_process_death(escaped_pid).await;
         let _ = dir;
     }
+}
+
+/// The TERM trap itself owns a pipe gate. Settlement cannot precede releasing
+/// the trap, and the recorded supervisor control must begin with owned TERM.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancellation_waits_for_pipe_gated_term_trap_before_physical_terminal() {
+    use std::io::{Read, Write};
+    let (_dir, artifacts, tool_output, workspace) = fixture();
+    let root = workspace.root();
+    let ready = root.join("term-ready");
+    let entered = root.join("term-entered");
+    let release = root.join("term-release");
+    for path in [&ready, &entered, &release] {
+        nix::unistd::mkfifo(
+            path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+    }
+    let ready_reader = tokio::task::spawn_blocking(move || {
+        let mut byte = [0];
+        std::fs::File::open(ready)
+            .unwrap()
+            .read_exact(&mut byte)
+            .unwrap();
+        assert_eq!(byte, [b'R']);
+    });
+    let entered_path = entered.clone();
+    let trap_reader = tokio::task::spawn_blocking(move || {
+        let mut byte = [0];
+        std::fs::File::open(entered_path)
+            .unwrap()
+            .read_exact(&mut byte)
+            .unwrap();
+        assert_eq!(byte, [b'T']);
+    });
+    let command = format!(
+        "trap 'printf T > {}; read release < {}; exit 0' TERM; printf R > {}; while :; do :; done",
+        entered.display(),
+        release.display(),
+        root.join("term-ready").display(),
+    );
+    let control = BashTestControl::new();
+    let cancellation = CancellationSignal::new();
+    let mut task = tokio::spawn(run_with_control(
+        command,
+        control.clone(),
+        cancellation.clone(),
+        artifacts,
+        tool_output,
+        workspace,
+        None,
+    ));
+    tokio::time::timeout(Duration::from_secs(15), ready_reader)
+        .await
+        .unwrap()
+        .unwrap();
+    cancellation.cancel();
+    tokio::time::timeout(Duration::from_secs(15), trap_reader)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        futures_util::poll!(&mut task).is_pending(),
+        "a live TERM trap still owns physical work"
+    );
+    tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(release)
+            .unwrap()
+            .write_all(b"release\n")
+            .unwrap();
+    })
+    .await
+    .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(15), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
+        "{result:?}"
+    );
+    let signals = control.recorded_signals();
+    assert_eq!(signals.first().unwrap().signal, "SIGTERM");
+    assert!(signals.first().unwrap().emitted);
 }

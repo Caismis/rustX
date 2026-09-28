@@ -28,7 +28,7 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v25';
+} from '../../../../protocol/app-server/v27';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
@@ -534,6 +534,9 @@ export function TrajectoryInspector({
             <dd>{record.state}</dd>
             <dt>{tx('trajectory:trajectory-inspector.record')}</dt>
             <dd className={css.machine}>{record.id}</dd>
+            {record.agent_id && <><dt>{tx('common:activity.agent')}</dt><dd className={css.machine}>{record.agent_id}</dd></>}
+            {record.activation_id && <><dt>{tx('common:activity.activation-label')}</dt><dd className={css.machine}>{record.activation_id}</dd></>}
+            {record.activation_origin && <><dt>{tx('common:activity.activation-origin')}</dt><dd>{record.activation_origin.kind === 'client_control' ? tx('common:activity.client-control') : record.activation_origin.kind === 'creation_tool' ? tx('common:activity.creation-tool') : record.activation_origin.kind === 'workflow' ? tx('common:activity.workflow') : tx('common:activity.message-tool')}</dd></>}
             <dt>{tx('trajectory:trajectory-inspector.attempt')}</dt>
             <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
             <dt>{tx('trajectory:trajectory-inspector.logical-step')}</dt>

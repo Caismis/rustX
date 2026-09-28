@@ -70,7 +70,7 @@
 //!   materialization.
 //! - [`interaction`] — the durable interaction audit's runtime half.
 //! - [`background`] — the background registry and the deterministic half of
-//!   the `execution` intrinsic control plane.
+//!   finite Job control surface.
 //! - [`extensions`] — the closed launch-scoped native Agent Extension
 //!   composition boundary and its one runtime materialization seam.
 //! - [`tools`] — native registry contracts and the conversation task list.

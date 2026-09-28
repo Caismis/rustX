@@ -47,8 +47,8 @@
           "pending": []
         },
         "pending_interactions": [],
-        "background": [],
-        "subagents": [],
+        "jobs": [],
+        "agents": [],
         "statuses": [],
         "context": {
           "compaction_in_progress": false,
@@ -138,7 +138,7 @@
               {
                 "kind": "source_root_missing",
                 "source": "workspace",
-                "root": "/tmp/.tmpgTo8ZI/workspace/.agents/skills"
+                "root": "/tmp/.tmpw1QUby/workspace/.agents/skills"
               }
             ]
           },
@@ -859,12 +859,12 @@
               "steps": "2",
               "latest_turn": {
                 "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
-                "started_at": "2026-09-27T11:49:59.510477999Z",
-                "ended_at": "2026-09-27T11:49:59.528671516Z"
+                "started_at": "2026-09-28T00:34:22.029528943Z",
+                "ended_at": "2026-09-28T00:34:22.047768143Z"
               },
               "timing": {
                 "ttft_ms": 0,
-                "generation_ms": 1
+                "generation_ms": 2
               },
               "completed_responses": "1",
               "model_requests": "2",
@@ -902,8 +902,8 @@
                   "message_count": 1,
                   "tool_call_count": 1,
                   "outcome": "completed",
-                  "started_at": "2026-09-27T11:49:59.510477999Z",
-                  "ended_at": "2026-09-27T11:49:59.528671516Z"
+                  "started_at": "2026-09-28T00:34:22.029528943Z",
+                  "ended_at": "2026-09-28T00:34:22.047768143Z"
                 },
                 "response_pending": false,
                 "tool_calls": [
@@ -967,8 +967,8 @@
                   "message_count": 1,
                   "tool_call_count": 1,
                   "outcome": "completed",
-                  "started_at": "2026-09-27T11:49:59.510477999Z",
-                  "ended_at": "2026-09-27T11:49:59.528671516Z"
+                  "started_at": "2026-09-28T00:34:22.029528943Z",
+                  "ended_at": "2026-09-28T00:34:22.047768143Z"
                 },
                 "response_pending": false,
                 "tool_calls": [],
@@ -1005,8 +1005,8 @@
                   "message_count": 1,
                   "tool_call_count": 1,
                   "outcome": "completed",
-                  "started_at": "2026-09-27T11:49:59.510477999Z",
-                  "ended_at": "2026-09-27T11:49:59.528671516Z"
+                  "started_at": "2026-09-28T00:34:22.029528943Z",
+                  "ended_at": "2026-09-28T00:34:22.047768143Z"
                 },
                 "response_pending": false,
                 "completed_response": {
@@ -1016,13 +1016,13 @@
                     "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
                     "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2"
                   },
-                  "completed_at": "2026-09-27T11:49:59.528671516Z",
+                  "completed_at": "2026-09-28T00:34:22.047768143Z",
                   "surface_revision": "5",
                   "retry_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
                   "timing": {
                     "total_duration_ms": 18,
                     "ttft_ms": 0,
-                    "generation_ms": 1
+                    "generation_ms": 2
                   }
                 },
                 "tool_calls": [],
@@ -1175,12 +1175,12 @@
             "steps": "2",
             "latest_turn": {
               "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
-              "started_at": "2026-09-27T11:49:59.510477999Z",
-              "ended_at": "2026-09-27T11:49:59.528671516Z"
+              "started_at": "2026-09-28T00:34:22.029528943Z",
+              "ended_at": "2026-09-28T00:34:22.047768143Z"
             },
             "timing": {
               "ttft_ms": 0,
-              "generation_ms": 1
+              "generation_ms": 2
             },
             "completed_responses": "1",
             "model_requests": "2",
@@ -1218,8 +1218,8 @@
                 "message_count": 1,
                 "tool_call_count": 1,
                 "outcome": "completed",
-                "started_at": "2026-09-27T11:49:59.510477999Z",
-                "ended_at": "2026-09-27T11:49:59.528671516Z"
+                "started_at": "2026-09-28T00:34:22.029528943Z",
+                "ended_at": "2026-09-28T00:34:22.047768143Z"
               },
               "response_pending": false,
               "tool_calls": [
@@ -1283,8 +1283,8 @@
                 "message_count": 1,
                 "tool_call_count": 1,
                 "outcome": "completed",
-                "started_at": "2026-09-27T11:49:59.510477999Z",
-                "ended_at": "2026-09-27T11:49:59.528671516Z"
+                "started_at": "2026-09-28T00:34:22.029528943Z",
+                "ended_at": "2026-09-28T00:34:22.047768143Z"
               },
               "response_pending": false,
               "tool_calls": [],
@@ -1321,8 +1321,8 @@
                 "message_count": 1,
                 "tool_call_count": 1,
                 "outcome": "completed",
-                "started_at": "2026-09-27T11:49:59.510477999Z",
-                "ended_at": "2026-09-27T11:49:59.528671516Z"
+                "started_at": "2026-09-28T00:34:22.029528943Z",
+                "ended_at": "2026-09-28T00:34:22.047768143Z"
               },
               "response_pending": false,
               "completed_response": {
@@ -1332,13 +1332,13 @@
                   "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
                   "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2"
                 },
-                "completed_at": "2026-09-27T11:49:59.528671516Z",
+                "completed_at": "2026-09-28T00:34:22.047768143Z",
                 "surface_revision": "5",
                 "retry_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
                 "timing": {
                   "total_duration_ms": 18,
                   "ttft_ms": 0,
-                  "generation_ms": 1
+                  "generation_ms": 2
                 }
               },
               "tool_calls": [],
@@ -1371,7 +1371,7 @@
               "kind": "user",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.509338152Z",
+                "started_at": "2026-09-28T00:34:22.028504172Z",
                 "ended_at": null,
                 "duration_ms": null
               },
@@ -1383,6 +1383,9 @@
               "tool": null,
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
               "attachments": [],
@@ -1399,8 +1402,8 @@
               "kind": "attempt",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.510477999Z",
-                "ended_at": "2026-09-27T11:49:59.528671516Z",
+                "started_at": "2026-09-28T00:34:22.029528943Z",
+                "ended_at": "2026-09-28T00:34:22.047768143Z",
                 "duration_ms": "18"
               },
               "preview": null,
@@ -1408,6 +1411,9 @@
               "tool": null,
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": null,
               "attachments": [],
@@ -1424,8 +1430,8 @@
               "kind": "step",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.511150265Z",
-                "ended_at": "2026-09-27T11:49:59.521433331Z",
+                "started_at": "2026-09-28T00:34:22.029993784Z",
+                "ended_at": "2026-09-28T00:34:22.040203369Z",
                 "duration_ms": "10"
               },
               "preview": null,
@@ -1433,6 +1439,9 @@
               "tool": null,
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": null,
               "attachments": [],
@@ -1449,8 +1458,8 @@
               "kind": "request",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.512621983Z",
-                "ended_at": "2026-09-27T11:49:59.515924858Z",
+                "started_at": "2026-09-28T00:34:22.031350898Z",
+                "ended_at": "2026-09-28T00:34:22.034518051Z",
                 "duration_ms": "3"
               },
               "preview": {
@@ -1511,6 +1520,9 @@
               "tool": null,
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": null,
               "attachments": [],
@@ -1527,7 +1539,7 @@
               "kind": "assistant",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.517626604Z",
+                "started_at": "2026-09-28T00:34:22.036237417Z",
                 "ended_at": null,
                 "duration_ms": null
               },
@@ -1545,6 +1557,9 @@
                 }
               ],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
               "attachments": [],
@@ -1561,8 +1576,8 @@
               "kind": "tool",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.519399102Z",
-                "ended_at": "2026-09-27T11:49:59.519965438Z",
+                "started_at": "2026-09-28T00:34:22.038010581Z",
+                "ended_at": "2026-09-28T00:34:22.038600078Z",
                 "duration_ms": "0"
               },
               "preview": {
@@ -1580,6 +1595,9 @@
               },
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-tool-1-capture-call",
               "attachments": [],
@@ -1596,8 +1614,8 @@
               "kind": "step",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.521788341Z",
-                "ended_at": "2026-09-27T11:49:59.528321842Z",
+                "started_at": "2026-09-28T00:34:22.040588759Z",
+                "ended_at": "2026-09-28T00:34:22.047405276Z",
                 "duration_ms": "6"
               },
               "preview": null,
@@ -1605,6 +1623,9 @@
               "tool": null,
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": null,
               "attachments": [],
@@ -1621,8 +1642,8 @@
               "kind": "request",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.522661309Z",
-                "ended_at": "2026-09-27T11:49:59.525006680Z",
+                "started_at": "2026-09-28T00:34:22.041537816Z",
+                "ended_at": "2026-09-28T00:34:22.043979486Z",
                 "duration_ms": "2"
               },
               "preview": {
@@ -1639,13 +1660,13 @@
                 "usage": null,
                 "generation": {
                   "timeline": {
-                    "dispatch_ms": "1",
+                    "dispatch_ms": "2",
                     "first_output_ms": "2",
                     "last_output_ms": "2",
-                    "terminal_ms": "2"
+                    "terminal_ms": "3"
                   },
-                  "ttft_ms": "1",
-                  "generation_ms": "0",
+                  "ttft_ms": "0",
+                  "generation_ms": "1",
                   "terminal_ms": "1",
                   "output_tokens_per_second": null
                 },
@@ -1664,6 +1685,9 @@
               "tool": null,
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": null,
               "attachments": [],
@@ -1680,7 +1704,7 @@
               "kind": "assistant",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-27T11:49:59.526692730Z",
+                "started_at": "2026-09-28T00:34:22.045705092Z",
                 "ended_at": null,
                 "duration_ms": null
               },
@@ -1692,6 +1716,9 @@
               "tool": null,
               "calls": [],
               "native_id": null,
+              "agent_id": null,
+              "activation_id": null,
+              "activation_origin": null,
               "originating_tool_call_id": null,
               "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
               "attachments": [],
@@ -1782,8 +1809,8 @@
           }
         },
         "pending_interactions": [],
-        "background": [],
-        "subagents": [],
+        "jobs": [],
+        "agents": [],
         "statuses": [
           {
             "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
@@ -1891,7 +1918,7 @@
               {
                 "kind": "source_root_missing",
                 "source": "workspace",
-                "root": "/tmp/.tmpgTo8ZI/workspace/.agents/skills"
+                "root": "/tmp/.tmpw1QUby/workspace/.agents/skills"
               }
             ]
           },

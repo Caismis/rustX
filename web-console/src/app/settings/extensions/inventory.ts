@@ -1,7 +1,7 @@
 import type { Translate } from '../../../locale/translation';
 import type {
   CapabilityInspection1, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
-} from '../../../../../protocol/app-server/v25';
+} from '../../../../../protocol/app-server/v27';
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../capability';
 import type { ExtensionFamily } from '../projection';
 

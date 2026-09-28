@@ -5,7 +5,7 @@ See [Workflow admission and Agent selection](workflow-admission.md) for static c
 Goal answers WHAT persists; Workflow answers HOW finite work executes. A Goal
 round can invoke Workflow Tools normally, but Workflow completion never completes
 Goal, and WorkflowRun never owns Goal state or continuation. Workflow Agent-node
-overrides cannot enable root-only Goal for one-shot children. Scheduler owns future
+overrides cannot enable root-only Goal for child activations. Scheduler owns future
 WHEN semantics; Todo remains bounded working state. See [Goal extension](goal-extension.md).
 
 For small executable starting points and offline `workflow check` / `workflow explain`,
@@ -680,7 +680,7 @@ All Agent profiles in all branches must already resolve to exactly the same
 `GitWorktree { require_clean_parent }` policy. Shared profiles and mismatched
 cleanliness policies fail before acquisition or child/Tool side effects.
 Candidate Agents cannot select MCP (including managed Python) or nested
-`subagent`/`execution` orchestration: their existing bindings cannot safely
+native Agent creation/message orchestration: their existing bindings cannot safely
 promise candidate cwd or descendant access. These combinations are rejected,
 not stripped from a profile. Candidate eligibility reads each node's
 **effective** capability set, so an Agent node's invocation override (SUB-OVR)

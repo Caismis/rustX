@@ -1963,6 +1963,22 @@ impl InteractionCoordinator {
         }
     }
 
+    /// A dead parent cannot authorize interaction outcomes. Release waiters as
+    /// control loss before cancelling the enclosing attempt; preserve only the
+    /// historical requested facts.
+    pub(crate) fn abandon_after_parent_loss(&self) {
+        let pending = std::mem::take(
+            &mut self
+                .state
+                .lock()
+                .expect("interaction state poisoned")
+                .pending,
+        );
+        for (_, pending) in pending {
+            let _ = pending.sender.send(Err(InteractionFailure::ControlLost));
+        }
+    }
+
     /// Returns the authoritative live pending projection in deterministic id
     /// order. This is a live observation seed, not recovery input.
     ///

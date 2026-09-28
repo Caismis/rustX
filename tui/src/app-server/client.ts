@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 25;
+export const APP_SERVER_PROTOCOL_VERSION = 27;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -137,7 +137,7 @@ export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
 export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
-  "subagent/transcript": "read",
+  "agent/transcript": "read",
   "session/trace": "read",
   // Inspection detail is a pure historical read: it advances no cursor,
   // consumes no pending work, and settles nothing, so a lost response is
@@ -154,10 +154,16 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "resources/read": "read",
   "context/compact": "side_effecting",
   "goal/control": "side_effecting",
-  "background/status": "read",
-  "background/cancel": "side_effecting",
-  "subagent/status": "read",
-  "subagent/cancel": "side_effecting",
+  "job/status": "read",
+  "job/list": "read",
+  "job/wait": "read",
+  "agent/list": "read",
+  "agent/sendMessage": "side_effecting",
+  // A retry could capture a later activation, so a lost wait is never replayed.
+  "agent/wait": "side_effecting",
+  "job/cancel": "side_effecting",
+  "agent/status": "read",
+  "agent/interrupt": "side_effecting",
   "subagent/disposeWorkspace": "side_effecting",
   // Negotiation and subscriptions die with this connection; neither changes
   // authoritative product/runtime state. Re-establish them after reconnect.
@@ -199,6 +205,20 @@ interface PendingRequest {
   readonly expect: ResultType;
   resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
+}
+
+/** At most sixteen requests cross one connection. Observation and admission
+ * cannot occupy the capacity reserved for lifecycle control and inspection.
+ * Rejection is local, before id allocation/send; no lane queues or replays work. */
+const REQUEST_CAPACITY = { wait: 4, admission: 2, control: 2, rpc: 8 } as const;
+function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
+  switch (method) {
+    case "agent/wait": case "job/wait": return "wait";
+    case "agent/sendMessage": return "admission";
+    case "agent/interrupt": case "job/cancel": case "turn/cancel":
+    case "interaction/respond": case "interaction/cancel": return "control";
+    default: return "rpc";
+  }
 }
 
 type NotificationListener = (notification: Notification) => void;
@@ -328,6 +348,11 @@ export class AppServerClient {
       return Promise.reject(this.#closed);
     }
 
+    const lane = requestLane(method);
+    if ([...this.#pending.values()].filter(request => requestLane(request.method) === lane).length >= REQUEST_CAPACITY[lane]) {
+      return Promise.reject(new Error(`Client ${lane} capacity reached. Request not sent; inspect current operations before retrying.`));
+    }
+
     const id = this.#nextRequestId;
     this.#nextRequestId += 1;
 
@@ -349,7 +374,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v25 protocol message");
+      this.#fail("invalid App Server v27 protocol message");
       return;
     }
 

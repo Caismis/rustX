@@ -1228,8 +1228,10 @@ impl UserConfigManager {
         }
         let main_subagents =
             subagents.selected_definitions(&config.agent.agents.iter().cloned().collect());
-        let native_metadata =
-            crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
+        let native_metadata = crate::tools::native::definitions(
+            config.native_tools.to_policies(),
+            Some(&main_subagents),
+        );
         let native_leaves: std::collections::BTreeSet<_> = native_metadata
             .iter()
             .filter(|(_, policy)| *policy == crate::tools::deadline::ForegroundPolicy::Leaf)

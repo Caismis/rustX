@@ -1,12 +1,12 @@
 //! Native Session/Conversation ownership facts shared by inspection and deletion.
 //! One global identity map, derived only under the product ownership freeze.
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use super::session::{SessionCatalog, SessionId, SessionNode};
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::events::types::RuntimeEvent;
-use crate::runtime::identity::ConversationId;
+use crate::runtime::identity::{AgentId, ConversationId};
 use crate::runtime::local_storage::{OwnershipSnapshot, ProductRoot};
 
 /// A lineage and its exclusive private allocation, never a workspace allocation.
@@ -75,6 +75,7 @@ impl SessionOwnership {
             }
         }
         let mut conversations = BTreeMap::new();
+        let mut agent_owners = BTreeMap::new();
         let mut unavailable = None;
         while let Some((owner, id, parent)) = pending.pop_front() {
             check().map_err(|_| Error::Cancelled)?;
@@ -124,7 +125,13 @@ impl SessionOwnership {
                 unavailable.get_or_insert(Error::ConversationUnavailable { descendant });
                 continue;
             };
-            for child in read_children(&store, &check)? {
+            for (child, agent) in read_children(&store, &check)? {
+                if agent_owners
+                    .insert(agent, (id.clone(), child.clone()))
+                    .is_some()
+                {
+                    return Err(Error::Invalid);
+                }
                 pending.push_back((owner.clone(), child, Some(id.clone())));
             }
         }
@@ -191,8 +198,9 @@ fn safe_identity(id: &ConversationId) -> Result<(), Error> {
 fn read_children(
     store: &SqliteConversationStore,
     check: &impl Fn() -> std::io::Result<()>,
-) -> Result<BTreeSet<ConversationId>, Error> {
-    let mut children = BTreeSet::new();
+) -> Result<BTreeMap<ConversationId, AgentId>, Error> {
+    let mut children = BTreeMap::new();
+    let mut agents = BTreeMap::new();
     let through = store.event_high_watermark().map_err(|_| Error::Invalid)?;
     let mut cursor = None;
     while cursor.unwrap_or(0) < through {
@@ -211,19 +219,57 @@ fn read_children(
             }
             if let RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id,
+                child_agent_id,
+                parent_agent_id,
                 child_conversation_id,
+                ownership,
+                admitted_authority,
                 ..
             } = envelope.event
             {
                 safe_identity(&child_conversation_id)?;
                 if envelope.event_id
                     != crate::runtime::subagent::subagent_ownership_event_id(&subagent_id)
-                    || !children.insert(child_conversation_id)
                 {
                     return Err(Error::Invalid);
+                }
+                if let Some((owner, parent, durable)) = children.get(&child_conversation_id) {
+                    // Activation admission is another fact about the SAME
+                    // child Conversation, never another ownership edge.
+                    if owner != &child_agent_id
+                        || parent != &parent_agent_id
+                        || !durable
+                        || ownership != crate::events::types::SubagentOwnershipKind::Normal
+                        || admitted_authority.is_some()
+                    {
+                        return Err(Error::Invalid);
+                    }
+                } else {
+                    if (ownership == crate::events::types::SubagentOwnershipKind::Normal)
+                        != admitted_authority.is_some()
+                    {
+                        return Err(Error::Invalid);
+                    }
+                    if agents
+                        .insert(child_agent_id.clone(), child_conversation_id.clone())
+                        .is_some()
+                    {
+                        return Err(Error::Invalid);
+                    }
+                    children.insert(
+                        child_conversation_id,
+                        (
+                            child_agent_id,
+                            parent_agent_id,
+                            admitted_authority.is_some(),
+                        ),
+                    );
                 }
             }
         }
     }
-    Ok(children)
+    Ok(children
+        .into_iter()
+        .map(|(conversation, (agent, _, _))| (conversation, agent))
+        .collect())
 }

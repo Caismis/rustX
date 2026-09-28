@@ -265,3 +265,19 @@ Each Agent reference mode runs as its own test/page/context rather than sharing
 one multi-navigation capture. This keeps reference setup independent, including
 the browser's paint caches. Screenshot tolerances remain zero; no composer style
 workaround, semantic sleep or retry is introduced.
+
+## #411 Jobs and continuable Agents
+
+- `test/chat.test.tsx`: same DOM Agent identity through Active → Inactive →
+  resumed (new activation), snapshot/reconnect replacement, and one finite Job's
+  active → terminal projection with its expanded output retained.
+- `test/activity-controls.test.tsx`: Active and Inactive messaging use exactly the
+  same native operation; a pending activation wait leaves Interrupt available;
+  a pending Job wait leaves Cancel available; finite Jobs expose no resume/input.
+  Gates are held protocol responses and explicit snapshot replacements, never
+  sleeps or a browser lifecycle simulation.
+- `test/e2e/activity.spec.ts`: child transcript stays selected through interrupt
+  and resume, the same Agent row changes activation correlation, Job cancellation
+  renders physical terminal output, desktop/mobile overflow and console checks.
+- Native Tool renderers label Job and Agent operations separately. The current
+  roster comes only from the native snapshot, not historical Tool results.

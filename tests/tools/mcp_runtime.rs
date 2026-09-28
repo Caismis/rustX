@@ -1607,6 +1607,15 @@ chat_reasoning_replay = "omit"
                 .any(|tool| tool.name == rustx::tools::mcp::fixture::ROUTED_TOOL),
             "the routing conformance tool is published: {tools:?}"
         );
+        let routed = tools
+            .iter()
+            .find(|tool| tool.name == rustx::tools::mcp::fixture::ROUTED_TOOL)
+            .unwrap();
+        assert_eq!(
+            routed.input_schema["properties"]["region"]["x-mcp-header"],
+            serde_json::json!(rustx::tools::mcp::fixture::ROUTED_TOOL_HEADER),
+            "the exact generation used by this call supplies the SDK header annotation"
+        );
         let result = call_canonical_tool_with(
             &runtime,
             &server_id,

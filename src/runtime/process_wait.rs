@@ -181,3 +181,80 @@ mod macos_waitid_tests {
         unsafe { libc::close(write_end) };
     }
 }
+
+/// Inspect a stopped child without consuming the sole result owner's status.
+/// Darwin's waitid WSTOPPED differs from waitpid's WUNTRACED; Linux aliases them.
+pub(crate) fn observe_stopped_child(
+    pid: nix::unistd::Pid,
+) -> nix::Result<nix::sys::wait::WaitStatus> {
+    use nix::sys::wait::WaitPidFlag;
+    waitid(
+        Id::Pid(pid),
+        WaitPidFlag::WNOHANG | WaitPidFlag::WSTOPPED | WaitPidFlag::WNOWAIT,
+    )
+}
+
+#[cfg(test)]
+mod stopped_observation_tests {
+    use super::{Id, observe_stopped_child, waitid};
+    use nix::sys::{
+        signal::{Signal, kill},
+        wait::{WaitPidFlag, WaitStatus},
+    };
+    use nix::unistd::Pid;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn stopped_observation_preserves_stop_and_terminal_status_for_owner() {
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = OwnedChild(
+            std::process::Command::new("/bin/sh")
+                .args(["-c", "kill -STOP $$; exit 23"])
+                .spawn()
+                .unwrap(),
+        );
+        let pid = Pid::from_raw(i32::try_from(child.0.id()).unwrap());
+        let stopped = WaitStatus::Stopped(pid, Signal::SIGSTOP);
+        // Blocking native observation establishes the state; no scheduling delay.
+        assert_eq!(
+            waitid(Id::Pid(pid), WaitPidFlag::WSTOPPED | WaitPidFlag::WNOWAIT),
+            Ok(stopped)
+        );
+        // Exercise the outer's actual observation order against a proven
+        // stopped child. Record Darwin's answer instead of assuming WEXITED
+        // cannot expose a nonterminal transition; neither call may consume it.
+        let exit_only = waitid(
+            Id::Pid(pid),
+            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+        );
+        eprintln!("stopped anchor: WEXITED|WNOHANG|WNOWAIT -> {exit_only:?}");
+        assert!(matches!(
+            exit_only,
+            Ok(WaitStatus::StillAlive | WaitStatus::Stopped(..) | WaitStatus::Continued(_))
+        ));
+        assert_eq!(observe_stopped_child(pid), Ok(stopped));
+        assert_eq!(observe_stopped_child(pid), Ok(stopped));
+        kill(pid, Signal::SIGKILL).unwrap();
+        assert_eq!(
+            waitid(Id::Pid(pid), WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT),
+            Ok(WaitStatus::Signaled(pid, Signal::SIGKILL, false))
+        );
+        // With only terminal status retained, implementations may report no
+        // eligible stopped child. Neither result may consume the exit status.
+        assert!(matches!(
+            observe_stopped_child(pid),
+            Ok(WaitStatus::StillAlive) | Err(nix::errno::Errno::ECHILD)
+        ));
+        assert_eq!(
+            waitid(Id::Pid(pid), WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT),
+            Ok(WaitStatus::Signaled(pid, Signal::SIGKILL, false))
+        );
+        assert_eq!(child.0.wait().unwrap().signal(), Some(libc::SIGKILL));
+    }
+}

@@ -1635,7 +1635,7 @@ fn request_failure_preserves_native_cancellation_and_timeout_classes() {
 #[test]
 fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
     use crate::runtime_client::projection::RuntimeClientProjection;
-    use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientBackgroundExecution};
+    use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientJob};
     use crate::tools::background::BackgroundLifecycle;
     let store = store("conv_da5c0fef-42f3-73f9-8f7f-b6878d9b0cbd");
     start(&store);
@@ -1664,8 +1664,8 @@ fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
     record.kind = TraceKind::Background;
     record.native_id = Some("exec_db47f954-a31a-74a3-8706-22baacdc0747".into());
     snapshot.trace.records = vec![record];
-    snapshot.background.push(RuntimeClientBackgroundExecution {
-        execution_id: crate::runtime::identity::ToolExecutionId::new(
+    snapshot.jobs.push(RuntimeClientJob {
+        job_id: crate::runtime::identity::ToolExecutionId::new(
             "exec_68344812-64a3-79bc-815f-6c3b32dfac91",
         ),
         tool_id: ToolId::new("same-tool"),
@@ -1680,7 +1680,7 @@ fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
         TraceState::Incomplete,
         "a different execution identity proves nothing"
     );
-    snapshot.background[0].execution_id =
+    snapshot.jobs[0].job_id =
         crate::runtime::identity::ToolExecutionId::new("exec_db47f954-a31a-74a3-8706-22baacdc0747");
     repair_live(&mut snapshot);
     assert_eq!(snapshot.trace.records[0].state, TraceState::Running);
@@ -1706,7 +1706,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
     use crate::runtime::workflow::read_model::{WorkflowRunView, WorkflowState};
     use crate::runtime::workflow::{WorkflowId, WorkflowRunId};
     use crate::runtime_client::projection::RuntimeClientProjection;
-    use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientBackgroundExecution};
+    use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientJob};
     use crate::tools::background::BackgroundLifecycle;
     let store = store("conv_7cc9b826-cbd4-78d6-87f0-53569f654a7b");
     let execution = ToolExecutionId::new("exec_6600d36f-a2f9-7057-8735-85a8c316b8af");
@@ -1759,8 +1759,8 @@ fn older_records_are_repaired_and_settle_by_identity() {
     .snapshot()
     .unwrap()
     .0;
-    snapshot.background.push(RuntimeClientBackgroundExecution {
-        execution_id: execution.clone(),
+    snapshot.jobs.push(RuntimeClientJob {
+        job_id: execution.clone(),
         tool_id: ToolId::new("tool"),
         tool_name: "tool".into(),
         state: BackgroundLifecycle::Running,
@@ -2911,6 +2911,7 @@ fn request_scoped_context_that_is_not_an_admitted_context_fact_never_commits() {
 /// outer `ToolCallId` their own native start fact froze. Reused Tool, Agent
 /// and Workflow names cannot cross-correlate them.
 #[test]
+#[allow(clippy::too_many_lines)] // One native correlation fixture spans both identity domains.
 fn tool_owned_domains_carry_their_exact_originating_tool_call() {
     let store = store("conv_a7f34b28-5c91-7e06-8d42-3fb8c0e17d54");
     start(&store);
@@ -2927,17 +2928,21 @@ fn tool_owned_domains_carry_their_exact_originating_tool_call() {
         2,
     );
     let subagent =
-        crate::runtime::identity::SubagentId::new("sub_1f0a7d4c-5b28-7e19-8a63-90cf2d8b4e17");
+        crate::runtime::identity::SubagentId::for_conversation(store.conversation_id(), 1);
     let mut ownership = event(
         &store,
         E::SubagentOwnershipCommitted {
             subagent_id: subagent.clone(),
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
             child_conversation_id: ConversationId::new("conv_1d5e2a90-7b41-7c38-8a02-64f0be93c175"),
-            tool_call_id: ToolCallId::new("call-subagent"),
+            origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                tool_call_id: ToolCallId::new("call-subagent"),
+            },
             agent: "shared".into(),
             definition_digest: "digest".into(),
             profile_digest: "profile".into(),
+            admitted_authority: None,
+            parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             ownership: crate::events::types::SubagentOwnershipKind::Normal,
             workspace: crate::runtime::workspace::WorkspaceSnapshot {
                 borrowed_from: None,
@@ -2950,7 +2955,11 @@ fn tool_owned_domains_carry_their_exact_originating_tool_call() {
     // The durable contract derives this event's canonical identity from the
     // subagent it opens; ownership is not an ordinary standalone fact.
     ownership.event_id = EventId::new(format!("subagent-committed-event:{subagent}"));
-    store.append_event(ownership).unwrap();
+    let mut resumed_ownership = ownership.clone();
+    let mut client_ownership = ownership.clone();
+    let (ownership, authority) =
+        crate::local_runtime::session::tests::deletion_tests::admit_agent(ownership);
+    store.append_agent_admission(ownership, &authority).unwrap();
     append(
         &store,
         E::WorkflowStarted {
@@ -2965,7 +2974,120 @@ fn tool_owned_domains_carry_their_exact_originating_tool_call() {
         4,
     );
 
+    let next_activation =
+        crate::runtime::identity::SubagentId::for_conversation(store.conversation_id(), 2);
+    if let E::SubagentOwnershipCommitted {
+        subagent_id,
+        origin,
+        ..
+    } = &mut resumed_ownership.event
+    {
+        *subagent_id = next_activation.clone();
+        *origin = crate::runtime::subagent::AgentActivationOrigin::MessageTool {
+            tool_call_id: ToolCallId::new("call-message"),
+        };
+    }
+    resumed_ownership.event_id =
+        EventId::new(format!("subagent-committed-event:{next_activation}"));
+    if let E::SubagentOwnershipCommitted {
+        child_agent_id,
+        subagent_id,
+        origin,
+        ..
+    } = &resumed_ownership.event
+    {
+        store
+            .append_event(crate::runtime::subagent::admission_event(
+                store.conversation_id(),
+                child_agent_id,
+                subagent_id,
+                origin,
+                crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                timestamp(4),
+            ))
+            .unwrap();
+    }
+    store.append_event(resumed_ownership).unwrap();
+    let client_activation =
+        crate::runtime::identity::SubagentId::for_conversation(store.conversation_id(), 3);
+    if let E::SubagentOwnershipCommitted {
+        subagent_id,
+        origin,
+        ..
+    } = &mut client_ownership.event
+    {
+        *subagent_id = client_activation.clone();
+        *origin = crate::runtime::subagent::AgentActivationOrigin::ClientControl;
+    }
+    client_ownership.event_id =
+        EventId::new(format!("subagent-committed-event:{client_activation}"));
+    if let E::SubagentOwnershipCommitted {
+        child_agent_id,
+        subagent_id,
+        origin,
+        ..
+    } = &client_ownership.event
+    {
+        store
+            .append_event(crate::runtime::subagent::admission_event(
+                store.conversation_id(),
+                child_agent_id,
+                subagent_id,
+                origin,
+                crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                timestamp(4),
+            ))
+            .unwrap();
+    }
+    store.append_event(client_ownership).unwrap();
     let projected = page(&store);
+    let activations: Vec<_> = projected
+        .records
+        .iter()
+        .filter(|r| r.kind == TraceKind::Subagent)
+        .collect();
+    assert_eq!(activations.len(), 3);
+    for activation in &activations {
+        assert_eq!(
+            activation
+                .agent_id
+                .as_ref()
+                .map(crate::runtime::identity::AgentId::as_str),
+            Some("agent-child")
+        );
+        assert!(activation.activation_id.is_some());
+    }
+    assert_ne!(activations[0].activation_id, activations[1].activation_id);
+    for activation in &activations {
+        let origin = activation
+            .activation_origin
+            .as_ref()
+            .expect("frozen origin");
+        assert_eq!(
+            activation.originating_tool_call_id.as_ref(),
+            origin.tool_call_id()
+        );
+    }
+    let client = activations
+        .iter()
+        .find(|record| record.activation_id.as_ref() == Some(&client_activation))
+        .unwrap();
+    assert_eq!(
+        client.activation_origin,
+        Some(crate::runtime::subagent::AgentActivationOrigin::ClientControl)
+    );
+    assert!(client.originating_tool_call_id.is_none());
+    let resumed = activations
+        .iter()
+        .find(|record| record.activation_id.as_ref() == Some(&next_activation))
+        .unwrap();
+    assert_eq!(
+        resumed
+            .originating_tool_call_id
+            .as_ref()
+            .map(ToolCallId::as_str),
+        Some("call-message")
+    );
     let correlated = |kind| {
         record_of(&projected, kind)
             .originating_tool_call_id

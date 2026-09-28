@@ -109,6 +109,7 @@ pub(crate) struct WorkspaceAccess {
 /// This sum is the process driver's only workspace lifecycle input.
 #[derive(Debug)]
 pub(crate) enum WorkspaceUse {
+    Agent(Box<super::AgentWorkspaceAccess>),
     Owned(Box<WorkspaceLease>),
     Borrowed(Box<WorkspaceAccess>),
 }
@@ -143,6 +144,7 @@ impl From<WorkspaceAccess> for WorkspaceUse {
 impl WorkspaceUse {
     pub(crate) fn snapshot(&self) -> &WorkspaceSnapshot {
         match self {
+            Self::Agent(access) => access.snapshot(),
             Self::Owned(lease) => lease.snapshot(),
             Self::Borrowed(access) => access.snapshot(),
         }
@@ -153,6 +155,7 @@ impl WorkspaceUse {
 
     pub(crate) async fn settle_after_child(self) -> WorkspaceUseSettlement {
         match self {
+            Self::Agent(access) => access.settle().into(),
             Self::Owned(lease) => lease.settle_after_child().await.into(),
             Self::Borrowed(access) => {
                 let snapshot = access.snapshot().clone();
@@ -173,6 +176,7 @@ impl WorkspaceUse {
         self,
     ) -> Result<WorkspaceSettlement, WorkspaceSettlementError> {
         match self {
+            Self::Agent(access) => access.rollback().await,
             Self::Owned(lease) => lease.settle_staged().await,
             borrowed @ Self::Borrowed(_) => Ok(borrowed.settle_after_child().await.workspace),
         }
@@ -182,6 +186,7 @@ impl WorkspaceUse {
         detail: impl Into<String>,
     ) -> WorkspaceSettlement {
         match self {
+            Self::Agent(access) => access.unresolved(detail.into()),
             Self::Owned(lease) => lease.preserve_after_unresolved_nested(detail),
             Self::Borrowed(access) => {
                 let snapshot = access.snapshot().clone();
@@ -266,7 +271,7 @@ pub(super) async fn inspect_source(
         dirty: false,
     };
     manager
-        .verify_retained_workspace(owner, snapshot, &handoff)
+        .verify_retained_workspace(owner, snapshot, &handoff, None)
         .await
         .map_err(|e| e.to_string())?;
     let first = hash_source(manager, snapshot, &head).await?;
@@ -275,7 +280,7 @@ pub(super) async fn inspect_source(
         return Err("candidate changed during native source inspection".into());
     }
     manager
-        .verify_retained_workspace(owner, snapshot, &handoff)
+        .verify_retained_workspace(owner, snapshot, &handoff, None)
         .await
         .map_err(|e| e.to_string())?;
     Ok(first)

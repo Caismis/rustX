@@ -76,7 +76,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     // through `agent.tools.builtin` — which no longer accepts the name at all. The
     // bounded catalog the rest of FND-06 relies on is preserved by composing
     // no Todo extension unless a case asks for one.
-    let builtin_tools = vec!["read", "bash", "execution"];
+    let builtin_tools = vec!["read", "bash", "job_status"];
     toml::to_string_pretty(&serde_json::json!({
         "schema_version": 9,
         "agent_id": "agent-fnd06",
@@ -195,9 +195,7 @@ impl Lab {
 
     /// Spawns one child armed to freeze at the `nth` occurrence of `gate`.
     pub(crate) fn spawn_nth(&self, scenario: &str, gate: Option<&str>, nth: usize) -> Child {
-        let socket = self.root().join(format!("control-{scenario}-{nth}.sock"));
-        let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).expect("FND-06 control listener");
+        let (control_directory, socket, listener) = control_listener();
         let mut command = Command::new(std::env::current_exe().expect("test binary"));
         command
             .args([
@@ -238,6 +236,7 @@ impl Lab {
             .expect("control read timeout");
         let writer = control.try_clone().expect("control writer");
         Child {
+            _control_directory: control_directory,
             pid: process.id(),
             process: Some(process),
             stderr,
@@ -388,6 +387,8 @@ pub(crate) enum ChildLine {
 
 /// One spawned child process and its control channel.
 pub(crate) struct Child {
+    // Kept through child termination; short, exclusive namespace independent of TMPDIR/scenario.
+    _control_directory: tempfile::TempDir,
     pid: u32,
     process: Option<OsChild>,
     stderr: Option<std::process::ChildStderr>,
@@ -638,4 +639,38 @@ impl Durable {
     pub(crate) fn recover(&self) -> RecoveryReport {
         recover(self.store.as_ref(), &FixedClock).expect("recovery succeeds")
     }
+}
+
+/// Native addresses deliberately avoid scenario names and the platform TMPDIR.
+fn control_listener() -> (tempfile::TempDir, std::path::PathBuf, UnixListener) {
+    let directory = tempfile::Builder::new()
+        .prefix("rx-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = directory.path().join("c");
+    let listener = UnixListener::bind(&socket).expect("FND-06 control listener");
+    (directory, socket, listener)
+}
+
+#[test]
+fn native_control_paths_are_bounded_and_independently_owned() {
+    use std::os::unix::ffi::OsStrExt;
+    let (first, first_path, first_listener) = control_listener();
+    let (second, second_path, second_listener) = control_listener();
+    assert_ne!(first_path, second_path);
+    for path in [&first_path, &second_path] {
+        assert!(
+            path.as_os_str().as_bytes().len() < 104,
+            "Darwin sockaddr_un limit"
+        );
+    }
+    let _first_client = UnixStream::connect(&first_path).unwrap();
+    let _first_peer = first_listener.accept().unwrap();
+    drop(first);
+    assert!(!first_path.exists());
+    assert!(second_path.exists());
+    let _second_client = UnixStream::connect(&second_path).unwrap();
+    let _second_peer = second_listener.accept().unwrap();
+    drop(second);
+    assert!(!second_path.exists());
 }

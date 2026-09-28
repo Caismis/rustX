@@ -1027,6 +1027,24 @@ option-label checking and typed status presentation) are independent rustX work.
 No additional Harness material was copied or adapted. Existing source records
 retain their upstream revisions; local hashes and import closures are refreshed.
 
+## #411 Jobs and continuable Agents
+
+No new upstream source is copied and the presentation baseline is unchanged.
+Current source review used DeepSeek Harness commit
+`477b4f420553e8a52c2fbccc464d7561b239c443`:
+`packages/client/ui-subagent/src/client/sidebar-chat/index.tsx` and
+`packages/client/ui-jobs/src/client/JobListAction.tsx`. Stable child detail and
+separate finite Job output/control patterns inform rustX-authored ActivityCards.
+The old one-shot/continuable mode branch is deliberately not adopted.
+
+Reviewed local inventory changes update App Server imports to v27 and ToolCard's
+identity discriminator to finite `job`, including its `data-job-id` marker.
+Existing Tool dispatch, primitives, styling, licenses and pinned upstream hashes
+are retained. Inventory local hashes and import closure reflect those edits.
+
+Review corrections retain native Admitting state and typed creation/message/client/
+Workflow activation provenance. Current local hashes and import closures track
+App Server v27; the preceding #409 v27 record describes its historical audit.
 ## Issue #419
 
 Client-lifetime first-submit ownership and localized pending presentation are

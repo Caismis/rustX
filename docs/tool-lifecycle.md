@@ -218,14 +218,22 @@ policy is intentionally absent. The same status meanings apply, including
 `Denied`, `TimedOut`, and `OutcomeUnknown`. A durable terminal candidate is
 retained during publication failure; repeated finish/cancel cannot replace it.
 Terminal publication precedes the observable terminal state. Its deterministic
-correlation prevents duplicate inbound messages. The model-facing `execution`
-tool only routes observations/control to this authority.
+correlation prevents duplicate inbound messages. The separate `job_list`,
+`job_status`, `job_wait` and `job_cancel` tools route to this finite Job owner.
+Status never waits; wait binds the exact Job ID and awaits physical settlement
+through a watch. Unknown IDs fail immediately. Terminal Jobs cannot resume.
 
-Subagent creation similarly returns a creation result; the child registry owns
-the child's later lifecycle. Workflow foreground execution retains its existing
-Workflow and child authorities. `execution(steer)` uses the shared cooperative
-handle while keeping the subagent registry's exact guidance admission frontier
-and ticket cleanup. Cancelling a steer never invents child cancellation.
+Native `subagent` creates a durable Agent and its first finite activation.
+`send_message` atomically chooses Active delivery or Inactive activation admission;
+Admitting/Stopping reject transiently while their owner can settle. Unavailable
+returns a non-retryable typed Agent settlement error. `wait_agent` captures one activation and `interrupt_agent`
+settles only that activation. The identity remains resumable. Workflow finite
+AgentRuns retain their Workflow-owned input/output contract. Logical terminal,
+durable terminal/value publication and physical proof are separate; valid output
+with unproven containment fails closed with a physical-settlement diagnostic.
+Only normally Completed native attempts may reopen for accepted guidance; failure,
+cancellation, orphaning and Workflow first terminal are final. See
+[Jobs and continuable Agents](jobs-and-agents.md) for ownership and linearization.
 
 ## Recovery
 
@@ -298,3 +306,8 @@ Incompatible}`. Native ask_user is Independent: its ordinary Questionnaire wait
 never borrows or validates a candidate. Filesystem/Bash executors consume the
 provided workspace; fixed/external executors default to Incompatible. Workflow
 admission checks this shared executor policy, never a tool-name exception.
+
+A recovered child activation may retain Interrupted while a later
+`SubagentPhysicalSettlementProven` fact proves its native physical containment.
+The Agent registry owns bounded reconciliation of exact incarnation receipts and
+released leases; neither Tool retry nor a terminal label grants that proof.

@@ -1,9 +1,10 @@
+import { incrementalAgent } from './incremental-agent-fixture';
 import { Profiler } from 'react';
 import { act, cleanup, render, fireEvent } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v25';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v27';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const s of servers) s.client.disconnect(); servers.length = 0; });
 const emit = (s: Server, event: RuntimeClientEvent) => {
@@ -24,6 +25,10 @@ it('native message id keeps both row and Assistant element through canonical cor
   const row = ui.container.querySelector('[data-chat-anchor-key="message:m"]');
   const assistant = ui.container.querySelector('[aria-label="Streaming response"]');
   expect(row).toBeTruthy(); expect(assistant).toBeTruthy();
+  await act(async () => { emit(s, { type: 'agent_updated', agent: incrementalAgent() }); emit(s, { type: 'agent_updated', agent: incrementalAgent('activation-2') }); });
+  expect(ui.container.querySelector('[data-chat-anchor-key="message:m"]')).toBe(row);
+  expect(ui.container.querySelector('[aria-label="Streaming response"]')).toBe(assistant);
+  expect(reasoning.getAttribute('data-expanded')).toBe('true');
   for (let i = 0; i < 20; i++) await act(async () => { emit(s, { type: 'assistant_text_delta', attempt_id: 'a', message_id: 'm', block_index: 1, delta: 'old' }); });
   await act(async () => { emit(s, { type: 'message_committed', attempt_id: 'a', transcript_cursor: '1', message: { id: 'm', role: 'assistant', content: [{ type: 'reasoning', text: 'reasoning stays expanded' }, { type: 'text', text: 'native final correction' }] } }); });
   expect(ui.container.querySelectorAll('[data-chat-anchor-key="message:m"]')).toHaveLength(1);

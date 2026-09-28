@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v25';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v27';
 import { interactionKey, OutcomeUncertain } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './fixture';
@@ -12,7 +12,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 25 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 27 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -402,4 +402,19 @@ it('ACK observer exceptions cannot strand a mutation or block queued request dis
   expect(s.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
   expect(diagnostic).toHaveBeenCalledOnce();
   diagnostic.mockRestore();
+});
+
+it('explicit catalog scope controls rereads even for a Session absent from local state', async () => {
+  const s = server(); await s.attached('A');
+  const lists = s.requests.filter(row => row.request.method === 'session/list').length;
+  s.invalidateSummary('not-cached', s.socket, false);
+  await s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');
+  expect(s.requests.filter(row => row.request.method === 'session/list')).toHaveLength(lists);
+  s.held.add('session/list');
+  s.invalidateSummary('not-cached', s.socket, true);
+  const read = await s.waitFor('session/list', lists + 1);
+  s.reply(read);
+  await s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');
+  expect(s.requests.filter(row => row.request.method === 'session/list')).toHaveLength(lists + 1);
+  expect(s.client.getSnapshot().connection).toBe('connected');
 });

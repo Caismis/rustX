@@ -1,9 +1,9 @@
-/** One disposable, finite read projection. No attachment or mutation authority. */
+/** One disposable page reader keyed by durable AgentId, across activations. */
 import type { AppServerSession } from "./session.ts";
 import type { RuntimeClientTranscriptPage } from "../protocol/app-server.ts";
 
 export class SubagentTranscript {
-  readonly #session: Pick<AppServerSession, "subagentTranscriptPage">;
+  readonly #session: Pick<AppServerSession, "agentTranscriptPage">;
   #generation = 0;
   #reading = false;
   #closed = false;
@@ -13,7 +13,7 @@ export class SubagentTranscript {
   #error: string | undefined;
   onChange?: () => void;
 
-  constructor(session: Pick<AppServerSession, "subagentTranscriptPage">, id: string) {
+  constructor(session: Pick<AppServerSession, "agentTranscriptPage">, id: string) {
     this.#session = session;
     this.selected = id;
   }
@@ -48,7 +48,7 @@ export class SubagentTranscript {
     this.#error = undefined;
     this.onChange?.();
     try {
-      const page = await this.#session.subagentTranscriptPage(id, before);
+      const page = await this.#session.agentTranscriptPage(id, before);
       if (generation !== this.#generation || this.#closed) return;
       if (page !== undefined) this.#page = page;
     } catch (error) {

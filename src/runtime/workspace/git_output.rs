@@ -1,49 +1,9 @@
-//! Collect one already-spawned Git child. An interrupted wait/read never
-//! returns to command construction or discards bytes already collected.
-use std::{io, process::Output};
-use tokio::{io::AsyncReadExt, process::Child};
+//! Exact Git streams; interruptions retain accumulated bytes. The shared
+//! supervised runner exclusively owns process wait, containment, and reap.
+use std::io;
+use tokio::io::AsyncReadExt;
 
-pub(super) async fn collect(mut child: Child, #[cfg(test)] faults: &Faults) -> io::Result<Output> {
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    drop(child.stdin.take());
-    let wait = async {
-        loop {
-            #[cfg(test)]
-            let result = if faults.wait.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                Err(io::ErrorKind::Interrupted.into())
-            } else {
-                child.wait().await
-            };
-            #[cfg(not(test))]
-            let result = child.wait().await;
-            match result {
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                result => break result,
-            }
-        }
-    };
-    let (status, stdout, stderr) = tokio::try_join!(
-        wait,
-        read_pipe(
-            stdout,
-            #[cfg(test)]
-            &faults.stdout
-        ),
-        read_pipe(
-            stderr,
-            #[cfg(test)]
-            &faults.stderr
-        ),
-    )?;
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
-}
-
-async fn read_pipe(
+pub(super) async fn read_pipe(
     pipe: Option<impl tokio::io::AsyncRead + Unpin>,
     #[cfg(test)] interrupt: &std::sync::atomic::AtomicBool,
 ) -> io::Result<Vec<u8>> {
@@ -74,58 +34,47 @@ async fn read_pipe(
     Ok(output)
 }
 
-#[cfg(test)]
-#[derive(Default)]
-pub(super) struct Faults {
-    wait: std::sync::atomic::AtomicBool,
-    stdout: std::sync::atomic::AtomicBool,
-    stderr: std::sync::atomic::AtomicBool,
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::{
-        process::Stdio,
-        sync::atomic::{AtomicBool, Ordering},
+    use crate::runtime::process_runner::{
+        ProcessOutcomeIntent, RunnerTestControl, SupervisedCommandRunner, SupervisedCommandSpec,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]
     async fn eintr_collection_never_replays_started_child() {
         let directory = tempfile::tempdir().unwrap();
         let effect = directory.path().join("effect");
-        let mut command = tokio::process::Command::new("sh");
-        command
-            .args([
-                "-c",
-                "printf x >> \"$1\"; printf stdout; printf stderr >&2",
-                "fixture",
-            ])
-            .arg(&effect)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut spawns = 0;
-        let child = {
-            spawns += 1;
-            command.spawn().unwrap()
+        let spec = SupervisedCommandSpec {
+            command: "printf x >> effect; printf stdout; printf stderr >&2".into(),
+            cwd: directory.path().into(),
+            command_environment: std::env::vars().collect(),
+            timeout: None,
+            cancellation: crate::runtime::cancellation::CancellationSignal::new(),
         };
-        let faults = Faults {
-            wait: AtomicBool::new(true),
-            stdout: AtomicBool::new(true),
-            stderr: AtomicBool::new(true),
-        };
-        // Borrow the faults through the whole collector so consumption is checked.
-        let mut terminal_results = 0;
-        let result = collect(child, &faults).await.unwrap();
-        terminal_results += 1;
-        assert!(!faults.wait.load(Ordering::SeqCst));
-        assert!(!faults.stdout.load(Ordering::SeqCst));
-        assert!(!faults.stderr.load(Ordering::SeqCst));
-        assert_eq!(terminal_results, 1);
-        assert!(result.status.success());
-        assert_eq!(result.stdout, b"stdout");
-        assert_eq!(result.stderr, b"stderr");
-        assert_eq!(spawns, 1);
-        assert_eq!(std::fs::read(effect).unwrap(), b"x");
+        let control = RunnerTestControl::new();
+        control.interrupt_direct_wait.store(true, Ordering::SeqCst);
+        let (mut runner, stdout, stderr) =
+            SupervisedCommandRunner::spawn(&spec, Some(control.clone())).unwrap();
+        let stdout_interrupt = AtomicBool::new(true);
+        let stderr_interrupt = AtomicBool::new(true);
+        let (terminal, stdout, stderr) = tokio::join!(
+            runner.settle(),
+            read_pipe(stdout, &stdout_interrupt),
+            read_pipe(stderr, &stderr_interrupt)
+        );
+        assert!(!control.interrupt_direct_wait.load(Ordering::SeqCst));
+        assert!(!stdout_interrupt.load(Ordering::SeqCst));
+        assert!(!stderr_interrupt.load(Ordering::SeqCst));
+        assert_eq!(terminal.intent, ProcessOutcomeIntent::Completed);
+        assert!(terminal.exit_status.unwrap().success());
+        assert_eq!(stdout.unwrap(), b"stdout");
+        assert_eq!(stderr.unwrap(), b"stderr");
+        assert_eq!(
+            std::fs::read(effect).unwrap(),
+            b"x",
+            "the native command ran exactly once despite all three interruptions"
+        );
     }
 }

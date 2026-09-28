@@ -22,15 +22,17 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await page.getByLabel('Message', { exact: true }).fill('workflow conformance request');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('workflow-child-admitted');
-    const child = page.locator('[data-subagent-id]');
+    // Workflow-owned finite activations remain under their Workflow; they are
+    // not continuable Agents and must not acquire message/resume controls.
+    const child = page.locator('[data-workflow-activation-id]');
     const run = page.locator('[data-workflow-run-id]');
     await expect(child).toHaveCount(1); await expect(run).toHaveCount(1);
-    const childId = await child.getAttribute('data-subagent-id');
+    const childId = await child.getAttribute('data-workflow-activation-id');
     const runId = await run.getAttribute('data-workflow-run-id');
     await expect(run).toContainText('review_pr');
     await page.screenshot({ path: test.info().outputPath('native-workflow-subagent.png') });
     await page.reload(); await connect();
-    await expect(child).toHaveAttribute('data-subagent-id', childId!);
+    await expect(child).toHaveAttribute('data-workflow-activation-id', childId!);
     await expect(run).toHaveAttribute('data-workflow-run-id', runId!);
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });

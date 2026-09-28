@@ -183,7 +183,8 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     });
     throw error;
   } finally {
-    // Retire the page and its Host routes before stopping their native fixture.
+    // Close the browser connection before shutting down its Host so reconnect
+    // cannot race Playwright context teardown.
     await page.close();
     const report = await fixture.stop(passed);
     await test.info().attach('retry-native-fixture-report', { contentType: 'application/json',

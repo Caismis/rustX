@@ -74,9 +74,19 @@ use crate::runtime::workspace::{
     WorkspaceUse,
 };
 
+mod agents;
+mod recovery_settlement;
+pub use agents::{
+    AgentControlError, AgentMessageAccepted, AgentSnapshot, AgentState, AgentWaitResult,
+    DurableAgentAuthority, MAX_AGENT_LIST_LIMIT,
+};
+
 /// The highest lifecycle state of one subagent child.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubagentLifecycle {
+    Starting,
+    /// Message admission is closed; already admitted input is draining.
+    Stopping,
     /// Ownership committed; the delegation is in flight or running.
     Running,
     /// Cancellation intent is committed; escalation may be in flight.
@@ -118,6 +128,7 @@ enum Decision {
     },
     RolledBack,
     Failed(SubagentStartError),
+    WaitingForGoalIdle,
 }
 
 /// Unique live Workflow child result. Candidate applicability is native,
@@ -131,6 +142,7 @@ pub(crate) struct WorkflowAgentOutput {
 /// The canonicalized terminal outcome awaiting publication.
 #[derive(Debug, Clone)]
 struct TerminalCandidate {
+    physical_settlement_proven: bool,
     state: TerminalState,
     /// The bounded result content (succeeded only).
     content: Option<String>,
@@ -217,7 +229,7 @@ impl NotificationState {
 /// semantic object from an unresolved one, and that disposing of its
 /// ticket is lifecycle cleanup, never a denial of the acceptance itself
 /// (see [`SubagentRecord::steer_tickets`] and
-/// [`SubagentRegistry::commit_guidance`]).
+/// [`SubagentRegistry::send_message`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SteerTicketPhase {
     /// Admitted; the child conversation's durable decision has not yet
@@ -225,10 +237,8 @@ enum SteerTicketPhase {
     /// refusal, and child refusal are all still possible.
     AwaitingChildDecision,
     /// The child's durable `Accepted` answer has reached the registry and
-    /// the steer's parent acknowledgement commit is still owed. Only a
-    /// committed cancellation intent (or the caller abandoning the steer)
-    /// can still invalidate it; a natural terminal settlement cleans the
-    /// ticket without erasing the acceptance.
+    /// message acknowledgement is still owed. Cancellation, settlement and
+    /// caller abandonment can clean the ticket but cannot erase acceptance.
     ChildAcceptedPendingParentCommit,
 }
 
@@ -246,11 +256,24 @@ struct SteerTicket {
     phase: SteerTicketPhase,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DelegateDelivery {
+    NotSent,
+    /// Write attempted, or replay cannot prove prior non-delivery.
+    Started,
+    /// Child acknowledged its canonical inbound commit.
+    Accepted,
+}
+
 struct SubagentRecord {
+    /// Proven process, nested-work and required resource settlement, independent of logical terminal.
+    physical_settlement_proven: bool,
+    delegate_delivery: DelegateDelivery,
+    parent_agent_id: AgentId,
     subagent_id: SubagentId,
     child_agent_id: AgentId,
     child_conversation_id: ConversationId,
-    tool_call_id: ToolCallId,
+    origin: AgentActivationOrigin,
     agent: SubagentName,
     definition_digest: NamedAgentDefinitionDigest,
     /// The deterministic identity of the **effective execution profile** this
@@ -261,7 +284,10 @@ struct SubagentRecord {
     /// recovery-projected record restores exactly the committed value and
     /// never recomputes it from the current catalog.
     profile_digest: SubagentExecutionProfileDigest,
-    terminal: SubagentTerminalMode,
+    /// Immutable domain identity, including for non-executable historical records.
+    ownership: SubagentOwnershipKind,
+    /// Frozen live terminal protocol; never reconstructed for historical activations.
+    terminal: Option<SubagentTerminalMode>,
     workspace: WorkspaceSnapshot,
     handoff: Option<WorkspaceHandoff>,
     /// The post-terminal physical-resource state. This never changes the
@@ -310,22 +336,20 @@ struct SubagentRecord {
     /// state can therefore never destroy the classification of an
     /// already-accepted steer: the classification is decided at the
     /// steer's own commit from the caller-held child outcome, which no
-    /// registry cleanup touches (see [`SubagentRegistry::commit_guidance`]).
+    /// registry cleanup touches (see [`SubagentRegistry::send_message`]).
     ///
     /// # Ticket ownership and disposal
     ///
     /// Every ticket has **one explicit owner** — the [`GuidanceTicket`]
-    /// guard returned by [`SubagentRegistry::admit_guidance`] — and exactly
+    /// guard returned by `admit_guidance_locked` — and exactly
     /// one terminal disposition, so arbitration state is never abandoned:
     ///
-    /// - the steer's own commit removes it ([`SubagentRegistry::commit_guidance`]);
-    /// - dropping the steer future before it commits runs the guard's
+    /// - completing or dropping the message future runs the guard's
     ///   `Drop`, which removes exactly its own ticket ([`GuidanceTicket`])
     ///   — so no abandoned caller leaves a ticket behind;
     /// - the cancellation linearization point in
     ///   [`SubagentRegistry::cancel`] removes every ticket (whichever
-    ///   phase it is in): a committed cancellation intent is absorbing and
-    ///   supersedes even an already-accepted, not-yet-acknowledged steer;
+    ///   phase it is in); this cleanup cannot erase accepted child input;
     /// - the terminal-authority commit in
     ///   [`SubagentRegistry::settle_from_driver`] removes every remaining
     ///   ticket (whichever phase it is in), so a terminal record never
@@ -347,7 +371,7 @@ struct SubagentRecord {
     deadline_task: Option<tokio::task::JoinHandle<()>>,
     /// The narrow cancellation handle into the driver task — never an OS
     /// process handle.
-    control: Option<tokio::sync::mpsc::Sender<super::process::DriverCommand>>,
+    control: Option<tokio::sync::mpsc::UnboundedSender<super::process::DriverCommand>>,
     /// The bounded terminal failure/cancellation diagnostic. A successful
     /// child's answer content never appears here: the durable terminal
     /// inbound publication is the one result channel (Issue #178).
@@ -370,6 +394,60 @@ struct SubagentRecord {
 }
 
 impl SubagentRecord {
+    /// Reconstruct one historical activation from committed ownership. Recovery
+    /// grants neither a control channel nor proof of Delegate acceptance. The
+    /// ownership domain alone selects mailbox notification semantics; a Workflow
+    /// can never acquire durable Agent controls through this constructor.
+    fn recovered(
+        parent_agent_id: AgentId,
+        evidence: &crate::runtime::recovery::SubagentEvidence,
+    ) -> Result<Self, crate::durable::ConversationStoreError> {
+        use crate::durable::ConversationStoreError;
+        let agent = SubagentName::parse(&evidence.agent)
+            .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?;
+        let definition_digest = serde_json::from_value(serde_json::Value::String(
+            evidence.definition_digest.clone(),
+        ))
+        .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?;
+        Ok(Self {
+            physical_settlement_proven: false,
+            delegate_delivery: DelegateDelivery::Started,
+            parent_agent_id,
+            subagent_id: evidence.subagent_id.clone(),
+            child_agent_id: evidence.child_agent_id.clone(),
+            child_conversation_id: evidence.child_conversation_id.clone(),
+            origin: evidence.origin.clone(),
+            agent,
+            definition_digest,
+            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(
+                evidence.profile_digest.clone(),
+            ),
+            ownership: evidence.ownership,
+            terminal: None,
+            workspace: evidence.workspace.clone(),
+            handoff: None,
+            workspace_resource_state: SubagentWorkspaceResourceState::None,
+            workspace_disposal: None,
+            workspace_unresolved: None,
+            lifecycle: SubagentLifecycle::Interrupted,
+            cancel_reason: None,
+            steer_tickets: Vec::new(),
+            deadline_task: None,
+            control: None,
+            detail: None,
+            observation: SubagentObservation::default(),
+            profile: None,
+            terminal_workflow_value: None,
+            pending_terminal: None,
+            publication_abandoned: false,
+            notification: match evidence.ownership {
+                SubagentOwnershipKind::Normal => NotificationState::Delivered,
+                SubagentOwnershipKind::Workflow => NotificationState::None,
+            },
+            started_at: evidence.started_at,
+        })
+    }
+
     fn terminal_workspace_resource(&self) -> SubagentWorkspaceTerminalResource {
         match self.workspace_resource_state {
             SubagentWorkspaceResourceState::None | SubagentWorkspaceResourceState::Disposed => {
@@ -402,6 +480,7 @@ impl SubagentRecord {
     fn snapshot(&self) -> SubagentSnapshot {
         let state = match self.lifecycle {
             SubagentLifecycle::Running => SubagentState::Running,
+            SubagentLifecycle::Starting | SubagentLifecycle::Stopping => SubagentState::Stopping,
             SubagentLifecycle::Cancelling => SubagentState::Cancelling,
             SubagentLifecycle::PublishingTerminal => SubagentState::PublishingTerminal,
             SubagentLifecycle::Succeeded => SubagentState::Succeeded,
@@ -410,10 +489,12 @@ impl SubagentRecord {
             SubagentLifecycle::Interrupted => SubagentState::Interrupted,
         };
         SubagentSnapshot {
+            ownership: self.ownership,
+            parent_agent_id: self.parent_agent_id.clone(),
             subagent_id: self.subagent_id.clone(),
             child_agent_id: self.child_agent_id.clone(),
             child_conversation_id: self.child_conversation_id.clone(),
-            tool_call_id: self.tool_call_id.clone(),
+            origin: self.origin.clone(),
             agent: self.agent.as_str().to_owned(),
             definition_digest: self.definition_digest.as_str().to_owned(),
             profile_digest: self.profile_digest.as_str().to_owned(),
@@ -432,18 +513,75 @@ impl SubagentRecord {
             detail: self.detail.clone(),
             observation: self.observation.clone(),
             profile: self.profile.clone(),
-            publication_abandoned: self.publication_abandoned,
-            settled: self.lifecycle.is_terminal() && !self.publication_abandoned,
+            settlement: SubagentSettlement {
+                publication: if self.publication_abandoned {
+                    SubagentPublication::Abandoned
+                } else if self.lifecycle.is_terminal() {
+                    SubagentPublication::Committed
+                } else {
+                    SubagentPublication::Pending
+                },
+                physical: if self.physical_settlement_proven {
+                    SubagentPhysicalSettlement::Proven
+                } else {
+                    SubagentPhysicalSettlement::Unproven
+                },
+            },
             started_at: self.started_at,
         }
     }
 }
 
+/// Ownership of one immutable terminal append across the unlocked I/O phase.
+struct TerminalPublicationClaim {
+    registry: SubagentRegistry,
+    activation: SubagentId,
+}
+impl Drop for TerminalPublicationClaim {
+    fn drop(&mut self) {
+        self.registry
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .terminal_inflight
+            .remove(&self.activation);
+    }
+}
+
+struct GoalIdleClaim<'a>(&'a SubagentRegistry);
+
+impl Drop for GoalIdleClaim<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
+        debug_assert!(state.goal_idle_committing);
+        state.goal_idle_committing = false;
+        self.0.state_version.send_modify(|version| *version += 1);
+    }
+}
+
+impl RegistryState {
+    fn owns_idle_work(&self) -> bool {
+        self.goal_idle_committing
+            || !self.recovery_pending.is_empty()
+            || !self.ownership_committing.is_empty()
+            || self.agents.values().any(|agent| agent.resuming.is_some())
+            || self.records.iter().any(|record| {
+                (record.lifecycle.is_terminal() && !record.physical_settlement_proven)
+                    || record.lifecycle.is_active()
+                    || matches!(record.lifecycle, SubagentLifecycle::PublishingTerminal)
+            })
+    }
+}
+
 struct RegistryState {
     max_active: usize,
+    /// Pins an idle Goal admission while its durable append runs off-lock.
+    goal_idle_committing: bool,
     /// Registered staged children, ordered by their already allocated native
     /// identity ordinal. Notifications never confer eligibility.
     capacity_waiters: BTreeMap<u64, CancellationSignal>,
+    /// Exact staging owners that reserved capacity while ownership durability commits off-lock.
+    ownership_committing: BTreeMap<SubagentId, (CancellationSignal, Option<CancellationReason>)>,
     #[cfg(test)]
     capacity_wait_entered: Option<tokio::sync::oneshot::Sender<()>>,
     #[cfg(test)]
@@ -457,6 +595,18 @@ struct RegistryState {
     /// steer request and is never a conversation identity, an inbound
     /// sequence, or a lifecycle fact.
     next_guidance_id: u64,
+    agents: BTreeMap<AgentId, agents::AgentRecord>,
+    /// Complete recovered physical obligation set, including allocations with
+    /// no Reserved event, activation record or resume reservation. Reconciler
+    /// completion never releases these runtime owners; only exact proof does.
+    recovery_pending: std::collections::BTreeSet<SubagentId>,
+    recovery_unreserved: std::collections::BTreeMap<SubagentId, ConversationId>,
+    recovery_inflight: std::collections::BTreeSet<SubagentId>,
+    terminal_inflight: std::collections::BTreeSet<SubagentId>,
+    #[cfg(test)]
+    recovery_probe_hook: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg(test)]
+    recovery_proof_wait: std::collections::BTreeSet<SubagentId>,
     records: Vec<SubagentRecord>,
     index: HashMap<SubagentId, usize>,
     /// Live routed interactions owned by child coordinators. This is a root
@@ -511,7 +661,24 @@ struct RegistryState {
     /// staging AFTER the real identity/incarnation reservation has completed.
     #[cfg(test)]
     allocation_test_hook: Option<AllocationTestHook>,
+    #[cfg(test)]
+    allocation_failure: Option<super::process::SpawnError>,
+    #[cfg(test)]
+    allocation_attempts: usize,
+    #[cfg(test)]
+    resume_test_gates: Option<ResumeTestGates>,
+    #[cfg(test)]
+    resume_owner_abort: Option<tokio::task::AbortHandle>,
+    #[cfg(test)]
+    reserved_commit_hook: Option<Arc<CommitBoundaryHook>>,
+    #[cfg(test)]
+    resume_cleanup_hook: Option<ResumeCleanupHook>,
+    #[cfg(test)]
+    authority_install_hook: Option<Arc<CommitBoundaryHook>>,
 }
+
+#[cfg(test)]
+type ResumeCleanupHook = Box<dyn FnOnce(&super::physical_recovery::ParentPhysicalLease) + Send>;
 
 #[cfg(test)]
 struct AllocationTestHook {
@@ -526,6 +693,8 @@ struct AllocationTestHook {
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum SubagentState {
+    /// Message admission is closed while the activation drains and settles.
+    Stopping,
     /// Ownership committed; the delegation is in flight or running.
     Running,
     /// Cancellation intent committed; escalation may be in flight.
@@ -683,14 +852,14 @@ fn map_workspace_disposal_error(
 ///
 /// Read-model materialization only: every field is derived from the
 /// registry's state machine, never an authority of its own. This is the
-/// **rich runtime-truth projection** consumed by the Runtime Client, the
-/// TUI, recovery, and internal diagnostics. The model-facing
-/// `execution(status)` response is the deliberately minimal
-/// `SubagentExecutionSnapshot` projection of this snapshot (Issue #192),
-/// owned by the `execution` intrinsic — this authoritative type never
-/// weakens to fit the model boundary.
+/// **rich finite activation projection** consumed by runtime diagnostics and
+/// Agent projections. Durable Agent identity and current state come from
+/// `AgentSnapshot`; this type describes one exact activation's facts.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SubagentSnapshot {
+    /// Only Normal activations belong to a durable native Agent.
+    pub ownership: SubagentOwnershipKind,
+    pub parent_agent_id: AgentId,
     /// The conversation-owned subagent identity.
     pub subagent_id: SubagentId,
     /// The child agent identity (provenance of its answer).
@@ -698,7 +867,7 @@ pub struct SubagentSnapshot {
     /// The child's own durable conversation identity.
     pub child_conversation_id: ConversationId,
     /// The delegating tool call.
-    pub tool_call_id: ToolCallId,
+    pub origin: AgentActivationOrigin,
     /// The canonical named-agent identity frozen at start (Issue #144).
     pub agent: String,
     /// The deterministic definition digest frozen at start (Issue #144).
@@ -749,14 +918,49 @@ pub struct SubagentSnapshot {
     /// The redacted execution profile frozen at child start (Issue #178);
     /// `None` for recovery-projected records.
     pub profile: Option<SubagentExecutionProfile>,
-    /// Whether a terminal publication could not reach the durable
-    /// authority and was abandoned.
-    pub publication_abandoned: bool,
-    /// Whether the child reached a settled state (terminal, publication
-    /// not abandoned).
-    pub settled: bool,
+    /// Terminal durability and physical containment are independent of the
+    /// logical outcome in `state`. A committed terminal may remain physically
+    /// unresolved; proven containment does not invent a logical outcome.
+    pub settlement: SubagentSettlement,
     /// When the ownership committed.
     pub started_at: DateTime<Utc>,
+}
+
+/// Durable publication of an activation terminal and its required result value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentPublication {
+    #[default]
+    Pending,
+    Committed,
+    /// The bounded publication owner exhausted durability retries.
+    Abandoned,
+}
+
+/// Evidence that the activation's physical incarnation no longer owns effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentPhysicalSettlement {
+    #[default]
+    Unproven,
+    Proven,
+}
+
+/// The two independent settlement dimensions; logical lifecycle is `state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+pub struct SubagentSettlement {
+    pub publication: SubagentPublication,
+    pub physical: SubagentPhysicalSettlement,
+}
+
+impl SubagentSnapshot {
+    /// Full publication and containment proof, independent of the logical outcome.
+    #[must_use]
+    pub fn is_settled(&self) -> bool {
+        self.state.is_terminal()
+            && self.settlement.publication == SubagentPublication::Committed
+            && self.settlement.physical == SubagentPhysicalSettlement::Proven
+    }
 }
 
 /// The subagent domain's own bounded discovery read model (Issue #180).
@@ -785,28 +989,6 @@ pub struct SubagentListing {
     pub matched: usize,
 }
 
-/// The acknowledgement of one durably accepted parent-authored steer
-/// (Issue #193).
-///
-/// It carries identity and lifecycle only. A steer is a **control
-/// acknowledgement**, never a result channel: no child transcript, history,
-/// answer, or observation ever travels through it.
-///
-/// Its exact meaning is stated once, on [`SubagentRegistry::steer`]: the
-/// guidance is durably in the child's own conversation inbox and no
-/// cancellation intent had committed up to that point. A *later*
-/// cancellation, or physical loss of the child, may still prevent the child
-/// from ever observing it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubagentSteerAccepted {
-    /// The child that accepted the guidance — the same one the caller named,
-    /// never a new or re-resolved child.
-    pub subagent_id: SubagentId,
-    /// The child's lifecycle state, read from the authoritative record after
-    /// acceptance.
-    pub state: SubagentState,
-}
-
 /// Why one parent-authored steer could not be durably accepted (Issue #193).
 ///
 /// Every variant is deterministic and bounded: a steer is never silently
@@ -825,12 +1007,9 @@ pub enum SubagentSteerError {
         /// The offending byte length.
         bytes: usize,
     },
-    /// A cancellation intent committed for this child at the registry's
-    /// cancellation linearization point — either before the steer was
-    /// admitted, or while it was still outstanding. Cancellation is
-    /// absorbing and always wins this race: no steer may move a child back
-    /// toward running, and no steer that raced a cancellation is ever
-    /// reported accepted.
+    /// Cancellation committed before guidance admission. No new message can
+    /// enter that activation after this boundary; already admitted messages
+    /// retain their own durable outcome.
     CancellationCommitted {
         /// The committed first-winner cause.
         reason: CancellationReason,
@@ -861,7 +1040,7 @@ pub enum SubagentSteerError {
         detail: String,
     },
     /// The child's control plane could not take the envelope — the driver
-    /// is gone, or its bounded control lane is saturated. Either way the
+    /// is gone. The reliable owner queue never rejects due to saturation; the
     /// guidance never reached the child conversation, so nothing was
     /// accepted and no ticket was armed.
     ControlLost,
@@ -912,32 +1091,58 @@ impl std::error::Error for SubagentSteerError {}
 /// lifecycle only.
 #[derive(Debug, Clone)]
 pub struct SubagentStartSpec {
-    /// The frozen named-agent specification of the child.
-    pub resolved: ResolvedSubagentSpec,
-    /// Policy inherited from the admitting parent, never from registry state.
-    pub execution_policy: super::InheritedExecutionPolicy,
-    /// The effective approval mode frozen by the invoking Agent attempt.
-    /// This changes approval decisions only for Tools already present in
-    /// resolved; it never widens the child's capability set.
-    pub approval_mode: crate::runtime::types::ApprovalMode,
-    /// The delegated task.
+    pub authority: agents::DurableAgentAuthority,
+    pub admission: ActivationAdmission,
+}
+
+/// Input and provenance of exactly one finite activation, never Agent authority.
+#[derive(Debug, Clone)]
+pub struct ActivationAdmission {
     pub task: String,
-    /// The explicit bounded context package.
     pub context: Option<String>,
-    /// The delegating tool call.
-    pub tool_call_id: ToolCallId,
-    /// The child terminal protocol owned by the caller.
+    pub origin: AgentActivationOrigin,
     pub terminal: SubagentTerminalMode,
+}
+
+/// Truthful admission source. Client controls have no model `ToolCall` identity.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentActivationOrigin {
+    CreationTool {
+        tool_call_id: ToolCallId,
+    },
+    MessageTool {
+        tool_call_id: ToolCallId,
+    },
+    ClientControl,
+    Workflow {
+        node_id: Box<crate::runtime::workflow::WorkflowNodeInstance>,
+    },
+}
+impl AgentActivationOrigin {
+    #[must_use]
+    pub fn tool_call_id(&self) -> Option<&ToolCallId> {
+        match self {
+            Self::CreationTool { tool_call_id } | Self::MessageTool { tool_call_id } => {
+                Some(tool_call_id)
+            }
+            Self::ClientControl | Self::Workflow { .. } => None,
+        }
+    }
 }
 
 /// A privately prepared subagent start: everything fallible already
 /// succeeded, but nothing is published or owned yet.
 #[derive(Debug)]
 pub struct PreparedSubagent {
+    authority: agents::DurableAgentAuthority,
+    agent_workspace: Option<crate::runtime::workspace::AgentWorkspace>,
     subagent_id: SubagentId,
     child_agent_id: AgentId,
     child_conversation_id: ConversationId,
-    tool_call_id: ToolCallId,
+    origin: AgentActivationOrigin,
     agent: SubagentName,
     definition_digest: NamedAgentDefinitionDigest,
     profile_digest: SubagentExecutionProfileDigest,
@@ -1154,6 +1359,44 @@ impl core::fmt::Display for SubagentStartError {
 
 impl std::error::Error for SubagentStartError {}
 
+impl SubagentStartError {
+    /// Exhaustive typed accounting: every error except explicit rollback
+    /// uncertainty is returned only after its resource owner proved teardown,
+    /// or before that owner could acquire any physical resource.
+    fn rollback_is_proven(&self) -> bool {
+        match self {
+            Self::Rollback { .. } => false,
+            Self::ConversationInactive
+            | Self::InvalidTask { .. }
+            | Self::ContextOversized { .. }
+            | Self::CapacityExceeded { .. }
+            | Self::Spawn { .. }
+            | Self::Workspace { .. }
+            | Self::WorkspaceDirtyParent { .. }
+            | Self::Durability { .. }
+            | Self::DurabilityFailed { .. }
+            | Self::Cancelled => true,
+        }
+    }
+}
+
+impl From<super::process::SpawnError> for SubagentStartError {
+    fn from(error: super::process::SpawnError) -> Self {
+        use super::process::SpawnError;
+        match error {
+            SpawnError::Cancelled => Self::Cancelled,
+            SpawnError::Rollback { detail } => Self::Rollback { detail },
+            error @ (SpawnError::ContainmentPrerequisite { .. }
+            | SpawnError::WorkspaceSetup { .. }
+            | SpawnError::ConversationIdentityInUse { .. }
+            | SpawnError::Spawn { .. }
+            | SpawnError::Handshake { .. }) => Self::Spawn {
+                detail: error.to_string(),
+            },
+        }
+    }
+}
+
 /// The observation seam of the subagent plane (TUI / Runtime Client).
 ///
 /// Two publication classes (Issue #178): [`on_snapshot`](Self::on_snapshot)
@@ -1162,12 +1405,17 @@ impl std::error::Error for SubagentStartError {}
 /// [`on_activity`](Self::on_activity) is the **disposable** latest-value
 /// activity publication, which the consumer may coalesce or drop.
 pub trait SubagentObserver: Send + Sync {
-    /// Called under the registry lock with each new consistency snapshot;
-    /// the implementation must be cheap and nonblocking.
-    fn on_snapshot(&self, snapshot: &SubagentSnapshot);
-    /// Publishes installed native state together with its exact durable receipt.
-    fn on_committed(&self, snapshot: &SubagentSnapshot, _sequence: u64) {
-        self.on_snapshot(snapshot);
+    /// One complete owner transition, captured under the registry lock.
+    /// Workflow activations have no durable Agent owner.
+    fn on_snapshot(&self, agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot);
+    /// One durable receipt releases the complete Agent and activation transition.
+    fn on_committed(
+        &self,
+        agent: Option<&AgentSnapshot>,
+        snapshot: &SubagentSnapshot,
+        _sequence: u64,
+    ) {
+        self.on_snapshot(agent, snapshot);
     }
 
     /// Called under the registry lock for a retained-workspace resource
@@ -1176,7 +1424,7 @@ pub trait SubagentObserver: Send + Sync {
     /// to the lifecycle callback for observers that do not distinguish the
     /// projections.
     fn on_workspace(&self, snapshot: &SubagentSnapshot) {
-        self.on_snapshot(snapshot);
+        self.on_snapshot(None, snapshot);
     }
 
     /// Called under the registry lock with each new live-activity snapshot
@@ -1188,7 +1436,7 @@ pub trait SubagentObserver: Send + Sync {
     /// to [`on_snapshot`](Self::on_snapshot), so an observer that does not
     /// distinguish the two classes keeps capturing everything.
     fn on_activity(&self, snapshot: &SubagentSnapshot) {
-        self.on_snapshot(snapshot);
+        self.on_snapshot(None, snapshot);
     }
 
     /// Called under the registry lock when a child coordinator publishes a
@@ -1257,6 +1505,56 @@ pub(crate) struct SubagentInteractionSink {
 }
 
 impl SubagentInteractionSink {
+    /// The start gate already resolved start-vs-cancel under the registry
+    /// mutex. Record the actual write attempt without introducing a second
+    /// cancellation arbiter: a released gate sends Delegate before queued Cancel.
+    pub(crate) fn begin_delegate(&self) {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let index = state.index[&self.subagent_id];
+        state.records[index].delegate_delivery = DelegateDelivery::Started;
+    }
+
+    pub(crate) fn accept_delegate(&self) {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(&index) = state.index.get(&self.subagent_id) {
+            if state.records[index].delegate_delivery != DelegateDelivery::Started {
+                return;
+            }
+            state.records[index].delegate_delivery = DelegateDelivery::Accepted;
+            self.registry
+                .state_version
+                .send_modify(|version| *version += 1);
+        }
+    }
+    pub(crate) fn reopen_admission(&self) -> bool {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(&index) = state.index.get(&self.subagent_id)
+            && state.records[index].lifecycle == SubagentLifecycle::Stopping
+            && state.records[index].cancel_reason.is_none()
+        {
+            state.records[index].lifecycle = SubagentLifecycle::Running;
+            publish_snapshot(&mut state, &self.registry.state_version, index);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn begin_seal(&self) {
+        self.registry.begin_seal(&self.subagent_id);
+    }
+
     /// Applies one child-owned interaction request received over reliable
     /// control transport.
     pub(crate) fn apply_requested(&self, request: InteractionRequest) {
@@ -1310,6 +1608,7 @@ pub struct SubagentRegistryConfig {
 /// Cheaply cloneable: every clone shares the one registry state, the same
 /// contract as the background registry.
 pub struct SubagentRegistry {
+    recovery_reconciliation: tokio::sync::watch::Sender<bool>,
     config: SubagentRegistryConfig,
     identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
     state: Arc<Mutex<RegistryState>>,
@@ -1341,46 +1640,14 @@ impl Clone for SubagentRegistry {
 /// The **cancellation-safe owned ticket** of one admitted parent-authored
 /// steer (Issue #193).
 ///
-/// A steer runs in explicit phases against the registry mutex's total order:
-/// admission arms a ticket on the child record ([`SteerTicketPhase::
-/// AwaitingChildDecision`]), the caller advances it to
-/// [`SteerTicketPhase::ChildAcceptedPendingParentCommit`] once the child's
-/// durable `Accepted` answer reaches it ([`SubagentRegistry::
-/// record_child_decision`]), and commit consumes it. The ticket's ownership
-/// is what makes all of that safe when the steer's caller goes away: this
-/// guard is the *one owner* of the ticket's terminal disposition. It is
-/// created inside the same critical section that arms the ticket, lives for
-/// exactly as long as the steer future (or, at the Issue #204 boundary, the
-/// `execution(steer)` operation that composes the registry phases), and is
-/// dropped in exactly two situations:
+/// Message admission arms a ticket under the Agent owner mutex. The message
+/// future retains this guard while waiting for the child's durable answer.
+/// Dropping that future removes only its own ticket; it cannot withdraw an
+/// admitted message, cancel the activation, or erase durable acceptance.
 ///
-/// - the steer future completes — its commit has already removed the ticket
-///   under the registry mutex, so the drop is a no-op; or
-/// - the steer future is dropped before it commits (caller abandonment: an
-///   `execution(steer)` operation whose Issue #204 cancellation settlement
-///   classified the steer as unresolved — the child had not answered — and
-///   dropped the operation, or any teardown that drops the futures) — the
-///   guard's `Drop` removes exactly its own ticket under the registry
-///   mutex.
-///
-/// Cancellation and terminal authority stay authoritative in the registry:
-/// [`SubagentRegistry::cancel`] and
-/// [`SubagentRegistry::settle_from_driver`] clear every outstanding ticket
-/// under the same mutex, and a guard drop that races either simply finds
-/// its ticket already gone. The guard therefore holds no cancellation or
-/// lifecycle authority of its own, and it does not duplicate any authority:
-/// it can only *remove its own ticket*, never change a lifecycle, never
-/// synthesize a cancellation, and never answer for the child.
-///
-/// It holds only a clone of the registry's shared state `Arc` — never the
-/// driver command handle, the deadline task, the mailbox, or any other
-/// handle that could keep the child or its process alive — and `Drop` runs
-/// a short in-memory mutex section with no async work.
-///
-/// The guard is crate-visible only because the Issue #204 `execution(steer)`
-/// operation composes the registry's steering phases with the tool
-/// cancellation lifecycle and must hold the guard across its own await;
-/// the guard's fields stay private.
+/// Cancellation and terminal settlement may clear the same ticket under the
+/// owner mutex. A later guard drop then finds nothing to remove. The guard holds
+/// only shared registry state, never a process or workspace lifetime lease.
 pub(crate) struct GuidanceTicket {
     /// The registry state the ticket was armed in. Only the shared `Arc` is
     /// held, so the guard can never keep the child's driver task, process,
@@ -1390,6 +1657,7 @@ pub(crate) struct GuidanceTicket {
     subagent_id: SubagentId,
     /// The ticket's own transport correlation identity.
     guidance_id: u64,
+    write_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Drop for GuidanceTicket {
@@ -1420,11 +1688,14 @@ impl SubagentRegistry {
     pub fn new(config: SubagentRegistryConfig) -> Self {
         let max_active = config.max_active;
         Self {
+            recovery_reconciliation: tokio::sync::watch::Sender::new(true),
             config,
             identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             state: Arc::new(Mutex::new(RegistryState {
                 max_active,
+                goal_idle_committing: false,
                 capacity_waiters: BTreeMap::new(),
+                ownership_committing: BTreeMap::new(),
                 #[cfg(test)]
                 capacity_wait_entered: None,
                 #[cfg(test)]
@@ -1434,6 +1705,15 @@ impl SubagentRegistry {
                 next_ordinal: 1,
                 next_response_id: 1,
                 next_guidance_id: 1,
+                agents: BTreeMap::new(),
+                recovery_pending: std::collections::BTreeSet::new(),
+                recovery_unreserved: std::collections::BTreeMap::new(),
+                recovery_inflight: std::collections::BTreeSet::new(),
+                terminal_inflight: std::collections::BTreeSet::new(),
+                #[cfg(test)]
+                recovery_probe_hook: None,
+                #[cfg(test)]
+                recovery_proof_wait: std::collections::BTreeSet::new(),
                 records: Vec::new(),
                 index: HashMap::new(),
                 routed_interactions: HashMap::new(),
@@ -1460,6 +1740,20 @@ impl SubagentRegistry {
                 prepared_policies: Vec::new(),
                 #[cfg(test)]
                 allocation_test_hook: None,
+                #[cfg(test)]
+                allocation_failure: None,
+                #[cfg(test)]
+                allocation_attempts: 0,
+                #[cfg(test)]
+                resume_test_gates: None,
+                #[cfg(test)]
+                resume_owner_abort: None,
+                #[cfg(test)]
+                reserved_commit_hook: None,
+                #[cfg(test)]
+                resume_cleanup_hook: None,
+                #[cfg(test)]
+                authority_install_hook: None,
             })),
             state_version: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
@@ -1533,7 +1827,7 @@ impl SubagentRegistry {
             })
     }
 
-    /// Whether the registry owns no committed child record yet.
+    /// Whether the registry owns neither a child record nor its committing owner.
     ///
     /// A `ConversationRuntime` construction requires a pristine logical
     /// subagent plane: a registry with live children can never be silently
@@ -1541,7 +1835,7 @@ impl SubagentRegistry {
     #[must_use]
     pub(crate) fn is_pristine(&self) -> bool {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.records.is_empty()
+        state.records.is_empty() && state.ownership_committing.is_empty()
     }
 
     /// Reseeds the ordinal sequence from the durable authority during
@@ -1560,7 +1854,9 @@ impl SubagentRegistry {
         &self,
         recovered: &crate::runtime::recovery::RecoveredSubagentHandoff,
     ) {
-        let Ok(agent) = SubagentName::parse(&recovered.evidence.agent) else {
+        let Ok(mut record) =
+            SubagentRecord::recovered(self.config.agent_id.clone(), &recovered.evidence)
+        else {
             return;
         };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1589,44 +1885,10 @@ impl SubagentRegistry {
                     .to_owned()
             }
         });
-        let record = SubagentRecord {
-            subagent_id: recovered.evidence.subagent_id.clone(),
-            child_agent_id: recovered.evidence.child_agent_id.clone(),
-            child_conversation_id: recovered.evidence.child_conversation_id.clone(),
-            tool_call_id: recovered.evidence.tool_call_id.clone(),
-            agent,
-            // Restored from the durable ownership fact, never recomputed:
-            // the role definition and the resource generation are both
-            // mutable and may have changed since the commit.
-            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(
-                recovered.evidence.profile_digest.clone(),
-            ),
-            definition_digest: serde_json::from_value(serde_json::Value::String(
-                recovered.evidence.definition_digest.clone(),
-            ))
-            .expect("durable subagent digest is validated before recovery"),
-            terminal: SubagentTerminalMode::Normal,
-            workspace: recovered.evidence.workspace.clone(),
-            handoff: Some(recovered.handoff.clone()),
-            workspace_resource_state: SubagentWorkspaceResourceState::Retained,
-            workspace_disposal: None,
-            workspace_unresolved: None,
-            lifecycle,
-            cancel_reason: None,
-            steer_tickets: Vec::new(),
-            deadline_task: None,
-            control: None,
-            detail,
-            // A recovery-projected record has no live activity and no
-            // frozen launch profile in this process.
-            observation: SubagentObservation::default(),
-            profile: None,
-            terminal_workflow_value: None,
-            pending_terminal: None,
-            publication_abandoned: false,
-            notification: NotificationState::Delivered,
-            started_at: recovered.evidence.started_at,
-        };
+        record.lifecycle = lifecycle;
+        record.handoff = Some(recovered.handoff.clone());
+        record.workspace_resource_state = SubagentWorkspaceResourceState::Retained;
+        record.detail = detail;
         let index = state.records.len();
         state
             .index
@@ -1643,7 +1905,9 @@ impl SubagentRegistry {
         &self,
         recovered: &crate::runtime::recovery::RecoveredSubagentUnresolvedWorkspace,
     ) {
-        let Ok(agent) = SubagentName::parse(&recovered.evidence.agent) else {
+        let Ok(mut record) =
+            SubagentRecord::recovered(self.config.agent_id.clone(), &recovered.evidence)
+        else {
             return;
         };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1682,45 +1946,13 @@ impl SubagentRegistry {
                 )
             }
         });
-        let record = SubagentRecord {
-            subagent_id: recovered.evidence.subagent_id.clone(),
-            child_agent_id: recovered.evidence.child_agent_id.clone(),
-            child_conversation_id: recovered.evidence.child_conversation_id.clone(),
-            tool_call_id: recovered.evidence.tool_call_id.clone(),
-            agent,
-            // Restored from the durable ownership fact, never recomputed:
-            // the role definition and the resource generation are both
-            // mutable and may have changed since the commit.
-            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(
-                recovered.evidence.profile_digest.clone(),
-            ),
-            definition_digest: serde_json::from_value(serde_json::Value::String(
-                recovered.evidence.definition_digest.clone(),
-            ))
-            .expect("durable subagent digest is validated before recovery"),
-            terminal: SubagentTerminalMode::Normal,
-            workspace: recovered.evidence.workspace.clone(),
-            handoff: None,
-            workspace_resource_state: SubagentWorkspaceResourceState::PreservedUnresolved,
-            workspace_disposal: None,
-            workspace_unresolved: Some(WorkspaceUnresolvedRecord {
-                reason: recovered.reason,
-                detail: recovered.detail.clone(),
-            }),
-            lifecycle,
-            cancel_reason: None,
-            steer_tickets: Vec::new(),
-            deadline_task: None,
-            control: None,
-            detail,
-            observation: SubagentObservation::default(),
-            profile: None,
-            terminal_workflow_value: None,
-            pending_terminal: None,
-            publication_abandoned: false,
-            notification: NotificationState::Delivered,
-            started_at: recovered.evidence.started_at,
-        };
+        record.lifecycle = lifecycle;
+        record.workspace_resource_state = SubagentWorkspaceResourceState::PreservedUnresolved;
+        record.workspace_unresolved = Some(WorkspaceUnresolvedRecord {
+            reason: recovered.reason,
+            detail: recovered.detail.clone(),
+        });
+        record.detail = detail;
         let index = state.records.len();
         state
             .index
@@ -1736,7 +1968,9 @@ impl SubagentRegistry {
         &self,
         recovered: &crate::runtime::recovery::RecoveredSubagentDisposal,
     ) {
-        let Ok(agent) = SubagentName::parse(&recovered.evidence.agent) else {
+        let Ok(mut record) =
+            SubagentRecord::recovered(self.config.agent_id.clone(), &recovered.evidence)
+        else {
             return;
         };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1791,42 +2025,10 @@ impl SubagentRegistry {
                 (SubagentWorkspaceResourceState::Disposed, None)
             }
         };
-        let record = SubagentRecord {
-            subagent_id: recovered.evidence.subagent_id.clone(),
-            child_agent_id: recovered.evidence.child_agent_id.clone(),
-            child_conversation_id: recovered.evidence.child_conversation_id.clone(),
-            tool_call_id: recovered.evidence.tool_call_id.clone(),
-            agent,
-            // Restored from the durable ownership fact, never recomputed:
-            // the role definition and the resource generation are both
-            // mutable and may have changed since the commit.
-            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(
-                recovered.evidence.profile_digest.clone(),
-            ),
-            definition_digest: serde_json::from_value(serde_json::Value::String(
-                recovered.evidence.definition_digest.clone(),
-            ))
-            .expect("durable subagent digest is validated before recovery"),
-            terminal: SubagentTerminalMode::Normal,
-            workspace: recovered.evidence.workspace.clone(),
-            handoff: None,
-            workspace_resource_state,
-            workspace_disposal,
-            workspace_unresolved: None,
-            lifecycle,
-            cancel_reason: None,
-            steer_tickets: Vec::new(),
-            deadline_task: None,
-            control: None,
-            detail: Some(detail),
-            observation: SubagentObservation::default(),
-            profile: None,
-            terminal_workflow_value: None,
-            pending_terminal: None,
-            publication_abandoned: false,
-            notification: NotificationState::Delivered,
-            started_at: recovered.evidence.started_at,
-        };
+        record.lifecycle = lifecycle;
+        record.workspace_resource_state = workspace_resource_state;
+        record.workspace_disposal = workspace_disposal;
+        record.detail = Some(detail);
         let index = state.records.len();
         state
             .index
@@ -1834,21 +2036,32 @@ impl SubagentRegistry {
         state.records.push(record);
     }
 
-    /// Installs the observation seam and immediately emits the current
-    /// snapshot of every known record.
-    pub fn install_observer_and_snapshots(
+    /// Install the observer and capture durable Agent owners at one registry cut.
+    /// Finite activation allocation order never chooses a durable Agent's latest state.
+    pub(crate) fn install_observer_and_agent_snapshots(
         &self,
         observer: Arc<dyn SubagentObserver>,
-    ) -> Vec<SubagentSnapshot> {
+    ) -> Vec<(AgentSnapshot, SubagentSnapshot)> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let snapshots: Vec<SubagentSnapshot> =
-            state.records.iter().map(SubagentRecord::snapshot).collect();
-        for snapshot in &snapshots {
-            observer.on_snapshot(snapshot);
+        let snapshots: Vec<_> = state
+            .agents
+            .keys()
+            .filter_map(|id| {
+                let agent = Self::agent_snapshot_locked(&state, id)?;
+                let activation =
+                    state.records[*state.index.get(&agent.latest_activation)?].snapshot();
+                Some((agent, activation))
+            })
+            .collect();
+        for (agent, activation) in &snapshots {
+            observer.on_snapshot(Some(agent), activation);
         }
-        let interactions: Vec<RoutedInteraction> =
-            state.routed_interactions.values().cloned().collect();
-        for interaction in &interactions {
+        for record in &state.records {
+            if record.ownership == SubagentOwnershipKind::Workflow {
+                observer.on_snapshot(None, &record.snapshot());
+            }
+        }
+        for interaction in state.routed_interactions.values() {
             observer.on_interaction_pending(interaction);
         }
         state.observer = Some(observer);
@@ -1928,8 +2141,9 @@ impl SubagentRegistry {
 
     /// **Prepare.** Runs every fallible stage privately: input validation,
     /// identity allocation, process spawn, and the activation handshake.
-    /// Nothing is published, no capacity is consumed, and a failure leaves
-    /// no trace.
+    /// No semantic ownership is published and no capacity is committed.
+    /// Positive physical allocations retain their recovery evidence and consume
+    /// their identities even when preparation fails.
     ///
     /// `preparation_cancellation` is the invoking attempt's cancellation
     /// authority (Issue #145): it owns the *whole* pre-commit lifecycle,
@@ -1964,7 +2178,7 @@ impl SubagentRegistry {
         mut access: Option<WorkspaceAccess>,
     ) -> Result<PreparedSubagent, SubagentStartError> {
         let result = self
-            .prepare_inner(spec, preparation_cancellation, &mut access)
+            .prepare_inner(spec, preparation_cancellation, &mut access, None)
             .await;
         if let Some(access) = access {
             let _ = access.finish(false).await;
@@ -1978,16 +2192,17 @@ impl SubagentRegistry {
         spec: &SubagentStartSpec,
         preparation_cancellation: &CancellationSignal,
         access: &mut Option<WorkspaceAccess>,
+        resume: Option<&agents::ResumeIdentity>,
     ) -> Result<PreparedSubagent, SubagentStartError> {
         #[cfg(test)]
         self.state
             .lock()
             .unwrap()
             .prepared_policies
-            .push(spec.execution_policy);
+            .push(spec.authority.execution_policy);
         if let Some(access) = access.as_ref() {
-            let matches = matches!(&spec.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == access.node());
-            if !matches || spec.resolved.workspace_policy != access.policy() {
+            let matches = matches!(&spec.admission.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == access.node());
+            if !matches || spec.authority.resolved.workspace_policy != access.policy() {
                 return Err(SubagentStartError::Workspace {
                     detail: "candidate access does not match the frozen child/node authority"
                         .into(),
@@ -1997,11 +2212,11 @@ impl SubagentRegistry {
         if preparation_cancellation.is_cancelled() {
             return Err(SubagentStartError::Cancelled);
         }
-        let task_bytes = spec.task.len();
-        if spec.task.trim().is_empty() || task_bytes > MAX_TASK_BYTES {
+        let task_bytes = spec.admission.task.len();
+        if spec.admission.task.trim().is_empty() || task_bytes > MAX_TASK_BYTES {
             return Err(SubagentStartError::InvalidTask { bytes: task_bytes });
         }
-        if let Some(context) = &spec.context {
+        if let Some(context) = &spec.admission.context {
             let bytes = context.len();
             if bytes > MAX_CONTEXT_PACKAGE_BYTES {
                 return Err(SubagentStartError::ContextOversized { bytes });
@@ -2012,11 +2227,12 @@ impl SubagentRegistry {
         }
         // The redacted observation-plane profile derives from the frozen
         // model authority exactly once, at preparation time.
-        let profile = SubagentExecutionProfile::from_frozen(&spec.resolved.model);
+        let profile = SubagentExecutionProfile::from_frozen(&spec.authority.resolved.model);
         // Workspace acquisition and physical-root allocation are both staged
         // child ownership. A pre-commit crash can leave a durable store for
         // an identity that was never published; skip that identity rather
         // than ever allowing a new child to append to its history.
+        let mut agent_workspace = None;
         let mut identity_attempts = 0;
         let (subagent_id, child_conversation_id, child_agent_id, workspace_lease, runtime_root) = loop {
             if preparation_cancellation.is_cancelled() {
@@ -2028,43 +2244,168 @@ impl SubagentRegistry {
                 });
             }
             identity_attempts += 1;
-            let ordinal = {
+            let subagent_id = if let Some(resume) = resume {
+                resume.activation_id.clone()
+            } else {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 let ordinal = state.next_ordinal;
                 state.next_ordinal += 1;
-                ordinal
+                SubagentId::for_conversation(&self.config.conversation_id, ordinal)
             };
-            let subagent_id = SubagentId::for_conversation(&self.config.conversation_id, ordinal);
-            let child_conversation_id = ConversationId::from_uuid(self.identities.next_uuid())
-                .map_err(|detail| SubagentStartError::Spawn { detail })?;
-            if child_conversation_id == self.config.conversation_id
-                || self
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .records
-                    .iter()
-                    .any(|record| record.child_conversation_id == child_conversation_id)
+            let child_conversation_id = if let Some(resume) = resume {
+                resume.conversation_id.clone()
+            } else {
+                ConversationId::from_uuid(self.identities.next_uuid())
+                    .map_err(|detail| SubagentStartError::Spawn { detail })?
+            };
+            if resume.is_none()
+                && (child_conversation_id == self.config.conversation_id
+                    || self
+                        .state
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .records
+                        .iter()
+                        .any(|record| record.child_conversation_id == child_conversation_id))
             {
                 continue;
             }
-            let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
+            let child_agent_id = resume.map_or_else(
+                || AgentId::new(format!("agent-{subagent_id}")),
+                |resume| resume.agent_id.clone(),
+            );
+            #[cfg(test)]
+            let override_child = self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .staged_overrides
+                .pop_front();
+            #[cfg(test)]
+            let overridden = override_child.is_some();
+            #[cfg(not(test))]
+            let overridden = false;
+            #[cfg(test)]
+            let allocation_stage = self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .allocation_test_hook
+                .take()
+                .map(|hook| {
+                    hook.entered.send(()).unwrap();
+                    hook.stage
+                });
+            // Allocate recoverable authority before any workspace Git can start.
+            let (runtime_root, physical_owner) = if overridden {
+                (
+                    None,
+                    resume.and_then(|identity| identity.physical_owner.clone()),
+                )
+            } else {
+                #[cfg(test)]
+                let injected_failure = {
+                    let mut state = self.state.lock().unwrap();
+                    state.allocation_attempts += 1;
+                    state.allocation_failure.take()
+                };
+                let allocate = async {
+                    if resume.is_some() {
+                        self.config
+                            .spawn
+                            .allocate_activation_runtime_root(
+                                &child_conversation_id,
+                                preparation_cancellation,
+                            )
+                            .await
+                    } else {
+                        self.config
+                            .spawn
+                            .allocate_child_runtime_root(
+                                &child_conversation_id,
+                                preparation_cancellation,
+                            )
+                            .await
+                    }
+                };
+                #[cfg(test)]
+                let allocation = match injected_failure {
+                    Some(error) => {
+                        drop(allocate);
+                        Err(error)
+                    }
+                    None => allocate.await,
+                };
+                #[cfg(not(test))]
+                let allocation = allocate.await;
+                let mut runtime_root = match allocation {
+                    Ok(root) => root,
+                    Err(super::process::SpawnError::ConversationIdentityInUse { .. })
+                        if resume.is_none() && access.is_none() =>
+                    {
+                        continue;
+                    }
+                    Err(super::process::SpawnError::ConversationIdentityInUse { .. })
+                        if resume.is_some() =>
+                    {
+                        return Err(SubagentStartError::Spawn {
+                            detail:
+                                "reserved activation identity conflicts with existing allocation"
+                                    .into(),
+                        });
+                    }
+                    Err(error) => return Err(SubagentStartError::from(error)),
+                };
+                let physical_owner = if let Some(resume) = resume {
+                    resume
+                        .physical_owner
+                        .as_ref()
+                        .expect("Reserved physical authority")
+                        .clone()
+                } else {
+                    Arc::new(self.finish_physical_reservation(
+                        &child_conversation_id,
+                        &subagent_id,
+                        super::physical_recovery::ParentPhysicalLease::reserve(
+                            &self.config.spawn.product_root,
+                            &self.config.spawn.session_id,
+                            &child_conversation_id,
+                            &subagent_id,
+                        ),
+                    )?)
+                };
+                runtime_root.install_physical_owner(physical_owner.clone());
+                (Some(runtime_root), Some(physical_owner))
+            };
             // Workspace acquisition is staged child ownership. It happens
             // after resolution/freeze and before any child preparation, but
             // the lease is not durable until the commit below succeeds.
-            let workspace_lease = if let Some(access) = access.take() {
+            let workspace_lease = if let Some(resume) = resume {
+                let scope = resume.workspace.clone();
+                let access = resume
+                    .workspace_access
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()
+                    .expect("Reserved admission already owns verified workspace access");
+                agent_workspace = Some(scope);
+                WorkspaceUse::Agent(Box::new(access))
+            } else if let Some(access) = access.take() {
                 WorkspaceUse::from(access)
             } else {
-                WorkspaceUse::from(
-                    self.config
-                        .workspace
-                        .acquire(
-                            spec.resolved.workspace_policy,
-                            &subagent_id,
-                            preparation_cancellation,
-                        )
-                        .await
-                        .map_err(|error| match error {
+                let acquired = crate::runtime::workspace::with_physical_settlement_authority(
+                    physical_owner.clone(),
+                    self.config.workspace.acquire(
+                        spec.authority.resolved.workspace_policy,
+                        &subagent_id,
+                        preparation_cancellation,
+                    ),
+                )
+                .await;
+                match acquired {
+                    Ok(lease) => WorkspaceUse::from(lease),
+                    Err(error) => {
+                        let original = match error {
                             crate::runtime::workspace::WorkspaceAcquireError::Cancelled => {
                                 SubagentStartError::Cancelled
                             }
@@ -2082,91 +2423,73 @@ impl SubagentRegistry {
                             error => SubagentStartError::Workspace {
                                 detail: error.to_string(),
                             },
-                        })?,
-                )
+                        };
+                        if let Some(root) = runtime_root {
+                            root.discard_unstarted().map_err(|error| {
+                                SubagentStartError::Rollback {
+                                    detail: format!("{original}; {error}"),
+                                }
+                            })?;
+                        }
+                        return Err(original);
+                    }
+                }
+            };
+            let workspace_lease = match workspace_lease {
+                WorkspaceUse::Owned(lease)
+                    if matches!(spec.admission.terminal, SubagentTerminalMode::Normal) =>
+                {
+                    let scope = crate::runtime::workspace::AgentWorkspace::new(*lease);
+                    let access = scope
+                        .acquire(preparation_cancellation)
+                        .await
+                        .map_err(|detail| SubagentStartError::Workspace { detail })?;
+                    agent_workspace = Some(scope);
+                    WorkspaceUse::Agent(Box::new(access))
+                }
+                other => other,
             };
             #[cfg(test)]
             {
-                let override_child = self
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .staged_overrides
-                    .pop_front();
                 if let Some(staged) = override_child {
                     return Ok(PreparedSubagent {
+                        authority: spec.authority.clone(),
+                        agent_workspace,
+
                         subagent_id,
                         child_agent_id,
                         child_conversation_id,
-                        tool_call_id: spec.tool_call_id.clone(),
-                        agent: spec.resolved.agent.clone(),
-                        definition_digest: spec.resolved.definition_digest.clone(),
-                        profile_digest: spec.resolved.profile_digest(),
-                        terminal: spec.terminal.clone(),
-                        task: spec.task.clone(),
-                        context: spec.context.clone(),
-                        execution_deadline: spec.resolved.execution_deadline,
+                        origin: spec.admission.origin.clone(),
+                        agent: spec.authority.resolved.agent.clone(),
+                        definition_digest: spec.authority.resolved.definition_digest.clone(),
+                        profile_digest: spec.authority.resolved.profile_digest(),
+                        terminal: spec.admission.terminal.clone(),
+                        task: spec.admission.task.clone(),
+                        context: spec.admission.context.clone(),
+                        execution_deadline: spec.authority.resolved.execution_deadline,
                         profile,
                         staged: staged.with_workspace(workspace_lease),
                     });
                 }
             }
-            #[cfg(test)]
-            let allocation_stage = self
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .allocation_test_hook
-                .take()
-                .map(|hook| {
-                    hook.entered.send(()).unwrap();
-                    hook.stage
-                });
-            let runtime_root = match self
-                .config
-                .spawn
-                .allocate_child_runtime_root(&child_conversation_id, preparation_cancellation)
-                .await
-            {
-                Ok(runtime_root) => runtime_root,
-                Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
-                    let borrowed = matches!(workspace_lease, WorkspaceUse::Borrowed(_));
-                    if let Err(error) = workspace_lease.settle_staged().await {
-                        return Err(SubagentStartError::Rollback {
-                            detail: error.detail,
-                        });
-                    }
-                    if borrowed {
-                        return Err(SubagentStartError::Workspace {
-                            detail: "candidate child identity is already occupied".into(),
-                        });
-                    }
-                    continue;
-                }
-                Err(error) => {
-                    let start_error = match error {
-                        super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
-                        error => SubagentStartError::Spawn {
-                            detail: error.to_string(),
-                        },
-                    };
-                    return Err(settle_staged_workspace(workspace_lease, start_error).await);
-                }
-            };
+            let runtime_root = runtime_root.expect("production preparation allocated its root");
             #[cfg(test)]
             if let Some(stage) = allocation_stage {
                 return Ok(PreparedSubagent {
+                    authority: spec.authority.clone(),
+                    agent_workspace,
+
                     subagent_id,
                     child_agent_id,
                     child_conversation_id,
-                    tool_call_id: spec.tool_call_id.clone(),
-                    agent: spec.resolved.agent.clone(),
-                    definition_digest: spec.resolved.definition_digest.clone(),
-                    profile_digest: spec.resolved.profile_digest(),
-                    terminal: spec.terminal.clone(),
-                    task: spec.task.clone(),
-                    context: spec.context.clone(),
-                    execution_deadline: spec.resolved.execution_deadline,
+                    origin: spec.admission.origin.clone(),
+                    agent: spec.authority.resolved.agent.clone(),
+                    definition_digest: spec.authority.resolved.definition_digest.clone(),
+                    profile_digest: spec.authority.resolved.profile_digest(),
+                    terminal: spec.admission.terminal.clone(),
+                    task: spec.admission.task.clone(),
+                    context: spec.admission.context.clone(),
+                    execution_deadline: spec.authority.resolved.execution_deadline,
                     profile,
                     staged: stage(runtime_root, workspace_lease),
                 });
@@ -2184,12 +2507,12 @@ impl SubagentRegistry {
             &child_conversation_id,
             &child_agent_id,
             &self.config.agent_id,
-            &spec.resolved,
-            spec.approval_mode,
-            spec.execution_policy,
+            &spec.authority.resolved,
+            spec.authority.approval_mode,
+            spec.authority.execution_policy,
             &runtime_root,
             &workspace_lease,
-            &spec.terminal,
+            &spec.admission.terminal,
         );
         let staged = match super::process::spawn_staged(
             &self.config.spawn,
@@ -2202,27 +2525,25 @@ impl SubagentRegistry {
         {
             Ok(staged) => staged,
             Err(error) => {
-                let start_error = match error {
-                    super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
-                    error => SubagentStartError::Spawn {
-                        detail: error.to_string(),
-                    },
-                };
+                let start_error = SubagentStartError::from(error);
                 return Err(start_error);
             }
         };
+        crate::runtime::process_death::reach("after:subagent_staged");
         Ok(PreparedSubagent {
+            authority: spec.authority.clone(),
+            agent_workspace,
             subagent_id,
             child_agent_id,
             child_conversation_id,
-            tool_call_id: spec.tool_call_id.clone(),
-            agent: spec.resolved.agent.clone(),
-            definition_digest: spec.resolved.definition_digest.clone(),
-            profile_digest: spec.resolved.profile_digest(),
-            terminal: spec.terminal.clone(),
-            task: spec.task.clone(),
-            context: spec.context.clone(),
-            execution_deadline: spec.resolved.execution_deadline,
+            origin: spec.admission.origin.clone(),
+            agent: spec.authority.resolved.agent.clone(),
+            definition_digest: spec.authority.resolved.definition_digest.clone(),
+            profile_digest: spec.authority.resolved.profile_digest(),
+            terminal: spec.admission.terminal.clone(),
+            task: spec.admission.task.clone(),
+            context: spec.admission.context.clone(),
+            execution_deadline: spec.authority.resolved.execution_deadline,
             profile,
             staged,
         })
@@ -2388,10 +2709,12 @@ impl SubagentRegistry {
             };
         };
         let PreparedSubagent {
+            authority,
+            agent_workspace,
             subagent_id,
             child_agent_id,
             child_conversation_id,
-            tool_call_id,
+            origin,
             agent,
             definition_digest,
             profile_digest,
@@ -2431,155 +2754,166 @@ impl SubagentRegistry {
                     });
                 }
             };
-            let decision = {
+            let mailbox = self.config.mailbox.clone();
+            let config = &self.config;
+            let workspace = staged.workspace_snapshot().clone();
+            // Reserve capacity and the exact generation before releasing the
+            // linearization mutex. Controls can cancel this owner while SQLite
+            // is parked; another admission cannot steal its capacity.
+            let selection = {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                let mailbox = self.config.mailbox.clone();
-                let clock = self.config.clock.clone();
-                let monotonic_clock = self.config.monotonic_clock.clone();
-                let config = &self.config;
-                // The lease carried by the staged child is the sole workspace
-                // authority. The prepared wrapper does not keep a second mutable
-                // copy that could drift from the physical owner before commit.
-                let workspace = staged.workspace_snapshot().clone();
-                // Runtime durability frontier (Issue #60): a new
-                // conversation-owned durable ownership commit must linearize
-                // against the owning runtime's `DurabilityFailed` commit on one
-                // synchronization boundary. The permission guard is held across
-                // the durable ownership write and the record publication below,
-                // so a failure that wins the gate first rejects this start (and
-                // the staged child rolls back conclusively), and an ownership
-                // that wins first is already durably owned before the failure
-                // can be published. A standalone registry has no runtime gate
-                // and commits through the unbound-mailbox path. The gate handle
-                // is copied out of the registry state first: the guard borrows
-                // the gate, never the registry state, so the ownership commit
-                // below may still mutate the state while the guard is held.
-                let durability_gate = state.durability_gate.clone();
-                let ownership_permission = durability_gate
-                    .as_ref()
-                    .map(|gate| gate.enter_ownership_commit());
-                if let Some(Err(refused)) = &ownership_permission {
-                    Decision::Failed(SubagentStartError::DurabilityFailed {
-                        detail: refused.diagnostic.clone(),
-                    })
+                let active = state
+                    .records
+                    .iter()
+                    .filter(|record| record.lifecycle.is_active())
+                    .count()
+                    + state.ownership_committing.len();
+                if attempt_cancellation.is_cancelled() {
+                    Err(Decision::RolledBack)
+                } else if state.goal_idle_committing {
+                    Err(Decision::WaitingForGoalIdle)
                 } else {
-                    // `ownership_permission` stays alive to the end of this
-                    // block: the gate guard spans the whole ownership commit.
-                    let decision = match mailbox.with_running_commit(|| {
-                        if mailbox.is_bound_inactive() {
-                            return Decision::Failed(SubagentStartError::ConversationInactive);
-                        }
-                        #[cfg(test)]
-                        if let Some(hook) = &state.commit_hook {
-                            hook.wait();
-                        }
-                        let active = state
-                            .records
-                            .iter()
-                            // PublishingTerminal remains an owned, unresolved
-                            // settlement and therefore still consumes capacity. A
-                            // durability-failed runtime separately rejects new
-                            // mutations, but capacity must not silently reopen.
-                            .filter(|record| record.lifecycle.is_active())
-                            .count();
-                        if attempt_cancellation.is_cancelled() {
-                            return Decision::RolledBack;
-                        }
-                        // Registration frontier: insert once, under the same
-                        // mutex as eligibility and the existing ownership
-                        // commit. Relative order is native identity order,
-                        // never wake order. Ordinary commit cannot bypass an
-                        // existing waiter, but remains strictly non-waiting.
-                        if wait_for_capacity
-                            && state.max_active > 0
-                            && (active >= state.max_active || !state.capacity_waiters.is_empty())
-                        {
-                            state
-                                .capacity_waiters
-                                .entry(ordinal)
-                                .or_insert_with(|| attempt_cancellation.clone());
-                        }
-                        let eligible = state
+                    if wait_for_capacity
+                        && state.max_active > 0
+                        && (active >= state.max_active || !state.capacity_waiters.is_empty())
+                    {
+                        state
                             .capacity_waiters
-                            .first_key_value()
-                            .is_none_or(|(first, _)| wait_for_capacity && *first == ordinal);
-                        if active >= state.max_active || !eligible {
-                            return Decision::Failed(SubagentStartError::CapacityExceeded {
-                                max: state.max_active,
-                            });
-                        }
-                        if attempt_cancellation.is_cancelled() {
-                            return Decision::RolledBack;
-                        }
-                        let started_at = clock.now();
-                        let committed = match mailbox.commit_subagent_ownership(
-                            &ownership_admission,
-                            ownership_event(
-                                &config.conversation_id,
-                                &subagent_id,
-                                &child_agent_id,
-                                &child_conversation_id,
-                                &tool_call_id,
-                                &agent,
-                                &definition_digest,
-                                &profile_digest,
+                            .entry(ordinal)
+                            .or_insert_with(|| attempt_cancellation.clone());
+                    }
+                    let eligible = state
+                        .capacity_waiters
+                        .first_key_value()
+                        .is_none_or(|(first, _)| wait_for_capacity && *first == ordinal);
+                    if active >= state.max_active || !eligible {
+                        Err(Decision::Failed(SubagentStartError::CapacityExceeded {
+                            max: state.max_active,
+                        }))
+                    } else {
+                        let first = matches!(terminal, SubagentTerminalMode::Normal)
+                            && !state.agents.contains_key(&child_agent_id);
+                        assert!(
+                            state
+                                .ownership_committing
+                                .insert(subagent_id.clone(), (attempt_cancellation.clone(), None))
+                                .is_none()
+                        );
+                        Ok((first, state.durability_gate.clone()))
+                    }
+                }
+            };
+            let decision = match selection {
+                Err(decision) => decision,
+                Ok((first_admission, durability_gate)) => {
+                    let ownership_permission = durability_gate
+                        .as_ref()
+                        .map(|gate| gate.enter_ownership_commit());
+                    let decision = if let Some(Err(refused)) = &ownership_permission {
+                        Decision::Failed(SubagentStartError::DurabilityFailed {
+                            detail: refused.diagnostic.clone(),
+                        })
+                    } else {
+                        mailbox.with_running_commit(|| {
+                            if mailbox.is_bound_inactive() {
+                                return Decision::Failed(SubagentStartError::ConversationInactive);
+                            }
+                            #[cfg(test)]
+                            let hook = self.state.lock().unwrap_or_else(PoisonError::into_inner).commit_hook.clone();
+                            #[cfg(test)]
+                            if let Some(hook) = hook { hook.wait(); }
+                            if attempt_cancellation.is_cancelled() {
+                                return Decision::RolledBack;
+                            }
+                            let started_at = config.clock.now();
+                            let mut ownership = ownership_event(
+                                &config.agent_id, &config.conversation_id, &subagent_id,
+                                &child_agent_id, &child_conversation_id, &origin, &agent,
+                                &definition_digest, &profile_digest,
                                 match &terminal {
                                     SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
-                                    SubagentTerminalMode::WorkflowOutput { .. } => {
-                                        SubagentOwnershipKind::Workflow
-                                    }
+                                    SubagentTerminalMode::WorkflowOutput { .. } => SubagentOwnershipKind::Workflow,
+                                }, &workspace, started_at,
+                            );
+                            if first_admission
+                                && let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { admitted_authority, .. } = &mut ownership.event
+                            { *admitted_authority = Some(child_agent_id.clone()); }
+                            match mailbox.commit_subagent_ownership(&ownership_admission, ownership, first_admission.then_some(&authority)) {
+                                Ok(committed) => Decision::Accepted {
+                                    started_at,
+                                    deadline_at_millis: execution_deadline.map(|deadline| config.monotonic_clock.now_millis().saturating_add(deadline.as_millis())),
+                                    journal_sequence: committed.sequence,
                                 },
-                                &workspace,
-                                started_at,
-                            ),
-                        ) {
-                            Ok(committed) => committed,
-                            Err(error) => {
-                                return Decision::Failed(SubagentStartError::Durability {
-                                    detail: error.to_string(),
-                                });
+                                Err(error) => Decision::Failed(SubagentStartError::Durability { detail: error.to_string() }),
                             }
-                        };
-                        // The deadline starts only after the durable ownership
-                        // event succeeds. Sampling the monotonic clock here
-                        // keeps the whole owned lifecycle covered without
-                        // allowing an uncommitted staged child to be cancelled.
-                        let deadline_at_millis = execution_deadline.map(|deadline| {
-                            monotonic_clock
-                                .now_millis()
-                                .saturating_add(deadline.as_millis())
-                        });
-                        Decision::Accepted {
-                            started_at,
-                            deadline_at_millis,
-                            journal_sequence: committed.sequence,
-                        }
-                    }) {
-                        Ok(decision) => decision,
-                        Err(_) => Decision::Failed(SubagentStartError::ConversationInactive),
+                        }).unwrap_or(Decision::Failed(SubagentStartError::ConversationInactive))
                     };
+                    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                    let (_, committed_cancellation) = state
+                        .ownership_committing
+                        .remove(&subagent_id)
+                        .expect("exact ownership committer retains its capacity reservation");
                     if let Decision::Accepted {
                         started_at,
                         journal_sequence,
                         ..
                     } = &decision
                     {
+                        if matches!(terminal, SubagentTerminalMode::Normal) {
+                            let agent_workspace = agent_workspace
+                                .as_ref()
+                                .expect("native Agent owns workspace");
+                            agent_workspace.commit();
+                            state
+                                .agents
+                                .entry(child_agent_id.clone())
+                                .and_modify(|agent| {
+                                    agent.latest_activation = subagent_id.clone();
+                                    agent.finish_resume(&subagent_id);
+                                })
+                                .or_insert_with(|| agents::AgentRecord {
+                                    created_sequence: *journal_sequence,
+                                    authority: authority.clone(),
+                                    workspace: agent_workspace.clone(),
+                                    conversation_id: child_conversation_id.clone(),
+                                    latest_activation: subagent_id.clone(),
+                                    resuming: None,
+                                });
+                        }
+                        let cancelled = committed_cancellation.or_else(|| {
+                            attempt_cancellation
+                                .is_cancelled()
+                                .then_some(CancellationReason::ParentCancelled)
+                        });
                         let record = SubagentRecord {
+                            physical_settlement_proven: false,
+                            delegate_delivery: DelegateDelivery::NotSent,
+                            parent_agent_id: config.agent_id.clone(),
                             subagent_id: subagent_id.clone(),
                             child_agent_id: child_agent_id.clone(),
                             child_conversation_id: child_conversation_id.clone(),
-                            tool_call_id: tool_call_id.clone(),
+                            origin: origin.clone(),
                             agent: agent.clone(),
                             definition_digest: definition_digest.clone(),
                             profile_digest: profile_digest.clone(),
-                            terminal: terminal.clone(),
+                            ownership: match terminal {
+                                SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
+                                SubagentTerminalMode::WorkflowOutput { .. } => {
+                                    SubagentOwnershipKind::Workflow
+                                }
+                            },
+                            terminal: Some(terminal.clone()),
                             workspace: workspace.clone(),
                             handoff: None,
                             workspace_resource_state: SubagentWorkspaceResourceState::None,
                             workspace_disposal: None,
                             workspace_unresolved: None,
-                            lifecycle: SubagentLifecycle::Running,
-                            cancel_reason: None,
+                            lifecycle: if cancelled.is_some() {
+                                SubagentLifecycle::Cancelling
+                            } else {
+                                SubagentLifecycle::Starting
+                            },
+                            cancel_reason: cancelled,
                             steer_tickets: Vec::new(),
                             deadline_task: None,
                             control: None,
@@ -2602,24 +2936,26 @@ impl SubagentRegistry {
                             *journal_sequence,
                         );
                     }
+                    self.state_version.send_modify(|version| *version += 1);
                     decision
                 }
             };
-            // The durable event and Running record are now one published fact.
+            // The durable event and Starting record are now one published fact.
             // Never retain this guard during capacity waits, rollback or driver
             // handoff. Archive may capture before or after this whole transition.
             drop(ownership_admission);
-            if wait_for_capacity
-                && self
-                    .state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .max_active
-                    > 0
-                && matches!(
-                    decision,
-                    Decision::Failed(SubagentStartError::CapacityExceeded { .. })
-                )
+            if matches!(decision, Decision::WaitingForGoalIdle)
+                || (wait_for_capacity
+                    && self
+                        .state
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .max_active
+                        > 0
+                    && matches!(
+                        decision,
+                        Decision::Failed(SubagentStartError::CapacityExceeded { .. })
+                    ))
             {
                 #[cfg(test)]
                 {
@@ -2650,6 +2986,9 @@ impl SubagentRegistry {
         // Removal notifies the successor even if no child is active.
         drop(ticket);
         match decision {
+            Decision::WaitingForGoalIdle => {
+                unreachable!("the idle claim is awaited before an ownership decision")
+            }
             Decision::RolledBack => match staged.rollback().await {
                 Ok(()) => Ok(SubagentStartOutcome::RolledBack),
                 Err(error) => Err(SubagentStartError::Rollback {
@@ -2693,7 +3032,7 @@ impl SubagentRegistry {
                 );
                 let (commands, start_gate, task) = driver.split();
                 // The task is created only after the durable ownership event
-                // and Running record exist. It calls the same synchronous
+                // and Starting record exist. It calls the same synchronous
                 // registry cancellation authority as an explicit cancel;
                 // it never creates a terminal result or sends a driver
                 // command directly.
@@ -2724,7 +3063,7 @@ impl SubagentRegistry {
                     })
                 });
                 // This hook is outside the registry lock and after the
-                // durable ownership fact, the Running record, and the
+                // durable ownership fact, the Starting record, and the
                 // driver task all exist. It pauses before the gate-release
                 // critical section, so a concurrent cancellation commits
                 // while the command handle is still None — the
@@ -2769,6 +3108,9 @@ impl SubagentRegistry {
                         .expect("accepted ownership has a registry record");
                     let record = &mut state.records[index];
                     record.control = Some(commands);
+                    if matches!(record.lifecycle, SubagentLifecycle::Starting) {
+                        record.lifecycle = SubagentLifecycle::Running;
+                    }
                     record.deadline_task = deadline_task;
                     // Test-only: the exact remaining edge — the command
                     // handle is installed but the start gate is not yet
@@ -2797,6 +3139,7 @@ impl SubagentRegistry {
                     // synchronous under the same mutex acquisition, so
                     // start-vs-cancel has exactly one arbitration boundary.
                     let _ = start_gate.send(cancel_before_start);
+                    publish_snapshot(&mut state, &self.state_version, index);
                     deadline_task_to_abort
                 };
                 abort_deadline_task(deadline_task_to_abort);
@@ -2823,6 +3166,7 @@ impl SubagentRegistry {
 
     fn clone_for_task(&self) -> Self {
         Self {
+            recovery_reconciliation: self.recovery_reconciliation.clone(),
             config: self.config.clone(),
             identities: Arc::clone(&self.identities),
             state: Arc::clone(&self.state),
@@ -3028,7 +3372,6 @@ impl SubagentRegistry {
                     result,
                 },
             ))
-            .await
             .is_err()
         {
             return Err(RoutedInteractionError::NotPending {
@@ -3082,7 +3425,7 @@ impl SubagentRegistry {
         if record.lifecycle != SubagentLifecycle::Succeeded {
             return None;
         }
-        if !matches!(&record.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == instance)
+        if !matches!(&record.terminal, Some(SubagentTerminalMode::WorkflowOutput { node_id, .. }) if node_id.as_ref() == instance)
         {
             return None;
         }
@@ -3151,17 +3494,71 @@ impl SubagentRegistry {
             .collect()
     }
 
-    /// A Goal cannot pass an already-owned child at its durable frontier.
-    /// The caller holds the background lock first; this nests only lifecycle/store.
+    /// In-memory ownership read for residency. Physical reconciliation belongs
+    /// outside the caller's coordinator lock, never inside this predicate.
+    pub(crate) fn owns_idle_work(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .owns_idle_work()
+    }
+
+    /// An exact idle claim excludes new ownership/resume admission while the
+    /// Goal's durable frontier commits. Reads and controls retain mutex access;
+    /// no filesystem or durable append runs inside the registry critical section.
     pub(crate) fn with_goal_idle<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.records.iter().any(|record| {
-            record.lifecycle.is_active()
-                || matches!(record.lifecycle, SubagentLifecycle::PublishingTerminal)
-        }) {
-            return None;
+        self.reconcile_recovered_settlements();
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if state.owns_idle_work() {
+                return None;
+            }
+            // Linearization: a new owner must observe this claim and wait;
+            // any previously selected owner made the idle check fail above.
+            state.goal_idle_committing = true;
         }
+        let _claim = GoalIdleClaim(self);
         Some(operation())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fresh_with_mailbox_for_test(&self, mailbox: ConversationInboundMailbox) -> Self {
+        let mut config = self.config.clone();
+        config.mailbox = mailbox;
+        Self::new(config)
+    }
+
+    /// Exact generations with unresolved physical ownership after terminal,
+    /// failed staging or recovery (including allocations before Reserved).
+    /// Draining reports these instead of retrying a finished driver.
+    pub(crate) fn unproven_settlements(&self) -> Vec<SubagentId> {
+        self.reconcile_recovered_settlements();
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut targets: Vec<_> = state
+            .records
+            .iter()
+            .filter(|record| {
+                (record.lifecycle.is_terminal() || record.publication_abandoned)
+                    && !record.physical_settlement_proven
+            })
+            .map(|record| record.subagent_id.clone())
+            .chain(state.agents.values().filter_map(|agent| {
+                agent
+                    .resuming
+                    .as_ref()
+                    .filter(|reservation| {
+                        matches!(
+                            *reservation.completion.borrow(),
+                            agents::AdmissionSettlement::Failed,
+                        )
+                    })
+                    .map(|reservation| reservation.activation_id.clone())
+            }))
+            .chain(state.recovery_pending.iter().cloned())
+            .collect();
+        targets.sort();
+        targets.dedup();
+        targets
     }
 
     /// The subagents whose terminal publication was abandoned.
@@ -3232,28 +3629,23 @@ impl SubagentRegistry {
             } else {
                 None
             };
-            if matches!(record.lifecycle, SubagentLifecycle::Running) {
+            if matches!(
+                record.lifecycle,
+                SubagentLifecycle::Starting
+                    | SubagentLifecycle::Running
+                    | SubagentLifecycle::Stopping
+            ) {
                 // This mutex transition is the cancellation linearization
                 // point. The first source to change Running to Cancelling
                 // owns the reason; later sources can only observe it.
                 record.lifecycle = SubagentLifecycle::Cancelling;
                 record.cancel_reason = Some(reason);
-                // The same instant is the steer invalidation commit (Issue
-                // #193). Every steer ticket admitted but not yet committed
-                // is cleared here, under this mutex, in **either** phase
-                // ([`SteerTicketPhase::AwaitingChildDecision`] and
-                // [`SteerTicketPhase::ChildAcceptedPendingParentCommit`]),
-                // so no such steer can ever be reported accepted afterwards
-                // — whatever the child does with the envelope already on the
-                // wire, and even if the child's `Accepted` answer had
-                // already reached the registry but the parent acknowledgement
-                // commit was still owed. Cancellation is absorbing and
-                // outranks steering by construction rather than by transport
-                // ordering: the committed reason below is what the later
-                // steer commit observes and refuses on.
+                // Close local guidance tracking at the same cancellation cut.
+                // Clearing a ticket cannot erase canonical child acceptance or
+                // turn an unacknowledged write into proven non-delivery.
                 record.steer_tickets.clear();
                 if let Some(control) = &record.control {
-                    let _ = control.try_send(super::process::DriverCommand::Cancel { reason });
+                    let _ = control.send(super::process::DriverCommand::Cancel { reason });
                 }
                 publish_snapshot(&mut state, &self.state_version, index);
             }
@@ -3263,184 +3655,20 @@ impl SubagentRegistry {
         Some(snapshot)
     }
 
-    /// **In-flight steering.** Routes one parent-authored guidance message
-    /// into the already-running child's own semantic conversation (Issue
-    /// #193).
-    ///
-    /// A steer is *additional parent-authored semantic conversation input to
-    /// an already-running child*. It does not change the child's identity,
-    /// authority, process incarnation, lifecycle, or terminal model: no
-    /// subagent is resolved again, no definition/model/tool/skill/
-    /// instruction/workspace authority is re-derived or overridden, no
-    /// second child, process, conversation, registry record, result channel,
-    /// or terminal lifecycle is created, and the driver task remains a pure
-    /// transport for the envelope.
-    ///
-    /// # One arbitration authority: the steer ticket
-    ///
-    /// Steering and cancellation are arbitrated by **this mutex alone**. It
-    /// is the same critical section that commits `Running -> Cancelling`
-    /// ([`SubagentRegistry::cancel`]) and `... -> PublishingTerminal`
-    /// (`SubagentRegistry::settle_from_driver`), so all four events —
-    /// steer admission, cancellation-intent commit, steer commit, and
-    /// terminal-authority commit — have one total order.
-    ///
-    /// A steer runs in explicit phases against that order:
-    ///
-    /// 1. **Admission** ([`Self::admit_guidance`]) arms a *ticket* on the
-    ///    record and hands the envelope to the driver, inside one critical
-    ///    section. Admission mutates no lifecycle state, so it can never
-    ///    resurrect anything, and it is not yet an acceptance. This is the
-    ///    steer **effect frontier**: before it no envelope exists anywhere;
-    ///    after it the child conversation may durably accept the envelope at
-    ///    any time.
-    /// 2. **Child decision.** The driver resolves the caller with the child
-    ///    conversation's durable answer. When the answer is `Accepted`, the
-    ///    caller advances its ticket to
-    ///    [`SteerTicketPhase::ChildAcceptedPendingParentCommit`] under this
-    ///    same mutex ([`Self::record_child_decision`]) — the registry now
-    ///    knows the steer's semantic effect is committed even though the
-    ///    parent acknowledgement commit is still owed. A scheduling delay
-    ///    of the parent steer future after this point cannot un-commit the
-    ///    child's acceptance.
-    /// 3. **Commit** ([`Self::commit_guidance`]) consumes the ticket and
-    ///    decides the winner under the arbitration mutex, from the
-    ///    caller-held child outcome and the record's committed cancellation
-    ///    fact.
-    ///
-    /// # Ticket ownership: no abandoned caller leaves state behind
-    ///
-    /// Every admitted ticket is owned by a `GuidanceTicket` guard that
-    /// lives exactly as long as this steer future (or, at the Issue #204
-    /// boundary, exactly as long as the `execution(steer)` operation that
-    /// composes these phases), so the ticket always has exactly one owner
-    /// and exactly one terminal disposition:
-    ///
-    /// - the steer's own commit removes it;
-    /// - dropping the future before it commits (caller abandonment — at the
-    ///   Issue #204 boundary, an `execution(steer)` operation whose
-    ///   cancellation settlement classified the steer as unresolved and
-    ///   dropped it) runs the guard's `Drop`, which removes exactly this
-    ///   ticket;
-    /// - [`SubagentRegistry::cancel`] clears every outstanding ticket at its
-    ///   cancellation linearization point, whichever phase it is in:
-    ///   cancellation is absorbing and supersedes even an already-accepted,
-    ///   not-yet-acknowledged steer;
-    /// - the terminal-authority commit in
-    ///   `SubagentRegistry::settle_from_driver` clears every remaining
-    ///   ticket, whichever phase it is in, so no terminal record ever
-    ///   retains live steering state. Clearing a ticket is registry
-    ///   lifecycle cleanup; it cannot erase an acceptance the registry has
-    ///   already learned, and it cannot erase one it has not yet learned
-    ///   either — the accepted classification is carried into the commit by
-    ///   the caller-held child outcome, which cleanup never touches.
-    ///
-    /// The guard's `Drop` is a short in-memory mutex section with no async
-    /// work, and it removes only its own ticket — it never changes a
-    /// lifecycle, never synthesizes a cancellation, and holds no handle that
-    /// could keep the child or its process alive.
-    ///
-    /// # Durable acceptance vs. parent acknowledgement scheduling
-    ///
-    /// The child's durable acceptance and the parent-side acknowledgement
-    /// delivery are **different linearization points**. The child commits
-    /// acceptance into its own conversation under its own coordinator lock,
-    /// ahead of its terminal seal, and answers `Accepted` over the control
-    /// lane; the parent driver resolves the steer waiter with that answer.
-    /// From that instant the accepted fact is committed in the child and
-    /// observable by this caller, and a later **natural** terminal commit
-    /// — which can only settle the child *after* the driver already read
-    /// that answer (the frames share one FIFO lane and the terminal
-    /// publication is downstream of the child's seal) — must not transform
-    /// the acceptance into a refusal merely because this future was not yet
-    /// scheduled to publish its acknowledgement. Natural terminal cleanup
-    /// may remove the ticket; it does not remove the acceptance.
-    ///
-    /// Cancellation remains different and stays authoritative: a committed
-    /// cancellation intent that wins before this steer's commit — whether
-    /// before or after the child's acceptance — refuses the steer as
-    /// [`SubagentSteerError::CancellationCommitted`], whatever the child
-    /// answered.
-    ///
-    /// A child that never answered `Accepted` before terminal settlement is
-    /// never optimistically treated as accepted: its caller observes a
-    /// refusal or the dropped driver waiter, and the commit reports the
-    /// child-side refusal.
-    ///
-    /// # What `Ok` means
-    ///
-    /// Exactly: *the guidance was durably committed into this child's own
-    /// conversation inbound inbox, and no cancellation intent had committed
-    /// for this child at any point up to that commit.* It follows that a
-    /// **naturally completing** child cannot publish a terminal that
-    /// predates the guidance — the child's terminal seal enforces that. It
-    /// does **not** promise observation in the face of a *later*
-    /// cancellation or physical child loss: cancellation stays authoritative
-    /// and may terminate the child with the guidance unobserved.
-    ///
-    /// Multiple accepted steers preserve their acceptance order through the
-    /// child's durable `InboundSequence` domain, never through scheduling.
-    ///
-    /// # Errors
-    ///
-    /// Returns the deterministic [`SubagentSteerError`] of the refusing
-    /// authority. Nothing is ever silently dropped, and `Ok` is returned
-    /// only after both authorities agreed.
-    pub async fn steer(
-        &self,
-        subagent_id: &SubagentId,
-        message: &str,
-    ) -> Result<SubagentSteerAccepted, SubagentSteerError> {
-        Self::validate_guidance_message(message)?;
-        let (guidance_id, receiver, _ticket) = self.admit_guidance(subagent_id, message)?;
-        // The envelope is on the reliable control lane; the child's answer is
-        // authoritative for durability. A dropped sender means the driver
-        // settled without an answer, which is a refusal — never an
-        // optimistic acceptance.
-        let child_outcome = receiver.await;
-        // The child's durable decision has now crossed into this caller.
-        // Record it against the ticket under the arbitration mutex before
-        // the acknowledgement commit, so the registry's ticket state says
-        // explicitly that an accepted-but-unacknowledged steer is different
-        // from an unresolved one.
-        self.record_child_decision(subagent_id, guidance_id, &child_outcome);
-        // Test-only: park the parent acknowledgement immediately before its
-        // registry commit, after the child's decision has been recorded.
-        // The park is an ordinary async wait (it holds no registry lock and
-        // blocks no executor worker), so the natural terminal authority —
-        // or a cancellation — can still acquire the same mutex and settle
-        // the child while the acknowledgement is parked. Production has no
-        // pause and no equivalent semantic state; the hook exists only to
-        // force the deterministic natural-terminal-after-acceptance
-        // interleaving in the regression.
-        #[cfg(test)]
-        let steer_ack_hook = {
-            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            state.steer_acknowledgement_hook.clone()
+    /// Close message admission under the same mutex as `admit_guidance_locked`.
+    /// The driver drains admitted FIFO messages before granting the child seal.
+    fn begin_seal(&self, subagent_id: &SubagentId) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return;
         };
-        #[cfg(test)]
-        if let Some(hook) = steer_ack_hook {
-            hook.park().await;
+        if matches!(state.records[index].lifecycle, SubagentLifecycle::Running) {
+            state.records[index].lifecycle = SubagentLifecycle::Stopping;
+            publish_snapshot(&mut state, &self.state_version, index);
         }
-        // The commit consumes the ticket under the arbitration mutex and
-        // classifies from the caller-held child outcome and the record's
-        // committed cancellation fact — never from whether the terminal
-        // authority happened to clean the ticket first (natural terminal
-        // cleanup cannot erase an acceptance). The `_ticket` guard stays
-        // bound across the await and until this future ends: if this future
-        // is dropped *here* instead — caller abandonment before the commit
-        // — the guard's `Drop` removes exactly its own ticket, so no
-        // abandoned caller leaves arbitration state behind (see the
-        // ownership section above). After a normal commit the guard's later
-        // drop is a no-op: the ticket is already gone.
-        self.commit_guidance(subagent_id, guidance_id, child_outcome)
     }
 
-    /// Validates one parent-authored steer message before any ownership or
-    /// lifecycle authority is consulted. Shared by every steer entry point
-    /// (the composed [`Self::steer`] and the Issue #204 `execution(steer)`
-    /// operation that composes the phases directly), so the bounded
-    /// message contract is one rule, not one copy per caller.
+    /// Validate a bounded parent-authored message before lifecycle arbitration.
     ///
     /// # Errors
     ///
@@ -3510,11 +3738,10 @@ impl SubagentRegistry {
     /// dropping it removes exactly its own ticket under this same mutex.
     ///
     /// The message must already be validated by
-    /// [`Self::validate_guidance_message`]; the caller (the composed
-    /// [`Self::steer`] or the Issue #204 `execution(steer)` operation)
-    /// decides where that static validation runs relative to its own
-    /// cancellation observation.
-    pub(crate) fn admit_guidance(
+    /// [`Self::validate_guidance_message`]. Production admission is composed
+    /// inside `send_message` under the same Agent owner mutex.
+    #[cfg(test)]
+    fn admit_guidance(
         &self,
         subagent_id: &SubagentId,
         message: &str,
@@ -3527,6 +3754,22 @@ impl SubagentRegistry {
         SubagentSteerError,
     > {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.admit_guidance_locked(&mut state, subagent_id, message)
+    }
+
+    fn admit_guidance_locked(
+        &self,
+        state: &mut RegistryState,
+        subagent_id: &SubagentId,
+        message: &str,
+    ) -> Result<
+        (
+            u64,
+            tokio::sync::oneshot::Receiver<super::ipc::ChildGuidanceOutcome>,
+            GuidanceTicket,
+        ),
+        SubagentSteerError,
+    > {
         {
             let Some(&index) = state.index.get(subagent_id) else {
                 return Err(SubagentSteerError::Unknown {
@@ -3541,11 +3784,11 @@ impl SubagentRegistry {
             // at all. The refusal is structural and therefore checked before
             // anything else about this child's state, and provably before
             // any Guidance frame exists.
-            if let SubagentTerminalMode::WorkflowOutput {
+            if let Some(SubagentTerminalMode::WorkflowOutput {
                 workflow_id,
                 node_id,
                 ..
-            } = &record.terminal
+            }) = &record.terminal
             {
                 return Err(SubagentSteerError::WorkflowOwned {
                     workflow_id: workflow_id.clone(),
@@ -3564,7 +3807,9 @@ impl SubagentRegistry {
                             .unwrap_or(CancellationReason::UserRequested),
                     });
                 }
-                SubagentLifecycle::PublishingTerminal
+                SubagentLifecycle::Starting
+                | SubagentLifecycle::Stopping
+                | SubagentLifecycle::PublishingTerminal
                 | SubagentLifecycle::Succeeded
                 | SubagentLifecycle::Failed
                 | SubagentLifecycle::Cancelled
@@ -3580,11 +3825,13 @@ impl SubagentRegistry {
             let guidance_id = state.next_guidance_id;
             state.next_guidance_id = guidance_id.saturating_add(1);
             let (outcome, receiver) = tokio::sync::oneshot::channel();
+            let write_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
             if control
-                .try_send(super::process::DriverCommand::Route(
+                .send(super::process::DriverCommand::Route(
                     super::process::ChildBoundRoute::Guidance {
                         guidance_id,
                         message: message.to_owned(),
+                        write_started: Arc::clone(&write_started),
                         outcome,
                     },
                 ))
@@ -3609,141 +3856,27 @@ impl SubagentRegistry {
                     state: Arc::clone(&self.state),
                     subagent_id: subagent_id.clone(),
                     guidance_id,
+                    write_started,
                 },
             ))
-        }
-    }
-
-    /// Phase three of [`SubagentRegistry::steer`]: the acknowledgement
-    /// commit. The same arbitration mutex consumes the ticket and classifies
-    /// the steer from two authoritative facts — the caller-held child
-    /// outcome and the record's committed cancellation cause — so the
-    /// commit linearizes against admission, cancellation, and terminal
-    /// authority.
-    ///
-    /// # The classification rule
-    ///
-    /// 1. **A committed cancellation intent wins, whatever the child
-    ///    answered.** The record's committed cause is present exactly when
-    ///    the cancellation linearization point ([`SubagentRegistry::cancel`])
-    ///    committed before this commit — the only authority that both
-    ///    clears every ticket and records the reason. The steer is refused
-    ///    as [`SubagentSteerError::CancellationCommitted`] even when the
-    ///    child side answered `Accepted` (which always strictly precedes
-    ///    this commit): a cancelled child is never reported steered, and
-    ///    cancellation absorbs an already-accepted but not-yet-
-    ///    acknowledged steer exactly as it absorbs an unresolved one.
-    /// 2. **Otherwise the child's own durable answer is the child-side
-    ///    authority.** `Accepted` reports acceptance
-    ///    ([`SubagentSteerAccepted`]); `Refused`, and a dropped driver
-    ///    waiter (the child settled without ever answering), are child-side
-    ///    refusals ([`SubagentSteerError::ChildRefused`]).
-    ///
-    /// # Why ticket survival is not the acceptance test
-    ///
-    /// A commit that observes `Ok(Accepted)` holds a fact that no registry
-    /// cleanup can have erased: the driver resolves the steer waiter with
-    /// `Accepted` only when the child's durable acceptance frame arrived on
-    /// the shared FIFO control lane, which is strictly before the driver can
-    /// return its physical settlement — and the natural terminal commit is
-    /// downstream of that settlement. So whenever this commit holds
-    /// `Ok(Accepted)`, the child durably accepted ahead of any natural
-    /// terminal, and the natural terminal's removal of this steer's ticket
-    /// (in `AwaitingChildDecision` if the caller had not yet been
-    /// scheduled, or in `ChildAcceptedPendingParentCommit` if it had) is
-    /// lifecycle cleanup, never a denial of the acceptance. A scheduling
-    /// delay of this steer future between the child's answer and this
-    /// commit therefore cannot turn an accepted steer into a refusal
-    /// (Issue #193 architecture review blocker 1).
-    ///
-    /// Terminal-before-answer is still refused, and never optimistically
-    /// accepted: a child that settled before answering yields a dropped
-    /// waiter (`Err`) or its own refusal, both child-side refusals below,
-    /// and a child that never answered at all cannot produce
-    /// `Ok(Accepted)` here.
-    ///
-    /// The commit always consumes its own ticket under the mutex, so no
-    /// committed steer leaves its ticket behind; the caller's
-    /// [`GuidanceTicket`] guard drop afterwards is then a no-op.
-    pub(crate) fn commit_guidance(
-        &self,
-        subagent_id: &SubagentId,
-        guidance_id: u64,
-        child_outcome: Result<
-            super::ipc::ChildGuidanceOutcome,
-            tokio::sync::oneshot::error::RecvError,
-        >,
-    ) -> Result<SubagentSteerAccepted, SubagentSteerError> {
-        let (cancelled, cancel_reason, state) = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let Some(&index) = state.index.get(subagent_id) else {
-                return Err(SubagentSteerError::Unknown {
-                    subagent_id: subagent_id.clone(),
-                });
-            };
-            let record = &mut state.records[index];
-            // The commit always consumes its own ticket under the mutex, so
-            // no committed steer leaves its ticket behind; the
-            // classification below is read from the same critical section.
-            if let Some(position) = record
-                .steer_tickets
-                .iter()
-                .position(|ticket| ticket.guidance_id == guidance_id)
-            {
-                record.steer_tickets.remove(position);
-            }
-            let cancelled = matches!(record.lifecycle, SubagentLifecycle::Cancelling)
-                || record.cancel_reason.is_some();
-            (cancelled, record.cancel_reason, record.snapshot().state)
-        };
-        if cancelled {
-            // No answer derived from a refused steer is ever published,
-            // because this child's terminal is the cancellation's.
-            // `cancelled` is true exactly when the cancellation
-            // linearization point committed before this commit: `cancel` is
-            // the only path that both clears the tickets and records the
-            // reason, and a cancelled child that already settled its
-            // cancelled terminal keeps that reason. The cancellation is
-            // absorbing and outranks even a child-side `Accepted` answer
-            // (rule 1 above).
-            return Err(SubagentSteerError::CancellationCommitted {
-                reason: cancel_reason.unwrap_or(CancellationReason::UserRequested),
-            });
-        }
-        match child_outcome {
-            Ok(super::ipc::ChildGuidanceOutcome::Accepted) => {
-                // The child's durable acceptance is the child-side
-                // authority, and — as documented above — it predates any
-                // natural terminal that settled this record, so cleanup of
-                // the ticket (by this commit or, earlier, by the natural
-                // terminal authority) never turns it into a refusal. Only a
-                // committed cancellation intent (handled above) can
-                // invalidate an already-accepted steer.
-                Ok(SubagentSteerAccepted {
-                    subagent_id: subagent_id.clone(),
-                    state,
-                })
-            }
-            Ok(super::ipc::ChildGuidanceOutcome::Refused(refusal)) => {
-                // The child's own durable refusal is the cause: nothing was
-                // durably accepted, so there is no acceptance for the
-                // parent-side ticket to arbitrate.
-                Err(SubagentSteerError::ChildRefused {
-                    detail: refusal.to_string(),
-                })
-            }
-            Err(_) => Err(SubagentSteerError::ChildRefused {
-                detail: "the child settled before the guidance was accepted".to_owned(),
-            }),
         }
     }
 
     /// Cancels every active subagent (runtime drain).
     pub fn cancel_all(&self, reason: CancellationReason) {
         let ids: Vec<SubagentId> = {
-            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            for agent in state.agents.values() {
+                if let Some(reservation) = &agent.resuming {
+                    reservation.cancellation.cancel();
+                }
+            }
             for cancellation in state.capacity_waiters.values() {
                 cancellation.cancel();
+            }
+            for (cancellation, committed_reason) in state.ownership_committing.values_mut() {
+                cancellation.cancel();
+                committed_reason.get_or_insert(reason);
             }
             state
                 .records
@@ -3751,7 +3884,10 @@ impl SubagentRegistry {
                 .filter(|record| {
                     matches!(
                         record.lifecycle,
-                        SubagentLifecycle::Running | SubagentLifecycle::Cancelling
+                        SubagentLifecycle::Starting
+                            | SubagentLifecycle::Running
+                            | SubagentLifecycle::Stopping
+                            | SubagentLifecycle::Cancelling
                     )
                 })
                 .map(|record| record.subagent_id.clone())
@@ -3807,6 +3943,14 @@ impl SubagentRegistry {
                 return Err(SubagentWorkspaceDisposalError::NotTerminal {
                     state: record.snapshot().state,
                 });
+            }
+            // The durable Agent, rather than any finite activation, owns
+            // this workspace until a future Agent-deletion lifecycle. A
+            // recovered inspection handoff cannot transfer that authority.
+            if state.agents.contains_key(&record.child_agent_id) {
+                return Ok(SubagentWorkspaceDisposal::NoRetainedWorkspace(
+                    record.snapshot(),
+                ));
             }
             match record.workspace_resource_state {
                 SubagentWorkspaceResourceState::Disposed => {
@@ -4064,13 +4208,16 @@ impl SubagentRegistry {
         publish_workspace_snapshot(&mut state, &self.state_version, index);
     }
 
-    /// Waits until one subagent is settled or abandoned (runtime drain;
-    /// never agent-loop blocking).
+    /// Waits for the exact activation's terminal decision or abandoned publication.
+    /// Inspect the snapshot's separate publication and physical settlement facts;
+    /// returning a terminal decision is not a physical-settlement acknowledgement.
     pub async fn wait_until_settled(&self, subagent_id: &SubagentId) -> Option<SubagentSnapshot> {
         let mut rx = self.state_version.subscribe();
         loop {
             let snapshot = self.snapshot(subagent_id)?;
-            if snapshot.settled || snapshot.publication_abandoned {
+            if snapshot.state.is_terminal()
+                || snapshot.settlement.publication == SubagentPublication::Abandoned
+            {
                 return Some(snapshot);
             }
             if rx.changed().await.is_err() {
@@ -4153,19 +4300,30 @@ impl SubagentRegistry {
         .collect::<Vec<_>>();
         let settlement_diagnostic =
             (!settlement_diagnostic.is_empty()).then_some(settlement_diagnostic.join("; "));
-        let physical_settlement_unproven = !nested.unproven.is_empty()
-            || candidate_diagnostic.is_some()
-            || workspace.error().is_some()
-            || runtime_root_cleanup_error.is_some();
+        let physical_settlement_unproven =
+            matches!(&outcome, PhysicalOutcome::ControlFailure { .. })
+                || !nested.unproven.is_empty()
+                || candidate_diagnostic.is_some()
+                || workspace.error().is_some()
+                || runtime_root_cleanup_error.is_some();
         let workspace_handoff = workspace.handoff().cloned();
         let (workspace_resource_state, workspace_unresolved) = match &workspace.disposition {
-            WorkspaceSettlementDisposition::Borrowed
+            WorkspaceSettlementDisposition::AgentRetained
+            | WorkspaceSettlementDisposition::Borrowed
             | WorkspaceSettlementDisposition::Shared
             | WorkspaceSettlementDisposition::Removed => {
                 (SubagentWorkspaceResourceState::None, None)
             }
             WorkspaceSettlementDisposition::Retained { .. } => {
                 (SubagentWorkspaceResourceState::Retained, None)
+            }
+            WorkspaceSettlementDisposition::PreservedUnresolved { .. }
+                if !workspace.snapshot.is_isolated() =>
+            {
+                // Shared cwd has no runtime-owned disposable resource. Its
+                // containment failure is represented by the terminal physical
+                // proof and poisoned Agent, never a fabricated retained worktree.
+                (SubagentWorkspaceResourceState::None, None)
             }
             WorkspaceSettlementDisposition::PreservedUnresolved { reason, detail } => (
                 SubagentWorkspaceResourceState::PreservedUnresolved,
@@ -4197,10 +4355,18 @@ impl SubagentRegistry {
             let Some(&index) = state.index.get(subagent_id) else {
                 return;
             };
-            let record = &mut state.records[index];
-            if record.lifecycle.is_terminal() || record.publication_abandoned {
+            if state.records[index].lifecycle.is_terminal()
+                || state.records[index].publication_abandoned
+            {
                 return;
             }
+            if physical_settlement_unproven {
+                let agent_id = &state.records[index].child_agent_id;
+                if let Some(agent) = state.agents.get(agent_id) {
+                    agent.workspace.poison();
+                }
+            }
+            let record = &mut state.records[index];
             // Terminal candidate creation and timer invalidation share this
             // registry mutex. A deadline that has not already committed
             // cancellation is stopped before this child can publish any
@@ -4218,10 +4384,7 @@ impl SubagentRegistry {
             // record of what the child did.
             record.observation.settle_neutral();
             let cancelling = matches!(record.lifecycle, SubagentLifecycle::Cancelling);
-            let workflow_output = matches!(
-                &record.terminal,
-                SubagentTerminalMode::WorkflowOutput { .. }
-            );
+            let workflow_output = record.ownership == SubagentOwnershipKind::Workflow;
             // The publication timestamp freezes at canonicalization: every
             // later bounded retry rebuilds the byte-identical draft, so an
             // ambiguous commit resolves as the idempotent correlation
@@ -4240,6 +4403,7 @@ impl SubagentRegistry {
                         (true, _, super::ipc::ChildResultStatus::Succeeded)
                         | (false, false, super::ipc::ChildResultStatus::Succeeded) => {
                             TerminalCandidate {
+                                physical_settlement_proven: false,
                                 state: TerminalState::Succeeded,
                                 content: Some(bound_utf8(
                                     frame.content.unwrap_or_default(),
@@ -4252,6 +4416,7 @@ impl SubagentRegistry {
                             }
                         }
                         (_, false, super::ipc::ChildResultStatus::Failed) => TerminalCandidate {
+                            physical_settlement_proven: false,
                             state: TerminalState::Failed,
                             content: None,
                             workflow_value: None,
@@ -4265,6 +4430,7 @@ impl SubagentRegistry {
                             timestamp,
                         },
                         (_, false, super::ipc::ChildResultStatus::Cancelled) => TerminalCandidate {
+                            physical_settlement_proven: false,
                             state: TerminalState::Cancelled,
                             content: None,
                             workflow_value: None,
@@ -4278,6 +4444,7 @@ impl SubagentRegistry {
                         // Cancellation intent is canonical: a completed frame
                         // after the intent settles as cancelled.
                         (_, true, _) => TerminalCandidate {
+                            physical_settlement_proven: false,
                             state: TerminalState::Cancelled,
                             content: None,
                             workflow_value: None,
@@ -4298,6 +4465,7 @@ impl SubagentRegistry {
                         // infrastructure failure, never a clean
                         // Interrupted state.
                         TerminalCandidate {
+                            physical_settlement_proven: false,
                             state: TerminalState::Failed,
                             content: None,
                             workflow_value: None,
@@ -4311,6 +4479,7 @@ impl SubagentRegistry {
                         // escalation: physical death cannot erase the
                         // logical cancellation cause.
                         TerminalCandidate {
+                            physical_settlement_proven: false,
                             state: TerminalState::Cancelled,
                             content: None,
                             workflow_value: None,
@@ -4323,6 +4492,7 @@ impl SubagentRegistry {
                         // valid semantic terminal arrived. The outcome is
                         // unknown, not a known model failure.
                         TerminalCandidate {
+                            physical_settlement_proven: false,
                             state: TerminalState::Interrupted,
                             content: None,
                             workflow_value: None,
@@ -4336,6 +4506,7 @@ impl SubagentRegistry {
                     // A required process/control operation was not proven.
                     // This is an explicit infrastructure failure, including
                     // after a cancellation intent.
+                    physical_settlement_proven: false,
                     state: TerminalState::Failed,
                     content: None,
                     workflow_value: None,
@@ -4356,6 +4527,7 @@ impl SubagentRegistry {
                         None => diagnostic,
                     };
                     TerminalCandidate {
+                        physical_settlement_proven: false,
                         state: TerminalState::Failed,
                         content: None,
                         workflow_value: None,
@@ -4380,7 +4552,15 @@ impl SubagentRegistry {
                     ..candidate
                 },
             };
-            let candidate = validate_workflow_candidate(&record.terminal, candidate);
+            let mut candidate = validate_workflow_candidate(
+                record
+                    .terminal
+                    .as_ref()
+                    .expect("a live driver owns its frozen terminal protocol"),
+                candidate,
+            );
+            candidate.physical_settlement_proven = !physical_settlement_unproven;
+            record.physical_settlement_proven = candidate.physical_settlement_proven;
             record.pending_terminal = Some(candidate.clone());
             // Terminal authority linearizes under the same registry mutex as
             // cancellation. Once this transition commits, a late deadline
@@ -4462,157 +4642,8 @@ impl SubagentRegistry {
 
     /// Attempts the durable terminal publication; on failure, enters
     /// `PublishingTerminal` and schedules the bounded retry.
-    #[allow(clippy::too_many_lines)] // terminal publication is one native linearization boundary
-    fn publish_terminal(&self, subagent_id: &SubagentId, candidate: &TerminalCandidate) {
-        let initial_failure = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let Some(&index) = state.index.get(subagent_id) else {
-                return;
-            };
-            let record = &state.records[index];
-            // A Workflow-owned child has no parent Conversation mailbox
-            // result. Its physical terminal candidate is already the native
-            // WorkflowRuntime handoff: publication below commits the
-            // registry lifecycle and wakes waiters, but deliberately does
-            // not create a normal ToolResult/inbound message.
-            if matches!(
-                &record.terminal,
-                SubagentTerminalMode::WorkflowOutput { .. }
-            ) {
-                let event = terminal_settlement(
-                    &self.config.conversation_id,
-                    subagent_id,
-                    &record.child_agent_id,
-                    candidate_state(candidate),
-                    &record.terminal_workspace_resource(),
-                    candidate.timestamp,
-                );
-                let result = if candidate.state == TerminalState::Succeeded {
-                    match (candidate.workflow_value.clone(), &record.terminal) {
-                        (
-                            Some(value),
-                            SubagentTerminalMode::WorkflowOutput {
-                                workflow_id,
-                                run_id,
-                                node_id,
-                                ..
-                            },
-                        ) => self
-                            .config
-                            .mailbox
-                            .commit_workflow_agent_terminal(
-                                event,
-                                workflow_output_event(
-                                    &self.config.conversation_id,
-                                    subagent_id,
-                                    workflow_id,
-                                    run_id,
-                                    node_id,
-                                    value,
-                                    candidate.timestamp,
-                                ),
-                            )
-                            .map(|(terminal, _)| terminal.sequence)
-                            .map_err(|error| error.to_string()),
-                        (None, _) => Err(
-                            "a successful Workflow terminal candidate has no validated value"
-                                .to_owned(),
-                        ),
-                        (_, _) => Err(
-                            "a successful Workflow terminal candidate has no Workflow protocol"
-                                .to_owned(),
-                        ),
-                    }
-                } else {
-                    self.config
-                        .mailbox
-                        .commit_subagent_terminal(event)
-                        .map(|event| event.sequence)
-                        .map_err(|error| error.to_string())
-                };
-                match result {
-                    Ok(journal_sequence) => {
-                        let record = &mut state.records[index];
-                        record.lifecycle = match candidate.state {
-                            TerminalState::Succeeded => SubagentLifecycle::Succeeded,
-                            TerminalState::Failed => SubagentLifecycle::Failed,
-                            TerminalState::Cancelled => SubagentLifecycle::Cancelled,
-                            TerminalState::Interrupted => SubagentLifecycle::Interrupted,
-                        };
-                        record.pending_terminal = None;
-                        // Workflow terminalization is a direct native handoff
-                        // to the waiting WorkflowRuntime. There is no parent
-                        // mailbox delivery phase to represent, so the
-                        // ordinary `settled -> delivered` notification state
-                        // is deliberately not entered.
-                        record.notification = NotificationState::None;
-                        publish_committed_snapshot(
-                            &mut state,
-                            &self.state_version,
-                            index,
-                            journal_sequence,
-                        );
-                        None
-                    }
-                    Err(error) => {
-                        let record = &mut state.records[index];
-                        record.lifecycle = SubagentLifecycle::PublishingTerminal;
-                        record.notification = NotificationState::Failed;
-                        publish_snapshot(&mut state, &self.state_version, index);
-                        Some(error)
-                    }
-                }
-            } else {
-                let (draft, event) = terminal_publication(
-                    &self.config.conversation_id,
-                    subagent_id,
-                    &record.child_agent_id,
-                    candidate_state(candidate),
-                    terminal_blocks(record, candidate),
-                    &record.terminal_workspace_resource(),
-                    candidate.timestamp,
-                );
-                // The runtime-authored terminal notice — the
-                // parent-model correlation projection, with the
-                // retained-workspace fact folded in when applicable —
-                // commits in the same durable transaction, strictly before
-                // the terminal report (Issue #192).
-                let notice = success_terminal_notice(record, candidate);
-                let result = self
-                    .config
-                    .mailbox
-                    .accept_subagent_terminal(notice, draft, event);
-                let record = &mut state.records[index];
-                match result {
-                    Ok(committed) => {
-                        let journal_sequence = committed.sequence;
-                        record.lifecycle = match candidate.state {
-                            TerminalState::Succeeded => SubagentLifecycle::Succeeded,
-                            TerminalState::Failed => SubagentLifecycle::Failed,
-                            TerminalState::Cancelled => SubagentLifecycle::Cancelled,
-                            TerminalState::Interrupted => SubagentLifecycle::Interrupted,
-                        };
-                        record.pending_terminal = None;
-                        record.notification = NotificationState::Delivered;
-                        publish_committed_snapshot(
-                            &mut state,
-                            &self.state_version,
-                            index,
-                            journal_sequence,
-                        );
-                        None
-                    }
-                    Err(error) => {
-                        record.lifecycle = SubagentLifecycle::PublishingTerminal;
-                        record.notification = NotificationState::Failed;
-                        let diagnostic = error.to_string();
-                        publish_snapshot(&mut state, &self.state_version, index);
-                        Some(diagnostic)
-                    }
-                }
-            }
-        };
-        let Some(initial_failure) = initial_failure else {
+    fn publish_terminal(&self, subagent_id: &SubagentId, _candidate: &TerminalCandidate) {
+        let Err(initial_failure) = self.retry_terminal_publication(subagent_id) else {
             return;
         };
         // Bounded publication retry; the candidate is stable from
@@ -4638,15 +4669,30 @@ impl SubagentRegistry {
 
     /// One bounded publication retry. Returns whether the terminal is now
     /// durably committed.
-    #[allow(clippy::too_many_lines)] // retry preserves the same terminal boundary and state machine
+    #[allow(clippy::too_many_lines)] // capture, append and publish one immutable terminal
     fn retry_terminal_publication(&self, subagent_id: &SubagentId) -> Result<bool, String> {
+        enum Append {
+            Normal(
+                Box<(
+                    Option<crate::durable::inbox::InboundDraft>,
+                    crate::durable::inbox::InboundDraft,
+                    crate::events::types::RuntimeEventEnvelope,
+                )>,
+            ),
+            Workflow(
+                Box<(
+                    crate::events::types::RuntimeEventEnvelope,
+                    Option<crate::events::types::RuntimeEventEnvelope>,
+                )>,
+            ),
+        }
         let _settlement = self
             .config
             .mailbox
             .begin_settlement_admission()
             .map_err(|error| format!("terminal settlement admission failed: {error}"))?;
-        let candidate = {
-            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (candidate, append) = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
                 return Ok(true);
             };
@@ -4654,44 +4700,34 @@ impl SubagentRegistry {
             if record.lifecycle.is_terminal() {
                 return Ok(true);
             }
-            record.pending_terminal.clone()
-        };
-        let Some(candidate) = candidate else {
-            return Ok(true);
-        };
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(&index) = state.index.get(subagent_id) else {
-            return Ok(true);
-        };
-        let record = &state.records[index];
-        let result = if matches!(
-            &record.terminal,
-            SubagentTerminalMode::WorkflowOutput { .. }
-        ) {
-            let event = terminal_settlement(
-                &self.config.conversation_id,
-                subagent_id,
-                &record.child_agent_id,
-                candidate_state(&candidate),
-                &record.terminal_workspace_resource(),
-                candidate.timestamp,
-            );
-            if candidate.state == TerminalState::Succeeded {
-                match (candidate.workflow_value.clone(), &record.terminal) {
-                    (
-                        Some(value),
-                        SubagentTerminalMode::WorkflowOutput {
-                            workflow_id,
-                            run_id,
-                            node_id,
-                            ..
-                        },
-                    ) => self
-                        .config
-                        .mailbox
-                        .commit_workflow_agent_terminal(
-                            event,
-                            workflow_output_event(
+            let Some(candidate) = record.pending_terminal.clone() else {
+                return Ok(true);
+            };
+            if state.terminal_inflight.contains(subagent_id) {
+                return Ok(false);
+            }
+            let append = if record.ownership == SubagentOwnershipKind::Workflow {
+                let event = terminal_settlement(
+                    &self.config.conversation_id,
+                    subagent_id,
+                    &record.child_agent_id,
+                    candidate_state(&candidate),
+                    candidate.physical_settlement_proven,
+                    &record.terminal_workspace_resource(),
+                    candidate.timestamp,
+                );
+                let output =
+                    if candidate.state == TerminalState::Succeeded {
+                        match (candidate.workflow_value.clone(), &record.terminal) {
+                            (
+                                Some(value),
+                                Some(SubagentTerminalMode::WorkflowOutput {
+                                    workflow_id,
+                                    run_id,
+                                    node_id,
+                                    ..
+                                }),
+                            ) => Some(workflow_output_event(
                                 &self.config.conversation_id,
                                 subagent_id,
                                 workflow_id,
@@ -4699,41 +4735,79 @@ impl SubagentRegistry {
                                 node_id,
                                 value,
                                 candidate.timestamp,
+                            )),
+                            _ => return Err(
+                                "a successful Workflow terminal candidate has no validated value"
+                                    .to_owned(),
                             ),
-                        )
-                        .map(|(terminal, _)| terminal.sequence)
-                        .map_err(|error| error.to_string()),
-                    _ => {
-                        return Err(
-                            "a successful Workflow terminal candidate has no validated value"
-                                .to_owned(),
-                        );
-                    }
-                }
+                        }
+                    } else {
+                        None
+                    };
+                Append::Workflow(Box::new((event, output)))
             } else {
+                let (draft, event) = terminal_publication(
+                    &self.config.conversation_id,
+                    subagent_id,
+                    &record.child_agent_id,
+                    candidate_state(&candidate),
+                    terminal_blocks(record, &candidate),
+                    &record.terminal_workspace_resource(),
+                    candidate.physical_settlement_proven,
+                    candidate.timestamp,
+                );
+                Append::Normal(Box::new((
+                    success_terminal_notice(record, &candidate),
+                    draft,
+                    event,
+                )))
+            };
+            // PublishingTerminal pins the immutable candidate; cancellation
+            // cannot rewrite it. This explicit claim excludes another append
+            // while the registry mutex is released for SQLite.
+            state.terminal_inflight.insert(subagent_id.clone());
+            (candidate, append)
+        };
+        let _claim = TerminalPublicationClaim {
+            registry: self.clone(),
+            activation: subagent_id.clone(),
+        };
+        crate::runtime::process_death::reach("after:subagent_physical_settlement");
+        let result = match append {
+            Append::Normal(payload) => {
+                let (notice, draft, event) = *payload;
                 self.config
                     .mailbox
-                    .commit_subagent_terminal(event)
+                    .accept_subagent_terminal(notice, draft, event)
                     .map(|event| event.sequence)
                     .map_err(|error| error.to_string())
             }
-        } else {
-            let (draft, event) = terminal_publication(
-                &self.config.conversation_id,
-                subagent_id,
-                &record.child_agent_id,
-                candidate_state(&candidate),
-                terminal_blocks(record, &candidate),
-                &record.terminal_workspace_resource(),
-                candidate.timestamp,
-            );
-            let notice = success_terminal_notice(record, &candidate);
-            self.config
-                .mailbox
-                .accept_subagent_terminal(notice, draft, event)
-                .map(|event| event.sequence)
-                .map_err(|error| error.to_string())
+            Append::Workflow(payload) => {
+                let (event, output) = *payload;
+                match output {
+                    Some(output) => self
+                        .config
+                        .mailbox
+                        .commit_workflow_agent_terminal(event, output)
+                        .map(|(terminal, _)| terminal.sequence)
+                        .map_err(|error| error.to_string()),
+                    None => self
+                        .config
+                        .mailbox
+                        .commit_subagent_terminal(event)
+                        .map(|event| event.sequence)
+                        .map_err(|error| error.to_string()),
+                }
+            }
         };
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return Ok(true);
+        };
+        if state.records[index].lifecycle.is_terminal() {
+            return Ok(true);
+        }
+        debug_assert!(state.terminal_inflight.contains(subagent_id));
         match result {
             Ok(journal_sequence) => {
                 let record = &mut state.records[index];
@@ -4743,12 +4817,10 @@ impl SubagentRegistry {
                     TerminalState::Cancelled => SubagentLifecycle::Cancelled,
                     TerminalState::Interrupted => SubagentLifecycle::Interrupted,
                 };
+                record.physical_settlement_proven = candidate.physical_settlement_proven;
                 record.pending_terminal = None;
                 record.publication_abandoned = false;
-                record.notification = if matches!(
-                    &record.terminal,
-                    SubagentTerminalMode::WorkflowOutput { .. }
-                ) {
+                record.notification = if record.ownership == SubagentOwnershipKind::Workflow {
                     NotificationState::None
                 } else {
                     NotificationState::Delivered
@@ -4794,6 +4866,11 @@ impl SubagentRegistry {
         let Some(&index) = state.index.get(subagent_id) else {
             return;
         };
+        if state.records[index].lifecycle.is_terminal()
+            || state.terminal_inflight.contains(subagent_id)
+        {
+            return;
+        }
         state.records[index].publication_abandoned = true;
         publish_snapshot(&mut state, &self.state_version, index);
     }
@@ -4845,7 +4922,7 @@ impl SubagentRegistry {
         state.terminal_authority_hook = Some(hook);
     }
 
-    /// Installs the test-only pause of one composed [`SubagentRegistry::steer`]
+    /// Installs the test-only pause of one composed [`SubagentRegistry::send_message`]
     /// acknowledgement: the steer's child decision has already reached the
     /// caller (an `Accepted` answer has advanced its ticket), and the path is
     /// parked immediately before the registry commit that consumes the ticket
@@ -4914,23 +4991,6 @@ impl SubagentRegistry {
     }
 }
 
-/// Settles a lease when physical child-root allocation fails before the lease
-/// can be transferred to `spawn_staged`. A clean disposable lease is removed;
-/// if physical cleanliness cannot be proven, the original start failure is
-/// strengthened to a rollback failure and the workspace manager preserves the
-/// evidence.
-async fn settle_staged_workspace(
-    workspace: WorkspaceUse,
-    original: SubagentStartError,
-) -> SubagentStartError {
-    match workspace.settle_staged().await {
-        Ok(_) => original,
-        Err(error) => SubagentStartError::Rollback {
-            detail: format!("{original}; {}", error.detail),
-        },
-    }
-}
-
 /// Revalidates a Workflow terminal candidate at the parent boundary before
 /// it is durably accepted. The child already validates against its frozen
 /// latch, but the parent owns the cross-process result and must not commit a
@@ -4972,6 +5032,7 @@ fn validate_workflow_candidate(
             ..candidate
         },
         Err(diagnostic) => TerminalCandidate {
+            physical_settlement_proven: false,
             state: TerminalState::Failed,
             content: None,
             workflow_value: None,
@@ -5051,6 +5112,7 @@ fn success_terminal_notice(
 ) -> Option<crate::durable::inbox::InboundDraft> {
     (candidate.state == TerminalState::Succeeded).then(|| {
         super::terminal_notice(
+            &record.child_agent_id,
             &record.subagent_id,
             &record.agent,
             matches!(
@@ -5101,7 +5163,9 @@ fn publish_committed_snapshot(
     sequence: u64,
 ) {
     if let Some(observer) = &state.observer {
-        observer.on_committed(&state.records[index].snapshot(), sequence);
+        let snapshot = state.records[index].snapshot();
+        let agent = SubagentRegistry::agent_snapshot_locked(state, &snapshot.child_agent_id);
+        observer.on_committed(agent.as_ref(), &snapshot, sequence);
     }
     version.send_modify(|v| *v += 1);
 }
@@ -5113,7 +5177,8 @@ fn publish_snapshot(
 ) {
     let snapshot = state.records[index].snapshot();
     if let Some(observer) = &state.observer {
-        observer.on_snapshot(&snapshot);
+        let agent = SubagentRegistry::agent_snapshot_locked(state, &snapshot.child_agent_id);
+        observer.on_snapshot(agent.as_ref(), &snapshot);
     }
     version.send_modify(|v| *v += 1);
 }
@@ -5147,6 +5212,22 @@ fn publish_activity_snapshot(
         observer.on_activity(&snapshot);
     }
     version.send_modify(|v| *v += 1);
+}
+
+/// One-shot barriers at the real resume staging and publication boundaries.
+#[cfg(test)]
+pub(crate) struct ResumeTestGates {
+    pub staged: tokio::sync::oneshot::Sender<()>,
+    pub release_staged: tokio::sync::oneshot::Receiver<()>,
+    pub published: tokio::sync::oneshot::Sender<()>,
+    pub release_published: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+impl SubagentRegistry {
+    pub(crate) fn install_resume_test_gates(&self, gates: ResumeTestGates) {
+        self.state.lock().unwrap().resume_test_gates = Some(gates);
+    }
 }
 
 /// A test-only pause inside the ownership-commit critical section
@@ -5403,7 +5484,7 @@ impl TerminalAuthorityHook {
     }
 }
 
-/// A test-only pause for one composed [`SubagentRegistry::steer`]
+/// A test-only pause for one composed [`SubagentRegistry::send_message`]
 /// acknowledgement at the exact pre-commit edge: the steer caller has
 /// already observed the child's durable decision (an `Accepted` answer has
 /// advanced its ticket to
@@ -5474,6 +5555,10 @@ impl SteerAcknowledgementHook {
 
 #[cfg(test)]
 mod tests {
+    include!("registry/agent_recovery_tests.rs");
+    include!("registry/agent_bootstrap_tests.rs");
+    include!("registry/review_tests.rs");
+    include!("registry/physical_proof_tests.rs");
     mod archive_ownership;
     mod capacity_wait;
     use std::sync::Arc;
@@ -5500,16 +5585,26 @@ mod tests {
     }
 
     fn plane(max_active: usize) -> TestPlane {
+        plane_with_storage(max_active, false)
+    }
+
+    fn plane_with_storage(max_active: usize, on_disk: bool) -> TestPlane {
         let dir = tempfile::tempdir().expect("temp dir");
         let workspace = dir.path().join("workspace");
         let runtime_root = dir.path().join("runtime");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::create_dir_all(&runtime_root).expect("runtime root");
         let conversation_id = ConversationId::new("conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0");
-        let store = Arc::new(
+        let store = Arc::new(if on_disk {
+            crate::durable::SqliteConversationStore::open(
+                conversation_id.clone(),
+                &dir.path().join("parent.sqlite"),
+            )
+            .expect("on-disk store")
+        } else {
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
-                .expect("in-memory store"),
-        );
+                .expect("in-memory store")
+        });
         let mailbox = ConversationInboundMailbox::over_store(store.clone());
         let workspace_settlement_hook =
             Arc::new(crate::runtime::workspace::WorkspaceSettlementHook::new());
@@ -5694,6 +5789,16 @@ mod tests {
             .expect("parent frame")
         }
 
+        async fn accept_delegate(&mut self) -> DelegationFrame {
+            let ParentFrame::Delegate(delegate) = self.read_frame().await else {
+                panic!("delegate");
+            };
+            super::super::ipc::write_child_frame(&mut self.peer, &ChildFrame::DelegateAccepted)
+                .await
+                .unwrap();
+            delegate
+        }
+
         /// Sends the child's terminal frame after the test has established
         /// the intended lifecycle ordering.
         async fn send_result(&mut self, status: ChildResultStatus, content: Option<&str>) {
@@ -5784,18 +5889,25 @@ mod tests {
 
     fn spec(task: &str) -> SubagentStartSpec {
         SubagentStartSpec {
-            execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-            resolved: resolved("explore"),
-            approval_mode: crate::runtime::ApprovalMode::Policy,
-            task: task.to_owned(),
-            context: None,
-            tool_call_id: ToolCallId::new("call-1"),
-            terminal: SubagentTerminalMode::Normal,
+            authority: crate::runtime::subagent::DurableAgentAuthority {
+                execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                resolved: resolved("explore"),
+                approval_mode: crate::runtime::ApprovalMode::Policy,
+            },
+            admission: crate::runtime::subagent::ActivationAdmission {
+                task: task.to_owned(),
+                context: None,
+                origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                    tool_call_id: ToolCallId::new("call-1"),
+                },
+                terminal: SubagentTerminalMode::Normal,
+            },
         }
     }
 
     fn workflow_spec(task: &str) -> SubagentStartSpec {
-        SubagentStartSpec {
+        let mut start = spec(task);
+        start.admission = crate::runtime::subagent::ActivationAdmission {
             terminal: SubagentTerminalMode::WorkflowOutput {
                 output_schema: serde_json::json!({
                     "type": "object",
@@ -5813,8 +5925,21 @@ mod tests {
                     "agent",
                 )),
             },
-            ..spec(task)
+            ..start.admission
+        };
+        start
+    }
+
+    /// Finite Workflow children own the terminal worktree disposition. Native
+    /// Agent activations instead keep their Agent-owned workspace for resume.
+    fn finite_workspace_spec(task: &str) -> SubagentStartSpec {
+        let mut spec = workflow_spec(task);
+        if let SubagentTerminalMode::WorkflowOutput { output_schema, .. } =
+            &mut spec.admission.terminal
+        {
+            *output_schema = serde_json::json!({"type": "string"});
         }
+        spec
     }
 
     fn start_spec(task: &str) -> SubagentStartSpec {
@@ -5823,7 +5948,7 @@ mod tests {
 
     fn deadline_spec(task: &str, millis: u64) -> SubagentStartSpec {
         let mut spec = start_spec(task);
-        spec.resolved.execution_deadline =
+        spec.authority.resolved.execution_deadline =
             Some(SubagentExecutionDeadline::from_millis(millis).expect("valid test deadline"));
         spec
     }
@@ -5865,7 +5990,7 @@ mod tests {
     struct RecordingObserver(std::sync::Mutex<Vec<SubagentSnapshot>>);
 
     impl SubagentObserver for RecordingObserver {
-        fn on_snapshot(&self, snapshot: &SubagentSnapshot) {
+        fn on_snapshot(&self, _agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot) {
             self.0
                 .lock()
                 .expect("recording observer lock")
@@ -5889,9 +6014,9 @@ mod tests {
     /// captured exactly.
     fn recording_observer(plane: &TestPlane) -> Arc<RecordingObserver> {
         let recorded = Arc::new(RecordingObserver::default());
-        plane
-            .registry
-            .install_observer_and_snapshots(Arc::clone(&recorded) as Arc<dyn SubagentObserver>);
+        plane.registry.install_observer_and_agent_snapshots(
+            Arc::clone(&recorded) as Arc<dyn SubagentObserver>
+        );
         recorded
     }
 
@@ -5918,9 +6043,10 @@ mod tests {
         let plane = plane(4);
         make_dirty_git_workspace(&plane);
         let mut start = spec("strict workspace");
-        start.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        start.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
 
         let error = plane
             .registry
@@ -5990,16 +6116,17 @@ mod tests {
                 server_id: crate::runtime::identity::McpServerId::new("github"),
             },
         };
-        spec.resolved.tools = vec![super::super::resolver::ResolvedSubagentTool::Source {
-            source_id: crate::capabilities::ToolSourceId::Mcp(
-                crate::runtime::identity::McpServerId::new("github"),
-            ),
-            tool_id: definition.id.clone(),
-            name: definition.name.clone(),
-            identity: crate::tools::mcp::identity::definition_identity(&definition)
-                .expect("an MCP definition has an MCP identity"),
-            definition,
-        }];
+        spec.authority.resolved.tools =
+            vec![super::super::resolver::ResolvedSubagentTool::Source {
+                source_id: crate::capabilities::ToolSourceId::Mcp(
+                    crate::runtime::identity::McpServerId::new("github"),
+                ),
+                tool_id: definition.id.clone(),
+                name: definition.name.clone(),
+                identity: crate::tools::mcp::identity::definition_identity(&definition)
+                    .expect("an MCP definition has an MCP identity"),
+                definition,
+            }];
         // The staged override consumes `prepare` before any real process is
         // spawned, so this asserts exactly one thing: the registry no longer
         // has a capability-shaped refusal of its own.
@@ -6071,10 +6198,11 @@ mod tests {
     ) -> (SubagentAccepted, SubagentSnapshot) {
         make_clean_git_workspace(plane);
         let child = stage_stubborn(plane);
-        let mut spec = start_spec(task);
-        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        let mut spec = finite_workspace_spec(task);
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
         let accepted = start(plane, &spec).await;
         let workspace = plane
             .registry
@@ -6085,7 +6213,7 @@ mod tests {
         std::fs::write(workspace.join("retained.txt"), "retain this child work\n")
             .expect("child work");
         child
-            .complete(ChildResultStatus::Succeeded, Some("child answer"))
+            .complete(ChildResultStatus::Succeeded, Some(r#""child answer""#))
             .await;
         let settled = plane
             .registry
@@ -6110,16 +6238,17 @@ mod tests {
     ) -> (SubagentAccepted, SubagentSnapshot) {
         make_clean_git_workspace(plane);
         let child = stage_exit0(plane);
-        let mut spec = start_spec(task);
-        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        let mut spec = finite_workspace_spec(task);
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
         plane
             .workspace_settlement_hook
             .fail_next("injected final workspace inspection failure");
         let accepted = start(plane, &spec).await;
         child
-            .complete(ChildResultStatus::Succeeded, Some("child answer"))
+            .complete(ChildResultStatus::Succeeded, Some(r#""child answer""#))
             .await;
         plane.workspace_settlement_hook.wait_until_entered().await;
         plane.workspace_settlement_hook.release().await;
@@ -6167,6 +6296,9 @@ mod tests {
         for disposal in plan.settled_subagent_disposals() {
             registry.restore_recovered_disposal(disposal);
         }
+        registry
+            .restore_agents(plane.store.as_ref())
+            .expect("the complete durable owner cut");
         (registry, plan)
     }
 
@@ -6289,6 +6421,58 @@ mod tests {
         )));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn workflow_output_committed_before_cancel_remains_successful() {
+        workflow_child_cancellation_ordering(true).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn workflow_cancel_before_output_commit_remains_cancelled() {
+        workflow_child_cancellation_ordering(false).await;
+    }
+
+    async fn workflow_child_cancellation_ordering(late: bool) {
+        let result =
+            crate::local_runtime::subagent_child::tests::workflow_cancellation_ordering(late).await;
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &workflow_spec("output cancellation ordering")).await;
+        plane
+            .registry
+            .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
+            .unwrap();
+        child
+            .cancelled_after_delegation(result.status, result.content.as_deref())
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            settled.state,
+            if late {
+                SubagentState::Succeeded
+            } else {
+                SubagentState::Cancelled
+            }
+        );
+        assert!(plane.store.select_pending_batch().unwrap().is_none());
+        assert_eq!(
+            events(&plane)
+                .iter()
+                .filter(|event| matches!(event,
+            crate::events::types::RuntimeEvent::WorkflowAgentOutputCommitted { subagent_id, .. }
+                if *subagent_id == accepted.subagent_id))
+                .count(),
+            usize::from(late)
+        );
+        assert_eq!(
+            plane.registry.workflow_agent_output(&accepted.subagent_id),
+            late.then(|| serde_json::json!({"summary": "committed answer"}))
+        );
+    }
+
     #[tokio::test]
     async fn a_workflow_child_closes_native_lifecycle_without_parent_inbound() {
         let plane = plane(4);
@@ -6380,14 +6564,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // This is the end-to-end lifecycle/resource regression.
-    async fn successful_worktree_child_publishes_a_valid_handoff_and_client_projection() {
+    async fn finite_workflow_child_publishes_a_valid_handoff_and_client_projection() {
         let plane = plane(4);
         make_clean_git_workspace(&plane);
         let child = stage_stubborn(&plane);
-        let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        let mut spec = finite_workspace_spec("write a source change");
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
         let accepted = start(&plane, &spec).await;
         let workspace = plane
             .registry
@@ -6398,7 +6583,7 @@ mod tests {
         std::fs::write(workspace.join("child-work.txt"), "retain me\n").expect("child work");
 
         child
-            .complete(ChildResultStatus::Succeeded, Some("the answer"))
+            .complete(ChildResultStatus::Succeeded, Some(r#""the answer""#))
             .await;
         let settled = plane
             .registry
@@ -6410,17 +6595,16 @@ mod tests {
         let handoff = settled.handoff.clone().expect("handoff");
         assert!(handoff.dirty);
         assert_eq!(handoff.base_commit, handoff.head_commit);
-        let view = crate::runtime_client::projection::subagent_view(&settled);
+        let view = crate::runtime_client::projection::subagent_workspace_view(&settled);
         assert_eq!(
-            view.workspace
-                .handoff
+            view.handoff
                 .as_ref()
                 .map(|item| &item.physical_worktree_root),
             Some(&handoff.physical_worktree_root)
         );
         assert!(events(&plane).iter().any(|event| matches!(
             event,
-            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+            crate::events::types::RuntimeEvent::SubagentTerminalSettled {
                 subagent_id,
                 state: SubagentTerminalState::Succeeded,
                 workspace_resource:
@@ -6430,6 +6614,28 @@ mod tests {
                 ..
             } if *subagent_id == accepted.subagent_id && actual == &handoff
         )));
+
+        let (recovered, _) = recovered_registry(&plane);
+        let restored = recovered.snapshot(&accepted.subagent_id).unwrap();
+        assert_eq!(restored.ownership, SubagentOwnershipKind::Workflow);
+        assert_eq!(restored.handoff, settled.handoff);
+        assert!(
+            restored.is_settled(),
+            "the durable terminal supplies the physical proof omitted from a resource-only placeholder"
+        );
+        assert_eq!(recovered.with_goal_idle(|| true), Some(true));
+        assert!(
+            recovered
+                .list_agents(MAX_AGENT_LIST_LIMIT)
+                .agents
+                .is_empty()
+        );
+        assert!(
+            recovered.state.lock().unwrap().records[0]
+                .terminal
+                .is_none(),
+            "a historical finite result never reconstructs executable Workflow schema authority"
+        );
 
         let disposed = plane
             .registry
@@ -6470,7 +6676,7 @@ mod tests {
                 .iter()
                 .filter(|event| matches!(
                     event,
-                    crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                    crate::events::types::RuntimeEvent::SubagentTerminalSettled {
                         subagent_id,
                         ..
                     } if *subagent_id == accepted.subagent_id
@@ -6514,7 +6720,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn worktree_removed_branch_failure_settles_as_pending_and_survives_recovery() {
         let plane = plane(4);
-        let (accepted, settled) = retained_git_child(&plane, "partial disposal").await;
+        let (accepted, settled) = Box::pin(retained_git_child(&plane, "partial disposal")).await;
         let handoff = settled.handoff.clone().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
@@ -6565,6 +6771,10 @@ mod tests {
             SubagentWorkspaceResourceState::WorktreeRemoved
         );
         assert!(recovered_snapshot.handoff.is_none());
+        assert!(
+            recovered_snapshot.is_settled(),
+            "resource disposal does not erase committed activation containment proof"
+        );
 
         let completed = recovered
             .dispose_retained_workspace(&accepted.subagent_id)
@@ -6584,7 +6794,7 @@ mod tests {
                 .iter()
                 .filter(|event| matches!(
                     event,
-                    crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                    crate::events::types::RuntimeEvent::SubagentTerminalSettled {
                         subagent_id, ..
                     } if *subagent_id == accepted.subagent_id
                 ))
@@ -6597,7 +6807,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn moved_branch_after_worktree_removal_is_never_deleted_by_registry_retry() {
         let plane = plane(4);
-        let (accepted, settled) = retained_git_child(&plane, "moved branch").await;
+        let (accepted, settled) = Box::pin(retained_git_child(&plane, "moved branch")).await;
         let handoff = settled.handoff.clone().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
@@ -6663,7 +6873,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn durable_intent_recovers_before_physical_mutation_and_continues_exactly() {
         let plane = plane(4);
-        let (accepted, settled) = retained_git_child(&plane, "recover before deletion").await;
+        let (accepted, settled) =
+            Box::pin(retained_git_child(&plane, "recover before deletion")).await;
         let handoff = settled.handoff.clone().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
@@ -6682,6 +6893,10 @@ mod tests {
             SubagentWorkspaceResourceState::DisposalInProgress
         );
         assert!(pending.handoff.is_none());
+        assert!(
+            pending.is_settled(),
+            "resource disposal does not erase committed activation containment proof"
+        );
         assert!(physical.exists());
         assert!(ref_exists(&plane.dir.path().join("workspace"), &branch));
 
@@ -6698,7 +6913,7 @@ mod tests {
     async fn crash_after_worktree_removal_recovers_authorized_partial_state() {
         let plane = plane(4);
         let (accepted, settled) =
-            retained_git_child(&plane, "recover after worktree removal").await;
+            Box::pin(retained_git_child(&plane, "recover after worktree removal")).await;
         let handoff = settled.handoff.clone().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
@@ -6742,6 +6957,10 @@ mod tests {
             SubagentWorkspaceResourceState::DisposalInProgress
         );
         assert!(pending.handoff.is_none());
+        assert!(
+            pending.is_settled(),
+            "resource disposal does not erase committed activation containment proof"
+        );
 
         let result = recovered
             .dispose_retained_workspace(&accepted.subagent_id)
@@ -6755,7 +6974,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn final_settlement_append_failure_recovers_to_already_disposed() {
         let plane = plane(4);
-        let (accepted, settled) = retained_git_child(&plane, "recover after deletion").await;
+        let (accepted, settled) =
+            Box::pin(retained_git_child(&plane, "recover after deletion")).await;
         let handoff = settled.handoff.clone().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
@@ -6823,7 +7043,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_disposal_requests_have_one_physical_owner() {
         let plane = plane(4);
-        let (accepted, settled) = retained_git_child(&plane, "concurrent disposal").await;
+        let (accepted, settled) = Box::pin(retained_git_child(&plane, "concurrent disposal")).await;
         let handoff = settled.handoff.clone().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
@@ -6893,7 +7113,7 @@ mod tests {
                 .iter()
                 .filter(|event| matches!(
                     event,
-                    crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                    crate::events::types::RuntimeEvent::SubagentTerminalSettled {
                         subagent_id, ..
                     } if *subagent_id == accepted.subagent_id
                 ))
@@ -6911,16 +7131,17 @@ mod tests {
             .workspace_settlement_hook
             .fail_next("injected final workspace inspection failure");
         let child = stage_stubborn(&plane);
-        let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        let mut spec = finite_workspace_spec("write a source change");
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
         let accepted = start(&plane, &spec).await;
 
         child
             .complete(
                 ChildResultStatus::Succeeded,
-                Some("child success must not leak"),
+                Some(r#""child success must not leak""#),
             )
             .await;
         // The manager hook is reached only after the driver has received the
@@ -6954,24 +7175,17 @@ mod tests {
         assert!(detail.contains("workspace"));
         assert!(!detail.contains("child success must not leak"));
 
-        let pending = plane
-            .store
-            .select_pending_batch()
-            .expect("pending")
-            .expect("terminal notice");
-        assert!(matches!(
-            pending.items[0].message.source,
-            crate::message::types::UserSource::Runtime
-        ));
-        let parent_notice = match &pending.items[0].message.content[0] {
-            crate::message::types::UserContentBlock::Text(text) => &text.text,
-            other => panic!("unexpected terminal content: {other:?}"),
-        };
-        assert!(parent_notice.contains("physical settlement was not proven"));
-        assert!(!parent_notice.contains("child success must not leak"));
+        assert!(
+            plane
+                .store
+                .select_pending_batch()
+                .expect("pending")
+                .is_none(),
+            "a finite Workflow child never publishes native Agent reports"
+        );
         assert!(events(&plane).iter().any(|event| matches!(
             event,
-            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+            crate::events::types::RuntimeEvent::SubagentTerminalSettled {
                 subagent_id,
                 state: SubagentTerminalState::Failed,
                 workspace_resource:
@@ -6984,20 +7198,23 @@ mod tests {
         )));
         assert!(!events(&plane).iter().any(|event| matches!(
             event,
-            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+            crate::events::types::RuntimeEvent::SubagentTerminalSettled {
                 subagent_id,
                 state: SubagentTerminalState::Succeeded,
                 ..
             } if *subagent_id == accepted.subagent_id
         )));
-        let view = crate::runtime_client::projection::subagent_view(&settled);
-        assert_eq!(view.state, crate::runtime::subagent::SubagentState::Failed);
+        let view = crate::runtime_client::projection::subagent_workspace_view(&settled);
         assert_eq!(
-            view.workspace.resource_state,
+            settled.state,
+            crate::runtime::subagent::SubagentState::Failed
+        );
+        assert_eq!(
+            view.resource_state,
             SubagentWorkspaceResourceState::PreservedUnresolved
         );
-        assert!(view.workspace.handoff.is_none());
-        assert_eq!(view.detail.as_deref(), Some(detail));
+        assert!(view.handoff.is_none());
+        assert_eq!(settled.detail.as_deref(), Some(detail));
 
         let disposal = plane
             .registry
@@ -7068,9 +7285,10 @@ mod tests {
         make_clean_git_workspace(&plane);
         let child = stage_with_unresolved_anchor(&plane);
         let mut spec = deadline_spec("nested containment", 100);
-        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
         let accepted = start(&plane, &spec).await;
         let running = plane
             .registry
@@ -7133,14 +7351,17 @@ mod tests {
             &accepted.subagent_id,
         );
 
-        let error = recovered
+        let result = recovered
             .dispose_retained_workspace(&accepted.subagent_id)
             .await
-            .expect_err("nested containment uncertainty is not Git-only authority");
+            .expect("finite disposal cannot claim an Agent-owned workspace");
         assert!(matches!(
-            error,
-            SubagentWorkspaceDisposalError::OwnershipMismatch { detail }
-                if detail.contains("nested process containment")
+            result,
+            SubagentWorkspaceDisposal::NoRetainedWorkspace(_)
+        ));
+        assert!(matches!(
+            recovered.wait_agent(&accepted.child_agent_id).await,
+            Err(AgentControlError::Settlement)
         ));
         let after = recovered
             .snapshot(&accepted.subagent_id)
@@ -7162,7 +7383,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn unresolved_resource_external_disappearance_fails_closed_without_intent() {
         let plane = plane(4);
-        let (accepted, settled) = unresolved_git_child(&plane, "external disappearance").await;
+        let (accepted, settled) =
+            Box::pin(unresolved_git_child(&plane, "external disappearance")).await;
         let worktree = settled
             .workspace
             .git_worktree()
@@ -7220,7 +7442,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn unresolved_resource_branch_tampering_fails_closed_without_intent() {
         let plane = plane(4);
-        let (accepted, settled) = unresolved_git_child(&plane, "tampered unresolved branch").await;
+        let (accepted, settled) =
+            Box::pin(unresolved_git_child(&plane, "tampered unresolved branch")).await;
         let worktree = settled
             .workspace
             .git_worktree()
@@ -7273,7 +7496,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn unresolved_resource_reproof_after_restart_disposes_idempotently() {
         let plane = plane(4);
-        let (accepted, settled) = unresolved_git_child(&plane, "retry unresolved disposal").await;
+        let (accepted, settled) =
+            Box::pin(unresolved_git_child(&plane, "retry unresolved disposal")).await;
         let worktree = settled
             .workspace
             .git_worktree()
@@ -7371,21 +7595,45 @@ mod tests {
         ));
     }
 
-    /// Issue #192 — a successful child whose terminal settlement retained
-    /// changed isolated work publishes two items in one durable
-    /// transaction: the runtime-authored terminal notice first — the
-    /// parent-model correlation projection naming the exact typed
-    /// execution handle, with the retained-workspace semantic fact folded
-    /// in (the runtime alone can know terminal workspace settlement) — and
-    /// the child-authored final report last, byte-for-byte the child's own
-    /// content. The notice carries semantic facts only — never a
-    /// physical path, branch, or commit.
+    /// A normal Agent keeps its workspace after activation settlement and
+    /// publishes exactly one notice/report pair through canonical inbound.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // one cohesive retained-notice regression
-    async fn a_successful_retained_worktree_child_publishes_a_runtime_authored_adjacent_notice() {
+    async fn a_successful_agent_keeps_workspace_and_publishes_one_adjacent_notice() {
         let plane = plane(4);
-        let (accepted, settled) = retained_git_child(&plane, "write a source change").await;
-        let handoff = settled.handoff.clone().expect("retained handoff");
+        make_clean_git_workspace(&plane);
+        let child = stage_stubborn(&plane);
+        let mut spec = start_spec("write a source change");
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
+        let accepted = start(&plane, &spec).await;
+        let workspace = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .unwrap()
+            .workspace
+            .logical_workspace;
+        std::fs::write(workspace.join("retained.txt"), "Agent-owned work").unwrap();
+        child
+            .complete(ChildResultStatus::Succeeded, Some("child answer"))
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        assert!(
+            settled.handoff.is_none(),
+            "inactive Agent still owns its workspace"
+        );
+        assert!(workspace.join("retained.txt").exists());
+        let agent = plane
+            .registry
+            .agent_snapshot(&accepted.child_agent_id)
+            .unwrap();
+        assert_eq!(agent.state, super::super::AgentState::Inactive);
 
         let pending = plane
             .store
@@ -7421,30 +7669,19 @@ mod tests {
         };
         assert!(
             notice_text.text.contains(&format!(
-                "{{\"kind\":\"subagent\",\"id\":\"{}\"}}",
-                accepted.subagent_id
+                "Agent {} activation {}",
+                accepted.child_agent_id, accepted.subagent_id
             )),
-            "the notice names the exact typed execution handle: {}",
-            notice_text.text
+            "the notice correlates both independent identities"
         );
         assert!(
-            notice_text
-                .text
-                .contains("changes were retained and are not applied to your workspace"),
-            "the minimal actionable semantic fact: {}",
-            notice_text.text
+            !notice_text.text.contains(&workspace.display().to_string()),
+            "no physical path crosses the model boundary"
         );
-        for physical in [
-            handoff.physical_worktree_root.display().to_string(),
-            handoff.branch.clone(),
-            handoff.base_commit.clone(),
-            handoff.head_commit.clone(),
-        ] {
-            assert!(
-                !notice_text.text.contains(&physical),
-                "no physical path/ref crosses into the notice: {physical}"
-            );
-        }
+        assert!(
+            !notice_text.text.contains("dispose"),
+            "the inactive Agent workspace is not a disposable terminal handoff"
+        );
 
         // The terminal report remains last and purely child-authored.
         let report = &pending.items[1];
@@ -7480,18 +7717,18 @@ mod tests {
         );
     }
 
-    /// Issue #192 — a failed child whose settlement retained changed
-    /// isolated work folds the retained fact into its one runtime-authored
-    /// diagnostic notice: same provenance, one message, no physical detail.
+    /// A failed activation leaves its Agent-owned workspace intact and
+    /// publishes one runtime-authored failure notice, without physical paths.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_failed_retained_worktree_child_folds_the_retained_fact_into_its_runtime_notice() {
+    async fn a_failed_agent_keeps_workspace_and_publishes_one_runtime_notice() {
         let plane = plane(4);
         make_clean_git_workspace(&plane);
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
         let accepted = start(&plane, &spec).await;
         let workspace = plane
             .registry
@@ -7508,7 +7745,11 @@ mod tests {
             .await
             .expect("settled");
         assert_eq!(settled.state, SubagentState::Failed);
-        let handoff = settled.handoff.clone().expect("retained handoff");
+        assert!(
+            settled.handoff.is_none(),
+            "the durable Agent keeps its workspace"
+        );
+        assert!(workspace.join("retained.txt").exists());
 
         let pending = plane
             .store
@@ -7529,21 +7770,8 @@ mod tests {
             panic!("the notice is text");
         };
         assert!(text.text.contains("failed"), "the failure diagnostic");
-        assert!(
-            text.text
-                .contains("changes were retained and are not applied to your workspace"),
-            "the retained fact rides the same runtime notice: {}",
-            text.text
-        );
-        for physical in [
-            handoff.physical_worktree_root.display().to_string(),
-            handoff.branch.clone(),
-        ] {
-            assert!(
-                !text.text.contains(&physical),
-                "no physical path/ref crosses into the notice: {physical}"
-            );
-        }
+        assert!(!text.text.contains("dispose"));
+        assert!(!text.text.contains(&workspace.display().to_string()));
     }
 
     /// Issue #191/#192 — ordinary explicit cancellation and deadline
@@ -7782,7 +8010,10 @@ mod tests {
             &deadline_spec("deadline wins the authority race", 100),
         )
         .await;
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
         assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
 
         // The child's success result is consumed and every physical
@@ -7802,7 +8033,10 @@ mod tests {
             SubagentState::Running,
             "the terminal contender is parked before its commit; Running is not yet Cancelling"
         );
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
 
         // Fire the manual deadline while terminal authority is parked: the
         // deadline contender acquires the registry mutex first and commits
@@ -7812,7 +8046,11 @@ mod tests {
         assert_eq!(cancelling.state, SubagentState::Cancelling);
         assert_eq!(
             recorded.states(),
-            vec![SubagentState::Running, SubagentState::Cancelling],
+            vec![
+                SubagentState::Stopping,
+                SubagentState::Running,
+                SubagentState::Cancelling
+            ],
             "exactly one observable Running -> Cancelling transition"
         );
 
@@ -7839,6 +8077,7 @@ mod tests {
         assert_eq!(
             recorded.states(),
             vec![
+                SubagentState::Stopping,
                 SubagentState::Running,
                 SubagentState::Cancelling,
                 SubagentState::Cancelled
@@ -7859,6 +8098,7 @@ mod tests {
         assert_eq!(
             recorded.states(),
             vec![
+                SubagentState::Stopping,
                 SubagentState::Running,
                 SubagentState::Cancelling,
                 SubagentState::Cancelled
@@ -7885,7 +8125,10 @@ mod tests {
             .registry
             .watch_deadline_completion(&SubagentId::for_conversation(&plane.conversation_id, 1));
         let accepted = start(&plane, &deadline_spec("terminal authority wins", 100)).await;
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
         assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
 
         // Fire the manual deadline: the fired deadline task is now a live
@@ -7902,7 +8145,10 @@ mod tests {
             SubagentState::Running,
             "the deadline contender is parked before its commit"
         );
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
 
         // While the deadline contender is parked, terminal settlement
         // acquires the registry critical section and commits one
@@ -7926,7 +8172,11 @@ mod tests {
         );
         assert_eq!(
             recorded.states(),
-            vec![SubagentState::Running, SubagentState::Succeeded],
+            vec![
+                SubagentState::Stopping,
+                SubagentState::Running,
+                SubagentState::Succeeded
+            ],
             "terminal authority won; no Cancelling was ever observable"
         );
 
@@ -7947,7 +8197,11 @@ mod tests {
         );
         assert_eq!(
             recorded.states(),
-            vec![SubagentState::Running, SubagentState::Succeeded],
+            vec![
+                SubagentState::Stopping,
+                SubagentState::Running,
+                SubagentState::Succeeded
+            ],
             "the released deadline produced no second transition"
         );
         assert_eq!(
@@ -8007,7 +8261,10 @@ mod tests {
             &deadline_spec("deadline wins the cancel race", 100),
         )
         .await;
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
         assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
 
         // Explicit cancellation is a live contender first: spawned and
@@ -8027,7 +8284,10 @@ mod tests {
             SubagentState::Running,
             "the explicit contender is parked before its commit"
         );
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
 
         // Fire the manual deadline: it reaches the same cancellation
         // authority and is allowed to acquire/commit first.
@@ -8036,7 +8296,11 @@ mod tests {
         assert_eq!(cancelling.state, SubagentState::Cancelling);
         assert_eq!(
             recorded.states(),
-            vec![SubagentState::Running, SubagentState::Cancelling],
+            vec![
+                SubagentState::Stopping,
+                SubagentState::Running,
+                SubagentState::Cancelling
+            ],
             "exactly one observable Running -> Cancelling transition"
         );
         assert!(
@@ -8062,7 +8326,11 @@ mod tests {
         assert_eq!(losing_explicit.state, SubagentState::Cancelling);
         assert_eq!(
             recorded.states(),
-            vec![SubagentState::Running, SubagentState::Cancelling],
+            vec![
+                SubagentState::Stopping,
+                SubagentState::Running,
+                SubagentState::Cancelling
+            ],
             "the losing explicit caller produced no transition"
         );
 
@@ -8090,6 +8358,7 @@ mod tests {
         assert_eq!(
             recorded.states(),
             vec![
+                SubagentState::Stopping,
                 SubagentState::Running,
                 SubagentState::Cancelling,
                 SubagentState::Cancelled
@@ -8113,7 +8382,10 @@ mod tests {
             .registry
             .watch_deadline_completion(&SubagentId::for_conversation(&plane.conversation_id, 1));
         let accepted = start(&plane, &deadline_spec("explicit wins the cancel race", 100)).await;
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
         assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
 
         // Fire the manual deadline: the fired deadline task is a live
@@ -8129,7 +8401,10 @@ mod tests {
             SubagentState::Running,
             "the deadline contender is parked before its commit"
         );
-        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Stopping, SubagentState::Running]
+        );
 
         // Explicit cancellation is allowed to commit first (it passes the
         // parked deadline contender).
@@ -8140,7 +8415,11 @@ mod tests {
         assert_eq!(cancelling.state, SubagentState::Cancelling);
         assert_eq!(
             recorded.states(),
-            vec![SubagentState::Running, SubagentState::Cancelling],
+            vec![
+                SubagentState::Stopping,
+                SubagentState::Running,
+                SubagentState::Cancelling
+            ],
             "exactly one observable Running -> Cancelling transition"
         );
         assert!(
@@ -8162,7 +8441,11 @@ mod tests {
             .expect("the fired deadline's cancellation call returned");
         assert_eq!(
             recorded.states(),
-            vec![SubagentState::Running, SubagentState::Cancelling],
+            vec![
+                SubagentState::Stopping,
+                SubagentState::Running,
+                SubagentState::Cancelling
+            ],
             "the released deadline produced no second transition"
         );
 
@@ -8190,6 +8473,7 @@ mod tests {
         assert_eq!(
             recorded.states(),
             vec![
+                SubagentState::Stopping,
                 SubagentState::Running,
                 SubagentState::Cancelling,
                 SubagentState::Cancelled
@@ -8333,7 +8617,7 @@ mod tests {
                 .as_millis(),
             100
         );
-        source_spec.resolved.execution_deadline = Some(
+        source_spec.authority.resolved.execution_deadline = Some(
             SubagentExecutionDeadline::from_millis(1_000).expect("valid replacement deadline"),
         );
         let accepted = match plane
@@ -8500,6 +8784,9 @@ mod tests {
             .await
             .expect("cancel task")
         };
+        // Release the deterministic handoff gate after capturing the state,
+        // before assertions, so a failing invariant cannot strand a worker.
+        hook.release();
         assert_eq!(cancelling.state, SubagentState::Cancelling);
         let expected_reason = if runtime_drain {
             CancellationReason::RuntimeShutdown
@@ -8507,7 +8794,6 @@ mod tests {
             CancellationReason::UserRequested
         };
 
-        hook.release();
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
             .await
             .expect("commit liveness")
@@ -8585,8 +8871,12 @@ mod tests {
                 Some(ParentFrame::Delegate(_)) => {
                     panic!("cancellation won the frontier; Delegate must never be sent")
                 }
-                Some(ParentFrame::Hello(_)) => {
-                    panic!("unexpected Hello after Ready")
+                Some(
+                    ParentFrame::Hello(_)
+                    | ParentFrame::SealGranted
+                    | ParentFrame::AdmissionReopened,
+                ) => {
+                    panic!("unexpected handshake frame after cancellation")
                 }
                 Some(ParentFrame::AnchorAccepted(_) | ParentFrame::AnchorRefused(_)) => {
                     panic!("this child offered no nested process unit anchor")
@@ -8614,7 +8904,10 @@ mod tests {
             .await
             .expect("settled");
         assert_eq!(settled.state, SubagentState::Cancelled);
-        assert!(!settled.publication_abandoned);
+        assert_ne!(
+            settled.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         #[cfg(unix)]
         assert!(
             matches!(
@@ -8837,7 +9130,7 @@ mod tests {
             .expect_err("oversized task");
         assert!(matches!(error, SubagentStartError::InvalidTask { .. }));
         let mut oversized_context = start_spec("inspect");
-        oversized_context.context = Some("x".repeat(MAX_CONTEXT_PACKAGE_BYTES + 1));
+        oversized_context.admission.context = Some("x".repeat(MAX_CONTEXT_PACKAGE_BYTES + 1));
         let error = plane
             .registry
             .prepare(&oversized_context, &CancellationSignal::new())
@@ -8862,8 +9155,31 @@ mod tests {
             .wait_until_settled(&accepted.subagent_id)
             .await
             .expect("abandoned resolves the wait");
-        assert!(settled.publication_abandoned);
+        assert_eq!(
+            settled.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         assert_eq!(settled.state, SubagentState::PublishingTerminal);
+        assert!(matches!(
+            plane.registry.wait_agent(&accepted.child_agent_id).await,
+            Err(AgentControlError::Settlement)
+        ));
+        assert!(matches!(
+            plane
+                .registry
+                .interrupt_agent(&accepted.child_agent_id)
+                .await,
+            Err(AgentControlError::Settlement)
+        ));
+        assert_eq!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .unwrap()
+                .state,
+            AgentState::Unavailable
+        );
+
         // Nothing reached the durable authority.
         assert!(
             plane
@@ -8878,14 +9194,12 @@ mod tests {
     async fn physical_settlement_failure_keeps_terminal_retry_classification_stable() {
         let plane = plane(4);
         make_clean_git_workspace(&plane);
-        plane
-            .workspace_settlement_hook
-            .fail_next("injected terminal workspace settlement failure");
-        let child = stage_stubborn(&plane);
+        let child = stage_with_unresolved_anchor(&plane);
         let mut spec = start_spec("inspect");
-        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
-            require_clean_parent: true,
-        };
+        spec.authority.resolved.workspace_policy =
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
         let accepted = start(&plane, &spec).await;
         plane.store.arm_fail_accept_times(3);
         child
@@ -8894,8 +9208,6 @@ mod tests {
                 Some("success must stay private"),
             )
             .await;
-        plane.workspace_settlement_hook.wait_until_entered().await;
-        plane.workspace_settlement_hook.release().await;
 
         let abandoned = plane
             .registry
@@ -8903,7 +9215,10 @@ mod tests {
             .await
             .expect("publication abandoned");
         assert_eq!(abandoned.state, SubagentState::PublishingTerminal);
-        assert!(abandoned.publication_abandoned);
+        assert_eq!(
+            abandoned.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         let diagnostic = abandoned.detail.clone().expect("stable diagnostic");
         assert!(diagnostic.contains("physical settlement was not proven"));
         assert!(!diagnostic.contains("success must stay private"));
@@ -8919,7 +9234,10 @@ mod tests {
             .snapshot(&accepted.subagent_id)
             .expect("settled snapshot");
         assert_eq!(settled.state, SubagentState::Failed);
-        assert!(!settled.publication_abandoned);
+        assert_ne!(
+            settled.settlement.publication,
+            SubagentPublication::Abandoned
+        );
         assert_eq!(settled.detail.as_deref(), Some(diagnostic.as_str()));
         assert_eq!(
             events(&plane)
@@ -8956,7 +9274,10 @@ mod tests {
             .await
             .expect("abandoned publication is observable");
         assert_eq!(unresolved.state, SubagentState::PublishingTerminal);
-        assert!(unresolved.publication_abandoned);
+        assert_eq!(
+            unresolved.settlement.publication,
+            SubagentPublication::Abandoned
+        );
 
         let _second_child = stage_exit0(&plane);
         let second_prepared = plane
@@ -8985,7 +9306,7 @@ mod tests {
             .snapshot(&first.subagent_id)
             .expect("first snapshot");
         assert_eq!(settled.state, SubagentState::Succeeded);
-        assert!(settled.settled);
+        assert!(settled.is_settled());
     }
 
     #[tokio::test]
@@ -9025,9 +9346,11 @@ mod tests {
                 },
             )],
             &crate::events::types::SubagentWorkspaceTerminalResource::None,
+            true,
             committed_at,
         );
         let notice = super::super::terminal_notice(
+            &accepted.child_agent_id,
             &accepted.subagent_id,
             &SubagentName::parse("explore").expect("canonical name"),
             false,
@@ -9137,17 +9460,8 @@ mod tests {
         );
     }
 
-    /// **Workflow ownership is enforced by the domain authority itself**
-    /// (Issue #193).
-    ///
-    /// The refusal is asserted here, directly against
-    /// [`SubagentRegistry::steer`], and not only at the model-facing
-    /// `execution` boundary: the registry API is reachable from in-process
-    /// callers, so the rule has to live where the ownership fact lives. It
-    /// is decided from `SubagentTerminalMode` alone, ahead of every
-    /// lifecycle branch, so it is an ownership answer rather than a timing
-    /// one — and it holds while the child is `Running`, which is exactly
-    /// when an ordinary child would be steerable.
+    /// Workflow-owned finite `AgentRuns` never enter the durable native Agent
+    /// identity domain, so `send_message` rejects them even while running.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn the_registry_authority_refuses_to_steer_a_workflow_owned_child() {
         let plane = plane(4);
@@ -9165,24 +9479,15 @@ mod tests {
 
         let refused = plane
             .registry
-            .steer(&accepted.subagent_id, "the workflow owns this instruction")
+            .send_message(
+                &accepted.child_agent_id,
+                "the workflow owns this instruction",
+                crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                crate::runtime::cancellation::CancellationSignal::new(),
+            )
             .await
             .expect_err("a Workflow-owned AgentRun is never steerable");
-        let SubagentSteerError::WorkflowOwned {
-            workflow_id,
-            node_id,
-        } = &refused
-        else {
-            panic!("the refusal names Workflow ownership, not a lifecycle: {refused:?}");
-        };
-        assert_eq!(workflow_id.as_str(), "test_workflow");
-        assert_eq!(node_id.node, "agent");
-        assert!(
-            refused
-                .to_string()
-                .contains("steering is not supported for workflow-owned subagent executions"),
-            "the bounded message is stable: {refused}"
-        );
+        assert!(matches!(refused, AgentControlError::Unknown(id) if id == accepted.child_agent_id));
         assert_eq!(
             plane
                 .registry
@@ -9240,6 +9545,846 @@ mod tests {
         assert_eq!(after.state, SubagentState::Succeeded);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn goal_idle_append_releases_registry_mutex_and_excludes_ownership_commit() {
+        let plane = plane(4);
+        let goal = crate::goal::GoalDomain::new(plane.store.clone());
+        goal.write(crate::goal::GoalWrite::Create {
+            objective: "one durable idle continuation".into(),
+            budget: 1,
+            origin: crate::goal::GoalOrigin::RuntimeControl,
+        })
+        .unwrap()
+        .unwrap();
+        let child = stage_exit0(&plane);
+        let cancellation = CancellationSignal::new();
+        let prepared = plane
+            .registry
+            .prepare(
+                &start_spec("must wait for the idle frontier"),
+                &cancellation,
+            )
+            .await
+            .unwrap();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        let idle = std::thread::spawn({
+            let registry = plane.registry.clone();
+            let hook = hook.clone();
+            move || {
+                registry.with_goal_idle(|| {
+                    hook.wait();
+                    crate::goal::GoalRoundDriver::request(
+                        &goal,
+                        &registry.config.mailbox,
+                        Utc::now(),
+                    )
+                })
+            }
+        });
+        // This is the real Goal callback after it captured an idle claim and
+        // before its SQLite request. Unrelated controls still take the mutex.
+        hook.wait_until_entered();
+        assert!(plane.registry.all_snapshots().is_empty());
+        assert!(
+            plane
+                .registry
+                .list_agents(MAX_AGENT_LIST_LIMIT)
+                .agents
+                .is_empty()
+        );
+        plane
+            .registry
+            .cancel_all(CancellationReason::RuntimeShutdown);
+        assert_eq!(plane.registry.with_goal_idle(|| true), None);
+        let mut committing = Box::pin(plane.registry.commit(prepared, &cancellation));
+        assert!(futures_util::poll!(&mut committing).is_pending());
+        assert!(
+            plane
+                .registry
+                .state
+                .lock()
+                .unwrap()
+                .ownership_committing
+                .is_empty()
+        );
+        assert!(!events(&plane).iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
+        )));
+        hook.release();
+        assert!(idle.join().unwrap().unwrap().unwrap());
+        let SubagentStartOutcome::Accepted(accepted) = committing.await.unwrap() else {
+            panic!("released idle claim permits the exact waiting owner");
+        };
+        child
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ownership_commit_pause_keeps_registry_controls_available() {
+        let plane = plane(1);
+        let mut child = stage_exit0(&plane);
+        let hook = Arc::new(CommitBoundaryHook::default());
+        plane.registry.state.lock().unwrap().commit_hook = Some(hook.clone());
+        let registry = plane.registry.clone();
+        let starting = tokio::spawn(async move {
+            let cancellation = CancellationSignal::new();
+            let prepared = registry
+                .prepare(&start_spec("cancel before durability"), &cancellation)
+                .await
+                .unwrap();
+            registry.commit(prepared, &cancellation).await
+        });
+        // Capacity and exact ID are reserved; the durable writer is parked
+        // outside the registry mutex and before canonical ownership exists.
+        hook.wait_until_entered();
+        assert!(plane.registry.all_snapshots().is_empty());
+        assert_eq!(
+            plane
+                .registry
+                .state
+                .lock()
+                .unwrap()
+                .ownership_committing
+                .len(),
+            1
+        );
+        plane
+            .registry
+            .cancel_all(CancellationReason::RuntimeShutdown);
+        hook.release();
+        assert!(matches!(
+            starting.await.unwrap(),
+            Ok(SubagentStartOutcome::RolledBack)
+        ));
+        assert!(events(&plane).is_empty());
+        assert!(
+            super::super::ipc::read_parent_frame(&mut child.peer)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            plane
+                .registry
+                .state
+                .lock()
+                .unwrap()
+                .ownership_committing
+                .is_empty()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn reserved_commit_does_not_lock_registry_and_interrupt_captures_exact_reservation() {
+        let plane = plane(4);
+        let first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first")).await;
+        first
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        plane.registry.state.lock().unwrap().reserved_commit_hook = Some(hook.clone());
+        let registry = plane.registry.clone();
+        let id = accepted.child_agent_id.clone();
+        let sending = tokio::spawn(async move {
+            registry
+                .send_message(
+                    &id,
+                    "next",
+                    AgentActivationOrigin::ClientControl,
+                    CancellationSignal::new(),
+                )
+                .await
+        });
+        // The real owner has installed its durable physical authority and is
+        // parked exactly before appending Reserved, with no registry lock.
+        hook.wait_until_entered();
+        let snapshot = plane
+            .registry
+            .agent_snapshot(&accepted.child_agent_id)
+            .unwrap();
+        assert_eq!(snapshot.state, AgentState::Admitting);
+        let activation = snapshot.current_activation.unwrap();
+        assert_ne!(activation, accepted.subagent_id);
+        let mut interrupt = Box::pin(plane.registry.interrupt_agent(&accepted.child_agent_id));
+        assert!(futures_util::poll!(&mut interrupt).is_pending());
+        assert_eq!(plane.registry.list_agents(MAX_AGENT_LIST_LIMIT).matched, 1);
+        hook.release();
+        assert!(matches!(
+            sending.await.unwrap(),
+            Err(AgentControlError::Start(SubagentStartError::Cancelled))
+        ));
+        assert_eq!(
+            interrupt.await.unwrap().activation_id,
+            Some(activation.clone())
+        );
+        let admissions: Vec<_> = events(&plane)
+            .into_iter()
+            .filter_map(|event| {
+                if let crate::events::types::RuntimeEvent::AgentActivationAdmission {
+                    activation_id,
+                    phase,
+                    ..
+                } = event
+                    && activation_id == activation
+                {
+                    Some(phase)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            admissions,
+            vec![
+                crate::events::types::AgentActivationAdmissionPhase::Reserved,
+                crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                    physical_settlement_proven: true
+                },
+            ]
+        );
+        assert_eq!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .unwrap()
+                .state,
+            AgentState::Inactive
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn resumed_cancellation_before_delegate_is_proven_not_delivered() {
+        let plane = plane(4);
+        let first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first")).await;
+        first
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        let mut child = stage_exit0(&plane);
+        let hook = Arc::new(ControlHandoffHook::default());
+        plane.registry.state.lock().unwrap().control_handoff_hook = Some(hook.clone());
+        let registry = plane.registry.clone();
+        let id = accepted.child_agent_id.clone();
+        let sending = tokio::spawn(async move {
+            registry
+                .send_message(
+                    &id,
+                    "never delivered",
+                    AgentActivationOrigin::ClientControl,
+                    CancellationSignal::new(),
+                )
+                .await
+        });
+        // Ownership is durable, but the process driver cannot cross its start gate.
+        hook.wait_until_entered();
+        let activation = plane
+            .registry
+            .agent_snapshot(&accepted.child_agent_id)
+            .unwrap()
+            .current_activation
+            .unwrap();
+        let mut interrupt = Box::pin(plane.registry.interrupt_agent(&accepted.child_agent_id));
+        assert!(futures_util::poll!(&mut interrupt).is_pending());
+        hook.release();
+        assert!(matches!(
+            child.read_frame().await,
+            ParentFrame::Cancel { .. }
+        ));
+        child.send_result(ChildResultStatus::Cancelled, None).await;
+        assert!(matches!(
+            sending.await.unwrap(),
+            Err(AgentControlError::NotDelivered)
+        ));
+        assert_eq!(interrupt.await.unwrap().activation_id, Some(activation));
+    }
+
+    #[tokio::test]
+    async fn resumed_delegate_without_acceptance_is_delivery_unknown() {
+        let plane = plane(4);
+        let first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first")).await;
+        first
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        let mut child = stage_exit0(&plane);
+        let registry = plane.registry.clone();
+        let id = accepted.child_agent_id.clone();
+        let sending = tokio::spawn(async move {
+            registry
+                .send_message(
+                    &id,
+                    "possibly delivered",
+                    AgentActivationOrigin::ClientControl,
+                    CancellationSignal::new(),
+                )
+                .await
+        });
+        // Reading the actual frame establishes Delegate write before control loss.
+        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+        drop(child);
+        assert!(matches!(
+            sending.await.unwrap(),
+            Err(AgentControlError::DeliveryUnknown)
+        ));
+    }
+
+    /// Dedicated subprocess entry: the production `spawn_staged` command starts
+    /// this through its shell trampoline, inheriting the real authority fd.
+    #[test]
+    fn staged_rollback_wire_child() {
+        use std::os::fd::AsFd as _;
+        if std::env::var_os("RUSTX_STAGED_ROLLBACK_FIXTURE").is_none() {
+            return;
+        }
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let stream = std::os::unix::net::UnixStream::from(
+                std::io::stdin().as_fd().try_clone_to_owned().unwrap(),
+            );
+            stream.set_nonblocking(true).unwrap();
+            let mut control = tokio::net::UnixStream::from_std(stream).unwrap();
+            let Some(ParentFrame::Hello(spec)) = super::super::ipc::read_parent_frame(&mut control)
+                .await
+                .unwrap()
+            else {
+                panic!("Hello");
+            };
+            // Actual child authority transition, never a manufactured receipt.
+            let _owner =
+                super::super::physical_recovery::ChildPhysicalLease::acquire(&spec).unwrap();
+            super::super::ipc::write_child_frame(
+                &mut control,
+                &ChildFrame::AnchorOffered(super::super::ipc::ProcessUnitAnchorFrame {
+                    unit_id: crate::runtime::identity::ProcessUnitId::new("unit-unproven-startup"),
+                    pgid: i32::MAX,
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                super::super::ipc::read_parent_frame(&mut control)
+                    .await
+                    .unwrap(),
+                Some(ParentFrame::AnchorAccepted(_))
+            ));
+            super::super::ipc::write_child_frame(
+                &mut control,
+                &ChildFrame::StartupError(super::super::ipc::DiagnosticFrame {
+                    message: "composition failed after owned staging".into(),
+                }),
+            )
+            .await
+            .unwrap();
+            // The process owner tears us down after StartupError; the offered
+            // anchor remains intentionally unprovable, so no epilogue claims proof.
+            let _ = super::super::ipc::read_parent_frame(&mut control).await;
+        });
+    }
+
+    #[tokio::test]
+    async fn staged_rollback_uncertainty_survives_prepare_and_durable_admission_rollback() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut plane = plane(4);
+        let executable = std::env::current_exe()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\'', "'\\''");
+        let script = plane.dir.path().join("unproven-child.sh");
+        std::fs::write(&script, format!(
+            "#!/bin/sh\nRUSTX_STAGED_ROLLBACK_FIXTURE=1 exec '{executable}' --exact runtime::subagent::registry::tests::staged_rollback_wire_child --nocapture\n"
+        )).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        plane.registry.config.spawn.program = script;
+        let first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first")).await;
+        first
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        let child_store = super::super::child_conversation_store_path(
+            plane.registry.config.spawn.product_root.root(),
+            &plane.registry.config.spawn.session_id,
+            &accepted.child_conversation_id,
+        );
+        std::fs::create_dir_all(child_store.parent().unwrap()).unwrap();
+        let _child_store = crate::durable::SqliteConversationStore::open(
+            accepted.child_conversation_id.clone(),
+            &child_store,
+        )
+        .unwrap();
+        let result = plane
+            .registry
+            .send_message(
+                &accepted.child_agent_id,
+                "next",
+                AgentActivationOrigin::ClientControl,
+                CancellationSignal::new(),
+            )
+            .await;
+        assert!(matches!(result, Err(AgentControlError::Settlement)));
+        let failed = plane
+            .registry
+            .agent_snapshot(&accepted.child_agent_id)
+            .unwrap();
+        let failed_activation = failed.current_activation.as_ref().unwrap();
+        assert_ne!(failed_activation, &accepted.subagent_id);
+        assert_eq!(failed.conversation_id, accepted.child_conversation_id);
+        assert!(
+            super::super::physical_recovery::prove(
+                &plane.registry.config.spawn.product_root,
+                &plane.registry.config.spawn.session_id,
+                &accepted.child_conversation_id,
+                failed_activation,
+            )
+            .unwrap()
+            .is_none(),
+            "unproven Running authority cannot become a recovery proof"
+        );
+        let rollback: Vec<_> = events(&plane)
+            .into_iter()
+            .filter_map(|event| {
+                if let crate::events::types::RuntimeEvent::AgentActivationAdmission {
+                    phase:
+                        crate::events::types::AgentActivationAdmissionPhase::RolledBack {
+                            physical_settlement_proven,
+                        },
+                    ..
+                } = event
+                {
+                    Some(physical_settlement_proven)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(rollback, vec![false]);
+        assert_eq!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .unwrap()
+                .state,
+            AgentState::Unavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_cancels_reserved_resume_before_preparation() {
+        let plane = plane(4);
+        let first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first")).await;
+        first
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        let mut resume = Box::pin(plane.registry.send_message(
+            &accepted.child_agent_id,
+            "next",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        ));
+        // One poll reserves the activation; its owner task has not run yet.
+        assert!(futures_util::poll!(&mut resume).is_pending());
+        plane
+            .registry
+            .cancel_all(CancellationReason::RuntimeShutdown);
+        assert!(matches!(
+            resume.await,
+            Err(AgentControlError::Start(SubagentStartError::Cancelled))
+        ));
+        assert_eq!(plane.registry.all_snapshots().len(), 1);
+        assert_eq!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .unwrap()
+                .state,
+            AgentState::Inactive
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_resume_cleanup_cannot_clear_a_newer_reservation() {
+        let plane = plane(4);
+        let first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first")).await;
+        first
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        let mut resume = Box::pin(plane.registry.send_message(
+            &accepted.child_agent_id,
+            "next",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        ));
+        assert!(futures_util::poll!(&mut resume).is_pending());
+        {
+            let mut state = plane.registry.state.lock().unwrap();
+            let agent = state.agents.get_mut(&accepted.child_agent_id).unwrap();
+            let reserved = agent.resuming.as_ref().unwrap().activation_id.clone();
+            // Exact cleanup operation of an older completion, ordered after
+            // a newer reservation through the same owner mutex.
+            agent.finish_resume(&accepted.subagent_id);
+            assert_eq!(agent.resuming.as_ref().unwrap().activation_id, reserved);
+        }
+        plane
+            .registry
+            .cancel_all(CancellationReason::RuntimeShutdown);
+        assert!(resume.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_resume_reserves_exactly_one_activation_before_preparation() {
+        let plane = plane(4);
+        let first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first")).await;
+        first
+            .complete(ChildResultStatus::Succeeded, Some("first report"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        let mut second = stage_exit0(&plane);
+        let mut winner = Box::pin(plane.registry.send_message(
+            &accepted.child_agent_id,
+            "resume winner",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        ));
+        // On this current-thread executor the first poll commits reservation,
+        // then parks on its spawned preparation. That task cannot run until
+        // this test yields; the losing contender deterministically sees it.
+        assert!(futures_util::poll!(&mut winner).is_pending());
+        assert!(matches!(
+            plane
+                .registry
+                .send_message(
+                    &accepted.child_agent_id,
+                    "resume loser",
+                    crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                    crate::runtime::cancellation::CancellationSignal::new()
+                )
+                .await,
+            Err(AgentControlError::Stopping)
+        ));
+        let mut admission_wait = Box::pin(plane.registry.wait_agent(&accepted.child_agent_id));
+        assert!(futures_util::poll!(&mut admission_wait).is_pending());
+        second.accept_delegate().await;
+        let resumed = winner.await.unwrap();
+        assert_ne!(resumed.activation_id, accepted.subagent_id);
+        {
+            let state = plane.registry.state.lock().unwrap();
+            assert_eq!(
+                state
+                    .records
+                    .iter()
+                    .filter(|record| record.child_agent_id == accepted.child_agent_id
+                        && record.lifecycle.is_active())
+                    .count(),
+                1
+            );
+            assert_eq!(state.records.len(), 2);
+        }
+        second
+            .send_result(ChildResultStatus::Succeeded, Some("second report"))
+            .await;
+        drop(second);
+        assert!(admission_wait.await.unwrap().outcome.is_some());
+        plane
+            .registry
+            .wait_agent(&accepted.child_agent_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_active_messages_follow_owner_admission_sequence() {
+        let plane = plane(4);
+        let mut child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("messages")).await;
+        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+        let mut first = Box::pin(plane.registry.send_message(
+            &accepted.child_agent_id,
+            "one",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        ));
+        let mut second = Box::pin(plane.registry.send_message(
+            &accepted.child_agent_id,
+            "two",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        ));
+        assert!(futures_util::poll!(&mut first).is_pending());
+        assert!(futures_util::poll!(&mut second).is_pending());
+        let ParentFrame::Guidance(one) = child.read_frame().await else {
+            panic!("first guidance");
+        };
+        let ParentFrame::Guidance(two) = child.read_frame().await else {
+            panic!("second guidance");
+        };
+        assert_eq!(one.message, "one");
+        assert_eq!(two.message, "two");
+        assert_eq!(two.guidance_id, one.guidance_id + 1);
+        // Response scheduling cannot alter durable delivery order.
+        for message in [two, one] {
+            super::super::ipc::write_child_frame(
+                &mut child.peer,
+                &ChildFrame::GuidanceResult(super::super::ipc::GuidanceResultFrame {
+                    guidance_id: message.guidance_id,
+                    outcome: super::super::ipc::ChildGuidanceOutcome::Accepted,
+                }),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(first.await.unwrap().activation_id, accepted.subagent_id);
+        assert_eq!(second.await.unwrap().activation_id, accepted.subagent_id);
+        child
+            .send_result(ChildResultStatus::Succeeded, Some("ordered report"))
+            .await;
+        plane
+            .registry
+            .wait_agent(&accepted.child_agent_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupt_settles_only_captured_activation_and_agent_resumes() {
+        let plane = plane(4);
+        let mut child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("interrupt")).await;
+        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+        let mut interrupt = Box::pin(plane.registry.interrupt_agent(&accepted.child_agent_id));
+        assert!(futures_util::poll!(&mut interrupt).is_pending());
+        assert_eq!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .unwrap()
+                .state,
+            AgentState::Stopping
+        );
+        assert!(matches!(
+            plane
+                .registry
+                .send_message(
+                    &accepted.child_agent_id,
+                    "too late",
+                    crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                    crate::runtime::cancellation::CancellationSignal::new()
+                )
+                .await,
+            Err(AgentControlError::Stopping)
+        ));
+        assert!(matches!(
+            child.read_frame().await,
+            ParentFrame::Cancel { .. }
+        ));
+        child
+            .send_result(
+                ChildResultStatus::Succeeded,
+                Some("losing normal completion"),
+            )
+            .await;
+        let result = interrupt.await.unwrap();
+        assert_eq!(result.activation_id, Some(accepted.subagent_id));
+        assert_eq!(result.outcome.unwrap().state, SubagentState::Cancelled);
+        assert_eq!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .unwrap()
+                .state,
+            AgentState::Inactive
+        );
+        let mut next = stage_exit0(&plane);
+        let (resumed, _) = tokio::join!(
+            plane.registry.send_message(
+                &accepted.child_agent_id,
+                "continue",
+                AgentActivationOrigin::ClientControl,
+                CancellationSignal::new()
+            ),
+            next.accept_delegate(),
+        );
+        assert!(resumed.unwrap().resumed);
+        next.send_result(ChildResultStatus::Succeeded, Some("resumed report"))
+            .await;
+        drop(next);
+        plane
+            .registry
+            .wait_agent(&accepted.child_agent_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn agent_resume_preserves_identity_and_wait_captures_only_one_activation() {
+        let plane = plane(4);
+        let mut first = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("first activation")).await;
+        assert!(matches!(first.read_frame().await, ParentFrame::Delegate(_)));
+        let agent_id = accepted.child_agent_id;
+        let conversation_id = accepted.child_conversation_id;
+        assert_eq!(
+            plane.registry.agent_snapshot(&agent_id).unwrap().state,
+            AgentState::Active
+        );
+        let mut waiting = Box::pin(plane.registry.wait_agent(&agent_id));
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        first
+            .send_result(ChildResultStatus::Succeeded, Some("first report"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            plane.registry.agent_snapshot(&agent_id).unwrap().state,
+            AgentState::Inactive
+        );
+        assert!(
+            plane
+                .registry
+                .wait_agent(&agent_id)
+                .await
+                .unwrap()
+                .activation_id
+                .is_none()
+        );
+        let mut second = stage_exit0(&plane);
+        let (resumed, delegate) = tokio::join!(
+            plane.registry.send_message(
+                &agent_id,
+                "second activation",
+                AgentActivationOrigin::ClientControl,
+                CancellationSignal::new()
+            ),
+            second.accept_delegate(),
+        );
+        let resumed = resumed.unwrap();
+        assert!(resumed.resumed);
+        assert_ne!(resumed.activation_id, accepted.subagent_id);
+        let current = plane.registry.agent_snapshot(&agent_id).unwrap();
+        assert_eq!(current.conversation_id, conversation_id);
+        assert_eq!(current.agent_id, agent_id);
+        assert_eq!(current.state, AgentState::Active);
+        assert_eq!(
+            current.current_activation,
+            Some(resumed.activation_id.clone())
+        );
+        assert_eq!(
+            plane
+                .registry
+                .list_agents(MAX_AGENT_LIST_LIMIT)
+                .agents
+                .len(),
+            1
+        );
+        // Resume occurs before the original waiter is polled again. It must
+        // complete from its captured activation even while the next is active.
+        let result = futures_util::poll!(&mut waiting);
+        assert!(matches!(result, std::task::Poll::Ready(Ok(AgentWaitResult {
+            activation_id: Some(ref id), ..
+        })) if id == &accepted.subagent_id));
+        assert_eq!(delegate.task, "second activation");
+        second
+            .send_result(ChildResultStatus::Succeeded, Some("second report"))
+            .await;
+        plane.registry.wait_agent(&agent_id).await.unwrap();
+        assert_eq!(
+            plane.registry.agent_snapshot(&agent_id).unwrap().state,
+            AgentState::Inactive
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn seal_arbitrates_with_message_admission_and_drains_the_winner() {
+        let plane = plane(4);
+        let mut child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("survey")).await;
+        let id = accepted.subagent_id;
+        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+
+        // Admission is synchronous under the registry mutex. This call is
+        // the gate establishing that the message wins before SealRequested.
+        let (guidance_id, answer, _ticket) =
+            plane.registry.admit_guidance(&id, "before seal").unwrap();
+        super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealRequested)
+            .await
+            .unwrap();
+        let ParentFrame::Guidance(guidance) = child.read_frame().await else {
+            panic!("admitted input must precede the grant");
+        };
+        assert_eq!(guidance.guidance_id, guidance_id);
+        assert_eq!(guidance.message, "before seal");
+        assert!(matches!(child.read_frame().await, ParentFrame::SealGranted));
+        assert_eq!(
+            plane.registry.snapshot(&id).unwrap().state,
+            SubagentState::Stopping
+        );
+        assert!(matches!(
+            plane.registry.admit_guidance(&id, "after seal"),
+            Err(SubagentSteerError::Settled {
+                state: SubagentState::Stopping
+            })
+        ));
+        super::super::ipc::write_child_frame(
+            &mut child.peer,
+            &ChildFrame::GuidanceResult(super::super::ipc::GuidanceResultFrame {
+                guidance_id,
+                outcome: super::super::ipc::ChildGuidanceOutcome::Accepted,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            answer.await.unwrap(),
+            super::super::ipc::ChildGuidanceOutcome::Accepted
+        ));
+    }
+
     /// **A dropped steer future disposes its own ticket without
     /// synthesizing cancellation** (Issue #193 architecture review blocker
     /// 2).
@@ -9276,7 +10421,12 @@ mod tests {
 
         // (1) Admission: one poll drives the steer through `admit_guidance`
         // and parks it on the child's durable answer.
-        let mut steer = Box::pin(plane.registry.steer(&id, "steer one"));
+        let mut steer = Box::pin(plane.registry.send_message(
+            &accepted.child_agent_id,
+            "steer one",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        ));
         let () = std::future::poll_fn(|cx| {
             assert!(
                 steer.as_mut().poll(cx).is_pending(),
@@ -9318,8 +10468,17 @@ mod tests {
         // same running child.
         let second = tokio::spawn({
             let registry = plane.registry.clone();
-            let id = id.clone();
-            async move { registry.steer(&id, "steer after the abandonment").await }
+            let agent_id = accepted.child_agent_id.clone();
+            async move {
+                registry
+                    .send_message(
+                        &agent_id,
+                        "steer after the abandonment",
+                        crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                        crate::runtime::cancellation::CancellationSignal::new(),
+                    )
+                    .await
+            }
         });
         let ParentFrame::Guidance(guidance) = child.read_frame().await else {
             panic!(
@@ -9336,7 +10495,8 @@ mod tests {
         .await
         .expect("guidance answer");
         let second = second.await.expect("steer task").expect("accepted");
-        assert_eq!(second.state, SubagentState::Running);
+        assert_eq!(second.activation_id, id);
+        assert_eq!(second.agent_id, accepted.child_agent_id);
         assert_eq!(
             plane.registry.outstanding_guidance_tickets(&id),
             0,
@@ -9373,7 +10533,12 @@ mod tests {
 
         // Admit a steer and park it with the ticket armed; the child
         // withholds its answer and the future is deliberately kept alive.
-        let mut steer = Box::pin(plane.registry.steer(&id, "never answered"));
+        let mut steer = Box::pin(plane.registry.send_message(
+            &accepted.child_agent_id,
+            "never answered",
+            crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        ));
         let () = std::future::poll_fn(|cx| {
             assert!(steer.as_mut().poll(cx).is_pending());
             std::task::Poll::Ready(())
@@ -9412,23 +10577,9 @@ mod tests {
             "a terminal record never retains outstanding steering reservations"
         );
 
-        // (2) Polling the still-held steer future now completes
-        // deterministically: the driver dropped its waiter on exit, and the
-        // commit observes the cleared ticket, so the steer is refused — and
-        // the refusal is the honest child-side one, because the child never
-        // durably accepted the guidance.
+        // A write without an acknowledgement is ambiguous, even after settlement.
         let outcome = std::future::poll_fn(|cx| steer.as_mut().poll(cx)).await;
-        match outcome {
-            Err(SubagentSteerError::ChildRefused { detail }) => {
-                assert!(
-                    detail.contains("settled before the guidance was accepted"),
-                    "the refusal names the unanswered envelope: {detail}"
-                );
-            }
-            other => {
-                panic!("a steer whose child settled without answering is never accepted: {other:?}")
-            }
-        }
+        assert!(matches!(outcome, Err(AgentControlError::DeliveryUnknown)));
         assert_eq!(
             plane.registry.outstanding_guidance_tickets(&id),
             0,
@@ -9486,10 +10637,15 @@ mod tests {
             .install_steer_acknowledgement_hook(hook.clone());
         let steered = tokio::spawn({
             let registry = plane.registry.clone();
-            let id = id.clone();
+            let agent_id = accepted.child_agent_id.clone();
             async move {
                 registry
-                    .steer(&id, "accepted before the natural terminal")
+                    .send_message(
+                        &agent_id,
+                        "accepted before the natural terminal",
+                        crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                        crate::runtime::cancellation::CancellationSignal::new(),
+                    )
                     .await
             }
         });
@@ -9571,7 +10727,7 @@ mod tests {
         hook.release();
         let accepted = steered.await.expect("steer task").expect("accepted");
         assert_eq!(
-            accepted.subagent_id, id,
+            accepted.activation_id, id,
             "the acknowledgement names the very child that durably accepted"
         );
         assert_eq!(
@@ -9733,12 +10889,17 @@ mod tests {
         let mut state = registry.state.lock().expect("registry state");
         let index = state.records.len();
         state.records.push(SubagentRecord {
+            physical_settlement_proven: lifecycle.is_terminal(),
+            delegate_delivery: DelegateDelivery::NotSent,
+            parent_agent_id: AgentId::new("agent-parent"),
             subagent_id: subagent_id.clone(),
             child_agent_id: AgentId::new(format!("agent-{id}")),
             child_conversation_id: ConversationId::new(format!(
                 "conv_00000000-0000-7000-8000-{index:012x}"
             )),
-            tool_call_id: ToolCallId::new(format!("call-{id}")),
+            origin: AgentActivationOrigin::CreationTool {
+                tool_call_id: ToolCallId::new(format!("call-{id}")),
+            },
             agent: SubagentName::parse("reviewer").expect("agent name"),
             definition_digest: serde_json::from_value(serde_json::Value::String(format!(
                 "sha256:{}",
@@ -9749,7 +10910,8 @@ mod tests {
                 "sha256:{}",
                 "1".repeat(64)
             )),
-            terminal: SubagentTerminalMode::Normal,
+            ownership: SubagentOwnershipKind::Normal,
+            terminal: Some(SubagentTerminalMode::Normal),
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/workspace")),
             handoff: None,
             workspace_resource_state: SubagentWorkspaceResourceState::None,
@@ -9926,8 +11088,8 @@ mod tests {
         // defaults, so its profile identity differs from a default child's
         // while its definition identity does not.
         let mut spec = start_spec("inspect");
-        spec.resolved.extensions = crate::extensions::NativeAgentExtensions::none();
-        let expected = spec.resolved.profile_digest();
+        spec.authority.resolved.extensions = crate::extensions::NativeAgentExtensions::none();
+        let expected = spec.authority.resolved.profile_digest();
         assert_ne!(
             expected,
             resolved("explore").profile_digest(),
@@ -9952,7 +11114,11 @@ mod tests {
         assert_eq!(
             committed,
             (
-                spec.resolved.definition_digest.as_str().to_owned(),
+                spec.authority
+                    .resolved
+                    .definition_digest
+                    .as_str()
+                    .to_owned(),
                 expected.as_str().to_owned()
             ),
             "the ownership fact commits both identities exactly as frozen"
@@ -9992,7 +11158,7 @@ mod tests {
         let plane = plane(4);
         let child = stage_exit0(&plane);
         let spec = workflow_spec("inspect");
-        let expected = spec.resolved.profile_digest();
+        let expected = spec.authority.resolved.profile_digest();
 
         let accepted = start(&plane, &spec).await;
         let committed = events(&plane)
@@ -10045,7 +11211,9 @@ mod tests {
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
                     "conv_5c5feea1-e5d8-7965-8253-00af9a91ea8c",
                 ),
-                tool_call_id: ToolCallId::new("call-recovered"),
+                origin: AgentActivationOrigin::CreationTool {
+                    tool_call_id: ToolCallId::new("call-recovered"),
+                },
                 agent: "explore".to_owned(),
                 definition_digest: committed_definition.clone(),
                 profile_digest: committed_profile.clone(),

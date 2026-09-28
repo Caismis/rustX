@@ -31,11 +31,11 @@ import type {
   MessageId,
   ModelUsage,
   RuntimeClientAttemptPhase,
-  RuntimeClientBackgroundExecution,
+  RuntimeClientJob,
   RuntimeClientContextView,
   RuntimeClientCursor,
   RuntimeClientResourcesView,
-  RuntimeClientSubagent,
+  RuntimeClientAgent,
   RuntimeClientTranscriptCursor,
   RoutedInteraction,
   InteractionSettlement,
@@ -164,8 +164,8 @@ export interface PresentationState {
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
   pendingInteractions: RoutedInteraction[];
-  background: RuntimeClientBackgroundExecution[];
-  subagents: RuntimeClientSubagent[];
+  jobs: RuntimeClientJob[];
+  agents: RuntimeClientAgent[];
   /**
    * Composed Agent Statuses in runtime composition order, oldest first.
    *

@@ -605,7 +605,7 @@ impl McpRuntimeRetirementRegistry {
         }
     }
 
-    fn record_failure(&self, server_id: &McpServerId, error: &str) {
+    pub(crate) fn record_failure(&self, server_id: &McpServerId, error: &str) {
         let callback = {
             let callback_slot = self
                 .inner

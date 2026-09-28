@@ -626,6 +626,26 @@ const RENDERERS: ReadonlyMap<ToolId, ToolPresentationRenderer> = new Map([
   ["tool-edit", editRenderer],
   ["tool-write", writeRenderer],
   ["tool-todo", todoRenderer],
+  ...Object.entries({
+    job_list: "List Jobs", job_status: "Job status", job_wait: "Wait for Job", job_cancel: "Cancel Job",
+    subagent: "Create Agent", list_agents: "List Agents", send_message: "Message Agent",
+    wait_agent: "Wait for Agent activation", interrupt_agent: "Interrupt Agent activation",
+  }).map(([name, title]): [ToolId, ToolPresentationRenderer] => [
+    `tool-${name}`,
+    {
+      renderCall(args) {
+        const fields = record(args);
+        if (!fields) return undefined;
+        return {
+          title,
+          subject: text(fields["agent_id"]) ?? text(fields["job_id"]) ?? text(fields["agent"]),
+          // Arguments and results remain published evidence, never a source
+          // of lifecycle state for the Agent or Job activity panels.
+          detail: toLines(JSON.stringify(fields, null, 2)),
+        };
+      },
+    },
+  ]),
 ]);
 
 /** The renderer for one tool identity, or the generic one. */
