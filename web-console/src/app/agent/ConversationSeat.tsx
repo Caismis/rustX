@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { UserInputBlock } from '../../../../protocol/app-server/v27';
+import type { UserInputBlock } from '../../../../protocol/app-server/v28';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';

@@ -7163,7 +7163,7 @@ never bytes.
   established. Recording it never blocks on a client and never holds the
   Catalog mutex for delivery.
 
-  The integrated App Server v27 contract preserves this catalog owner alongside
+  The integrated App Server v28 contract preserves this catalog owner alongside
   finite Jobs, durable Agents and bounded client request lanes; see the
   [PR #416 integration audit](pr-416-main-integration.md).
 

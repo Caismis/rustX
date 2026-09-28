@@ -1,11 +1,18 @@
 # Trajectory semantic ledger contract
 
-Issue #421 is based independently on `a64e8ae79b2fa03da87d9995038670f179434845`
+Current repair and validation: [PR #424 contract and CI repair](pr-424-validation.md).
+Only that record describes validation of the repaired generation (Runtime Client 53 /
+App Server 28). The dated validation sections below are historical evidence for
+older commits, not evidence that the current HEAD passes.
+
+
+Historical initial implementation: issue #421 was based independently on `a64e8ae79b2fa03da87d9995038670f179434845`
 (fetched `origin/main`). The primary worktree contained only untracked
 `.playwright-mcp/`; it was left untouched. Implementation worktree:
 `/home/caismis/Documents/codes/rustX-issue-421`, branch
 `issue-421-trajectory-semantic-ledger`. PR #416 (finite Jobs / durable Agents)
-is independent and was not used as a base or dependency.
+was independent at that time. Main later integrated #416; the current repair
+includes it through `f4c044e9`, as recorded in the current validation document.
 
 ## Audited owners
 
@@ -15,9 +22,9 @@ is independent and was not used as a base or dependency.
 | Tool proposal and historical definition | `trace/detail.rs::step_tool_call`, `owning_request_snapshot`, `trace/tool.rs` |
 | Immutable request-relative presentation | `trace/summary.rs`, `record.rs`; native predecessor and Context joins |
 | Tool summary and lifecycle separation | `TraceToolSummary` in `trace/types.rs`, `record.rs` immutable materialization, `anchor.rs` lifecycle evidence |
-| Runtime protocol | `src/runtime_client/types.rs`; baseline 50, final 51 |
-| App Server protocol and schemas | `src/app_server/protocol.rs`, `schema.rs`, `examples/generate_app_server_protocol.rs`; baseline 25, final 26 |
-| Generated consumers | `protocol/app-server/{generate.mjs,package.json,type-contracts.ts,fixtures.json,fixtures.ts,v26.ts,v26.schema.json}` |
+| Runtime protocol | `src/runtime_client/types.rs`; reviewed main 52, current 53 |
+| App Server protocol and schemas | `src/app_server/protocol.rs`, `schema.rs`, `examples/generate_app_server_protocol.rs`; reviewed main 27, current 28 |
+| Generated consumers | `protocol/app-server/{generate.mjs,package.json,type-contracts.ts,fixtures.json,fixtures.ts,v28.ts,v28.schema.json}` |
 | Web transport and Trace cache | `web-console/src/client/{app-server.ts,trace.ts}` |
 | TUI transport and decoding | `tui/src/app-server/{client.ts,websocket-transport.ts}`, `tui/src/protocol/{app-server.ts,decoder.ts}` |
 | Native grouping, selection, folding | `web-console/src/app/trajectory/{layout.ts,Trajectory.tsx}` |
@@ -109,7 +116,7 @@ Lifecycle refresh resolves none of these immutable proposal facts. Results remai
 the bounded canonical ToolMessage preview, and an absent result is not replaced
 by the Tool name. The ledger shows input → result without a detail read.
 
-Runtime Client 51 and App Server 26 are the sole final vocabulary. Rust generation,
+Runtime Client 53 and App Server 28 are the sole current vocabulary. Rust generation,
 JSON schema, TypeScript, native serialized fixture, Web and TUI move atomically.
 The previous generated files are removed. No dual decoder, flags, aliases,
 protocol fallback, runtime events or storage migration are added.
@@ -178,7 +185,7 @@ from the immutable Playwright 1.63.0 Noble container, committed under
 `test/e2e/trajectory.spec.ts-snapshots/ledger-421-*`. No arbitrary screenshot
 thresholds, sleeps for races, new skips or raised timeouts are used.
 
-## Validation record
+## Historical validation record (before the current repair)
 
 Validation ran in the dedicated worktree against the fetched main base above.
 The actual CI owners are `.github/workflows/ci.yml`, the three package scripts,
@@ -470,7 +477,7 @@ Only `layout.ts` and its `Trajectory.tsx` call site change product behavior.
 Ledger keyboard/focus/virtualizer code, Row/CSS, Inspector, Timeline, Trace cache,
 Chat and all native/protocol/TUI sources are unchanged. Request-only, structural
 and semantic heights remain 10/20/30px. Turn/Step inspection remains summary-only.
-Runtime Client 51 / App Server 26 and the pinned Harness revision
+The historical Runtime Client 51 / App Server 26 implementation and the pinned Harness revision
 `477b4f420553e8a52c2fbccc464d7561b239c443` remain unchanged. Provenance descendant
 hashes reflect this local projection repair; no new Harness runtime semantics
 are imported.

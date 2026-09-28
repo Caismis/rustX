@@ -604,7 +604,17 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 27, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 28, requested: 12 })));
+        for requested in 0..crate::app_server::protocol::APP_SERVER_PROTOCOL_VERSION {
+            let request = serde_json::json!({"jsonrpc":"2.0","id":"previous-generation",
+                "method":"initialize","params":{"protocol_version":requested,
+                "client":{"name":"test","version":"1"},
+                "presentation":{"images":false,"questionnaires":false,"reviews":false}}});
+            let response = connection.handle_json(&request.to_string()).await.unwrap();
+            assert!(matches!(response, Response::Failure(Failure { error: RpcError {
+                data: Some(ErrorData::UnsupportedVersion { supported: 28, requested: rejected }), .. }, .. }) if rejected == requested));
+            assert_eq!(connection.attachment_counts(), (0, 0));
+        }
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -3285,7 +3295,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
         // byte-identically and no catalog commit happens.
         let reply = call(
             &connection,
-            52,
+            53,
             Method::TurnStart {
                 target: target.clone(),
                 content: wire_text("a follow-up repaints nothing"),

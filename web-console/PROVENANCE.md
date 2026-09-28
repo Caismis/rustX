@@ -1074,4 +1074,10 @@ New `TrajectoryLedger.tsx` and `TrajectoryRow.tsx` are bounded descendants with
 separate viewport and semantic/chrome responsibilities. No Harness runtime,
 request inference, manual resize system, subtool authority or canonical history
 is imported. Earlier per-file baselines remain; additional-source hashes identify
-this exact approved source and local hashes/import closure reflect App Server v26.
+this exact approved source and local hashes/import closure reflect App Server v28.
+
+The PR #424 contract repair keeps the pinned Harness revision above. Exact
+record membership repairs JSON-null Step ownership in the shared projection;
+local source hashes and import closures now reflect the mandatory v28 vocabulary.
+The #409/#411 v27 descriptions above are historical audit records. The full
+pinned-container browser acceptance passed without screenshot baseline changes.

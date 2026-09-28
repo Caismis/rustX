@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
-import type { Notification, RuntimeClientSnapshot } from '../../protocol/app-server/v27';
+import type { Notification, RuntimeClientSnapshot } from '../../protocol/app-server/v28';
 import { foldRuntimeEvent } from '../../protocol/app-server/projection';
 
 it('native snapshot C + captured contiguous wire events = independently acquired native snapshot N', () => {
