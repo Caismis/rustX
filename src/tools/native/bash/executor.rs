@@ -218,6 +218,16 @@ impl BashTestControl {
         self
     }
 
+    pub(crate) fn stopped_anchor_fixture(
+        mut self,
+        trace: std::path::PathBuf,
+        socket: std::path::PathBuf,
+    ) -> Self {
+        self.runner.diagnostics.trace = Some(trace);
+        self.runner.anchor_stop_socket = Some(socket);
+        self
+    }
+
     /// The recorded process-group signal attempts so far.
     #[must_use]
     pub(crate) fn recorded_signals(&self) -> Vec<RecordedSignal> {

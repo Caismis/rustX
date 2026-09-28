@@ -1593,6 +1593,7 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
         "RUSTX_TEST_FAIL_SIGTERM_HANDLER",
         "RUSTX_TEST_FORCE_ANCHOR_LOSS",
         "RUSTX_TEST_OUTER_BARRIER_DIR",
+        "RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET",
         "RUSTX_TEST_FAIL_CONTAINMENT",
         "RUSTX_PHYSICAL_CONTINUATION",
         "RUSTX_COMMAND_ENVIRONMENT",

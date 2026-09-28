@@ -1897,7 +1897,17 @@ async fn quiescence_watchdog_cannot_bypass_process_terminality() {
 /// confirmation path is never reached.
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One exact native stop/containment/reap scenario.
 async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
+    use super::supervisor::diagnostics::{Entry, Event};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let socket_dir = tempfile::Builder::new()
+        .prefix("rx-stop-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = socket_dir.path().join("gate");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let trace = socket_dir.path().join("trace");
     let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let anchor_pid_file = root.join("anchor.pid");
@@ -1922,7 +1932,9 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
     let cancelling = cancellation.clone();
     let task = tokio::spawn(run_with_control(
         command,
-        BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+        BashTestControl::new()
+            .anchor_pid_file(anchor_pid_file.clone())
+            .stopped_anchor_fixture(trace.clone(), socket),
         cancellation,
         artifacts.clone(),
         tool_output.clone(),
@@ -1940,16 +1952,66 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
         nix::sys::signal::Signal::SIGSTOP,
     )
     .unwrap();
+    let (mut stopped, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "outer did not observe stopped anchor: {}",
+                std::fs::read_to_string(&trace).unwrap_or_default()
+            )
+        })
+        .unwrap();
+    let mut label = [0];
+    tokio::time::timeout(Duration::from_secs(20), stopped.read_exact(&mut label))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&label, b"S");
+    // Cancellation follows the exact native stop observation. The outer is
+    // parked only by this private fixture; no scheduler race selects the path.
     cancelling.cancel();
+    stopped.write_all(&[1]).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(20), task)
         .await
-        .expect("the invocation settles")
+        .unwrap_or_else(|_| {
+            panic!(
+                "the invocation must settle; native evidence: {}",
+                std::fs::read_to_string(&trace).unwrap_or_default()
+            )
+        })
         .expect("executor task");
     assert!(
         matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
         "a frozen anchor must still settle the owned group as Cancelled, got {:?}",
         result.status
     );
+    let evidence = std::fs::read_to_string(&trace).unwrap();
+    eprintln!("stopped-anchor native sequence:\n{evidence}");
+    let events: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut ordered = events.iter();
+    for boundary in [
+        |event: &Event| matches!(event, Event::AnchorStopObserved),
+        |event: &Event| matches!(event, Event::AnchorUnwedgeKillAttempt { result: 0 }),
+        |event: &Event| matches!(event, Event::AnchorTerminalObserved),
+        |event: &Event| matches!(event, Event::FallbackContainment),
+        #[cfg(target_os = "macos")]
+        |event: &Event| matches!(event, Event::GroupAbsenceProven),
+        |event: &Event| matches!(event, Event::TerminalPublished),
+        |event: &Event| matches!(event, Event::DirectChildReaped),
+    ] {
+        assert!(
+            ordered.any(|entry| boundary(&entry.event)),
+            "missing/out-of-order native boundary: {evidence}"
+        );
+    }
+    // Publication logging is after the frame write, so receiver logging may
+    // precede it. Assert each owner's causal order, not cross-process file I/O.
+    let mut runner_events = events.iter();
+    assert!(runner_events.any(|entry| matches!(entry.event, Event::TerminalObserved)));
+    assert!(runner_events.any(|entry| matches!(entry.event, Event::DirectChildReaped)));
     let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
         .expect("anchor pid file")
         .trim()

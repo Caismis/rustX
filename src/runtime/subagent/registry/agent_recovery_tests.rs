@@ -925,25 +925,43 @@ async fn pre_reserved_wait_settles_independently_of_another_agents_recovery() {
     assert!(futures_util::poll!(&mut interrupt).is_pending());
     let y = registry.state.lock().unwrap().agents[&agents[1].child_agent_id]
         .resuming.as_ref().unwrap().activation_id.clone();
+    // Arm exact blocking proof acquisition before admission can publish Y.
+    registry.state.lock().unwrap().recovery_proof_wait.insert(y.clone());
     gate.release();
     let y_lock = retained_lock.await.unwrap();
     let mut changes = registry.state_version.subscribe();
-    loop {
-        changes.borrow_and_update();
-        if registry.state.lock().unwrap().recovery_pending.contains(&y) { break; }
-        changes.changed().await.unwrap();
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            changes.borrow_and_update();
+            {
+                let state = registry.state.lock().unwrap();
+                if state.recovery_pending.contains(&y) && state.recovery_inflight.contains(&y)
+                    && !state.recovery_proof_wait.contains(&y) { break; }
+            }
+            changes.changed().await.unwrap();
+        }
+    }).await.unwrap();
     assert!(futures_util::poll!(&mut wait).is_pending());
     // Explicit unlock releases this test-owned description even if an unrelated
     // spawn transiently inherited a duplicate. No drop=>next-Try assumption.
-    registry.state.lock().unwrap().recovery_proof_wait.insert(y.clone());
     y_lock.unlock().unwrap();
     drop(y_lock);
     // The positive proof and its retained locks flow through the real exact
     // obligation settlement while X's independent worker remains parked.
-    let proof_registry = registry.clone();
-    tokio::task::spawn_blocking(move || proof_registry.reconcile_recovered_settlements())
-        .await.unwrap();
+    // Observe the admission owner's exact completion, never start a competing
+    // pass (which correctly skips obligations already claimed by that owner).
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            changes.borrow_and_update();
+            {
+                let state = registry.state.lock().unwrap();
+                if !state.recovery_pending.contains(&y) && !state.recovery_inflight.contains(&y) {
+                    break;
+                }
+            }
+            changes.changed().await.unwrap();
+        }
+    }).await.unwrap();
     {
         let state = registry.state.lock().unwrap();
         assert!(!state.recovery_pending.contains(&y));

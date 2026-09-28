@@ -43,10 +43,16 @@ baseline/overlay keys are unchanged.
 | `RUSTX_SUPERVISOR_ANCHOR_PID_FILE` | Test-only Bash observation |
 | `RUSTX_TEST_FAIL_SIGNAL`, `RUSTX_TEST_FAIL_WAIT`, `RUSTX_TEST_FAIL_BASH_SPAWN`, `RUSTX_TEST_FAIL_SIGTERM_HANDLER`, `RUSTX_TEST_FORCE_ANCHOR_LOSS`, `RUSTX_TEST_OUTER_BARRIER_DIR`, `RUSTX_TEST_FAIL_CONTAINMENT` | Test-only Bash supervisor fault/gate controls |
 | `RUSTX_TEST_SUPERVISION_TRACE`, `RUSTX_TEST_BEFORE_TERM_SOCKET` | Explicit trusted diagnostic fixture controls; compiled for external integration tests |
+| `RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET` | Test-only stop-observation gate, supplied by cfg(test) RunnerTestControl |
 | `RUSTX_PHYSICAL_CONTINUATION` | Physical authority transport: runtime-authored metadata plus the inherited typed continuation descriptor; only the outer receives the authority |
 | `RUSTX_INTERACTIVE_CONTROL`, `RUSTX_INTERACTIVE_INNER_CONTROL` | Runtime-private interactive supervisor sockets |
 | `RUSTX_INTERACTIVE_ANCHOR_PID_FILE` | Test-only interactive observation |
 | `RUSTX_TEST_INTERACTIVE_OUTER_FAIL`, `RUSTX_TEST_INTERACTIVE_FAIL_SERVER_SPAWN`, `RUSTX_TEST_INTERACTIVE_FAIL_SIGNAL`, `RUSTX_TEST_INTERACTIVE_FAIL_SIGTERM`, `RUSTX_TEST_INTERACTIVE_INNER_EXIT_BEFORE_CONNECT`, `RUSTX_TEST_INTERACTIVE_FAIL_SETSID`, `RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR`, `RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP` | Test-only interactive supervisor fault/gate controls |
+
+`RUSTX_TEST_INTERACTIVE_PREANCHOR_SOCKET` is a separate private observation/release
+transport owned by `InteractiveTestControl`; the reap-failure key is only a semantic
+fault switch. The Bash after-stop gate is owned by `RunnerTestControl`. Both
+fixture sockets use bounded `/tmp` paths in the Darwin regressions.
 
 All user-supplied occurrences of the above names are ordinary command data,
 never any of these private capabilities. Shared `supervised_unit` consumes only

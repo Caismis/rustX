@@ -492,6 +492,7 @@ fn run_outer() -> i32 {
         i32::try_from(inner_pid).expect("the inner supervisor pid always fits in an i32");
     let mut anchor = InnerAnchor::Running;
     let mut inner_frozen = false;
+    let mut exit_wait_nonterminal_recorded = false;
     let mut anchor_loss_reported = false;
     loop {
         let previous = std::mem::discriminant(&anchor);
@@ -508,11 +509,19 @@ fn run_outer() -> i32 {
                     WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
                 ) {
                     Ok(WaitStatus::StillAlive) => {}
-                    Ok(WaitStatus::Stopped(..) | WaitStatus::Continued(_)) => {}
+                    Ok(status @ (WaitStatus::Stopped(..) | WaitStatus::Continued(_))) => {
+                        if !exit_wait_nonterminal_recorded {
+                            exit_wait_nonterminal_recorded = true;
+                            trace(TraceEvent::AnchorExitWaitNonterminal {
+                                stopped: matches!(status, WaitStatus::Stopped(..)),
+                            });
+                        }
+                    }
                     // WEXITED-only waiting: ptrace stops never match.
                     #[cfg(target_os = "linux")]
                     Ok(WaitStatus::PtraceEvent(..) | WaitStatus::PtraceSyscall(_)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
+                        trace(TraceEvent::AnchorTerminalObserved);
                         trace(TraceEvent::InnerExited { status: code << 8 });
                         anchor = if code == INNER_EXIT_NORMAL {
                             InnerAnchor::TerminalRetained
@@ -524,6 +533,7 @@ fn run_outer() -> i32 {
                         };
                     }
                     Ok(WaitStatus::Signaled(_, signal, _)) => {
+                        trace(TraceEvent::AnchorTerminalObserved);
                         trace(TraceEvent::InnerExited {
                             status: signal as i32,
                         });
@@ -565,8 +575,14 @@ fn run_outer() -> i32 {
                     )) {
                         Ok(WaitStatus::Stopped(..)) => {
                             inner_frozen = true;
-                            match nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL)
-                            {
+                            trace(TraceEvent::AnchorStopObserved);
+                            diagnostics::after_anchor_stop();
+                            let killed =
+                                nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL);
+                            trace(TraceEvent::AnchorUnwedgeKillAttempt {
+                                result: killed.as_ref().err().map_or(0, |error| *error as i32),
+                            });
+                            match killed {
                                 Ok(()) | Err(Errno::ESRCH) => {}
                                 Err(error) => {
                                     let _ = stream.write_failure(&format!(
@@ -603,6 +619,7 @@ fn run_outer() -> i32 {
                 ) {
                     Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
                     Err(Errno::ECHILD) => {
+                        trace(TraceEvent::GroupChildrenReaped);
                         // macOS: `ECHILD` only proves this supervisor has no
                         // waitable group child left; a reparented descendant
                         // is invisible to it. The group's absence is proven
@@ -614,6 +631,8 @@ fn run_outer() -> i32 {
                             anchor = InnerAnchor::ContainmentFailed;
                             continue;
                         }
+                        #[cfg(target_os = "macos")]
+                        trace(TraceEvent::GroupAbsenceProven);
                         if let Some(continuation) = &continuation
                             && let Err(error) = continuation.publish_quiescent()
                         {

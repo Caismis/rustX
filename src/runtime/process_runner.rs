@@ -631,6 +631,8 @@ pub(crate) use crate::runtime::supervised_unit::{
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
 #[derive(Clone)]
 pub(crate) struct RunnerTestControl {
+    #[cfg(test)]
+    pub(crate) anchor_stop_socket: Option<std::path::PathBuf>,
     pub(crate) diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
     #[cfg(test)]
     pub(crate) pause_at_shell_exit: bool,
@@ -682,6 +684,7 @@ impl RunnerTestControl {
     #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self {
+            anchor_stop_socket: None,
             diagnostics:
                 crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
             pause_at_shell_exit: false,
@@ -855,6 +858,13 @@ impl SupervisedCommandRunner {
         );
         if let Some(control) = &control {
             control.diagnostics.configure(&mut supervisor);
+            #[cfg(test)]
+            if let Some(path) = &control.anchor_stop_socket {
+                supervisor.env(
+                    crate::tools::native::bash_supervisor::diagnostics::ANCHOR_STOP_GATE_ENV,
+                    path,
+                );
+            }
         }
         supervisor.env(SUPERVISOR_ROLE_ENV, ROLE_OUTER);
         supervisor.env(COMMAND_ENV, &spec.command);

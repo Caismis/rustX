@@ -226,6 +226,18 @@ mod stopped_observation_tests {
             waitid(Id::Pid(pid), WaitPidFlag::WSTOPPED | WaitPidFlag::WNOWAIT),
             Ok(stopped)
         );
+        // Exercise the outer's actual observation order against a proven
+        // stopped child. Record Darwin's answer instead of assuming WEXITED
+        // cannot expose a nonterminal transition; neither call may consume it.
+        let exit_only = waitid(
+            Id::Pid(pid),
+            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+        );
+        eprintln!("stopped anchor: WEXITED|WNOHANG|WNOWAIT -> {exit_only:?}");
+        assert!(matches!(
+            exit_only,
+            Ok(WaitStatus::StillAlive | WaitStatus::Stopped(..) | WaitStatus::Continued(_))
+        ));
         assert_eq!(observe_stopped_child(pid), Ok(stopped));
         assert_eq!(observe_stopped_child(pid), Ok(stopped));
         kill(pid, Signal::SIGKILL).unwrap();

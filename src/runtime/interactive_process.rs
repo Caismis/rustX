@@ -155,7 +155,9 @@ pub(crate) struct InteractiveTestControl {
     #[cfg(test)]
     inner_stall_before_anchor: Option<String>,
     #[cfg(test)]
-    fail_pre_anchor_reap: Option<String>,
+    fail_pre_anchor_reap: bool,
+    #[cfg(test)]
+    pre_anchor_boundary_socket: Option<std::path::PathBuf>,
     /// Forces the emergency containment of a lost unit to report
     /// [`EmergencyContainment::AnchorUnavailable`].
     #[cfg(test)]
@@ -186,7 +188,8 @@ impl InteractiveTestControl {
             inner_exit_before_connect: None,
             fail_setsid: None,
             inner_stall_before_anchor: None,
-            fail_pre_anchor_reap: None,
+            fail_pre_anchor_reap: false,
+            pre_anchor_boundary_socket: None,
             force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             force_accept_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             observed_events: Arc::new(Mutex::new(Vec::new())),
@@ -239,10 +242,16 @@ impl InteractiveTestControl {
                 value,
             );
         }
-        if let Some(value) = &self.fail_pre_anchor_reap {
+        if let Some(path) = &self.pre_anchor_boundary_socket {
+            supervisor.env(
+                crate::runtime::interactive_supervisor::PRE_ANCHOR_BOUNDARY_SOCKET_ENV,
+                path,
+            );
+        }
+        if self.fail_pre_anchor_reap {
             supervisor.env(
                 crate::runtime::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
-                value,
+                "1",
             );
         }
     }
@@ -762,6 +771,10 @@ async fn run_interactive_unit(
                 Ok(Some(SupervisorEvent::ProcessControlFailure { message })) => {
                     record_event(test_control, "process_control_failure");
                     #[cfg(test)]
+                    if message.starts_with("pre-anchor fixture ") {
+                        record_event(test_control, &message);
+                    }
+                    #[cfg(test)]
                     if message.contains("injected pre-anchor reap failure") {
                         record_event(test_control, "injected_reap_failure_received");
                     }
@@ -1009,7 +1022,7 @@ mod interactive_tests {
                     INNER_STALL_BEFORE_ANCHOR_ENV => {
                         control.inner_stall_before_anchor = Some(value);
                     }
-                    FAIL_PRE_ANCHOR_REAP_ENV => control.fail_pre_anchor_reap = Some(value),
+                    FAIL_PRE_ANCHOR_REAP_ENV => control.fail_pre_anchor_reap = true,
                     _ => panic!("unknown fixture control: {key}"),
                 }
             }
@@ -1217,6 +1230,7 @@ mod interactive_tests {
             "RUSTX_TEST_INTERACTIVE_FAIL_SETSID",
             "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR",
             "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP",
+            "RUSTX_TEST_INTERACTIVE_PREANCHOR_SOCKET",
             "RUSTX_COMMAND_ENVIRONMENT",
             "RUSTX_PHYSICAL_CONTINUATION",
         ];
@@ -1897,6 +1911,52 @@ mod interactive_tests {
             .expect("reap the adopted pre-anchor inner");
     }
 
+    #[tokio::test]
+    async fn pre_anchor_fixture_transport_failure_is_explicit() {
+        let fixture = Fixture::new();
+        let socket_dir = tempfile::Builder::new()
+            .prefix("rx-pre-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let inner_pid_file = fixture.path("inner.pid");
+        let marker = fixture.path("server-started");
+        let mut control = InteractiveTestControl::new();
+        control.pre_anchor_boundary_socket = Some(socket_dir.path().join("missing"));
+        let process = fixture
+            .spawn_with_control(
+                &format!("touch {}", marker.display()),
+                vec![(
+                    FAIL_SETSID_ENV.to_owned(),
+                    inner_pid_file.display().to_string(),
+                )],
+                control.clone(),
+            )
+            .unwrap();
+        assert!(
+            tokio::time::timeout(DEADLINE, process.wait_for_settlement())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        let events = control.observed_events();
+        for label in ["inner_connected", "conclude_pre_anchor"] {
+            assert!(
+                events.iter().any(|event| event
+                    .starts_with(&format!("pre-anchor fixture {label} connect failed"))),
+                "{events:?}"
+            );
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|event| event == "no_ownership" || event == "all_children_reaped")
+        );
+        assert!(events.iter().any(|event| event == "direct_child_reaped"));
+        assert!(!marker.exists());
+        let _ =
+            nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(read_pid(&inner_pid_file)), None);
+    }
+
     /// A pre-anchor cleanup that cannot prove the direct-inner reap.
     ///
     /// The injected seam models exactly the forbidden state: the outer's
@@ -1912,9 +1972,15 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let diagnostic_path = fixture.path("pre-anchor.sock");
+        // Darwin sockaddr_un is bounded independently of the host TMPDIR.
+        let socket_dir = tempfile::Builder::new()
+            .prefix("rx-pre-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let diagnostic_path = socket_dir.path().join("gate");
         let diagnostic = tokio::net::UnixListener::bind(&diagnostic_path).unwrap();
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.pre_anchor_boundary_socket = Some(diagnostic_path.clone());
         let process = fixture
             .spawn_with_control(
                 &script,
@@ -1923,10 +1989,7 @@ mod interactive_tests {
                         FAIL_SETSID_ENV.to_owned(),
                         inner_pid_file.display().to_string(),
                     ),
-                    (
-                        FAIL_PRE_ANCHOR_REAP_ENV.to_owned(),
-                        diagnostic_path.display().to_string(),
-                    ),
+                    (FAIL_PRE_ANCHOR_REAP_ENV.to_owned(), "1".to_owned()),
                 ],
                 control.clone(),
             )
@@ -1939,7 +2002,14 @@ mod interactive_tests {
         ] {
             let (mut peer, _) = tokio::time::timeout(DEADLINE, diagnostic.accept())
                 .await
-                .expect("supervisor must reach the next pre-anchor boundary")
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "missing pre-anchor boundary {}; events: {:?}; stderr: {}",
+                        String::from_utf8_lossy(label),
+                        control.observed_events(),
+                        process.stderr_preview()
+                    )
+                })
                 .unwrap();
             let mut observed = vec![0; label.len()];
             tokio::time::timeout(DEADLINE, peer.read_exact(&mut observed))

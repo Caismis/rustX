@@ -7,6 +7,9 @@ use std::path::PathBuf;
 /// Explicit per-invocation fixture destination. Never enabled by default.
 pub const TRACE_ENV: &str = "RUSTX_TEST_SUPERVISION_TRACE";
 
+/// Trusted fixture gate after the outer's exact stop observation.
+pub const ANCHOR_STOP_GATE_ENV: &str = "RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET";
+
 /// Per-invocation Unix socket: test parks the inner after TERMINATE receipt,
 /// before any TERM syscall. The fixture owns the peer and releases it explicitly.
 pub const TERM_GATE_ENV: &str = "RUSTX_TEST_BEFORE_TERM_SOCKET";
@@ -24,6 +27,18 @@ pub(crate) fn before_term() {
 /// Scalar native evidence; a signal syscall result is not per-process delivery.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum Event {
+    /// Exact retained anchor stop, observed by the WSTOPPED wait.
+    AnchorStopObserved,
+    /// Unexpected nonterminal status from the WEXITED-only observation.
+    AnchorExitWaitNonterminal { stopped: bool },
+    /// Exact PID SIGKILL return (zero or errno).
+    AnchorUnwedgeKillAttempt { result: i32 },
+    /// Exact anchor terminal status, still retained by WNOWAIT.
+    AnchorTerminalObserved,
+    /// The owned-group wait reached ECHILD; Darwin still requires absence.
+    GroupChildrenReaped,
+    /// Darwin's positive group-absence proof completed.
+    GroupAbsenceProven,
     /// The runner attempted the cancellation control frame; `sent` is write success.
     TerminateSent { sent: bool },
     /// The inner parsed the authoritative cancellation frame.
@@ -140,4 +155,18 @@ pub fn fixture_executor(
     control: FixtureControl,
 ) -> std::sync::Arc<dyn crate::tools::executor::ToolExecutor> {
     std::sync::Arc::new(crate::tools::native::bash::BashTool::with_diagnostic_fixture(control))
+}
+
+/// Explicit fixture-only pause after the native stop observation. Diagnostics
+/// are recorded first; the fixture releases this before containment proceeds.
+pub(crate) fn after_anchor_stop() {
+    use std::io::Read;
+    if let Some(path) = std::env::var_os(ANCHOR_STOP_GATE_ENV) {
+        let mut gate = std::os::unix::net::UnixStream::connect(path)
+            .expect("anchor-stop fixture connect failed");
+        gate.write_all(b"S")
+            .expect("anchor-stop fixture write failed");
+        gate.read_exact(&mut [0])
+            .expect("anchor-stop fixture release failed");
+    }
 }

@@ -331,11 +331,15 @@ impl SubagentRegistry {
         if let Some(hook) = hook {
             hook();
         }
-        self.state
+        let blocking_proof = self
+            .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .recovery_proof_wait
-            .remove(activation)
+            .remove(activation);
+        // Test observation of the existing owner's claim, before physical proof.
+        self.state_version.send_modify(|version| *version += 1);
+        blocking_proof
     }
 
     /// A bounded reconciliation pass at startup, Goal idle and runtime drain.
