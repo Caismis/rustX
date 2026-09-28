@@ -157,7 +157,7 @@ pub(crate) struct InteractiveTestControl {
     #[cfg(test)]
     fail_pre_anchor_reap: bool,
     #[cfg(test)]
-    pre_anchor_boundary_socket: Option<std::path::PathBuf>,
+    pre_anchor_observation_socket: Option<std::path::PathBuf>,
     /// Forces the emergency containment of a lost unit to report
     /// [`EmergencyContainment::AnchorUnavailable`].
     #[cfg(test)]
@@ -189,7 +189,7 @@ impl InteractiveTestControl {
             fail_setsid: None,
             inner_stall_before_anchor: None,
             fail_pre_anchor_reap: false,
-            pre_anchor_boundary_socket: None,
+            pre_anchor_observation_socket: None,
             force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             force_accept_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             observed_events: Arc::new(Mutex::new(Vec::new())),
@@ -242,9 +242,9 @@ impl InteractiveTestControl {
                 value,
             );
         }
-        if let Some(path) = &self.pre_anchor_boundary_socket {
+        if let Some(path) = &self.pre_anchor_observation_socket {
             supervisor.env(
-                crate::runtime::interactive_supervisor::PRE_ANCHOR_BOUNDARY_SOCKET_ENV,
+                crate::runtime::interactive_supervisor::PRE_ANCHOR_OBSERVATION_ENV,
                 path,
             );
         }
@@ -542,6 +542,10 @@ async fn drive_interactive_unit(
     )
     .await;
     let _ = std::fs::remove_file(&socket_path);
+    #[cfg(test)]
+    if matches!(outcome, UnitSettlement::TerminalityUnproven(..)) {
+        record_event(&test_control, "terminality_unproven_publication");
+    }
     record_event(&test_control, "settlement_publication");
     settlement.publish(outcome);
 }
@@ -770,10 +774,6 @@ async fn run_interactive_unit(
                 )) => {}
                 Ok(Some(SupervisorEvent::ProcessControlFailure { message })) => {
                     record_event(test_control, "process_control_failure");
-                    #[cfg(test)]
-                    if message.starts_with("pre-anchor fixture ") {
-                        record_event(test_control, &message);
-                    }
                     #[cfg(test)]
                     if message.contains("injected pre-anchor reap failure") {
                         record_event(test_control, "injected_reap_failure_received");
@@ -1230,18 +1230,33 @@ mod interactive_tests {
             "RUSTX_TEST_INTERACTIVE_FAIL_SETSID",
             "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR",
             "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP",
-            "RUSTX_TEST_INTERACTIVE_PREANCHOR_SOCKET",
+            "RUSTX_TEST_INTERACTIVE_PREANCHOR_OBSERVATION",
             "RUSTX_COMMAND_ENVIRONMENT",
             "RUSTX_PHYSICAL_CONTINUATION",
         ];
-        let environment = ToolEnvironment::from_authorized(
-            keys.iter()
-                .map(|key| ((*key).to_owned(), "user-value".to_owned())),
-        )
-        .unwrap();
+        let observer_dir = tempfile::Builder::new()
+            .prefix("rx-env-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let observer_path = observer_dir.path().join("observations");
+        let observer = std::os::unix::net::UnixDatagram::bind(&observer_path).unwrap();
+        observer.set_nonblocking(true).unwrap();
+        let entries: Vec<_> = keys
+            .iter()
+            .map(|key| {
+                let value =
+                    if *key == crate::runtime::interactive_supervisor::PRE_ANCHOR_OBSERVATION_ENV {
+                        observer_path.display().to_string()
+                    } else {
+                        "user-value".to_owned()
+                    };
+                ((*key).to_owned(), value)
+            })
+            .collect();
+        let environment = ToolEnvironment::from_authorized(entries.clone()).unwrap();
         let mut script = String::new();
-        for key in keys {
-            write!(script, "test \"${key}\" = user-value || exit 9; ").unwrap();
+        for (key, value) in entries {
+            write!(script, "test \"${key}\" = '{value}' || exit 9; ").unwrap();
         }
         script.push_str("printf isolated");
         let mut process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
@@ -1263,6 +1278,10 @@ mod interactive_tests {
             .await
             .unwrap();
         assert_eq!(output, "isolated");
+        assert!(
+            drain_pre_anchor_observations(&observer).is_empty(),
+            "command data cannot configure supervisor observations"
+        );
         assert!(!fixture.path("user-value").exists());
     }
 
@@ -1911,50 +1930,88 @@ mod interactive_tests {
             .expect("reap the adopted pre-anchor inner");
     }
 
-    #[tokio::test]
-    async fn pre_anchor_fixture_transport_failure_is_explicit() {
-        let fixture = Fixture::new();
-        let socket_dir = tempfile::Builder::new()
-            .prefix("rx-pre-")
-            .tempdir_in("/tmp")
-            .unwrap();
-        let inner_pid_file = fixture.path("inner.pid");
-        let marker = fixture.path("server-started");
-        let mut control = InteractiveTestControl::new();
-        control.pre_anchor_boundary_socket = Some(socket_dir.path().join("missing"));
-        let process = fixture
-            .spawn_with_control(
-                &format!("touch {}", marker.display()),
-                vec![(
-                    FAIL_SETSID_ENV.to_owned(),
-                    inner_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
-            .unwrap();
-        assert!(
-            tokio::time::timeout(DEADLINE, process.wait_for_settlement())
-                .await
-                .unwrap()
-                .is_err()
-        );
-        let events = control.observed_events();
-        for label in ["inner_connected", "conclude_pre_anchor"] {
-            assert!(
-                events.iter().any(|event| event
-                    .starts_with(&format!("pre-anchor fixture {label} connect failed"))),
-                "{events:?}"
-            );
+    fn drain_pre_anchor_observations(socket: &std::os::unix::net::UnixDatagram) -> Vec<String> {
+        let mut events = Vec::new();
+        let mut buffer = [0; 64];
+        loop {
+            match socket.recv(&mut buffer) {
+                Ok(count) => events.push(std::str::from_utf8(&buffer[..count]).unwrap().to_owned()),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return events,
+                Err(error) => panic!("cannot read passive fixture evidence: {error}"),
+            }
         }
-        assert!(
-            !events
-                .iter()
-                .any(|event| event == "no_ownership" || event == "all_children_reaped")
-        );
-        assert!(events.iter().any(|event| event == "direct_child_reaped"));
-        assert!(!marker.exists());
-        let _ =
-            nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(read_pid(&inner_pid_file)), None);
+    }
+
+    #[tokio::test]
+    async fn broken_pre_anchor_observer_does_not_change_settlement() {
+        // Both physical outcomes depend only on the semantic reap switch,
+        // regardless of whether diagnostics are absent or have a missing sink.
+        for fail_reap in [false, true] {
+            for broken_observer in [false, true] {
+                let fixture = Fixture::new();
+                let socket_dir = tempfile::Builder::new()
+                    .prefix("rx-pre-")
+                    .tempdir_in("/tmp")
+                    .unwrap();
+                let inner_pid_file = fixture.path("inner.pid");
+                let marker = fixture.path("server-started");
+                let mut control = InteractiveTestControl::new();
+                control.fail_pre_anchor_reap = fail_reap;
+                if broken_observer {
+                    control.pre_anchor_observation_socket = Some(socket_dir.path().join("missing"));
+                }
+                let process = fixture
+                    .spawn_with_control(
+                        &format!("touch {}", marker.display()),
+                        vec![(
+                            FAIL_SETSID_ENV.to_owned(),
+                            inner_pid_file.display().to_string(),
+                        )],
+                        control.clone(),
+                    )
+                    .unwrap();
+                let settlement = tokio::time::timeout(DEADLINE, process.wait_for_settlement())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    settlement.is_err(),
+                    fail_reap,
+                    "observation cannot select the physical outcome"
+                );
+                let events = control.observed_events();
+                assert_eq!(
+                    events.iter().any(|event| event == "no_ownership"),
+                    !fail_reap,
+                    "{events:?}"
+                );
+                assert_eq!(
+                    events
+                        .iter()
+                        .any(|event| event == "injected_reap_failure_received"),
+                    fail_reap,
+                    "{events:?}"
+                );
+                assert_eq!(
+                    events
+                        .iter()
+                        .any(|event| event == "terminality_unproven_publication"),
+                    fail_reap,
+                    "{events:?}"
+                );
+                assert!(!events.iter().any(|event| event == "all_children_reaped"));
+                assert!(events.iter().any(|event| event == "direct_child_reaped"));
+                assert!(!marker.exists());
+                assert!(
+                    !process.stderr_preview().contains("fixture"),
+                    "observer errors are not process-control facts"
+                );
+                if fail_reap {
+                    let pid = nix::unistd::Pid::from_raw(read_pid(&inner_pid_file));
+                    let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+                    let _ = nix::sys::wait::waitpid(pid, None);
+                }
+            }
+        }
     }
 
     /// A pre-anchor cleanup that cannot prove the direct-inner reap.
@@ -1967,7 +2024,6 @@ mod interactive_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[allow(clippy::too_many_lines)] // One causal inner/outer/driver ownership scenario.
     async fn unprovable_pre_anchor_reap_never_settles_physically() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let fixture = Fixture::new();
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
@@ -1977,10 +2033,11 @@ mod interactive_tests {
             .prefix("rx-pre-")
             .tempdir_in("/tmp")
             .unwrap();
-        let diagnostic_path = socket_dir.path().join("gate");
-        let diagnostic = tokio::net::UnixListener::bind(&diagnostic_path).unwrap();
+        let diagnostic_path = socket_dir.path().join("observations");
+        let diagnostic = std::os::unix::net::UnixDatagram::bind(&diagnostic_path).unwrap();
+        diagnostic.set_nonblocking(true).unwrap();
         let mut control = InteractiveTestControl::new();
-        control.pre_anchor_boundary_socket = Some(diagnostic_path.clone());
+        control.pre_anchor_observation_socket = Some(diagnostic_path.clone());
         let process = fixture
             .spawn_with_control(
                 &script,
@@ -1994,51 +2051,20 @@ mod interactive_tests {
                 control.clone(),
             )
             .expect("spawn");
-        // Each phase has the existing deadlock guard, with causal socket
-        // evidence identifying which owner has reached its boundary.
-        for label in [
-            b"inner_connected".as_slice(),
-            b"conclude_pre_anchor".as_slice(),
-        ] {
-            let (mut peer, _) = tokio::time::timeout(DEADLINE, diagnostic.accept())
-                .await
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "missing pre-anchor boundary {}; events: {:?}; stderr: {}",
-                        String::from_utf8_lossy(label),
-                        control.observed_events(),
-                        process.stderr_preview()
-                    )
-                })
-                .unwrap();
-            let mut observed = vec![0; label.len()];
-            tokio::time::timeout(DEADLINE, peer.read_exact(&mut observed))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(observed, label, "exact inner/outer boundary order");
-            assert!(
-                process.settlement.observed().is_none(),
-                "gated owner has not concluded"
-            );
-            peer.write_all(&[1]).await.unwrap();
-            if label == b"conclude_pre_anchor" {
-                let mut outcome = Vec::new();
-                tokio::time::timeout(DEADLINE, peer.read_to_end(&mut outcome))
-                    .await
-                    .expect("outer must write the failure and leave conclude_pre_anchor")
-                    .unwrap();
-                assert_eq!(outcome, b"failure_written");
-            }
-        }
         let settlement = tokio::time::timeout(DEADLINE, process.wait_for_settlement())
             .await
             .unwrap_or_else(|_| {
                 panic!(
-                    "outer concluded but driver did not publish settlement; exact boundaries: {:?}",
-                    control.observed_events()
+                    "pre-anchor owner did not settle; driver: {:?}; native: {:?}; stderr: {}",
+                    control.observed_events(),
+                    drain_pre_anchor_observations(&diagnostic),
+                    process.stderr_preview()
                 )
             });
+        assert!(matches!(
+            process.settlement.observed(),
+            Some(super::UnitSettlement::TerminalityUnproven(_))
+        ));
         let reason = settlement.expect_err(
             "a pre-anchor child whose reap cannot be proven is never a physical settlement",
         );
@@ -2046,18 +2072,33 @@ mod interactive_tests {
             reason.contains("before the unit anchor was announced"),
             "the settlement must name the unproven pre-anchor state: {reason}"
         );
+        // Read only after the owner result: observation is never a progress gate.
+        let native = drain_pre_anchor_observations(&diagnostic);
+        assert_eq!(
+            native,
+            [
+                "inner_control_connected",
+                "fail_setsid_path_entered",
+                "conclude_pre_anchor_entered",
+                "injected_pre_anchor_reap_failure",
+                "process_control_failure_written",
+                "outer_exiting",
+            ]
+        );
         let events = control.observed_events();
+        let mut ordered = events.iter();
         for expected in [
             "owner_attached",
             "injected_reap_failure_received",
             "control_eof",
             "direct_child_wait",
             "direct_child_reaped",
+            "terminality_unproven_publication",
             "settlement_publication",
         ] {
             assert!(
-                events.iter().any(|event| event == expected),
-                "missing {expected}: {events:?}"
+                ordered.any(|event| event == expected),
+                "missing/out-of-order {expected}: {events:?}"
             );
         }
 

@@ -49,9 +49,10 @@ baseline/overlay keys are unchanged.
 | `RUSTX_INTERACTIVE_ANCHOR_PID_FILE` | Test-only interactive observation |
 | `RUSTX_TEST_INTERACTIVE_OUTER_FAIL`, `RUSTX_TEST_INTERACTIVE_FAIL_SERVER_SPAWN`, `RUSTX_TEST_INTERACTIVE_FAIL_SIGNAL`, `RUSTX_TEST_INTERACTIVE_FAIL_SIGTERM`, `RUSTX_TEST_INTERACTIVE_INNER_EXIT_BEFORE_CONNECT`, `RUSTX_TEST_INTERACTIVE_FAIL_SETSID`, `RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR`, `RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP` | Test-only interactive supervisor fault/gate controls |
 
-`RUSTX_TEST_INTERACTIVE_PREANCHOR_SOCKET` is a separate private observation/release
-transport owned by `InteractiveTestControl`; the reap-failure key is only a semantic
-fault switch. The Bash after-stop gate is owned by `RunnerTestControl`. Both
+`RUSTX_TEST_INTERACTIVE_PREANCHOR_OBSERVATION` is a separate private, passive
+nonblocking datagram destination owned by `InteractiveTestControl`; the reap-failure
+key is only a semantic fault switch. The obsolete pre-anchor rendezvous key is
+removed. Observation errors never become process-control facts. The Bash after-stop gate is owned by `RunnerTestControl`. Both
 fixture sockets use bounded `/tmp` paths in the Darwin regressions.
 
 All user-supplied occurrences of the above names are ordinary command data,
