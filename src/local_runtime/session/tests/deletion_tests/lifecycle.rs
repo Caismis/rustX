@@ -139,7 +139,7 @@ fn session_deletion_reclaims_committed_image_without_a_published_reference() {
 
     let (dir, mut catalog, preview) = fixture();
     let root = ProductRoot::existing(dir.path()).unwrap();
-    let path = residue(dir.path(), &preview)[0].clone();
+    let path = residue(root.root(), &preview)[0].clone();
     let conversation_id = match &preview.scopes[0] {
         DeletionScope::Node {
             conversation_id, ..
