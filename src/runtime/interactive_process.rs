@@ -156,6 +156,9 @@ pub(crate) struct InteractiveTestControl {
     inner_stall_before_anchor: Option<String>,
     #[cfg(test)]
     fail_pre_anchor_reap: bool,
+    /// Enables the supervisors' passive stderr lifecycle trace.
+    #[cfg(test)]
+    trace: bool,
     /// Forces the emergency containment of a lost unit to report
     /// [`EmergencyContainment::AnchorUnavailable`].
     #[cfg(test)]
@@ -187,6 +190,7 @@ impl InteractiveTestControl {
             fail_setsid: None,
             inner_stall_before_anchor: None,
             fail_pre_anchor_reap: false,
+            trace: false,
             force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             force_accept_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             observed_events: Arc::new(Mutex::new(Vec::new())),
@@ -244,6 +248,9 @@ impl InteractiveTestControl {
                 crate::runtime::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
                 "1",
             );
+        }
+        if self.trace {
+            supervisor.env(crate::runtime::interactive_supervisor::TRACE_ENV, "1");
         }
     }
 
@@ -1199,6 +1206,57 @@ mod interactive_tests {
             .unwrap_or_else(|_| panic!("{description}"))
     }
 
+    /// Passive timeout evidence: a `ps` row (state, wait channel, process
+    /// group) for the outer supervisor and each of its direct children and,
+    /// on macOS, one `sample` call graph of each. It reads process tables
+    /// and stacks only; it never waits for, signals, or reaps a unit process.
+    fn process_snapshot(outer_pid: u32, scratch: &Path) -> String {
+        let table = match std::process::Command::new("ps")
+            .args(["-A", "-o", "pid=,ppid=,pgid=,stat=,wchan=,command="])
+            .output()
+        {
+            Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+            Err(error) => return format!("ps unavailable: {error}"),
+        };
+        let mut snapshot = String::from("pid ppid pgid stat wchan command\n");
+        let mut pids = Vec::new();
+        for row in table.lines() {
+            let mut fields = row.split_whitespace().map(str::parse::<u32>);
+            if let (Some(Ok(pid)), Some(Ok(ppid))) = (fields.next(), fields.next())
+                && (pid == outer_pid || ppid == outer_pid)
+            {
+                pids.push(pid);
+                snapshot.push_str(row.trim());
+                snapshot.push('\n');
+            }
+        }
+        #[cfg(target_os = "macos")]
+        for pid in pids {
+            let report = scratch.join(format!("sample-{pid}.txt"));
+            let sampled = std::process::Command::new("sample")
+                .arg(pid.to_string())
+                .arg("1")
+                .arg("-file")
+                .arg(&report)
+                .output();
+            let graph = std::fs::read_to_string(&report).map_or_else(
+                |error| format!("no sample report ({sampled:?}): {error}"),
+                |text| {
+                    text.lines()
+                        .skip_while(|line| !line.starts_with("Call graph:"))
+                        .take(80)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                },
+            );
+            let _ =
+                std::fmt::Write::write_fmt(&mut snapshot, format_args!("sample {pid}:\n{graph}\n"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (pids, scratch);
+        snapshot
+    }
+
     #[cfg(target_os = "linux")]
     fn python_available() -> bool {
         ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
@@ -1224,6 +1282,7 @@ mod interactive_tests {
             "RUSTX_TEST_INTERACTIVE_FAIL_SETSID",
             "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR",
             "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP",
+            "RUSTX_TEST_INTERACTIVE_TRACE",
             "RUSTX_COMMAND_ENVIRONMENT",
             "RUSTX_PHYSICAL_CONTINUATION",
         ];
@@ -1918,7 +1977,8 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.trace = true;
         let process = fixture
             .spawn_with_control(
                 &script,
@@ -1932,19 +1992,27 @@ mod interactive_tests {
                 control.clone(),
             )
             .expect("spawn");
+        let outer_pid = process
+            .supervisor_child_pid
+            .expect("test-only supervisor pid");
         let settlement = tokio::time::timeout(DEADLINE, process.wait_for_settlement())
             .await
             .unwrap_or_else(|_| {
                 panic!(
-                    "pre-anchor owner did not settle; inner_pid_file_exists: {}; outer_pid: {:?}; outer_observation: {:?}; driver: {:?}; stderr: {}",
+                    "pre-anchor owner did not settle; inner_pid_file_exists: {}; outer_pid: \
+                     {outer_pid}; outer_observation: {:?}; driver: {:?}; stderr:\n{}\nprocesses:\n{}",
                     inner_pid_file.exists(),
-                    process.supervisor_child_pid,
-                    process.supervisor_child_pid.map(|pid| crate::runtime::process_wait::waitid(
-                        crate::runtime::process_wait::Id::Pid(nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap())),
-                        nix::sys::wait::WaitPidFlag::WNOHANG | nix::sys::wait::WaitPidFlag::WEXITED | nix::sys::wait::WaitPidFlag::WNOWAIT,
-                    )),
+                    crate::runtime::process_wait::waitid(
+                        crate::runtime::process_wait::Id::Pid(nix::unistd::Pid::from_raw(
+                            i32::try_from(outer_pid).unwrap()
+                        )),
+                        nix::sys::wait::WaitPidFlag::WNOHANG
+                            | nix::sys::wait::WaitPidFlag::WEXITED
+                            | nix::sys::wait::WaitPidFlag::WNOWAIT,
+                    ),
                     control.observed_events(),
-                    process.stderr_preview()
+                    process.stderr_preview(),
+                    process_snapshot(outer_pid, fixture.dir.path()),
                 )
             });
         assert!(matches!(
