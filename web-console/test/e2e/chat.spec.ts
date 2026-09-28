@@ -73,22 +73,29 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
     const ledger = trajectory.getByRole('table', { name: 'Trace ledger' });
-    await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(32);
+    await expect(trajectory.locator('[data-request-owner]').first()).toBeVisible();
+    await expect(ledger.locator('[data-display-type="TurnHeader"], [data-display-type="GroupHeader"]')).toHaveCount(0);
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
-    await ledger.evaluate(el => { el.scrollTop = 200; el.dispatchEvent(new Event('scroll')); });
-    const traceAnchor = trajectory.locator('[data-display-type="RequestBoundary"]').first();
-    const traceAnchorId = await traceAnchor.getAttribute('data-owner');
+    // Compact summaries can fit the whole first page without scrolling. Load
+    // one more page to establish a real scrolling viewport before asserting
+    // prepend anchoring (a short viewport necessarily clamps scrollTop to 0).
+    await trajectory.getByRole('button', { name: 'Load earlier records into the overview', exact: true }).click();
+    await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
+    await ledger.evaluate(el => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
+    const traceAnchorId = await ledger.evaluate(el => Array.from(el.querySelectorAll<HTMLElement>('[data-request-owner]')).find(marker => marker.getBoundingClientRect().top >= el.getBoundingClientRect().top)!.dataset.requestOwner!);
+    const traceAnchor = trajectory.locator(`[data-request-owner="${traceAnchorId}"]`);
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
-    for (let pageNumber = 0; pageNumber < 3; pageNumber++) {
+    for (let pageNumber = 0; pageNumber < 4; pageNumber++) {
       const before = Number(await ledger.getAttribute('aria-rowcount'));
       await trajectory.getByRole('button', { name: 'Load earlier records into the overview', exact: true }).click();
       await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(before);
     }
-    expect(await trajectory.locator('[data-display-key]').count()).toBeLessThan(80);
-    await expect.poll(async () => Math.abs(await trajectory.locator(`[data-display-type="RequestBoundary"][data-owner="${traceAnchorId}"]`).evaluate(el => el.getBoundingClientRect().top) - traceAnchorTop)).toBeLessThan(2);
+    const capacity = await ledger.evaluate(el => Math.ceil(el.clientHeight / 10) + 2 * 12 + 1);
+    expect(await ledger.getByRole('row').count()).toBeLessThanOrEqual(capacity);
+    await expect.poll(async () => Math.abs(await trajectory.locator(`[data-request-owner="${traceAnchorId}"]`).evaluate(el => el.getBoundingClientRect().top) - traceAnchorTop)).toBeLessThan(2);
     const requestRecord = traceBeforeBrowser.records.find(record => record.request)!;
     await trajectory.getByLabel('Search loaded Trace').fill(requestRecord.request!.model);
-    await trajectory.locator(`[data-display-type="RequestBoundary"][data-owner="${requestRecord.id}"]`).click();
+    await trajectory.locator(`[data-request-owner="${requestRecord.id}"]`).click();
     const inspector = trajectory.getByLabel('Trace record inspector');
     await inspector.getByRole('tab', { name: 'Native', exact: true }).click();
     await expect(inspector).toContainText(requestRecord.request!.request_id);
@@ -126,13 +133,13 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
-    await expect(trajectory.getByRole('table').getByText('running', { exact: true }).first()).toBeVisible();
+    await expect(trajectory.locator('[data-request-owner][data-status="running"]').first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
-    await expect(trajectory.getByRole('table').getByText('running', { exact: true }).first()).toBeVisible();
+    await expect(trajectory.locator('[data-request-owner][data-status="running"]').first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const beforeSettlement = Number(await ledger.getAttribute('aria-rowcount'));
     await fixture.release('settle-chat');

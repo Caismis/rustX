@@ -388,7 +388,8 @@ pub enum RuntimeClientSessionRequest {
 /// Version 48 adds native whole-conversation Turn/Step counts and Turn clocks.
 /// Version 49 unifies native Turn process ownership, counts and control seats.
 /// Version 50 publishes native derived read domains for incremental clients.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 50;
+/// Version 51 adds bounded canonical Tool argument previews to Trace summaries.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 51;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1370,7 +1371,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 50);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 51);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

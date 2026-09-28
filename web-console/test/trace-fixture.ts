@@ -1,4 +1,4 @@
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v25';
+import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v26';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
@@ -45,6 +45,7 @@ export const traceTool = (n: number, overrides: Partial<TraceRecord> = {}): Trac
       call_id: `call-${n}`,
       tool_id: 'tool-bash',
       name: 'bash',
+      arguments: { text: '{"command":"ls -la"}', truncated: false },
       started: true,
       outcome: 'success',
       detail: null,
@@ -150,3 +151,37 @@ export const structuralSearchRecords = (): TraceRecord[] => [
   traceRecord(7, { location: { attempt_id: 'attempt-b', step_id: 'gamma' } }),
   traceRecord(8, { location: { attempt_id: 'attempt-a', step_id: 'beta' } }),
 ];
+
+/** Fixed #421 acceptance data. Every group and retry is explicitly native-owned. */
+export function semanticLedgerRecords(): TraceRecord[] {
+  const a = { attempt_id: 'ledger-turn-a', step_id: 'ledger-step-a' };
+  const b = { attempt_id: 'ledger-turn-b', step_id: 'ledger-step-b' };
+  const prompt = traceRecord(102, { location: a });
+  prompt.request!.system_prompt = { state: 'initial', preview: { text: 'You are the historical agent. Preserve exact native authority.', truncated: false } };
+  prompt.request!.retry_number = 0;
+  prompt.request!.context_additions = ['workspace', 'environment'].map((name, n) => ({ message_id: `ledger-context-${name}`, context_kind: n ? 'native_environment' : 'extension_environment', producer: n ? { Native: 'workspace_instructions' } : { CertifiedExtension: 'vendor.workspace' }, source: n ? { type: 'runtime' } : { type: 'certified_extension', contributor: 'vendor.workspace' }, preview: { text: n ? 'Runtime environment: Linux · Rust workspace' : 'Workspace instructions: preserve native ownership and bounded reads', truncated: false }, attachments: [], truncated: false }));
+  const updated = traceRecord(112, { location: b });
+  updated.request!.system_prompt = { state: 'changed', preview: { text: 'Inspect the final diff and report validation evidence.', truncated: false } };
+  updated.request!.retry_number = 0;
+  const tool = traceTool(104, { location: a, preview: { text: '3 files changed, 28 insertions', truncated: false } });
+  tool.tool!.arguments = { text: '{"command":"git diff --stat"}', truncated: false };
+  const failed = traceTool(105, { location: a, state: 'failed', preview: { text: 'error: missing field `name` in source record', truncated: false } });
+  failed.tool!.arguments = { text: '{"command":"cargo test --lib"}', truncated: false }; failed.tool!.outcome = 'failed';
+  const finalTool = traceTool(114, { location: b, preview: { text: 'All focused tests passed. Additional output omitted…', truncated: true } });
+  finalTool.tool!.arguments = { text: '{"command":"cargo test --lib runtime_client::trace::', truncated: true };
+  const retry = traceRecord(107, { location: { ...a, step_id: 'ledger-step-recovery' }, state: 'failed' });
+  retry.request!.retry_number = 0;
+  const recovery = traceRecord(108, { location: retry.location }); recovery.request!.retry_number = 1;
+  return [
+    traceRecord(100, { kind: 'attempt', request: null, location: { attempt_id: a.attempt_id } }),
+    traceRecord(101, { kind: 'user', request: null, location: { attempt_id: a.attempt_id }, preview: { text: 'Review the workspace and run the focused checks.', truncated: false } }),
+    traceRecord(120, { kind: 'step', request: null, location: a }), prompt,
+    traceRecord(103, { kind: 'assistant', request: null, location: a, preview: { text: 'I will inspect the diff and verify the native contracts.', truncated: false }, calls: [tool, failed].map(record => ({ call_id: record.tool!.call_id, tool_id: record.tool!.tool_id, name: 'bash' })) }),
+    tool, failed, traceRecord(121, { kind: 'step', request: null, location: retry.location }), retry, recovery,
+    traceRecord(109, { kind: 'assistant', request: null, location: retry.location, preview: { text: 'The missing field is corrected. The retry passed.', truncated: false } }),
+    traceRecord(110, { kind: 'attempt', request: null, location: { attempt_id: b.attempt_id } }),
+    traceRecord(111, { kind: 'user', request: null, location: { attempt_id: b.attempt_id }, preview: { text: 'Verify the final implementation and its bounds.', truncated: false } }),
+    traceRecord(122, { kind: 'step', request: null, location: b }), updated,
+    traceRecord(113, { kind: 'assistant', request: null, location: b, preview: { text: 'Running the native Trace regression suite.', truncated: false } }), finalTool,
+  ];
+}

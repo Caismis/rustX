@@ -22,7 +22,7 @@ export function searchItems(projection: TrajectoryProjection, query: string): Re
     const text = [...structure, ...labels, preview, record.id, record.state,
       record.location.attempt_id, record.location.step_id, record.request?.request_id,
       ...(item.type === 'RequestBoundary' ? [record.request?.model, record.request?.failure_kind] : []),
-      record.tool?.name, record.tool?.tool_id, record.tool?.call_id, record.tool?.detail?.text,
+      record.tool?.name, record.tool?.tool_id, record.tool?.call_id, record.tool?.detail?.text, record.tool?.arguments?.text,
       record.native_id, record.message_id, record.originating_tool_call_id,
       ...record.calls.map(call => `${call.name} ${call.tool_id} ${call.call_id}`),
       ...(item.type === 'ContextRow' ? [item.context.message_id, JSON.stringify(item.context.producer), item.context.context_kind, JSON.stringify(item.context.source)] : []),

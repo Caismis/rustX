@@ -1,7 +1,7 @@
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v25';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v26';
 
 export type TrajectoryFacet = 'Summary' | 'System Prompt' | 'Diff' | 'Context' | 'Tools' | 'Options' | 'Usage' | 'Timing' | 'Native' | 'Content' | 'Thinking' | 'Raw' | 'Input' | 'Code' | 'Result' | 'Schema' | 'Artifacts';
 export interface TrajectorySelection {
@@ -230,8 +230,9 @@ export function matchedRecordIds(items: readonly TrajectoryDisplayItem[], matche
   return owners;
 }
 
-/** Search bypasses both collapse policies. It never performs a read. */
-export function visibleItems(tx: Translate, items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], attempts: ReadonlySet<string>, calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
+/** Search bypasses Tool-call folding; ledgerRows independently bypasses Turn
+ * folding for the same query. Neither projection performs a read. */
+export function visibleItems(tx: Translate, items: readonly TrajectoryDisplayItem[], records: readonly TraceRecord[], calls: ReadonlySet<string>, matches: ReadonlySet<string> | null): TrajectoryDisplayItem[] {
   if (matches) {
     const owners = matchedRecordIds(items, matches)!;
     return items.filter(item => isInspectable(item) ? matches.has(item.display_key)
@@ -242,8 +243,8 @@ export function visibleItems(tx: Translate, items: readonly TrajectoryDisplayIte
   for (const owner of calls) for (const record of matching.get(owner) ?? []) hidden.add(record.id);
   return items.flatMap<TrajectoryDisplayItem>(item => {
     if (item.type === 'HistoryBoundary') return [item];
-    const attempt = isInspectable(item) ? item.record.location.attempt_id : item.attempt_id;
-    if (item.type !== 'TurnHeader' && attempt != null && attempts.has(attempt)) return [];
+    // Turn folding belongs to the semantic ledger projection, where System
+    // cells and the first main row remain visible with their native chrome.
     if (item.type === 'RecordRow' && hidden.has(item.owner_record_id)) return [];
     if (item.type === 'RecordRow' && calls.has(item.owner_record_id) && item.record.calls.length) {
       const executions = matching.get(item.owner_record_id) ?? [];
@@ -280,6 +281,96 @@ export function preferredStructure(items: readonly TrajectoryDisplayItem[], prev
     && (item.type !== 'GroupHeader' || previous.type !== 'GroupHeader' || item.step_id === previous.step_id)
     );
 }
-export function preferredDisplayItem(items: readonly TrajectoryDisplayItem[], previous: FocusableDisplayItem): FocusableDisplayItem | undefined {
-  return isInspectable(previous) ? preferredItem(items, previous.owner_record_id, previous) : preferredStructure(items, previous);
+
+/** A measurable ledger seat. Structural inspection targets are metadata, never
+ * ordinary content rows. All relationships are resolved here, before rendering. */
+export interface TrajectoryLedgerRow {
+  display_key: string;
+  kind: 'semantic' | 'marker' | 'summary' | 'history';
+  height: 30 | 20 | 10;
+  item?: InspectableDisplayItem;
+  turn?: Extract<StructuralDisplayItem, { type: 'TurnHeader' }>;
+  steps: Extract<StructuralDisplayItem, { type: 'GroupHeader' }>[];
+  request?: Extract<InspectableDisplayItem, { type: 'RequestBoundary' }>;
+  turnStart: boolean;
+  stepMarkers: Extract<StructuralDisplayItem, { type: 'GroupHeader' }>[];
+  summary?: string;
+}
+
+export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {
+  const turns = new Map<string, Extract<StructuralDisplayItem, { type: 'TurnHeader' }>>();
+  const steps = new Map<string, Extract<StructuralDisplayItem, { type: 'GroupHeader' }>>();
+  const requests = new Map<string, Extract<InspectableDisplayItem, { type: 'RequestBoundary' }>>();
+  for (const item of items) {
+    if (item.type === 'TurnHeader') turns.set(item.attempt_id, item);
+    if (item.type === 'GroupHeader' && item.kind === 'step') steps.set(displayKey(item.attempt_id, item.step_id), item);
+    if (isInspectable(item) && item.record.request) {
+      const marker = cellsOf(tx, item.record).find((cell): cell is Extract<InspectableDisplayItem, { type: 'RequestBoundary' }> => cell.type === 'RequestBoundary')!;
+      requests.set(item.owner_record_id, marker);
+    }
+  }
+  const cells = items.filter(isInspectable);
+  const requestSeats = new Map<string, string>();
+  for (const [owner, marker] of requests) {
+    const owned = cells.filter(cell => cell.owner_record_id === owner);
+    requestSeats.set(owner, (owned.find(cell => cell.type === 'SystemPromptCell') ?? owned.find(cell => cell.type === 'ContextRow') ?? marker).display_key);
+  }
+  let rows: TrajectoryLedgerRow[] = items.flatMap<TrajectoryLedgerRow>(item => {
+    if (item.type === 'HistoryBoundary') return [{ display_key: item.display_key, kind: 'history', height: 30, steps: [], turnStart: false, stepMarkers: [] }];
+    if (!isInspectable(item)) return [];
+    if (item.type === 'RequestBoundary' && requestSeats.get(item.owner_record_id) !== item.display_key) return [];
+    const { attempt_id: attempt, step_id: step } = item.record.location;
+    const group = steps.get(displayKey(attempt, step));
+    return [{ display_key: item.type === 'RequestBoundary' ? displayKey('marker-seat', item.display_key) : item.display_key, kind: item.type === 'RequestBoundary' ? 'marker' : 'semantic', height: item.type === 'RequestBoundary' ? 10 : item.type === 'CollapsedCallSummary' ? 20 : 30,
+      item, turn: attempt == null ? undefined : turns.get(attempt), steps: group ? [group] : [],
+      request: requestSeats.get(item.owner_record_id) === item.display_key ? requests.get(item.owner_record_id) : undefined,
+      turnStart: false, stepMarkers: [] }];
+  });
+  // Native classification, not text or position, promotes the initial prompt.
+  // The cell's Request and Step identities remain untouched.
+  for (const turn of turns.values()) {
+    const owned = rows.filter(row => row.turn?.attempt_id === turn.attempt_id);
+    const initial = owned.filter(row => row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial');
+    if (initial.length) {
+      const first = rows.findIndex(row => row.turn?.attempt_id === turn.attempt_id);
+      rows = rows.filter(row => !initial.includes(row));
+      rows.splice(first, 0, ...initial);
+    }
+    if (!searching && folded.has(turn.attempt_id)) {
+      const main = owned.find(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell');
+      const retained = new Set(owned.filter(row => row.item?.type === 'SystemPromptCell' || row === main));
+      const turnSteps = [...steps.values()].filter(step => step.attempt_id === turn.attempt_id);
+      const count = cells.filter(cell => cell.type === 'RecordRow' && cell.record.location.attempt_id === turn.attempt_id).reduce((sum, cell) => sum + cell.record.calls.length, 0);
+      const summary: TrajectoryLedgerRow = { display_key: displayKey('turn-summary', turn.attempt_id), kind: 'summary', height: 20, turn, steps: turnSteps, turnStart: false, stepMarkers: [],
+        summary: tx('trajectory:ledger.fold-summary', { steps: turnSteps.length, calls: count }) };
+      const first = rows.findIndex(row => row.turn?.attempt_id === turn.attempt_id);
+      rows = rows.filter(row => row.turn?.attempt_id !== turn.attempt_id || retained.has(row));
+      const last = rows.map(row => row.turn?.attempt_id).lastIndexOf(turn.attempt_id);
+      rows.splice(last >= 0 ? last + 1 : Math.max(0, first), 0, summary);
+    } else {
+      const missingSteps = [...steps.values()].filter(step => step.attempt_id === turn.attempt_id && !owned.some(row => row.steps.includes(step)));
+      const needsTurn = !owned.some(row => !(row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial'));
+      if (missingSteps.length || needsTurn) {
+        const last = rows.map(row => row.turn?.attempt_id).lastIndexOf(turn.attempt_id);
+        rows.splice(last < 0 ? rows.length : last + 1, 0, { display_key: displayKey('structure-marker', turn.attempt_id), kind: 'marker', height: 10, turn,
+          steps: missingSteps, turnStart: false, stepMarkers: [] });
+      }
+    }
+  }
+
+  const seenTurns = new Set<string>();
+  const seenSteps = new Set<string>();
+  for (const row of rows) {
+    // Initial System Prompt precedes Turn chrome, even though it is Step-owned.
+    const initial = row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial';
+    if (row.turn && !initial && !seenTurns.has(row.turn.attempt_id)) { row.turnStart = true; seenTurns.add(row.turn.attempt_id); }
+    row.stepMarkers = row.steps.filter(step => !seenSteps.has(step.display_key));
+    for (const step of row.steps) seenSteps.add(step.display_key);
+  }
+  return rows;
+}
+
+export function rowOwnsKey(row: TrajectoryLedgerRow, key: string): boolean {
+  return row.display_key === key || row.request?.display_key === key || (row.turnStart && (row.turn?.display_key === key || `${row.turn?.display_key}:fold` === key))
+    || row.stepMarkers.some(step => step.display_key === key);
 }

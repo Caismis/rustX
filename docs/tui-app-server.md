@@ -34,7 +34,7 @@ control submission until authoritative settlement. Success focuses an existing
 Session or opens the empty selector, without automatically creating a Session.
 Lost deletion responses are never replayed; reconnection inspects native state.
 
-`session/summaryInvalidated` is part of the mandatory v25 vocabulary and is
+`session/summaryInvalidated` is part of the mandatory v26 vocabulary and is
 decoded and routed by Session identity like any other notification. The TUI
 holds no cached Session summary — `/resume` reads the catalog afresh every time
 it opens — so the notification is accepted and declined: it is never folded into
@@ -52,14 +52,14 @@ generations fence late reads and paging. Reconnect/resync remembers only the
 selected SubagentId and reconstructs through `subagent/transcript` on the current
 parent AttachmentTarget, displaying explicit unavailable history when needed.
 No child Session/Composer or HITL owner is created. See the
-[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v25).
+[protocol contract](app-server-protocol.md#read-only-native-subagent-conversations-v26).
 
 Initial `--model` intent is passed as `session/create.settings.model`; without it,
 creation omits the override and the native default owner decides. Attachment reads
 that established state. TUI startup does not issue an initialization `setModel`;
 later explicit model changes remain supported. See [#419](issue-419/ownership.md).
 
-## Incremental projection (v25 / Runtime Client 50)
+## Incremental projection (v26 / Runtime Client 51)
 
 The existing terminal presentation reducer consumes every native event and the new
 `read_domains_updated` cut (decorated transcript, statistics, Todo, occupancy).

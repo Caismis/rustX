@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions and TurnUsagePanel; see PROVENANCE.md. */
 import { useEffect, useState } from 'react';
-import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from '../../../../protocol/app-server/v25';
+import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from '../../../../protocol/app-server/v26';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Modal } from '../../presentation/primitives/Modal';

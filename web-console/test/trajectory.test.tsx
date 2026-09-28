@@ -8,10 +8,10 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
+import { ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v25';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v26';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -35,7 +35,7 @@ const richRequest = (n = 0) => {
   record.request!.context_additions = [context('context-z'), context('context-a')];
   return record;
 };
-function row(type: string, id = 'trace:0') { return document.querySelector<HTMLElement>(`[data-display-type="${type}"][data-owner="${id}"]`)!; }
+function row(type: string, id = 'trace:0') { return document.querySelector<HTMLElement>(type === 'RequestBoundary' ? `[data-request-owner="${id}"]` : `[data-display-type="${type}"][data-owner="${id}"]`)!; }
 const structureInspector = () => screen.getByRole('complementary', { name: 'Trace structure inspector' });
 /** The value beside one fact label of the structural inspector. */
 const fact = (label: string) => within(structureInspector()).getByText(label, { selector: 'dt' }).nextElementSibling?.textContent;
@@ -57,7 +57,7 @@ function dragTimeline(from: number, to: number) {
 const timelineFocusOf = () => Object.fromEntries([...document.querySelectorAll<HTMLElement>('[data-owner]')].map(el => [el.dataset.owner, el.dataset.timelineFocus]));
 const focusOverlay = () => document.querySelector<HTMLElement>('[data-focus-range]');
 
-// v25 exposes two independent enums: cover their full Cartesian product,
+// v26 exposes two independent enums: cover their full Cartesian product,
 // including combinations today's all-or-nothing snapshot producer cannot emit.
 const inputMatrix = [
   ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],
@@ -217,7 +217,7 @@ it('T1-06 retries stay one logical Step; failed and running requests need no Ass
   expect(items.filter(item => item.type === 'GroupHeader')).toHaveLength(1);
   expect(items.filter(item => item.type === 'RequestBoundary').map(item => item.record.request!.retry_number)).toEqual([0, 1, 2, 3]);
   show(cacheOf(records));
-  for (const record of records) { fireEvent.click(row('RequestBoundary', record.id)); expect(row('RequestBoundary', record.id).getAttribute('aria-selected')).toBe('true'); }
+  for (const record of records) { fireEvent.click(row('RequestBoundary', record.id)); expect(row('RequestBoundary', record.id).getAttribute('aria-pressed')).toBe('true'); }
   expect(screen.queryByText('Fold Steps')).toBeNull();
 });
 
@@ -249,7 +249,7 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never lends i
   expect(step.display_key).toBe(JSON.stringify(['group', 'attempt-a', '1']));
   expect(trajectoryItems([{ ...child, state: 'running' }]).find(item => item.type === 'GroupHeader')!.display_key).toBe(step.display_key);
   for (const type of ['TurnHeader', 'GroupHeader']) {
-    const header = document.querySelector<HTMLElement>(`[data-display-type="${type}"]`)!;
+    const header = document.querySelector<HTMLElement>(`[data-structural="${type === 'TurnHeader' ? 'turn' : 'step'}"]`)!;
     act(() => header.focus()); fireEvent.click(header); fireEvent.keyDown(header, { key: 'Enter' });
     expect(header.hasAttribute('data-owner')).toBe(false);
     expect(document.activeElement).toBe(header);
@@ -282,9 +282,8 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
   expect(ledger.textContent).not.toContain('attempt-opaque');
   expect(ledger.textContent).not.toContain('step-opaque');
   expect(ledger.textContent).not.toContain('Attempt');
-  const turn = within(ledger).getByRole('row', { name: 'Turn 1' });
-  const message = within(ledger).getByRole('row', { name: 'Message' });
-  const stepRow = within(ledger).getByRole('row', { name: 'Step 1' });
+  const turn = within(ledger).getByRole('button', { name: 'Turn 1' });
+  const stepRow = within(ledger).getByRole('button', { name: 'Step 1' });
 
   fireEvent.click(turn);
   expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
@@ -297,14 +296,10 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
   expect(fact('Duration')).toBe('Unavailable');
   expect(within(structureInspector()).queryByText('Logical Step')).toBeNull();
 
-  // Keyboard: arrows move structural selection, Enter/Space open, Escape closes in place.
-  act(() => turn.focus()); fireEvent.keyDown(turn, { key: 'ArrowDown' });
-  expect(document.activeElement).toBe(message);
-  expect(structureInspector().textContent).toContain('no native structural record');
-  expect(structureInspector().textContent).not.toContain(input.id);
-  expect(structureInspector().textContent).not.toContain('attempt input');
-  act(() => stepRow.focus()); fireEvent.keyDown(stepRow, { key: 'Enter' });
-  expect(stepRow.getAttribute('aria-selected')).toBe('true');
+  // Native chrome uses ordinary keyboard-focusable buttons; no Message header.
+  expect(within(ledger).queryByRole('row', { name: 'Message' })).toBeNull();
+  act(() => stepRow.focus()); fireEvent.click(stepRow);
+  expect(stepRow.getAttribute('aria-pressed')).toBe('true');
   expect(within(structureInspector()).getByText('Step 1 · native Step')).toBeDefined();
   expect(fact('Native kind')).toBe('Step');
   expect(fact('Record')).toBe(step.id);
@@ -315,7 +310,7 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
   fireEvent.keyDown(stepRow, { key: 'Escape' });
   expect(screen.queryByRole('complementary')).toBeNull();
   expect(document.activeElement).toBe(stepRow);
-  fireEvent.keyDown(stepRow, { key: ' ' });
+  fireEvent.click(stepRow);
   const close = within(structureInspector()).getByRole('button', { name: 'Close structure' });
   act(() => close.focus()); fireEvent.click(close);
   // Focus returns to the header without reopening its inspection.
@@ -323,7 +318,7 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
   expect(screen.queryByRole('complementary')).toBeNull();
   expect(load).not.toHaveBeenCalled();
   expect(select.mock.calls.every(([id]) => id === undefined)).toBe(true);
-  expect(document.querySelector('[data-display-type="TurnHeader"]')?.textContent).toContain('running');
+  expect(document.querySelectorAll('[role="row"][data-structural]')).toHaveLength(0);
 });
 
 it('407: prepend renumbering and lifecycle refresh keep the same native structural selection', () => {
@@ -331,13 +326,13 @@ it('407: prepend renumbering and lifecycle refresh keep the same native structur
   const records = [attempt, traceRecord(9, { kind: 'step', request: null, preview: null }), traceRecord(10)];
   const initial = cacheOf(records);
   const load = vi.fn(); const view = show(initial, load);
-  const turn = screen.getByRole('row', { name: 'Turn 1' });
-  act(() => turn.focus()); fireEvent.keyDown(turn, { key: 'Enter' });
+  const turn = screen.getByRole('button', { name: 'Turn 1' });
+  act(() => turn.focus()); fireEvent.click(turn);
   expect(fact('Record')).toBe(attempt.id);
   const older = prependTrace(initial, { records: [traceRecord(1, { location: { attempt_id: 'older-attempt', step_id: 'older-step' } })], next_cursor: null });
   view.rerender(<Trajectory cache={older} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={load} />);
-  expect(screen.getByRole('row', { name: 'Turn 2' })).toBe(turn);
-  expect(turn.getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('button', { name: 'Turn 2' })).toBe(turn);
+  expect(turn.getAttribute('aria-pressed')).toBe('true');
   expect(document.activeElement).toBe(turn);
   expect(within(structureInspector()).getByText('Turn 2 · native Attempt')).toBeDefined();
   expect(fact('Record')).toBe(attempt.id);
@@ -348,7 +343,7 @@ it('407: prepend renumbering and lifecycle refresh keep the same native structur
   view.rerender(<Trajectory cache={refreshed} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={load} />);
   expect(fact('Record')).toBe(attempt.id);
   expect(fact('State')).toBe('completed');
-  expect(turn.getAttribute('aria-selected')).toBe('true');
+  expect(turn.getAttribute('aria-pressed')).toBe('true');
   expect(load).not.toHaveBeenCalled();
 });
 
@@ -366,8 +361,8 @@ it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hi
   }
   render(<Fixture />);
   fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
-  const step = document.querySelector<HTMLElement>('[data-display-type="GroupHeader"]')!;
-  act(() => step.focus()); fireEvent.keyDown(step, { key: 'Enter' });
+  const step = document.querySelector<HTMLElement>('[data-structural="step"]')!;
+  act(() => step.focus()); fireEvent.click(step);
   expect(selections.at(-1)).toBeUndefined();
   expect(fact('Record')).toBe('trace:9');
   await act(async () => resolve(kind === 'request' ? requestDetail(10) : toolDetail(10)));
@@ -384,7 +379,7 @@ it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page
   const unrelated = [execution(2, { location: { attempt_id: 'other', step_id: '1' } }), execution(3, { location: { attempt_id: 'attempt-a', step_id: '2' } }), execution(4, { tool: { ...execution(4).tool!, tool_id: 'tool-b' } }), execution(5, { location: {} })];
   expect(matchingCalls([assistant, execution(1), ...unrelated]).get(assistant.id)?.map(r => r.id)).toEqual(['trace:1']);
   const records = [assistant, execution(1), ...unrelated];
-  const visible = visibleItems(translator('en'), trajectoryItems(records), records, new Set(), new Set([assistant.id]), null);
+  const visible = visibleItems(translator('en'), trajectoryItems(records), records, new Set([assistant.id]), null);
   const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
   expect(summary.preview).toContain('2 proposed · 1 loaded matching executions');
   expect(visible.filter(item => item.type === 'RecordRow').map(item => item.record.id)).toEqual(['trace:0', 'trace:4', 'trace:3', 'trace:2', 'trace:5']);
@@ -400,7 +395,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes warnings in %s and
   const executions = states.map((state, n) => execution(n + 1, { state }));
   const domains = ['background', 'subagent', 'workflow'].map((kind, n) => traceRecord(n + 10, { kind: kind as TraceRecord['kind'], request: null, originating_tool_call_id: 'same' }));
   const records = [assistant, ...executions, ...domains, traceRecord(20, { kind: 'compaction', request: null, state: 'running' })];
-  const visible = visibleItems(tx, flattenTrajectory(tx, projectTrajectory(tx, records)), records, new Set(), new Set([assistant.id]), null);
+  const visible = visibleItems(tx, flattenTrajectory(tx, projectTrajectory(tx, records)), records, new Set([assistant.id]), null);
   const summary = visible.find(item => item.type === 'CollapsedCallSummary')!;
   const labels = locale === 'en' ? ['settled', 'failed', 'denied', 'waiting', 'outcome unknown'] : ['已结束', '失败', '已拒绝', '等待中', '结果未知'];
   for (const label of labels) expect(summary.preview).toContain(`1 ${label}`);
@@ -509,15 +504,16 @@ it('T1-09 structural search and Attempt collapse never borrow child facts or ano
   const structural = items.find(item => item.type === 'GroupHeader')!;
   expect(searchItems(projectTrajectory(translator('en'), [child, other]), 'Step 1')).toEqual(new Set(items.filter(isInspectable).map(item => item.display_key)));
   expect(preferredStructure(trajectoryItems([{ ...child, location: { attempt_id: 'attempt-b', step_id: '1' } }]), structural)).toBeUndefined();
-  const visible = visibleItems(translator('en'), items, [child, other], new Set(['attempt-a']), new Set(), null);
-  expect(visible.filter(item => item.type === 'RequestBoundary')).toHaveLength(0);
-  expect(visible.filter(item => item.type === 'RecordRow').map(item => item.owner_record_id)).toEqual([other.id]);
-  expect(visible.filter(item => item.type === 'GroupHeader').map(item => item.attempt_id)).toEqual(['attempt-b']);
+  const visible = visibleItems(translator('en'), items, [child, other], new Set(), null);
+  const ledger = ledgerRows(translator('en'), visible, new Set(['attempt-a']), false);
+  expect(ledger.filter(row => row.item?.type === 'RequestBoundary')).toHaveLength(0);
+  expect(ledger.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual([other.id]);
+  expect(ledger.find(row => row.kind === 'summary')?.turn?.attempt_id).toBe('attempt-a');
 });
 
 it('T1-04 timeline navigation explicitly selects its native Request after structural focus', () => {
   const child = traceRecord(10); const load = vi.fn(); show(cacheOf([child]), load);
-  const header = document.querySelector<HTMLElement>('[data-display-type="GroupHeader"]')!;
+  const header = document.querySelector<HTMLElement>('[data-structural="step"]')!;
   act(() => header.focus());
   expect(load).not.toHaveBeenCalled();
   fireEvent.click(document.querySelector('[data-record-id="trace:10"]')!);
@@ -597,7 +593,7 @@ it.each(['expand', 'search', 'other owner'] as const)('T1-04 pending summary det
   expect(older).not.toHaveBeenCalled();
   if (transition === 'other owner') {
     expect(row('CollapsedCallSummary').getAttribute('aria-selected')).toBe('false');
-    expect(row('RequestBoundary', 'trace:2').getAttribute('aria-selected')).toBe('true');
+    expect(row('RequestBoundary', 'trace:2').getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
     expect(selections).toEqual(['trace:0', 'trace:2']);
     expect(reads).toEqual(['trace:0', 'trace:2']);
@@ -666,8 +662,8 @@ it('407: exact Attempt and Step identity own one Turn/group across interleaved r
   const items = flattenTrajectory(translator('en'), projection);
   expect(items.filter(item => item.type === 'TurnHeader').map(item => item.label)).toEqual(['Turn 1', 'Turn 2']);
   expect(items.filter(item => item.type === 'GroupHeader').map(item => item.label)).toEqual(['Message', 'Step 1', 'Step 2', 'Step 1']);
-  const folded = visibleItems(translator('en'), items, records, new Set(['attempt-a', 'attempt-b']), new Set(), null);
-  expect(folded.filter(isInspectable).map(item => item.owner_record_id)).toEqual(['trace:0']);
+  const folded = visibleItems(translator('en'), items, records, new Set(), null);
+  expect(ledgerRows(translator('en'), folded, new Set(['attempt-a', 'attempt-b']), false).flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual(['trace:0', 'trace:1']);
   expect(trajectoryTimeline(translator('en'), projection, 'sequence')!.boundaries.map(boundary => [boundary.nativeAttemptId, boundary.label])).toEqual(
     items.filter(item => item.type === 'TurnHeader').map(item => [item.attempt_id, item.label]),
   );
@@ -695,20 +691,20 @@ it('407: prepend renumbers Turn while collapsed selection, prompt detail and foc
   act(() => collapse.focus());
   fireEvent.click(collapse);
   expect(screen.getByRole('complementary').textContent).toContain('Exact frozen request ten');
-  expect(row('SystemPromptCell', selected.id)).toBeNull();
+  expect(row('SystemPromptCell', selected.id)).not.toBeNull();
   const next = prependTrace(initial, { records: [older], next_cursor: null });
   view.rerender(<Trajectory cache={next} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={load} />);
   expect(screen.getByRole('button', { name: 'Expand Turn 2' })).toBe(collapse);
   expect(document.activeElement).toBe(collapse);
   expect(screen.getByRole('complementary').textContent).toContain('Exact frozen request ten');
-  expect(row('SystemPromptCell', selected.id)).toBeNull();
+  expect(row('SystemPromptCell', selected.id)).not.toBeNull();
   const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'request-10' } });
   expect(row('SystemPromptCell', selected.id).getAttribute('aria-selected')).toBe('true');
-  expect(screen.getByRole('row', { name: 'Turn 2' })).toBeDefined();
+  expect(screen.getByRole('button', { name: 'Turn 2' })).toBeDefined();
   fireEvent.change(search, { target: { value: 'request-1' } });
   fireEvent.change(search, { target: { value: '' } });
-  expect(row('SystemPromptCell', selected.id)).toBeNull();
+  expect(row('SystemPromptCell', selected.id)).not.toBeNull();
   expect(screen.getByRole('button', { name: 'Expand Turn 2' })).toBeDefined();
   fireEvent.click(screen.getByRole('button', { name: 'Expand Turn 2' }));
   expect(row('SystemPromptCell', selected.id).getAttribute('aria-selected')).toBe('true');
@@ -747,13 +743,13 @@ it.each([
   const records = structuralSearchRecords();
   const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records), 'older');
   const collapsed = new Set(['attempt-a', 'attempt-b']);
-  const before = visibleItems(translator('en'), items, records, collapsed, new Set(), null);
+  const before = visibleItems(translator('en'), items, records, new Set(), null);
   const matches = searchItems(projectTrajectory(translator('en'), records), query);
   expect(matchedRecordIds(items, matches)).toEqual(new Set(ids));
-  const exposed = visibleItems(translator('en'), items, records, collapsed, new Set(), matches);
+  const exposed = visibleItems(translator('en'), items, records, new Set(), matches);
   expect(exposed.filter(isInspectable).map(item => item.owner_record_id)).toEqual([...ids]);
   expect(exposed).toContainEqual(expect.objectContaining({ type, label, attempt_id: attempt }));
-  expect(visibleItems(translator('en'), items, records, collapsed, new Set(), null)).toEqual(before);
+  expect(visibleItems(translator('en'), items, records, new Set(), null)).toEqual(before);
   expect([...collapsed]).toEqual(['attempt-a', 'attempt-b']);
 
   const load = vi.fn(); const older = vi.fn();
@@ -765,7 +761,8 @@ it.each([
   const foldedKeys = previousKeys();
   const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: query } });
-  expect(within(ledger).getByRole('row', { name: label }).getAttribute('data-attempt')).toBe(attempt);
+  if (label !== 'Message') expect(within(ledger).getByRole('button', { name: label }).closest('[data-attempt]')?.getAttribute('data-attempt')).toBe(attempt);
+  else expect(within(ledger).queryByRole('row', { name: 'Message' })).toBeNull();
   expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-owner'))).toEqual([...ids]);
   const spans = [...document.querySelectorAll('[data-record-id]')];
   expect(spans.length).toBeGreaterThan(0);
@@ -782,7 +779,7 @@ it('search conversion covers every inspectable cell, deduplicates owners and exc
   const assistant = traceRecord(1, { kind: 'assistant', request: null, message_id: 'assistant', calls: [{ call_id: 'call-2', tool_id: 'tool-bash', name: 'bash' }] });
   const records = [richRequest(), assistant, traceTool(2)];
   const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records), 'older');
-  const folded = visibleItems(translator('en'), items, records, new Set(), new Set([assistant.id]), null);
+  const folded = visibleItems(translator('en'), items, records, new Set([assistant.id]), null);
   const universe = [...items, ...folded];
   expect(new Set(universe.filter(isInspectable).map(item => item.type))).toEqual(new Set(['SystemPromptCell', 'ContextRow', 'RequestBoundary', 'RecordRow', 'CollapsedCallSummary']));
   for (const item of universe.filter(isInspectable)) {
@@ -813,7 +810,7 @@ it.each([
   const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: query } });
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual([...matches]);
+  expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(ledgerRows(translator('en'), expected, new Set(), true).map(row => row.display_key));
   expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual([owner]);
   expect(screen.getByRole('tab', { name: 'System Prompt' }).getAttribute('aria-selected')).toBe('true');
   fireEvent.change(search, { target: { value: '' } });
@@ -842,9 +839,9 @@ it.each(['Turn 2', 'Step 2'])('%s reveals every semantic cell of its structural 
   show(cacheOf(records));
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turns' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: query } });
-  const expected = trajectoryItems(query === 'Turn 2' ? records.slice(1) : [request]).filter(isInspectable);
+  const expected = trajectoryItems(query === 'Turn 2' ? records.slice(1) : [request]);
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
-  expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(expected.map(cell => cell.display_key));
+  expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(ledgerRows(translator('en'), expected, new Set(), true).map(row => row.display_key));
   expect([...document.querySelectorAll('[data-record-id]:not([data-dimmed])')].map(el => el.getAttribute('data-record-id'))).toEqual(query === 'Turn 2' ? ['trace:1', 'trace:5'] : ['trace:5']);
 });
 
@@ -863,7 +860,7 @@ it('407: Timeline focus keeps native identity across prepend and lifecycle refre
   view.rerender(<Trajectory cache={prepended} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />);
   // Same native identities; the Turn ordinal and projected range both moved.
   expect(timelineFocusOf()).toEqual({ 'trace:9': 'outside', 'trace:0': 'outside', 'trace:1': 'inside', 'trace:2': 'outside', 'trace:3': 'outside' });
-  expect(screen.getByRole('row', { name: 'Turn 3' }).getAttribute('data-attempt')).toBe('attempt-1');
+  expect(screen.getByRole('button', { name: 'Turn 3' }).closest('[data-attempt]')?.getAttribute('data-attempt')).toBe('attempt-1');
   expect(focusOverlay()!.style.left).not.toBe(before);
   // Projection changes retire coordinates while committed native focus survives.
   expect(timelineCanvas()).not.toBe(canvas);
@@ -980,7 +977,7 @@ it('407: Timeline zoom, pan and hover belong to the Trace epoch even across an i
   const view = show(initial);
   const hint = () => screen.getByLabelText('Timing overview').querySelector(':scope > p')!.textContent;
   const full = domainOf();
-  fireEvent.click(screen.getByRole('button', { name: 'Zoom timeline in' }));
+  fireEvent.keyDown(timelineCanvas(), { key: '+' });
   fireEvent.keyDown(timelineCanvas(), { key: 'ArrowRight' });
   const zoomed = domainOf();
   expect(zoomed).not.toEqual(full);
@@ -1072,14 +1069,14 @@ it('407: an obsolete pan cannot mutate a newly zoomed same-epoch viewport', () =
   const initial = cacheOf(epochRecords(0, 1, 2, 3, 4, 5, 6, 7));
   const ui = (cache: TraceCache) => <Trajectory cache={cache} loadEarlier={noop} latest={noop} onSelect={noop} onLoadDetail={noop} />;
   const view = render(ui(initial));
-  fireEvent.click(screen.getByRole('button', { name: 'Zoom timeline in' }));
+  fireEvent.keyDown(timelineCanvas(), { key: '+' });
   const stale = timelineCanvas();
   fireEvent.pointerDown(stale, { button: 2, pointerId: 1, clientX: 50 });
   fireEvent.pointerMove(stale, { pointerId: 1, clientX: 40 });
   const next = prependTrace(initial, { records: epochRecords(9), next_cursor: null });
   view.rerender(ui(next));
   expect(domainOf()).toEqual(['0', '9']);
-  fireEvent.click(screen.getByRole('button', { name: 'Zoom timeline in' }));
+  fireEvent.keyDown(timelineCanvas(), { key: '+' });
   const fresh = timelineCanvas();
   const domain = domainOf();
   fireEvent.pointerMove(stale, { pointerId: 1, clientX: 20 });
@@ -1198,19 +1195,19 @@ it('folded Turn preview and summary Status localize native lifecycle states with
   render(<Trajectory cache={cacheOf(records)} loadEarlier={older} latest={latest} onSelect={select} onLoadDetail={load} />);
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
   fireEvent.click(row('RecordRow', 'trace:9'));
-  const folded = document.querySelector<HTMLElement>('[data-display-type="TurnHeader"][data-attempt="attempt-a"]')!;
+  const folded = document.querySelector<HTMLElement>('[data-display-type="TurnSummary"][data-attempt="attempt-a"]')!;
   const preview = () => folded.querySelectorAll('[role="cell"]')[1]!.textContent;
   const owners = () => [...document.querySelectorAll<HTMLElement>('[data-owner]')].map(element => element.dataset.owner);
   const status = () => within(screen.getByRole('complementary', { name: translator(localeController.getSnapshot().active)('trajectory:trajectory-inspector.trace-record-inspector') }))
     .getByText(translator(localeController.getSnapshot().active)('trajectory:trajectory-inspector.status'), { selector: 'dt' }).nextElementSibling?.textContent;
-  expect(preview()).toBe('running · failed · waiting · outcome unknown');
+  expect(preview()).toContain('1 Steps · 0 Tool calls');
   expect(status()).toBe('denied');
   const visible = owners();
   expect(visible).toEqual(['trace:9']);
   const calls = [load, older, select, latest].map(fn => fn.mock.calls.length);
 
   act(() => localeController.setLocale('zh'));
-  expect(preview()).toBe('运行中 · 失败 · 等待中 · 结果未知');
+  expect(preview()).toContain('1 个步骤 · 0 次工具调用');
   expect(preview()).not.toMatch(/[a-z_]/);
   expect(status()).toBe('已拒绝');
   expect(owners()).toEqual(visible);
@@ -1218,7 +1215,74 @@ it('folded Turn preview and summary Status localize native lifecycle states with
   expect([load, older, select, latest].map(fn => fn.mock.calls.length)).toEqual(calls);
 
   act(() => localeController.setLocale('en'));
-  expect(preview()).toBe('running · failed · waiting · outcome unknown');
+  expect(preview()).toContain('1 Steps · 0 Tool calls');
   expect(owners()).toEqual(visible);
   expect([load, older, select, latest].map(fn => fn.mock.calls.length)).toEqual(calls);
+});
+
+it('421: ledger seats carry exact native actions and System precedes Turn chrome without heavyweight structure', () => {
+  const request = richRequest(2);
+  const retry = traceRecord(3);
+  const user = traceRecord(1, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' } });
+  const assistant = traceRecord(4, { kind: 'assistant', request: null });
+  const contextRequest = richRequest(5);
+  contextRequest.request!.system_prompt.state = 'unchanged';
+  contextRequest.request!.tool_catalog = 'unchanged';
+  const records = [user, request, retry, contextRequest, assistant];
+  const rows = ledgerRows(translator('en'), trajectoryItems(records), new Set(), false);
+  expect(rows[0]!.item?.type).toBe('SystemPromptCell');
+  expect(rows[0]!.item?.record.location).toEqual(request.location);
+  expect(rows[0]!.turnStart).toBe(false);
+  expect(rows[1]!.turnStart).toBe(true);
+  expect(rows[0]!.request?.owner_record_id).toBe(request.id);
+  const contextSeat = rows.find(row => row.request?.owner_record_id === contextRequest.id)!;
+  expect(contextSeat.item?.type).toBe('ContextRow');
+  expect(contextSeat.item?.owner_record_id).toBe(contextRequest.id);
+  expect(rows.filter(row => row.request?.owner_record_id === contextRequest.id)).toHaveLength(1);
+  const seat = rows.find(row => row.request?.owner_record_id === retry.id)!;
+  expect(seat.kind).toBe('marker'); expect(seat.height).toBe(10);
+  expect(seat.item?.record.request?.request_id).toBe(retry.request!.request_id);
+  expect(rows.find(row => row.item?.owner_record_id === assistant.id)?.request).toBeUndefined();
+  const load = vi.fn(); show(cacheOf(records), load);
+  expect(document.querySelectorAll('[role="row"][data-display-type="TurnHeader"], [role="row"][data-display-type="GroupHeader"], [role="row"][data-display-type="RequestBoundary"]')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Turn 1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Step 1' }));
+  expect(load).not.toHaveBeenCalled();
+  fireEvent.click(row('RequestBoundary', retry.id));
+  expect(load.mock.calls).toEqual([[retry.id]]);
+});
+
+it('421: fold retains System, first main semantic content and actionable compact summary; bilingual search restores exact folds', () => {
+  const user = traceRecord(1, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' } });
+  const records = [user, richRequest(2), traceTool(3), traceRecord(4, { kind: 'assistant', request: null })];
+  const load = vi.fn(); show(cacheOf(records), load);
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
+  expect(row('SystemPromptCell', 'trace:2')).not.toBeNull();
+  expect(row('RecordRow', user.id)).not.toBeNull();
+  expect(row('RecordRow', 'trace:3')).toBeNull();
+  expect(document.querySelector('[data-display-type="TurnSummary"]')?.getBoundingClientRect).toBeDefined();
+  const keys = () => [...screen.getByRole('table').querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
+  const before = keys();
+  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  fireEvent.change(search, { target: { value: 'Step 1' } });
+  expect(row('RecordRow', 'trace:3')).not.toBeNull();
+  const english = keys();
+  act(() => localeController.setLocale('zh'));
+  expect(keys()).toEqual(english);
+  fireEvent.change(search, { target: { value: '' } });
+  expect(keys()).toEqual(before);
+  expect(load).not.toHaveBeenCalled();
+  act(() => localeController.setLocale('en'));
+});
+
+it('421: Tool input and result render bounded summary facts without detail reads', () => {
+  const tool = traceTool(1, { preview: { text: 'bounded result', truncated: true } });
+  tool.tool!.arguments = { text: '{"command":"bounded input', truncated: true };
+  const load = vi.fn(); show(cacheOf([tool]), load);
+  expect(row('RecordRow', tool.id).textContent).toContain('bounded input');
+  expect(row('RecordRow', tool.id).textContent).toContain('→bounded result');
+  expect(within(row('RecordRow', tool.id)).getByLabelText(translator('en')('trajectory:trajectory.truncated'))).toBeDefined();
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'bounded input' } });
+  expect(row('RecordRow', tool.id)).not.toBeNull();
+  expect(load).not.toHaveBeenCalled();
 });

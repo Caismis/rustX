@@ -122,6 +122,39 @@ impl TracePreview {
         }
     }
 
+    /// Serialize only a bounded prefix of canonical JSON. Stop the serializer
+    /// at the byte ceiling rather than allocating the complete arguments.
+    #[must_use]
+    pub fn of_json(value: &serde_json::Value) -> Self {
+        struct Prefix(Vec<u8>);
+        impl std::io::Write for Prefix {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let kept = bytes
+                    .len()
+                    .min(TRACE_PREVIEW_BYTES.saturating_sub(self.0.len()));
+                self.0.extend_from_slice(&bytes[..kept]);
+                if kept < bytes.len() {
+                    return Err(std::io::Error::other("preview bound"));
+                }
+                Ok(kept)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut prefix = Prefix(Vec::new());
+        let truncated = serde_json::to_writer(&mut prefix, value).is_err();
+        // Serialization can stop inside a UTF-8 character; retain a valid prefix.
+        let valid = match std::str::from_utf8(&prefix.0) {
+            Ok(text) => text.len(),
+            Err(error) => error.valid_up_to(),
+        };
+        Self {
+            text: String::from_utf8_lossy(&prefix.0[..valid]).into_owned(),
+            truncated,
+        }
+    }
+
     /// Whether this preview carries no characters at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -249,6 +282,31 @@ mod tests {
         TRACE_JSON_DEPTH, TRACE_JSON_NODES, TRACE_JSON_STRING_BYTES, TraceJson, TracePreview,
         TraceText, identity_fits,
     };
+
+    /// JSON serialization stops at the byte bound and keeps a valid UTF-8 prefix.
+    #[test]
+    fn argument_preview_bounds_serialization_and_preserves_utf8() {
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!({"command": "ls"}),
+        ] {
+            let preview = super::TracePreview::of_json(&value);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&preview.text).unwrap(),
+                value
+            );
+            assert!(!preview.truncated);
+        }
+        for value in [
+            serde_json::json!("界".repeat(1000)),
+            serde_json::json!("\n".repeat(1000)),
+        ] {
+            let preview = super::TracePreview::of_json(&value);
+            assert!(preview.text.len() <= super::TRACE_PREVIEW_BYTES);
+            assert!(preview.truncated);
+        }
+    }
 
     /// Text is cut on a character boundary, never inside a code point.
     #[test]

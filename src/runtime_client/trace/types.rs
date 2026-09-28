@@ -344,6 +344,8 @@ pub struct TraceToolSummary {
     pub tool_id: ToolId,
     /// Recorded model-facing name, when the canonical proposal is loadable.
     pub name: Option<String>,
+    /// Bounded canonical arguments; absent only when the exact proposal is unavailable.
+    pub arguments: Option<TracePreview>,
     /// Whether execution started, as proven by its own durable start fact.
     pub started: bool,
     /// Typed outcome class, present only once the execution settled.

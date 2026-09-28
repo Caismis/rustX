@@ -2,27 +2,10 @@
 
 .root {
   flex: none;
-  padding: 6px 12px 8px;
+  position: relative;
+  padding: 3px 6px 2px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-1);
-}
-
-.legend {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.legend span {
-  color: var(--dsw-alias-label-primary);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.legend small {
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
 }
 
 .empty {
@@ -36,8 +19,8 @@
   touch-action: none;
   user-select: none;
   cursor: crosshair;
-  margin-left: 74px;
-  padding-top: 12px;
+  margin-left: 44px;
+  padding-top: 0;
 }
 
 .focus {
@@ -77,8 +60,8 @@
 
 .laneLabel {
   position: absolute;
-  left: -74px;
-  width: 70px;
+  left: -44px;
+  width: 40px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 10px;
   overflow: hidden;
@@ -120,9 +103,9 @@
   background: linear-gradient(
     to right,
     var(--dsw-alias-label-tertiary) 0 var(--trajectory-dispatch),
-    color-mix(in srgb, var(--dsw-alias-state-business-primary, #5794c8) 42%, transparent)
+    color-mix(in srgb, #885fc2 42%, transparent)
       var(--trajectory-dispatch) var(--trajectory-first-output, 100%),
-    var(--dsw-alias-state-business-primary, #5794c8) var(--trajectory-first-output, 100%)
+    #885fc2 var(--trajectory-first-output, 100%)
   );
 }
 
@@ -149,23 +132,13 @@
   opacity: 0.25;
 }
 
-.hoverDetail {
-  margin: 2px 0 0;
-  min-height: 12px;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.hoverDetail { position: absolute; right: 6px; bottom: 0; pointer-events: none; margin: 0; max-width: 70%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-1); font-size: 9px; }
 
 @media (max-width: 760px) {
   .boundary span { display: none; }
   .canvas { padding-top: 0; }
 }
 
-.controls { display: flex; gap: 2px; margin-left: auto; }
-.controls button { min-height: 20px; height: 20px; padding: 0 5px; font-size: 10px; }
 .canvas:focus-visible, .span:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 
 /* Adapted from pinned Harness TrajectoryTimeline.module.css .earlierHistory. */
@@ -209,3 +182,6 @@
   outline-offset: -2px;
   opacity: 1;
 }
+
+.span[data-kind='request']:not([style*='--trajectory-dispatch']):not([data-error]) { background: #885fc2; }
+.boundary span { display: none; }

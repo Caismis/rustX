@@ -1266,7 +1266,13 @@ fn summary_pages_carry_no_heavy_request_or_tool_payload() {
         !wire.contains(TOOL_DESCRIPTION),
         "the Tool catalog is detail-only"
     );
-    assert!(!wire.contains("ls -la"), "Tool arguments are detail-only");
+    let tool = record_of(&projected, TraceKind::Tool);
+    let arguments = tool.tool.as_ref().unwrap().arguments.as_ref().unwrap();
+    assert!(arguments.text.contains("ls -la"));
+    assert!(arguments.text.len() <= TRACE_PREVIEW_BYTES);
+    assert!(!arguments.truncated);
+    assert!(tool.preview.as_ref().unwrap().truncated);
+    assert!(tool.preview.as_ref().unwrap().text.len() <= TRACE_PREVIEW_BYTES);
     assert!(
         !wire.contains(&"R".repeat(2_000)),
         "Tool results are detail-only"
@@ -3834,4 +3840,90 @@ fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
         .unwrap();
     assert_eq!(detail.predecessor, summary.predecessor);
     assert!(detail.previous_system_prompt.is_none());
+}
+
+/// One exact proposal supplies both immutable summary fields. Same-name calls
+/// and a reused provider id in another Step cannot supply each other's input.
+#[test]
+fn tool_summary_one_exact_proposal_and_no_lifecycle_resolution() {
+    use super::summary::probe;
+    let store = store("conv_b0925de4-4a13-7f87-8c56-2d7e9a0b1f64");
+    start(&store);
+    for (step, prefix) in [("1", "first"), ("2", "second")] {
+        if step == "2" {
+            append_in_step(&store, E::TurnStarted, 5, step);
+        }
+        let mut call = bash_call("reused-provider-call");
+        call.arguments = serde_json::json!({"command": format!("{prefix}{}", "界".repeat(1000))});
+        let id = MessageId::new(format!("assistant-{step}"));
+        let mut proposal = event(
+            &store,
+            E::AssistantMessageCommitted {
+                message_id: id.clone(),
+            },
+            6,
+        );
+        proposal.turn_id = Some(TurnId::new(step));
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id,
+                    content: vec![AssistantContentBlock::ToolCall(call.clone())],
+                }),
+                proposal,
+            )
+            .unwrap();
+        append_in_step(
+            &store,
+            E::ToolExecutionStarted {
+                tool_call_id: call.id,
+                tool_id: call.tool_id,
+            },
+            7,
+            step,
+        );
+    }
+    let projection = TraceProjection::new(&store).unwrap();
+    probe::reset();
+    let page = projection.page(None, 32).unwrap();
+    let tools: Vec<_> = page
+        .records
+        .iter()
+        .filter(|record| record.kind == TraceKind::Tool)
+        .collect();
+    assert_eq!(tools.len(), 2);
+    assert_eq!(
+        probe::proposal_count(),
+        2,
+        "one relationship per materialization, not per field"
+    );
+    for (record, prefix) in tools.iter().zip(["first", "second"]) {
+        let tool = record.tool.as_ref().unwrap();
+        assert_eq!(tool.name.as_deref(), Some("bash"));
+        let arguments = tool.arguments.as_ref().unwrap();
+        assert!(arguments.text.contains(prefix));
+        assert!(arguments.text.len() <= super::bounds::TRACE_PREVIEW_BYTES);
+        assert!(arguments.truncated);
+    }
+    probe::reset();
+    let single = projection.page(None, 1).unwrap();
+    assert_eq!(single.records[0].kind, TraceKind::Tool);
+    assert_eq!(probe::proposal_count(), 1);
+    probe::reset();
+    for _ in 0..3 {
+        projection
+            .refresh(
+                &tools
+                    .iter()
+                    .map(|record| record.position.clone())
+                    .collect::<Vec<_>>(),
+                None,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        probe::proposal_count(),
+        0,
+        "refresh never resolves immutable arguments"
+    );
 }

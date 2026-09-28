@@ -202,6 +202,26 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         }))),
     ];
+    // The same serialized bounded Tool contract is consumed by Web and TUI.
+    fixtures.push(
+        serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": "trace-tool-summary", "result": {
+                "type": "trace", "page": { "records": [{
+                    "id": "trace:7", "position": "trace:7",
+                    "location": { "attempt_id": "attempt-a", "step_id": "1" },
+                    "kind": "tool", "state": "completed",
+                    "timing": { "started_at": "2026-09-15T00:00:00Z" },
+                    "preview": { "text": "bounded result", "truncated": true },
+                    "request": null,
+                    "tool": { "call_id": "reused-call", "tool_id": "tool-bash", "name": "bash",
+                        "arguments": { "text": "{\"command\":\"bounded input", "truncated": true },
+                        "started": true, "outcome": "success", "detail": null },
+                    "calls": [], "attachments": [], "has_detail": true, "truncated": false
+                }], "next_cursor": null }
+            }
+        }))
+        .expect("bounded Tool protocol fixture"),
+    );
     for call in [
         Method::ArtifactRead {
             target: target.clone(),
@@ -636,9 +656,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v25.schema.json", "v25.ts"]);
+        assert_eq!(generations, ["v26.schema.json", "v26.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v25.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v26.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -1,6 +1,6 @@
 import { backgroundStateLabel } from './status-labels';
 import type { Translate } from '../locale/translation';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v25';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v26';
 
 /** Agent Status is historical, request-scoped model context. Nothing here is a
  * current-state authority: current Todo is `snapshot.todos`, current Goal is

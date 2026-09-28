@@ -28,7 +28,7 @@ import type {
   TraceSystemPromptPresentation,
   TraceText,
   TraceToolDefinition,
-} from '../../../../protocol/app-server/v25';
+} from '../../../../protocol/app-server/v26';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Button } from '../../presentation/primitives/Button';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
@@ -472,7 +472,7 @@ export function TrajectoryInspector({
         : cellLabel(tx)[record.kind];
 
   return (
-    <aside className={css.inspector} aria-label={tx('trajectory:trajectory-inspector.trace-record-inspector')}>
+    <aside className={css.inspector} data-kind={selection.cell_type === 'SystemPromptCell' ? 'system' : selection.cell_type === 'ContextRow' ? 'context' : record.kind} aria-label={tx('trajectory:trajectory-inspector.trace-record-inspector')}>
       <header>
         <strong>{title}</strong>
         <Button size="sm" onClick={onClose}>
@@ -514,7 +514,7 @@ export function TrajectoryInspector({
               <dt>{tx('trajectory:trajectory-inspector.model')}</dt><dd>{record.request.model}</dd>
               <dt>{tx('trajectory:trajectory-inspector.retry-recovery-ordinal')}</dt><dd>{record.request.retry_number}</dd>
               <SystemPrompt system={record.request.system_prompt} />
-              <dt>{tx('trajectory:trajectory-inspector.tools')}</dt><dd>{record.request.tool_catalog.replaceAll('_', ' ')}</dd>
+              <dt>{tx('trajectory:trajectory-inspector.tools')}</dt><dd>{tx(`trajectory:catalog.${record.request.tool_catalog}`)}</dd>
               <dt>{tx('trajectory:trajectory-inspector.context-introduced')}</dt><dd>{record.request.context_additions.length}{record.request.context_truncated ? tx('trajectory:trajectory-inspector.truncated') : ''}</dd>
               {record.request.failure_kind && <><dt>{tx('trajectory:trajectory-inspector.failure')}</dt><dd>{record.request.failure_kind}</dd></>}
               {sections.includes('System Prompt') && <><dt>{tx('trajectory:trajectory-inspector.historical-input')}</dt><dd><Button size="sm" onClick={() => onFacet('System Prompt')}>{tx('trajectory:trajectory-inspector.view-system-prompt')}</Button> <Button size="sm" onClick={() => onFacet('Tools')}>{tx('trajectory:trajectory-inspector.view-tools')}</Button></dd></>}

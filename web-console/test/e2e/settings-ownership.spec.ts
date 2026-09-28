@@ -109,8 +109,8 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    const history = await remote.readSession(id);
    // X07: hold the exact settled historical Request across a lost adoption reply.
    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-   const requestBoundary = page.locator('[data-display-type="RequestBoundary"]').first();
-   const recordId = await requestBoundary.getAttribute('data-owner');
+   const requestBoundary = page.locator('[data-request-owner]').first();
+   const recordId = await requestBoundary.getAttribute('data-request-owner');
    await requestBoundary.click();
    await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail' && row.result?.detail?.id === recordId).length).toBe(1);
    const oldTrace = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail;
@@ -124,7 +124,7 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    expect(await remote.client.call('session/settings', { session_id: id }, 'settings')).toEqual(selection);
    expect(await remote.readSession(id)).toEqual(history);
    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-   await page.locator(`[data-display-type="RequestBoundary"][data-owner="${recordId}"]`).click();
+   await page.locator(`[data-request-owner="${recordId}"]`).click();
    await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail' && row.result?.detail?.id === recordId).length).toBe(2);
    expect(wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail).toEqual(oldTrace);
    expect((await f.control('requests')).requests).toHaveLength(1);
