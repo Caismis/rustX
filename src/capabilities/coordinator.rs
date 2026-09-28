@@ -1833,9 +1833,18 @@ impl CapabilityCoordinator {
                     handle,
                     &inner.mcp_retirements,
                 )),
-                // Phase B: the connect owner already drove its physical
-                // process (when one existed) to settlement before returning.
-                Err(error) => Err(CapabilityPreparationError::Mcp(error.to_string())),
+                Err(error) => {
+                    // Failed connects may never create a generation. Retain
+                    // their explicit uncertainty before formatting the public
+                    // preparation error, so drain cannot mistake an empty
+                    // generation set for proven physical settlement.
+                    if matches!(error, crate::tools::mcp::McpError::PhysicalSettlement(_)) {
+                        inner
+                            .mcp_retirements
+                            .record_failure(&server_id_owned, &error.to_string());
+                    }
+                    Err(CapabilityPreparationError::Mcp(error.to_string()))
+                }
             };
             if let Err(outcome) = result_tx.send(outcome)
                 && let Ok(generation) = outcome
@@ -1844,9 +1853,9 @@ impl CapabilityCoordinator {
             }
         });
         result_rx.await.unwrap_or_else(|_| {
-            Err(CapabilityPreparationError::Mcp(
-                "the MCP connection owner terminated without an outcome".to_owned(),
-            ))
+            let detail = "the MCP connection owner terminated without an outcome";
+            self.inner.mcp_retirements.record_failure(server_id, detail);
+            Err(CapabilityPreparationError::Mcp(detail.to_owned()))
         })
     }
 

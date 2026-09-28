@@ -23,3 +23,6 @@ mod transcript_history;
 
 #[path = "../common/identity.rs"]
 mod identity_fixture;
+
+#[path = "../common/agent_authority.rs"]
+mod agent_authority;

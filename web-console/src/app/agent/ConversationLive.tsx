@@ -11,7 +11,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { HistoryAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v26';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v27';
 
 export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
@@ -38,9 +38,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
 function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const snapshot = useClientSelector(client, state => {
     const value = state.views[sessionId]?.snapshot;
-    return value ? { subagents: value.subagents, background: value.background, workflows: value.workflows } : undefined;
+    return value ? { agents: value.agents, jobs: value.jobs, workflows: value.workflows } : undefined;
   }, shallowEqual);
-  return snapshot ? <RuntimeFacts snapshot={snapshot}/> : null;
+  return snapshot ? <RuntimeFacts snapshot={snapshot} client={client} sessionId={sessionId}/> : null;
 }
 
 export function ConversationDocks({ client, sessionId, disabled }: { client: AppServerClient; sessionId: string; disabled: boolean }) {

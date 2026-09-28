@@ -7,7 +7,7 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v26';
+} from '../../../protocol/app-server/v27';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -118,7 +118,27 @@ export function isOutcomeUncertain(error: unknown): boolean {
   return error instanceof OutcomeUncertain || (error instanceof RpcFailure && error.error.data?.kind === "committed_durability_uncertain");
 }
 export class RpcFailure extends Error {
-  constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(error.data?.kind === 'archive_preparation_failed' ? error.message : `${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
+  constructor(readonly error: Extract<Response, { error: unknown }>['error']) {
+    const data = error.data;
+    let message = `${error.message} (${error.code})${data ? `: ${JSON.stringify(data)}` : ''}`;
+    switch (data?.kind) {
+      case 'agent_not_delivered':
+        message = `Agent ${data.agent_id} input was not delivered`;
+        break;
+      case 'agent_delivery_unknown':
+        message = `Agent ${data.agent_id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically`;
+        break;
+      case 'job_publication_abandoned':
+        message = `Job ${data.job_id} terminal publication was abandoned; no durable terminal result is available`;
+        break;
+      case 'agent_settlement':
+        message = `Agent ${data.agent_id} is unavailable; physical settlement, publication, or workspace authority remains unresolved`;
+        break;
+      case 'archive_preparation_failed':
+        message = error.message;
+    }
+    super(message);
+  }
 }
 /** GoalDomain serializes its bounded rejection into the error message. Only the
  * reason is displayed; its embedded `current` is never adopted as authority. */
@@ -133,8 +153,20 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
   'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
-  'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'background/status', 'subagent/status', 'session/boundaries',
+  'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
 ]);
+/** Domain settlement has no RPC response deadline. Separate bounded lanes keep
+ * observation/admission from occupying the slots needed to stop or inspect work. */
+function requestLane(method: Request1['method']): 'wait' | 'admission' | 'control' | 'rpc' {
+  switch (method) {
+    case 'agent/wait': case 'job/wait': return 'wait';
+    case 'agent/sendMessage': return 'admission';
+    case 'agent/interrupt': case 'job/cancel': return 'control';
+    default: return 'rpc';
+  }
+}
+const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2 } as const;
+
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
   a.session_id === b.session_id && a.conversation_id === b.conversation_id &&
@@ -246,7 +278,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v26', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v27', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -264,12 +296,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 26, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 27, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 26 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v26 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 27 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v27 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -297,7 +329,7 @@ export class AppServerClient {
   }
   /** Side-effect-free policy, called immediately before fencing with no intervening await.
    * One replacement detaches at most one authority batch. pump transmits at most
-   * eight requests; only sent mutations become uncertain, each exactly once.
+   * sixteen requests across bounded lanes; only sent mutations become uncertain, each exactly once.
    * request admission already bounds uncertain + pending to 64 for mutations.
    * Reserve Session rows for pending continuations too, including unsent work.
    */
@@ -360,6 +392,10 @@ export class AppServerClient {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
     if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
+    const lane = requestLane(operation.method);
+    if (lane !== 'rpc' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
+      throw new Error(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
+    }
     if (this.pending.size >= 64) throw new Error('Client request capacity reached.');
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
     if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new Error('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
@@ -383,10 +419,11 @@ export class AppServerClient {
     return result as Extract<MethodResult, { type: T }>;
   }
   private pump() {
-    let sent = [...this.pending.values()].filter(p => p.sent).length;
+    let sent = [...this.pending.values()].filter(p => p.sent && requestLane(p.request.method) === 'rpc').length;
     for (const pending of this.pending.values()) {
-      if (sent >= 8 || !this.socket) break;
-      if (pending.sent) continue;
+      if (!this.socket) break;
+      const lane = requestLane(pending.request.method);
+      if (pending.sent || (lane === 'rpc' && sent >= 8)) continue;
       if (pending.dispatchCurrent && !pending.dispatchCurrent()) {
         this.pending.delete(String(pending.request.id));
         pending.reject(new Error('Authority changed before dispatch. No operation was sent.'));
@@ -395,9 +432,9 @@ export class AppServerClient {
       }
       const raw = JSON.stringify(pending.request);
       const generation = this.state.generation;
-      pending.sent = true; sent++;
+      pending.sent = true; if (lane === 'rpc') sent++;
       this.log.observe('out', generation, raw, pending.context);
-      pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
+      if (lane === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
       try { this.socket.send(raw); } catch { this.lose(generation); break; }
     }
   }
@@ -1149,7 +1186,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v26').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v27').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

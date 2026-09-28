@@ -65,12 +65,11 @@ import {
   type InteractionResponse,
   type ModelCatalogView,
   type Notification,
-  type RuntimeClientBackgroundExecution,
+  type RuntimeClientJob,
   type RuntimeClientContextView,
   type RuntimeClientCursor,
   type RuntimeClientSnapshot,
-  type RuntimeClientSubagent,
-  type RuntimeClientSubagentWorkspaceDisposalOutcome,
+  type RuntimeClientAgent,
   type RuntimeClientTranscriptCursor,
   type RuntimeClientTranscriptPage,
   type SessionModelConfig,
@@ -78,6 +77,7 @@ import {
   type SessionNodeId,
   type SessionUserMessageBoundary,
   type SubagentId,
+  type AgentId,
   type SurfaceRevision,
   type ToolExecutionId,
   type UserInputBlock,
@@ -236,8 +236,8 @@ export class AppServerSession {
       return true;
     }
     if (notification.method === "session/summaryInvalidated") {
-      // Durable Session display metadata changed (Issue #386). The TUI holds
-      // no cached Session summary: `/resume` reads the catalog afresh every
+      // Both explicit catalog_changed values are valid. The TUI holds
+      // no live catalog/summary cache: `/resume` reads the catalog afresh every
       // time it opens, so there is nothing here to repair. The notification is
       // accepted and declined — never folded into the conversation projection,
       // and never treated as invalid protocol input.
@@ -366,16 +366,16 @@ export class AppServerSession {
   }
 
   /** A read is valid only in the exact parent attachment/presentation epoch. */
-  async subagentTranscriptPage(
-    subagentId: SubagentId,
+  async agentTranscriptPage(
+    agentId: AgentId,
     before?: RuntimeClientTranscriptCursor,
   ): Promise<RuntimeClientTranscriptPage | undefined> {
     if (this.#released || this.#serverClosed) return undefined;
     const epoch = this.#epoch;
     const target = this.#target;
     try {
-      const result = await this.#client.call("subagent/transcript", {
-        target, subagent_id: subagentId, before: before ?? null,
+      const result = await this.#client.call("agent/transcript", {
+        target, agent_id: agentId, before: before ?? null,
         limit: TRANSCRIPT_PROJECTION_PAGE_LIMIT,
       }, "transcript");
       if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
@@ -520,66 +520,56 @@ export class AppServerSession {
   }
 
   // -------------------------------------------------------------------------
-  // Background and subagents
+  // Finite Jobs and durable Agents
   // -------------------------------------------------------------------------
 
   /**
-   * Requests cancellation of one background execution.
-   *
-   * The returned registry snapshot is *acceptance*. The terminal fact arrives
-   * later on the event stream, and only the runtime decides it.
+   * Cancels one finite Job through the runtime physical-settlement contract.
    */
-  async cancelBackground(
-    executionId: ToolExecutionId,
-  ): Promise<RuntimeClientBackgroundExecution> {
-    const accepted = await this.#client.call(
-      "background/cancel",
-      { target: this.#target, execution_id: executionId },
-      "background",
-    );
-    return accepted.execution;
+  async cancelJob(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
+    const result = await this.#client.call("job/cancel", { target: this.#target, job_id: jobId }, "job");
+    return result.job;
   }
 
-  async backgroundStatus(
-    executionId: ToolExecutionId,
-  ): Promise<RuntimeClientBackgroundExecution> {
-    const status = await this.#client.call(
-      "background/status",
-      { target: this.#target, execution_id: executionId },
-      "background",
-    );
-    return status.execution;
+  async jobStatus(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
+    const result = await this.#client.call("job/status", { target: this.#target, job_id: jobId }, "job");
+    return result.job;
   }
 
-  async subagentStatus(subagentId: SubagentId): Promise<RuntimeClientSubagent> {
-    const status = await this.#client.call(
-      "subagent/status",
-      { target: this.#target, subagent_id: subagentId },
-      "subagent",
-    );
-    return status.subagent;
+  async listJobs() {
+    return this.#client.call("job/list", { target: this.#target }, "jobs");
   }
 
-  async cancelSubagent(subagentId: SubagentId): Promise<RuntimeClientSubagent> {
-    const accepted = await this.#client.call(
-      "subagent/cancel",
-      { target: this.#target, subagent_id: subagentId },
-      "subagent",
-    );
-    return accepted.subagent;
+  async waitJob(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
+    const result = await this.#client.call("job/wait", { target: this.#target, job_id: jobId }, "job");
+    return result.job;
+  }
+
+  async agentStatus(agentId: AgentId): Promise<RuntimeClientAgent> {
+    const result = await this.#client.call("agent/status", { target: this.#target, agent_id: agentId }, "agent");
+    return result.agent;
+  }
+
+  async sendMessage(agentId: AgentId, message: string) {
+    return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message }, "agent_message");
+  }
+
+  async waitAgent(agentId: AgentId) {
+    return this.#client.call("agent/wait", { target: this.#target, agent_id: agentId }, "agent_wait");
+  }
+
+  async interruptAgent(agentId: AgentId) {
+    return this.#client.call("agent/interrupt", { target: this.#target, agent_id: agentId }, "agent_wait");
   }
 
   /** Disposes one retained subagent workspace through the runtime authority. */
-  async disposeSubagent(subagentId: SubagentId): Promise<{
-    subagent: RuntimeClientSubagent;
-    outcome: RuntimeClientSubagentWorkspaceDisposalOutcome;
-  }> {
+  async disposeSubagent(subagentId: SubagentId) {
     const disposed = await this.#client.call(
       "subagent/disposeWorkspace",
       { target: this.#target, subagent_id: subagentId },
       "workspace_disposed",
     );
-    return { subagent: disposed.subagent, outcome: disposed.outcome };
+    return { subagent_id: disposed.subagent_id, workspace: disposed.workspace, outcome: disposed.outcome };
   }
 
   // -------------------------------------------------------------------------

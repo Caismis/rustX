@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v26.js';
+import type {ProtocolMessage} from './v27.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -100,7 +100,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 26,
+      "protocol_version": 27,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -117,7 +117,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 26,
+      "protocol_version": 27,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -200,6 +200,22 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "method": "session/summaryInvalidated",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "catalog_changed": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/summaryInvalidated",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "catalog_changed": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "method": "session/closed",
     "params": {
       "target": {
@@ -266,6 +282,9 @@ export const fixtures = [
             },
             "calls": [],
             "native_id": null,
+            "agent_id": null,
+            "activation_id": null,
+            "activation_origin": null,
             "originating_tool_call_id": null,
             "message_id": null,
             "attachments": [],
@@ -407,7 +426,7 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
-    "method": "subagent/transcript",
+    "method": "agent/transcript",
     "params": {
       "target": {
         "session_id": "ses_00000000-0000-7000-8000-000000000001",
@@ -415,7 +434,7 @@ export const fixtures = [
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
-      "subagent_id": "subagent-fixture",
+      "agent_id": "agent-fixture",
       "before": "9007199254740993",
       "limit": 32
     }
@@ -441,6 +460,18 @@ export const fixtures = [
           "action": "pause"
         }
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "jobs",
+      "jobs": [],
+      "returned": 0,
+      "matched": 0,
+      "limit": 64,
+      "truncated": false
     }
   },
   {
@@ -489,6 +520,18 @@ export const fixtures = [
       "type": "inbound_accepted",
       "message_id": "message-fixture",
       "inbound_sequence": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "job-publication-failed",
+    "error": {
+      "code": -32000,
+      "message": "Job terminal publication was abandoned",
+      "data": {
+        "kind": "job_publication_abandoned",
+        "job_id": "exec_0199c989-03a0-7000-8000-000000000001"
+      }
     }
   },
   {
@@ -563,8 +606,8 @@ export const fixtures = [
       "code": -32000,
       "message": "Operation rejected",
       "data": {
-        "kind": "unknown_subagent",
-        "subagent_id": "subagent-fixture"
+        "kind": "unknown_agent",
+        "agent_id": "agent-fixture"
       }
     }
   },
@@ -575,8 +618,8 @@ export const fixtures = [
       "code": -32000,
       "message": "Operation rejected",
       "data": {
-        "kind": "subagent_history_unavailable",
-        "subagent_id": "subagent-fixture"
+        "kind": "agent_history_unavailable",
+        "agent_id": "agent-fixture"
       }
     }
   },

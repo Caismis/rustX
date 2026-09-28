@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v26.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution } from './v27.ts';
 
 const upsert = <T>(rows: readonly T[] | undefined, value: T, key: (row: T) => string): T[] => {
   const index = (rows ?? []).findIndex(row => key(row) === key(value));
@@ -72,8 +72,8 @@ export function foldRuntimeEvent(state: Snapshot, event: Event): Snapshot {
     case 'pending_inbound_changed': return { ...state, inbound: { ...state.inbound, pending: event.pending } };
     case 'inbound_enqueued': return { ...state, inbound: { ...state.inbound, pending: [...state.inbound.pending ?? [], { sequence: event.sequence, revision: "0", message: event.message }] } };
     case 'inbound_drained': return { ...state, inbound: { pending: (state.inbound.pending ?? []).filter(item => BigInt(item.sequence) > BigInt(event.watermark)), last_drain: { watermark: event.watermark, count: event.count } } };
-    case 'background_execution_updated': return { ...state, background: upsert(state.background, event.execution, row => row.execution_id) };
-    case 'subagent_updated': return { ...state, subagents: upsert(state.subagents, event.subagent, row => row.subagent_id) };
+    case 'job_updated': return { ...state, jobs: upsert(state.jobs, event.job, row => row.job_id) };
+    case 'agent_updated': return { ...state, agents: upsert(state.agents, event.agent, row => row.agent_id) };
     case 'capability_updated': return { ...state, capabilities: event.capabilities };
     case 'resource_generation_updated': return { ...state, effective_plugins: event.plugins, model: event.model, effective_approval_mode: event.approval_mode, capabilities: event.capabilities, resources: event.resources };
     case 'session_model_changed': return { ...state, model: event.model };

@@ -110,6 +110,7 @@ pub(crate) struct DeletionRecord {
     pub target_revision: String,
     pub scopes: Vec<DeletionScope>,
     pub upload_workspaces: Vec<PathBuf>,
+    pub agent_workspaces: Vec<super::super::session_deletion::AgentWorkspaceCleanup>,
 }
 /// An owned cleanup capability. It never borrows a catalog or root snapshot.
 #[derive(Debug)]
@@ -121,11 +122,74 @@ pub(crate) struct CleanupWork {
     _controller: Option<Arc<crate::runtime::local_storage::ProductController>>,
 }
 impl CleanupWork {
+    /// Settle durable Agent resources before deleting their ownership history.
+    /// The committed catalog record fences all new access; existing access must
+    /// physically release every Conversation before workspace deletion begins.
+    pub(crate) async fn settle(self) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(gate) = self.cleanup_gate.clone() {
+            tokio::task::spawn_blocking(move || gate.enter())
+                .await
+                .map_err(std::io::Error::other)?;
+        }
+        if !self.record.agent_workspaces.is_empty() {
+            let mut exclusions = Vec::new();
+            for scope in &self.record.scopes {
+                let path = scope.allocation(&self.root, &self.record.session_id)?;
+                match ConversationExclusion::acquire(&self.root, &path) {
+                    Ok(guard) => exclusions.push(guard),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            for resource in &self.record.agent_workspaces {
+                let tree = resource.workspace.git_worktree().ok_or_else(|| {
+                    std::io::Error::other("Agent cleanup has no isolated workspace")
+                })?;
+                let manager = crate::runtime::workspace::WorkspaceManager::new(
+                    &tree.source_repository_root,
+                    self.root.root().join("workspaces"),
+                );
+                let settlement = manager
+                    .dispose_agent_workspace_for_session_delete(
+                        &resource.allocation,
+                        &resource.workspace,
+                        &resource.handoff,
+                    )
+                    .await
+                    .map_err(std::io::Error::other)?;
+                match settlement {
+                    crate::runtime::workspace::WorkspaceDisposalSettlement::Disposed
+                    | crate::runtime::workspace::WorkspaceDisposalSettlement::AlreadyDisposed => {}
+                    outcome => {
+                        return Err(std::io::Error::other(format!(
+                            "Agent workspace cleanup incomplete: {outcome:?}"
+                        )));
+                    }
+                }
+            }
+            drop(exclusions);
+        }
+        tokio::task::spawn_blocking(move || self.run_private_allocations())
+            .await
+            .map_err(std::io::Error::other)?
+    }
+
+    /// Synchronous private-allocation leaf used by the existing deletion tests.
+    #[cfg(test)]
     pub(crate) fn run(&self) -> std::io::Result<()> {
+        assert!(
+            self.record.agent_workspaces.is_empty(),
+            "Agent resources require async physical settlement"
+        );
         #[cfg(test)]
         if let Some(gate) = &self.cleanup_gate {
             gate.enter();
         }
+        self.run_private_allocations()
+    }
+
+    fn run_private_allocations(&self) -> std::io::Result<()> {
         // Admission consults the catalog while holding ConversationAccess. Since
         // the record is durably authoritative, new normal access cannot enter.
         // Existing holders still exclude cleanup. Lock only one private unit at
@@ -198,6 +262,7 @@ impl SessionCatalog {
             }
         })
     }
+    #[allow(clippy::result_large_err)] // Preserve the typed deletion boundary result.
     fn preview_preflight(
         &self,
         id: &SessionId,
@@ -345,6 +410,7 @@ impl SessionCatalog {
             return Ok(Err(result));
         }
         let record = DeletionRecord {
+            agent_workspaces: preflight.agent_workspaces().to_vec(),
             session_id: id.clone(),
             target_revision: preview.target_revision,
             scopes: preview.scopes,
@@ -381,6 +447,7 @@ impl SessionCatalog {
     }
     /// Republish the existing frozen authority to establish durability, including
     /// after an uncertain rename. Never call preflight or inspect a Conversation.
+    #[allow(clippy::result_large_err)] // Preserve the typed deletion boundary result.
     pub(crate) fn recover_delete(
         &mut self,
         id: &SessionId,
@@ -579,6 +646,7 @@ impl SessionCatalog {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Validate the complete frozen ownership record together.
 pub(super) fn validate_records(document: &CatalogDocument) -> Result<(), SessionError> {
     let invalid = || SessionError::Catalog {
         detail: "invalid or reused deletion identity".into(),
@@ -614,6 +682,28 @@ pub(super) fn validate_records(document: &CatalogDocument) -> Result<(), Session
             .iter()
             .map(DeletionScope::conversation)
             .collect();
+        let mut agent_allocations = BTreeSet::new();
+        for resource in &record.agent_workspaces {
+            validate_id(resource.allocation.as_str(), "Agent workspace allocation")?;
+            if !owned.contains(&resource.conversation_id)
+                || !agent_allocations.insert((&resource.conversation_id, &resource.allocation))
+                || resource.handoff.dirty
+                || resource.handoff.head_commit != resource.handoff.base_commit
+                || resource.workspace.validate().is_err()
+                || resource.handoff.validate().is_err()
+                || resource.workspace.borrowed_from.is_some()
+            {
+                return Err(invalid());
+            }
+            let tree = resource.workspace.git_worktree().ok_or_else(invalid)?;
+            if tree.physical_worktree_root != resource.handoff.physical_worktree_root
+                || tree.branch != resource.handoff.branch
+                || tree.base_commit != resource.handoff.base_commit
+                || resource.workspace.logical_workspace != resource.handoff.logical_workspace
+            {
+                return Err(invalid());
+            }
+        }
         for scope in &record.scopes {
             // Every child chain must terminate at a frozen catalog node. The
             // persisted authority must not encode a detached cycle or root.

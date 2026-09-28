@@ -1079,7 +1079,7 @@ async fn probe(
             SupervisedCommandSpec {
                 command: command.to_owned(),
                 cwd: std::env::temp_dir(),
-                environment: materialization_environment(&std::env::temp_dir()),
+                command_environment: materialization_environment(&std::env::temp_dir()),
                 timeout: Some(timeout),
                 cancellation: CancellationSignal::new(),
             },
@@ -1117,7 +1117,7 @@ async fn run_checked(
             SupervisedCommandSpec {
                 command,
                 cwd: cwd.to_path_buf(),
-                environment: materialization_environment(cwd),
+                command_environment: materialization_environment(cwd),
                 timeout: Some(timeout),
                 cancellation: CancellationSignal::new(),
             },

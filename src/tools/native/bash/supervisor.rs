@@ -146,7 +146,7 @@
 //! | Call site | Matches | Observes/consumes | Owner |
 //! |---|---|---|---|
 //! | outer dedicated anchor wait (`waitid(Pid(inner), WNOWAIT \| WEXITED \| WNOHANG)`) | only the inner anchor | observes only (`WNOWAIT`) | outer dedicated path; `ECHILD` = invariant violation, never terminal |
-//! | outer frozen-anchor wait (`waitid(Pid(inner), WUNTRACED \| WNOHANG)`) | only the inner anchor | observes/consumes the stop event | outer dedicated path |
+//! | outer frozen-anchor wait (`waitid(Pid(inner), WSTOPPED \| WNOHANG \| WNOWAIT)`) | only the inner anchor | observes without consuming the stop event | outer dedicated path |
 //! | outer group gate (`waitid(PGid(inner), WEXITED \| WNOHANG)`) | every outer child in the invocation group, including the anchor | consumes | outer gate; `ECHILD` = canonical terminal event (the anchor's only reaper release); on macOS this is only a terminal event because the fallback containment signal was already issued while the anchor was retained |
 //! | inner reaping hygiene (`waitpid(-1, WNOHANG)`) | every child of the inner (bash and adopted in-group descendants) | consumes | inner supervisor; no child of the inner is ever an anchor, so this never consumes another owner's identity |
 //! | inner group gate (`waitid(PGid(self), WEXITED \| WNOHANG)`) | every inner child in the invocation group | consumes | inner supervisor; `ECHILD` = `INNER_EXIT_NORMAL` on Linux, `INNER_EXIT_CONTAINMENT` on macOS |
@@ -262,13 +262,18 @@
 //! not imply the escaped process terminated. This boundary is documented
 //! and is never claimed as containment.
 
+/// Opt-in bounded native regression evidence; not lifecycle authority.
+#[doc(hidden)]
+pub mod diagnostics;
+use diagnostics::{Event as TraceEvent, record as trace};
+
 use std::process::{Command, Stdio};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::{Pid, read, write};
+use nix::unistd::{Pid, read};
 
 use crate::runtime::process_wait::{Id, waitid};
 #[cfg(target_os = "macos")]
@@ -278,7 +283,8 @@ use crate::runtime::supervised_unit::{
     MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED,
     MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
     MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
-    contain_group, enforce_fixed_group_membership, ignore_group_term,
+    contain_group, enforce_fixed_group_membership, ignore_group_term, wait_for_supervisor_event,
+    wake_on_child_change,
 };
 
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
@@ -415,19 +421,55 @@ enum InnerAnchor {
 #[allow(clippy::too_many_lines)] // one coherent observe/un-wedge/contain/reap pipeline
 fn run_outer() -> i32 {
     let mut stream = ControlStream;
+    let continuation = match std::env::var("RUSTX_PHYSICAL_CONTINUATION") {
+        Ok(encoded) => {
+            let acquired = serde_json::from_str(&encoded)
+                .map_err(std::io::Error::other)
+                .and_then(|spec| {
+                    crate::runtime::subagent::physical_recovery::ChildPhysicalContinuation::acquire(
+                        &spec,
+                    )
+                });
+            match acquired {
+                Ok(continuation) => Some(continuation),
+                Err(error) => {
+                    let _ = stream.write_preownership_failure(&format!(
+                        "cannot acquire physical continuation: {error}"
+                    ));
+                    return 0;
+                }
+            }
+        }
+        Err(_) => None,
+    };
     if let Err(error) = become_child_subreaper() {
         let _ = stream.write_preownership_failure(&format!(
             "cannot become the invocation subreaper: {error}"
         ));
+        if let Some(continuation) = &continuation {
+            let _ = continuation.publish_quiescent();
+        }
         return 0;
     }
     if let Err(error) = fcntl(std::io::stdin(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
         let _ = stream.write_preownership_failure(&format!(
             "cannot make the outer control channel non-blocking: {error}"
         ));
+        if let Some(continuation) = &continuation {
+            let _ = continuation.publish_quiescent();
+        }
+        return 0;
+    }
+    if let Err(error) = wake_on_child_change() {
+        let _ = stream
+            .write_preownership_failure(&format!("cannot watch supervisor children: {error}"));
+        if let Some(continuation) = &continuation {
+            let _ = continuation.publish_quiescent();
+        }
         return 0;
     }
     let inner_pid = match Command::new(supervisor_binary())
+        .env_remove("RUSTX_PHYSICAL_CONTINUATION")
         .env("RUSTX_SUPERVISOR_ROLE", ROLE_INNER)
         .spawn()
     {
@@ -436,6 +478,9 @@ fn run_outer() -> i32 {
             let _ = stream.write_preownership_failure(&format!(
                 "cannot spawn the invocation anchor supervisor: {error}"
             ));
+            if let Some(continuation) = &continuation {
+                let _ = continuation.publish_quiescent();
+            }
             return 0;
         }
     };
@@ -447,8 +492,10 @@ fn run_outer() -> i32 {
         i32::try_from(inner_pid).expect("the inner supervisor pid always fits in an i32");
     let mut anchor = InnerAnchor::Running;
     let mut inner_frozen = false;
+    let mut exit_wait_nonterminal_recorded = false;
     let mut anchor_loss_reported = false;
     loop {
+        let previous = std::mem::discriminant(&anchor);
         match anchor {
             InnerAnchor::Running => {
                 // The dedicated anchor observation: matches only the inner
@@ -462,11 +509,20 @@ fn run_outer() -> i32 {
                     WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
                 ) {
                     Ok(WaitStatus::StillAlive) => {}
-                    Ok(WaitStatus::Stopped(..) | WaitStatus::Continued(_)) => {}
+                    Ok(status @ (WaitStatus::Stopped(..) | WaitStatus::Continued(_))) => {
+                        if !exit_wait_nonterminal_recorded {
+                            exit_wait_nonterminal_recorded = true;
+                            trace(TraceEvent::AnchorExitWaitNonterminal {
+                                stopped: matches!(status, WaitStatus::Stopped(..)),
+                            });
+                        }
+                    }
                     // WEXITED-only waiting: ptrace stops never match.
                     #[cfg(target_os = "linux")]
                     Ok(WaitStatus::PtraceEvent(..) | WaitStatus::PtraceSyscall(_)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
+                        trace(TraceEvent::AnchorTerminalObserved);
+                        trace(TraceEvent::InnerExited { status: code << 8 });
                         anchor = if code == INNER_EXIT_NORMAL {
                             InnerAnchor::TerminalRetained
                         } else {
@@ -476,7 +532,11 @@ fn run_outer() -> i32 {
                             contain_after_abnormal_exit(&mut stream, inner_pid)
                         };
                     }
-                    Ok(WaitStatus::Signaled(..)) => {
+                    Ok(WaitStatus::Signaled(_, signal, _)) => {
+                        trace(TraceEvent::AnchorTerminalObserved);
+                        trace(TraceEvent::InnerExited {
+                            status: signal as i32,
+                        });
                         anchor = contain_after_abnormal_exit(&mut stream, inner_pid);
                     }
                     Err(Errno::EINTR) => {}
@@ -510,14 +570,19 @@ fn run_outer() -> i32 {
                 // behind a dead control chain; the inner's death then
                 // follows the normal abnormal-exit containment path.
                 if !inner_frozen {
-                    match waitid(
-                        Id::Pid(Pid::from_raw(inner_pid)),
-                        WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED,
-                    ) {
+                    match crate::runtime::process_wait::observe_stopped_child(Pid::from_raw(
+                        inner_pid,
+                    )) {
                         Ok(WaitStatus::Stopped(..)) => {
                             inner_frozen = true;
-                            match nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL)
-                            {
+                            trace(TraceEvent::AnchorStopObserved);
+                            diagnostics::after_anchor_stop();
+                            let killed =
+                                nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL);
+                            trace(TraceEvent::AnchorUnwedgeKillAttempt {
+                                result: killed.as_ref().err().map_or(0, |error| *error as i32),
+                            });
+                            match killed {
                                 Ok(()) | Err(Errno::ESRCH) => {}
                                 Err(error) => {
                                     let _ = stream.write_failure(&format!(
@@ -554,6 +619,7 @@ fn run_outer() -> i32 {
                 ) {
                     Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
                     Err(Errno::ECHILD) => {
+                        trace(TraceEvent::GroupChildrenReaped);
                         // macOS: `ECHILD` only proves this supervisor has no
                         // waitable group child left; a reparented descendant
                         // is invisible to it. The group's absence is proven
@@ -564,6 +630,15 @@ fn run_outer() -> i32 {
                             let _ = stream.write_failure(&error);
                             anchor = InnerAnchor::ContainmentFailed;
                             continue;
+                        }
+                        #[cfg(target_os = "macos")]
+                        trace(TraceEvent::GroupAbsenceProven);
+                        if let Some(continuation) = &continuation
+                            && let Err(error) = continuation.publish_quiescent()
+                        {
+                            let _ = stream.write_failure(&format!(
+                                "cannot publish physical continuation proof: {error}"
+                            ));
                         }
                         if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
                             await_terminal_ack();
@@ -602,7 +677,9 @@ fn run_outer() -> i32 {
                 }
             }
         }
-        std::thread::sleep(POLL_INTERVAL);
+        if std::mem::discriminant(&anchor) == previous {
+            wait_for_supervisor_event(false);
+        }
     }
 }
 
@@ -619,7 +696,7 @@ fn await_terminal_ack() {
             Ok(0) => return,
             Ok(count) => buffered.extend_from_slice(&chunk[..count]),
             Err(Errno::EAGAIN) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(POLL_INTERVAL);
+                wait_for_supervisor_event(true);
             }
             Err(error) => {
                 if error == Errno::EINTR {
@@ -652,6 +729,7 @@ fn await_terminal_ack() {
 /// `Contained` (`Ok` or `ESRCH`) versus `Unproven` (`EPERM` and every other
 /// error).
 fn containment_signal(stream: &mut ControlStream, pgid: i32) -> ContainmentOutcome {
+    trace(TraceEvent::FallbackContainment);
     stream
         .write_frame(
             MSG_SIGNAL_ATTEMPT,
@@ -743,6 +821,11 @@ fn run_inner() -> i32 {
         ));
         return INNER_EXIT_NORMAL;
     }
+    if let Err(error) = wake_on_child_change() {
+        let _ =
+            stream.write_preownership_failure(&format!("cannot watch command children: {error}"));
+        return INNER_EXIT_NORMAL;
+    }
     // The control channel is non-blocking so the loop can poll for the
     // TERMINATE request without blocking the reap loop.
     if let Err(error) = fcntl(std::io::stdin(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
@@ -766,8 +849,20 @@ fn run_inner() -> i32 {
         return INNER_EXIT_NORMAL;
     }
     if let Ok(path) = std::env::var(ANCHOR_PID_FILE_ENV) {
-        let _ = std::fs::write(&path, std::process::id().to_string());
+        // File existence is the fixture's readiness event: publish complete
+        // PID bytes atomically so a concurrent reader cannot see an empty file.
+        let pending = std::path::Path::new(&path).with_extension("pending");
+        if std::fs::write(&pending, std::process::id().to_string()).is_ok() {
+            let _ = std::fs::rename(pending, path);
+        }
     }
+    let command_environment = match crate::runtime::supervised_unit::command_environment() {
+        Ok(environment) => environment,
+        Err(error) => {
+            let _ = stream.write_preownership_failure(&error);
+            return INNER_EXIT_NORMAL;
+        }
+    };
     let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
     if stream
         .write_frame(MSG_ANCHOR_READY, &self_pid.to_le_bytes())
@@ -817,6 +912,8 @@ fn run_inner() -> i32 {
         .arg("-c")
         .arg(&shell_command)
         .stdin(Stdio::null())
+        .env_clear()
+        .envs(command_environment)
         .spawn()
     {
         Ok(child) => child,
@@ -831,6 +928,7 @@ fn run_inner() -> i32 {
     // SAFETY-free pid capture: the pid is a positive `u32` from the kernel;
     // it is only compared against `waitpid` pids of the same conversion.
     let bash_pid = i32::try_from(bash.id()).unwrap_or(0);
+    trace_shell_group(bash_pid);
     let mut shell_reported = false;
     let mut kill_deadline: Option<std::time::Instant> = None;
     loop {
@@ -907,10 +1005,7 @@ fn run_inner() -> i32 {
         // group". macOS therefore escalates to the outer supervisor's
         // fallback containment (a `SIGKILL` to the retained group) instead
         // of claiming the group is empty.
-        match waitid(
-            Id::PGid(Pid::from_raw(self_pid)),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
-        ) {
+        match observe_inner_group(self_pid) {
             Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
             Err(Errno::ECHILD) => {
                 #[cfg(target_os = "macos")]
@@ -937,6 +1032,7 @@ fn run_inner() -> i32 {
                 &mut control_reader,
                 &mut stream,
                 self_pid,
+                bash_pid,
                 fail_signal,
                 force_anchor_loss,
                 &mut kill_deadline,
@@ -955,6 +1051,7 @@ fn run_inner() -> i32 {
                 Ok(control_read) => control_reader.feed(&chunk[..control_read]),
                 // non-blocking; EWOULDBLOCK == EAGAIN on Linux
                 Err(Errno::EAGAIN) => break,
+                Err(Errno::EINTR) => {}
                 Err(error) => {
                     let _ =
                         stream.write_failure(&format!("cannot read the control channel: {error}"));
@@ -966,6 +1063,12 @@ fn run_inner() -> i32 {
         // its terminal child set by the deadline, KILL the invocation group
         // (including this process; the outer supervisor reaps everything).
         if kill_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            trace(TraceEvent::GraceExpired);
+            trace(TraceEvent::Signal {
+                pgid: self_pid,
+                signal: libc::SIGKILL,
+                result: None,
+            });
             stream
                 .write_frame(
                     MSG_SIGNAL_ATTEMPT,
@@ -975,7 +1078,7 @@ fn run_inner() -> i32 {
             let _ = killpg(Pid::from_raw(self_pid), Signal::SIGKILL);
             return INNER_EXIT_CONTAINMENT;
         }
-        std::thread::sleep(POLL_INTERVAL);
+        wait_for_supervisor_event(true);
     }
 }
 
@@ -990,6 +1093,7 @@ fn handle_frames(
     reader: &mut FrameReader,
     stream: &mut ControlStream,
     self_pid: i32,
+    bash_pid: i32,
     fail_signal: bool,
     force_anchor_loss: bool,
     kill_deadline: &mut Option<std::time::Instant>,
@@ -997,6 +1101,9 @@ fn handle_frames(
     while let Some((kind, _payload)) = reader.pop() {
         match kind {
             MSG_TERMINATE => {
+                trace(TraceEvent::TerminateReceived);
+                diagnostics::before_term();
+                trace_shell_group(bash_pid);
                 if fail_signal {
                     // The injected signaling failure: the TERM cannot be
                     // delivered, so the termination contract cannot be
@@ -1029,7 +1136,14 @@ fn handle_frames(
                     MSG_SIGNAL_ATTEMPT,
                     &signal_attempt_payload(self_pid, Signal::SIGTERM, true),
                 )?;
-                match killpg(Pid::from_raw(self_pid), Signal::SIGTERM) {
+                let result = killpg(Pid::from_raw(self_pid), Signal::SIGTERM);
+                let signaled_at = std::time::Instant::now();
+                trace(TraceEvent::Signal {
+                    pgid: self_pid,
+                    signal: libc::SIGTERM,
+                    result: Some(result.map_or_else(|error| error as i32, |()| 0)),
+                });
+                match result {
                     Ok(()) | Err(Errno::ESRCH) => {}
                     Err(error) => {
                         return Err(format!(
@@ -1041,7 +1155,7 @@ fn handle_frames(
                 // terminal child set (ECHILD in the main loop) or is KILLed
                 // at the deadline.
                 if kill_deadline.is_none() {
-                    *kill_deadline = Some(std::time::Instant::now() + TERM_GRACE);
+                    *kill_deadline = Some(signaled_at + TERM_GRACE);
                 }
             }
             other => return Err(format!("unknown control message kind {other:#04x}")),
@@ -1074,7 +1188,7 @@ fn await_start(reader: &mut FrameReader) -> Result<bool, String> {
         match read(std::io::stdin(), &mut chunk) {
             Ok(0) => return Ok(false),
             Ok(count) => reader.feed(&chunk[..count]),
-            Err(Errno::EAGAIN) => std::thread::sleep(POLL_INTERVAL),
+            Err(Errno::EAGAIN) => wait_for_supervisor_event(true),
             Err(Errno::EINTR) => {}
             Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
         }
@@ -1088,14 +1202,19 @@ impl ControlStream {
     /// Writes one length-prefixed frame: `[u32 LE length][kind][payload]`.
     #[allow(clippy::unused_self)] // the handle exists to be explicit about the control stream
     fn write_frame(&mut self, kind: u8, payload: &[u8]) -> Result<(), String> {
-        let mut frame = Vec::with_capacity(4 + 1 + payload.len());
-        let frame_len = u32::try_from(1 + payload.len())
-            .map_err(|_| "the control frame is too large".to_owned())?;
-        frame.extend_from_slice(&frame_len.to_le_bytes());
-        frame.push(kind);
-        frame.extend_from_slice(payload);
-        write(std::io::stdin(), &frame)
-            .map_err(|error| format!("cannot write to the control channel: {error}"))?;
+        crate::runtime::supervised_unit::write_frame(&mut std::io::stdin(), kind, payload)?;
+        match kind {
+            MSG_ALL_CHILDREN_REAPED => trace(TraceEvent::TerminalPublished),
+            MSG_PROCESS_CONTROL_FAILURE => trace(TraceEvent::ControlFailure),
+            MSG_SHELL_EXITED if payload.len() == 9 => {
+                let code = i32::from_le_bytes(payload[..4].try_into().unwrap());
+                let signal = i32::from_le_bytes(payload[5..9].try_into().unwrap());
+                trace(TraceEvent::ShellExited {
+                    status: if payload[4] == 0 { code << 8 } else { signal },
+                });
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -1108,6 +1227,15 @@ impl ControlStream {
         self.write_failure(message)?;
         self.write_frame(MSG_NO_OWNERSHIP, &[])
     }
+}
+
+fn trace_shell_group(pid: i32) {
+    if std::env::var_os(diagnostics::TRACE_ENV).is_none() {
+        return;
+    }
+    let group = nix::unistd::getpgid(Some(Pid::from_raw(pid)))
+        .map_or_else(|error| -(error as i32), Pid::as_raw);
+    trace(TraceEvent::ShellGroup { pid, pgid: group });
 }
 
 /// The `SIGNAL_ATTEMPT` payload for one attempted group signal.
@@ -1126,6 +1254,15 @@ fn supervisor_binary() -> std::path::PathBuf {
 
 // Structural primitives (`become_child_subreaper`, `ignore_group_term`,
 // `enforce_fixed_group_membership`) come from the shared supervisor-unit core.
+
+fn observe_inner_group(pgid: i32) -> Result<WaitStatus, Errno> {
+    // Hygiene owns shell status publication. This proof observation must not
+    // consume a shell that exited after hygiene's preceding WNOHANG pass.
+    waitid(
+        Id::PGid(Pid::from_raw(pgid)),
+        WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+    )
+}
 
 #[cfg(all(
     test,
@@ -1181,6 +1318,37 @@ mod anchor_reaping_tests {
     /// (a deadlock guard, never a synchronization mechanism).
     const DEADLINE: Duration = Duration::from_secs(15);
 
+    #[test]
+    fn group_proof_cannot_consume_shell_exit_between_hygiene_passes() {
+        use std::os::unix::process::CommandExt;
+        let mut shell = Command::new("/bin/sh")
+            .args(["-c", "read gate; exit 23"])
+            .stdin(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_raw(i32::try_from(shell.id()).unwrap());
+        assert_eq!(
+            waitpid(pid, Some(WaitPidFlag::WNOHANG)),
+            Ok(WaitStatus::StillAlive)
+        );
+        shell.stdin.take().unwrap().write_all(b"release\n").unwrap();
+        // Pin the interleaving: the shell exits after hygiene's empty pass,
+        // before the production group gate observes it. This wait retains it.
+        let exited = WaitStatus::Exited(pid, 23);
+        assert_eq!(
+            waitid(Id::Pid(pid), WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT),
+            Ok(exited)
+        );
+        assert_eq!(observe_inner_group(pid.as_raw()), Ok(exited));
+        assert_eq!(
+            shell.wait().unwrap().code(),
+            Some(23),
+            "only hygiene may consume the exit status needed for ShellExited"
+        );
+        assert_eq!(observe_inner_group(pid.as_raw()), Err(Errno::ECHILD));
+    }
+
     /// Spawns the real outer supervisor with the test-only anchor barrier
     /// armed and returns the child and the rustX-side control stream.
     fn spawn_outer(
@@ -1191,6 +1359,10 @@ mod anchor_reaping_tests {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/bin:/bin"]]"#,
+            )
             .env(COMMAND_ENV, command)
             .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
             .env(OUTER_BARRIER_DIR_ENV, barrier_dir)
@@ -1217,6 +1389,10 @@ mod anchor_reaping_tests {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/bin:/bin"]]"#,
+            )
             .env(COMMAND_ENV, command)
             .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
             .stdin(Stdio::from(std::os::unix::io::OwnedFd::from(stream_b)))
@@ -1430,7 +1606,7 @@ mod anchor_reaping_tests {
         // shell's exit and escalates containment, exactly like a real
         // abnormal inner completion with possibly-live owned work.
         let command = format!(
-            "sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            "sleep 30 >/dev/null 2>&1 & echo $! > {0}.pending; mv {0}.pending {0}; exit 0",
             sleep_pid_file.display()
         );
         let (mut outer, mut stream) = spawn_outer(&command, &barrier_dir, &anchor_pid_file);
@@ -1538,12 +1714,16 @@ mod anchor_reaping_tests {
         let anchor_pid_file = dir.path().join("anchor.pid");
         let sleep_pid_file = dir.path().join("sleep.pid");
         let command = format!(
-            "sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            "sleep 30 >/dev/null 2>&1 & echo $! > {0}.pending; mv {0}.pending {0}; exit 0",
             sleep_pid_file.display()
         );
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
         let mut outer = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/bin:/bin"]]"#,
+            )
             .env(COMMAND_ENV, &command)
             .env(ANCHOR_PID_FILE_ENV, &anchor_pid_file)
             .env(OUTER_BARRIER_DIR_ENV, &barrier_dir)

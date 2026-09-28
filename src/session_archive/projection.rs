@@ -216,7 +216,8 @@ fn subagent_resource(resource: &crate::events::types::SubagentWorkspaceTerminalR
 fn workspace(workspace: &crate::runtime::workspace::WorkspaceSettlement) -> Value {
     use crate::runtime::workspace::WorkspaceSettlementDisposition;
     let disposition = match &workspace.disposition {
-        WorkspaceSettlementDisposition::Borrowed
+        WorkspaceSettlementDisposition::AgentRetained
+        | WorkspaceSettlementDisposition::Borrowed
         | WorkspaceSettlementDisposition::Shared
         | WorkspaceSettlementDisposition::Removed => json!(workspace.disposition),
         WorkspaceSettlementDisposition::Retained {
@@ -314,16 +315,19 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
             message_id,
             state,
             workspace_resource,
+            physical_settlement_proven,
+            ..
         } => {
-            json!({"type":"subagent_terminal_published","subagent_id":subagent_id,"child_agent_id":child_agent_id,"message_id":message_id,"state":state,"workspace_resource":subagent_resource(workspace_resource)})
+            json!({"type":"subagent_terminal_published","subagent_id":subagent_id,"child_agent_id":child_agent_id,"message_id":message_id,"state":state,"workspace_resource":subagent_resource(workspace_resource),"physical_settlement_proven":physical_settlement_proven})
         }
         RuntimeEvent::SubagentTerminalSettled {
             subagent_id,
             child_agent_id,
             state,
             workspace_resource,
+            physical_settlement_proven,
         } => {
-            json!({"type":"subagent_terminal_settled","subagent_id":subagent_id,"child_agent_id":child_agent_id,"state":state,"workspace_resource":subagent_resource(workspace_resource)})
+            json!({"type":"subagent_terminal_settled","subagent_id":subagent_id,"child_agent_id":child_agent_id,"state":state,"workspace_resource":subagent_resource(workspace_resource),"physical_settlement_proven":physical_settlement_proven})
         }
         RuntimeEvent::WorkflowWorkspaceSettled {
             run_id,
@@ -384,7 +388,9 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::CompactionCompleted { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }
         | RuntimeEvent::BackgroundTerminalPublished { .. }
+        | RuntimeEvent::AgentActivationAdmission { .. }
         | RuntimeEvent::SubagentOwnershipCommitted { .. }
+        | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
         | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
         | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
         | RuntimeEvent::WorkflowWorkspaceOwned { .. }

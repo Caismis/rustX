@@ -2,7 +2,13 @@
 //! registry. Source failure and exposure filtering remain independent.
 #![cfg(unix)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use crate::runtime::process_runner::{
+    CapturedProcessResult, RunnerBackedProcessRunner, RunnerTestControl, SupervisedCommandSpec,
+    SupervisedProcessRunner,
+};
+use tokio::sync::oneshot;
 
 use super::{common, support};
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
@@ -18,6 +24,42 @@ use rustx::runtime::identity::{AgentId, AttemptId, MessageId};
 use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::python::python_server_id;
 use support::fake::{FakeStep, ScriptedCall, fake_model, tool_call_events};
+
+/// Hold the real build owner after uv has physically settled, before the
+/// store can publish the immutable source. The network/package manager is
+/// setup, not a clock that decides whether publication was correctly ordered.
+struct PreparationRunner {
+    runner: RunnerBackedProcessRunner,
+    staged: Mutex<Option<oneshot::Sender<std::path::PathBuf>>>,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+}
+
+impl SupervisedProcessRunner for PreparationRunner {
+    fn run(
+        &self,
+        spec: SupervisedCommandSpec,
+        control: Option<RunnerTestControl>,
+    ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
+        Box::pin(async move {
+            let sync = spec.command.contains(" sync ");
+            let staging = spec.cwd.clone();
+            let result = self.runner.run(spec, control).await?;
+            if sync {
+                assert_eq!(result.exit_code, Some(0), "{result:?}");
+                let release = self.release.lock().unwrap().take().expect("one build");
+                self.staged
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("one build")
+                    .send(staging)
+                    .expect("preparation observer");
+                release.await.expect("publication release");
+            }
+            Ok(result)
+        })
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fastmcp4_availability_selection_request_and_invocation_share_one_authority() {
@@ -80,13 +122,56 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             base_environment: inputs.base_environment.clone(),
         })
         .unwrap();
-        let candidate = tokio::time::timeout(
-            std::time::Duration::from_mins(2),
-            coordinator.prepare_candidate(),
+        let (staged_tx, staged_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let store = rustx::tools::python::PythonToolStore::with_runner(
+            fixture.dir().path().join("environments/python-tools"),
+            Arc::new(PreparationRunner {
+                runner: RunnerBackedProcessRunner::default(),
+                staged: Mutex::new(Some(staged_tx)),
+                release: Mutex::new(Some(release_rx)),
+            }),
         )
-        .await
-        .expect("source preparation liveness guard")
         .unwrap();
+        coordinator.install_python_store(store);
+        let preparing = coordinator.clone();
+        let mut owner = tokio::spawn(async move { preparing.prepare_candidate().await });
+        // This acknowledgement, not an elapsed-time budget over uv resolution,
+        // establishes that the owner reached the pre-publication boundary.
+        let staging = tokio::select! {
+            staged = staged_rx => staged.expect("source preparation reaches publication"),
+            outcome = &mut owner => panic!("candidate completed before publication gate: {outcome:?}"),
+        };
+        assert!(
+            !owner.is_finished(),
+            "no candidate before owner publication"
+        );
+        assert!(staging.join("source/server.py").is_file());
+        assert!(!staging.join("manifest.json").exists());
+        assert!(
+            !coordinator
+                .current_snapshot()
+                .available_tools()
+                .definitions()
+                .iter()
+                .any(|tool| tool.name == "ping")
+        );
+        // Later workspace edits must not change the source whose availability
+        // and executor are about to be published together.
+        let source_path = root.join(".agents/tools/healthy/server.py");
+        let original_source = std::fs::read(&source_path).unwrap();
+        std::fs::write(
+            &source_path,
+            "raise RuntimeError('live workspace is not prepared authority')\n",
+        )
+        .unwrap();
+        release_tx.send(()).expect("release preparation owner");
+        let candidate = tokio::time::timeout(std::time::Duration::from_secs(30), owner)
+            .await
+            .expect("publication and MCP handoff liveness guard")
+            .expect("preparation owner")
+            .unwrap();
+        assert!(!staging.exists(), "staging was atomically published");
         assert_eq!(
             candidate
                 .availability()
@@ -250,6 +335,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 Some(RuntimeEvent::AttemptFailed { .. })
             ));
         }
+        std::fs::write(&source_path, original_source).unwrap();
         // A failed source cannot fabricate an exact-selected identity or
         // publish a fallback over the last successfully admitted registry.
         inputs.agent_activation = AgentActivation {

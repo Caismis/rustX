@@ -86,6 +86,17 @@ pub(crate) const SUBAGENT_TOOL: &str = "subagent_tool";
 /// [`SUBAGENT_TOOL`] whose owned child answers with its terminal result, so
 /// the terminal candidate is known and the publication transaction runs.
 pub(crate) const SUBAGENT_SETTLED: &str = "subagent_settled";
+/// A native rustx child produces its own physical receipt before the parent dies.
+pub(crate) const REAL_SUBAGENT_SETTLED: &str = "real_subagent_settled";
+/// A real child settles, but `SQLite` rejects all terminal publication attempts.
+pub(crate) const REAL_SUBAGENT_PUBLICATION_FAILURE: &str = "real_subagent_publication_failure";
+/// The same real durable Agent settles once, then admits a second activation.
+pub(crate) const REAL_SUBAGENT_RESUME: &str = "real_subagent_resume";
+/// Recompose the exact durable store and report recovered owner settlement.
+pub(crate) const REOPEN_SUBAGENT_SETTLEMENT: &str = "reopen_subagent_settlement";
+/// Recompose, then resume to prove consumed physical activation IDs are not reused.
+pub(crate) const REOPEN_SUBAGENT_RESUME: &str = "reopen_subagent_resume";
+
 /// One settled turn, an explicit manual compaction with a parked summary
 /// request, and one more settled turn afterwards.
 pub(crate) const COMPACTION: &str = "compaction";
@@ -355,14 +366,49 @@ impl Child {
         let runtime_config = launch.config().clone();
         let model = Arc::new(FakeModel::new(scripts));
         let adapter: Arc<dyn crate::model::ModelAdapter> = model.clone();
-        let registry = fixture_registry(
-            &[
-                FixtureModel::text(MODEL, ModelProtocol::OpenAiChatCompletions)
-                    .with_context_window(1_000_000)
-                    .with_max_output_tokens(4096),
-            ],
-            &ScriptedAdapterFactory::new(adapter),
+        let scenario = std::env::var(super::SCENARIO_ENV).unwrap_or_default();
+        let real_child = matches!(
+            scenario.as_str(),
+            REAL_SUBAGENT_SETTLED
+                | REAL_SUBAGENT_PUBLICATION_FAILURE
+                | REAL_SUBAGENT_RESUME
+                | REOPEN_SUBAGENT_SETTLEMENT
+                | REOPEN_SUBAGENT_RESUME
         );
+        let dependencies = LocalRuntimeDependencies {
+            child_program: real_child.then(|| {
+                std::env::current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("rustx")
+            }),
+            ..LocalRuntimeDependencies::default()
+        };
+        let registry = if real_child {
+            // The parent remains deterministically scripted. Its frozen provider
+            // configuration is real, so the spawned rustx child uses the local
+            // HTTP fixture through the ordinary supported provider adapter.
+            crate::model::invocation::ModelBindingRegistry::new_with_scripted_adapters(
+                launch
+                    .models
+                    .resolve(&launch.credentials)
+                    .expect("local fixture model"),
+                &ScriptedAdapterFactory::new(adapter),
+            )
+            .expect("parent bindings")
+        } else {
+            fixture_registry(
+                &[
+                    FixtureModel::text(MODEL, ModelProtocol::OpenAiChatCompletions)
+                        .with_context_window(1_000_000)
+                        .with_max_output_tokens(4096),
+                ],
+                &ScriptedAdapterFactory::new(adapter),
+            )
+        };
         let controller = Arc::new(
             crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
                 .unwrap(),
@@ -375,7 +421,7 @@ impl Child {
         });
         let core = LocalConversationCore::compose_from_config(
             &launch,
-            &LocalRuntimeDependencies::default(),
+            &dependencies,
             registry,
             runtime_config.clone(),
             SessionPersistentState {
@@ -461,7 +507,7 @@ impl Child {
         let runtime_root = root.join("private/sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001/incarnations/staged");
         std::fs::create_dir_all(&runtime_root).expect("staged child runtime root");
         self.runtime()
-            .subagents()
+            .subagent_registry()
             .expect("the composed runtime owns a subagent registry")
             .push_staged_override(crate::runtime::subagent::process::StagedChild::for_test(
                 process,
@@ -1009,6 +1055,13 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.submit("start the background command");
             child.log.wait_settled(1).await;
             note("settled");
+        }
+        REAL_SUBAGENT_SETTLED
+        | REAL_SUBAGENT_PUBLICATION_FAILURE
+        | REAL_SUBAGENT_RESUME
+        | REOPEN_SUBAGENT_SETTLEMENT
+        | REOPEN_SUBAGENT_RESUME => {
+            real_subagent_scenario(root, scenario).await;
         }
         SUBAGENT_TOOL | SUBAGENT_SETTLED => {
             let call = ScriptedCall {
@@ -1585,4 +1638,187 @@ async fn recovered_interrupt(root: &Path, scenario: &str) {
     shutdown.await.unwrap();
     note("recovered-interrupt-proved");
     park_owning(child).await;
+}
+
+/// This fixture never stages an IPC peer or writes physical evidence. The
+/// ordinary rustx child owns composition, canonical Delegate acceptance, drain,
+/// and the receipt. The parent's process-death gate owns the crash interleaving.
+#[derive(Debug)]
+struct PhysicalFixtureIdentities;
+impl crate::runtime::identity::UuidV7Generator for PhysicalFixtureIdentities {
+    fn next_uuid(&self) -> uuid::Uuid {
+        uuid::Uuid::parse_str("0199c989-03a0-7000-8000-000000000001").unwrap()
+    }
+}
+
+async fn real_subagent_scenario(root: &Path, scenario: &str) {
+    let publication_failure = scenario == REAL_SUBAGENT_PUBLICATION_FAILURE;
+    let answer_gate = crate::boundary_suites::common::HeaderGate::new();
+    let response_gate = answer_gate.clone();
+    let provider =
+        crate::boundary_suites::common::FixtureServer::start_with_body(move |_, _, _| {
+            let reply = crate::boundary_suites::common::sse_fixture(
+                "openai_chat",
+                "subagent_child_answer.sse",
+            );
+            if publication_failure {
+                reply.with_header_gate(response_gate.clone())
+            } else {
+                reply
+            }
+        })
+        .await;
+    let config = root.join("rustx.toml");
+    let mut document: serde_json::Value =
+        crate::toml_authoring::parse(&std::fs::read(&config).unwrap()).unwrap();
+    document["providers"]["fixture"]["base_url"] = serde_json::json!(provider.url("/v1"));
+    crate::launch_fixture::write_document(&config, &toml::to_string_pretty(&document).unwrap());
+    let reopening = matches!(
+        scenario,
+        REOPEN_SUBAGENT_SETTLEMENT | REOPEN_SUBAGENT_RESUME
+    );
+    if !reopening {
+        // Publish the real Session catalog before composing its fixed-identity
+        // runtime so deletion is exercised against ordinary ownership facts.
+        SessionCatalog::create_with_identities(
+            &root.join("private"),
+            &SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+                root.join("workspace"),
+            )),
+            Arc::new(PhysicalFixtureIdentities),
+        )
+        .unwrap();
+    }
+    let call = ScriptedCall {
+        id: "call-real-subagent",
+        tool_id: "tool-subagent",
+        name: "subagent",
+        arguments: serde_json::json!({ "agent": "explore", "task": "count the workspace files" }),
+    };
+    let final_turn = || {
+        vec![
+            started(),
+            text("parent complete"),
+            done(ModelFinishReason::Stop),
+        ]
+    };
+    let scripts = if reopening {
+        vec![final_turn(), final_turn(), final_turn()]
+    } else {
+        vec![
+            calling_turn(&call),
+            final_turn(),
+            final_turn(),
+            final_turn(),
+        ]
+    };
+    let child = Child::require(root, scripts, false, true).await;
+    if !reopening {
+        child.submit("delegate a real physical child");
+        child.log.wait_settled(1).await;
+    }
+    let registry = child.runtime().subagent_registry().expect("Agent registry");
+    let listing = registry.list_agents(1);
+    assert_eq!(listing.matched, 1, "one exact durable Agent");
+    let agent_id = listing.agents[0].0.agent_id.clone();
+    if publication_failure {
+        answer_gate.wait_entered().await;
+        assert_eq!(
+            provider.attempt_count(),
+            1,
+            "one real child provider request"
+        );
+        // The child is held after its real provider request. A real SQLite
+        // trigger now rejects only this parent's terminal publication event;
+        // no receipt or terminal fact is supplied by this fixture.
+        let database = root.join("private/sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001/conversation.sqlite");
+        let database = rusqlite::Connection::open(database).unwrap();
+        database.execute_batch("CREATE TRIGGER reject_subagent_terminal BEFORE INSERT ON events WHEN json_extract(NEW.event_json, '$.event.type') = 'subagent_terminal_published' BEGIN SELECT RAISE(FAIL, 'test terminal publication unavailable'); END;").unwrap();
+        answer_gate.release();
+        assert!(matches!(
+            registry.wait_agent(&agent_id).await,
+            Err(crate::runtime::subagent::AgentControlError::Settlement)
+        ));
+        let agent = registry.agent_snapshot(&agent_id).unwrap();
+        assert_eq!(
+            agent.state,
+            crate::runtime::subagent::AgentState::Unavailable
+        );
+        database
+            .execute_batch("DROP TRIGGER reject_subagent_terminal;")
+            .unwrap();
+        note(&format!(
+            "physical-publication-failed:{}:{}:{}",
+            agent.agent_id, agent.conversation_id, agent.latest_activation
+        ));
+        park_owning((child, provider)).await;
+    }
+    if reopening {
+        registry.wait_recovery_reconciliation().await;
+    }
+    registry
+        .wait_agent(&agent_id)
+        .await
+        .expect("Agent physical settlement");
+    assert_eq!(provider.attempt_count(), u64::from(!reopening));
+    let agent = registry.agent_snapshot(&agent_id).unwrap();
+    assert_eq!(agent.state, crate::runtime::subagent::AgentState::Inactive);
+    assert_eq!(registry.with_goal_idle(|| true), Some(true));
+    note(&format!(
+        "physical-agent:{}:{}:{}",
+        agent.agent_id, agent.conversation_id, agent.latest_activation
+    ));
+    if matches!(scenario, REAL_SUBAGENT_RESUME | REOPEN_SUBAGENT_RESUME) {
+        let accepted = registry
+            .send_message(
+                &agent_id,
+                "follow up after physical settlement",
+                crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                crate::runtime::CancellationSignal::new(),
+            )
+            .await
+            .expect("resumed canonical Delegate acceptance");
+        assert_ne!(accepted.activation_id, agent.latest_activation);
+        note(&format!(
+            "physical-resumed:{}:{}",
+            accepted.agent_id, accepted.activation_id
+        ));
+        if reopening {
+            // The retained profile still names the crashed fixture's endpoint.
+            // Prove fresh Delegate acceptance/identity, then explicitly drain
+            // that activation without relying on a replacement provider.
+            let settled = registry
+                .interrupt_agent(&agent_id)
+                .await
+                .expect("resumed physical settlement");
+            assert_eq!(settled.agent_id, accepted.agent_id);
+            if let Some(captured) = settled.activation_id {
+                assert_eq!(captured, accepted.activation_id);
+                assert!(settled.outcome.is_some_and(|outcome| outcome.is_settled()));
+            }
+            let inactive = registry.agent_snapshot(&agent_id).unwrap();
+            assert_eq!(inactive.latest_activation, accepted.activation_id);
+            assert_eq!(
+                inactive.state,
+                crate::runtime::subagent::AgentState::Inactive
+            );
+            assert_eq!(registry.with_goal_idle(|| true), Some(true));
+        } else {
+            registry
+                .wait_agent(&agent_id)
+                .await
+                .expect("resumed settlement");
+        }
+    }
+    if reopening {
+        child
+            .runtime()
+            .shutdown()
+            .await
+            .expect("recovered runtime shutdown");
+        note("physical-reopened:idle:shutdown-ok");
+    } else {
+        note("physical-settled");
+    }
+    park_owning((child, provider)).await;
 }

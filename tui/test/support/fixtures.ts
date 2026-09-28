@@ -20,10 +20,10 @@ import type {
   RuntimeClientAttempt,
   InteractionRequest,
   ModelInvocationView,
-  RuntimeClientBackgroundExecution,
+  RuntimeClientJob,
   RuntimeClientSnapshot,
-  RuntimeClientSubagent,
-  RuntimeClientSubagentObservation,
+  RuntimeClientAgent,
+  RuntimeClientAgentObservation,
   RuntimeClientTranscriptCursor,
   RuntimeClientCursor,
   RuntimeClientTranscriptPage,
@@ -283,7 +283,7 @@ export function snapshot(
     transcript,
     inbound: { pending: [] },
     pending_interactions: [],
-    background: [],
+    jobs: [],
     context: { compaction_in_progress: false, compaction_count: 0 },
     capabilities: capabilities(1),
     model: sessionModel("alpha/model-a"),
@@ -339,7 +339,7 @@ export function todoSection(
 
 /** The `background_executions` section, in registry allocation order. */
 export function backgroundSection(
-  executions: RuntimeClientBackgroundExecution[],
+  executions: RuntimeClientJob[],
   omittedCount = 0,
 ): RuntimeClientStatusSection {
   return {
@@ -436,11 +436,11 @@ export function toolResult(
 
 export function backgroundExecution(
   executionId: string,
-  state: RuntimeClientBackgroundExecution["state"],
-  overrides: Partial<RuntimeClientBackgroundExecution> = {},
-): RuntimeClientBackgroundExecution {
+  state: RuntimeClientJob["state"],
+  overrides: Partial<RuntimeClientJob> = {},
+): RuntimeClientJob {
   return {
-    execution_id: executionId,
+    job_id: executionId,
     tool_id: "tool-background",
     tool_name: "bash",
     state,
@@ -450,11 +450,11 @@ export function backgroundExecution(
 
 /** The neutral live-activity projection of one subagent child (Issue #178). */
 export function subagentObservation(
-  activity: RuntimeClientSubagentObservation["activity"] = {
+  activity: RuntimeClientAgentObservation["activity"] = {
     type: "awaiting_activity",
   },
-  overrides: Partial<RuntimeClientSubagentObservation> = {},
-): RuntimeClientSubagentObservation {
+  overrides: Partial<RuntimeClientAgentObservation> = {},
+): RuntimeClientAgentObservation {
   return {
     revision: "0",
     activity,
@@ -467,12 +467,15 @@ export function subagentObservation(
 export function subagent(
   agent: string,
   definitionDigest: string,
-  state: RuntimeClientSubagent["state"] = "running",
-  overrides: Partial<RuntimeClientSubagent> = {},
-): RuntimeClientSubagent {
+  state: RuntimeClientAgent["state"] = "active",
+  overrides: Partial<RuntimeClientAgent> = {},
+): RuntimeClientAgent {
   return {
-    subagent_id: "conv_57d68983-5497-771e-baaa-5f1356061697",
-    child_agent_id: "agent-child",
+    activation_id: "activation-one",
+    current_activation: state === "inactive" ? null : "activation-one",
+    activation_state: state === "inactive" ? "succeeded" : state === "stopping" ? "stopping" : "running",
+    agent_id: "agent-child",
+    parent_agent_id: "agent-parent",
     child_conversation_id: "conv_57d68983-5497-771e-baaa-5f1356061697",
     agent,
     definition_digest: definitionDigest,

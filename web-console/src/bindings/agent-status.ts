@@ -1,6 +1,6 @@
-import { backgroundStateLabel } from './status-labels';
+import { jobStateLabel } from './status-labels';
 import type { Translate } from '../locale/translation';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v26';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v27';
 
 /** Agent Status is historical, request-scoped model context. Nothing here is a
  * current-state authority: current Todo is `snapshot.todos`, current Goal is
@@ -118,7 +118,7 @@ function facetOf(tx: Translate, section: RuntimeClientStatusSection): AgentStatu
     const executions = section.executions ?? [];
     const total = executions.length + section.omitted_count;
     if (!total) return undefined;
-    const values = executions.slice(0, DETAIL_ENTRY_LIMIT).map(execution => `${execution.tool_name} · ${backgroundStateLabel(tx, execution.state)}`);
+    const values = executions.slice(0, DETAIL_ENTRY_LIMIT).map(execution => `${execution.tool_name} · ${jobStateLabel(tx, execution.state)}`);
     const hidden = section.omitted_count + Math.max(0, executions.length - DETAIL_ENTRY_LIMIT);
     if (hidden > 0) values.push(tx('agent:copy.and-value-more', { p0: hidden }));
     return { kind: 'background_executions', compact: tx('agent:status.background', { n: total }), label: tx('agent:agent-status.background'), values };

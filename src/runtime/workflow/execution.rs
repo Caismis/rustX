@@ -536,7 +536,7 @@ impl WorkflowRuntime {
             // Every fallible step after borrow stays inside this result scope.
             // The one finalizer below returns any access not transferred to a
             // native owner, including zero-start cancellation/budget rejection.
-            let result: Result<Option<BlockOutput<'_>>, WorkflowRunError> = async {
+            let result: Result<Option<BlockOutput<'_>>, WorkflowRunError> = Box::pin(async {
                 // Node admission frontier: cancellation observation and aggregate
                 // count reservation are synchronous, before any child preparation.
                 {
@@ -917,7 +917,7 @@ impl WorkflowRuntime {
                         Ok(Some(value))
                     }
                 }
-            }
+            })
             .await
             .and_then(|candidate| {
                 candidate

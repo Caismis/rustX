@@ -152,6 +152,8 @@ describe("command registry", () => {
         "/show-reasoning",
         "/expand",
         "/cancel",
+        "/agents", "/send-message", "/wait-agent", "/interrupt-agent",
+        "/jobs", "/job-status", "/job-wait", "/job-cancel",
         "/quit",
       ],
     );
@@ -1267,29 +1269,20 @@ describe("CommandDispatcher", () => {
     assert.equal(h.transport.log.count("interaction/respond"), 0);
   });
 
-  it("cancels one background execution by its runtime identity", async () => {
+  it("cancels one finite Job by its runtime identity", async () => {
     const h = await harness();
-    const cancelling = h.dispatcher.submit("/cancel exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
-    const cancel = await nextRequest(h, "background/cancel");
-    assert.equal(
-      paramsOf(cancel, "background/cancel").execution_id,
-      "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
-    );
+    const cancelling = h.dispatcher.submit("/job-cancel exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
+    const cancel = await nextRequest(h, "job/cancel");
+    assert.equal(paramsOf(cancel, "job/cancel").job_id, "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
     h.transport.respond(cancel.id, {
-      type: "background",
-      execution: {
-        execution_id: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
-        tool_id: "tool-background",
-        tool_name: "bash",
-        state: "cancelling",
+      type: "job",
+      job: {
+        job_id: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
+        tool_id: "tool-background", tool_name: "bash", state: "cancelled",
       },
     });
-
     const outcome = await cancelling;
-    assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") {
-      assert.match(outcome.text, /acceptance, not settlement/);
-    }
+    assert.equal(outcome.kind, "inspect");
   });
 
   it("surfaces a typed protocol error as an error message", async () => {
@@ -1574,4 +1567,29 @@ it("manual runtime unload is not a product command", async () => {
   assert.equal(result.kind, "transient");
   assert.equal(h.transport.log.count("session/delete"), 0);
   assert.equal(h.transport.log.count("session/unload"), 0);
+});
+
+it("a replacement attachment does not inherit an old Agent-message submission fence", async t => {
+  const h = await harness(); t.after(() => h.client.close());
+  const old = h.dispatcher.submit('/send-message agent-child old guidance');
+  const first = await nextRequest(h, 'agent/sendMessage', 0);
+  const detaching = h.host.detach(h.session.sessionId);
+  const detach = await nextRequest(h, 'session/detach', 0);
+  h.transport.respond(detach.id, { type: 'detached' });
+  await detaching;
+  const attaching = h.host.attach(h.session.sessionId);
+  const attach = await nextRequest(h, 'session/attach', 1);
+  const replacementTarget = { ...h.target, attachment_id: 'replacement' };
+  h.transport.respond(attach.id, { type: 'attached', target: replacementTarget, snapshot: snapshot(), cursor: runtimeCursor(0) });
+  const replacement = await attaching;
+  h.dispatcher.setSession(replacement);
+  const next = h.dispatcher.submit('/send-message agent-child new guidance');
+  const second = await nextRequest(h, 'agent/sendMessage', 1);
+  assert.deepEqual(paramsOf(second, "agent/sendMessage").target, replacementTarget);
+  h.transport.respond(first.id, { type: 'agent_message', agent_id: 'agent-child', activation_id: 'old', resumed: false });
+  await old;
+  await h.dispatcher.submit('/send-message agent-child new guidance');
+  assert.equal(h.transport.log.count('agent/sendMessage'), 2, 'old completion cannot release the replacement fence');
+  h.transport.respond(second.id, { type: 'agent_message', agent_id: 'agent-child', activation_id: 'new', resumed: false });
+  await next;
 });

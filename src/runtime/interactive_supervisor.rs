@@ -188,16 +188,35 @@ pub(crate) const FAIL_SETSID_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SETSID";
 /// a sleep.
 pub(crate) const INNER_STALL_BEFORE_ANCHOR_ENV: &str =
     "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR";
-/// Test-only injection: the outer's pre-anchor cleanup cannot prove the
-/// direct inner reap. This injects the semantic state only — the direct
-/// child is never actually waited for, so the proof-carrying
-/// `MSG_NO_OWNERSHIP` must not be emitted.
+/// Trusted semantic fixture: the setsid-failure inner remains alive until
+/// killed, then the outer consumes its exact wait status outside `Child`.
+/// Configured only by `InteractiveTestControl`, never command environment.
 pub(crate) const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
+/// Trusted passive lifecycle trace. Configured only by
+/// `InteractiveTestControl`, never command environment.
+pub(crate) const TRACE_ENV: &str = "RUSTX_TEST_INTERACTIVE_TRACE";
+
+/// Writes one fixed lifecycle trace line to the inherited stderr, which the
+/// runtime driver already drains into the bounded stderr preview.
+///
+/// Passive by construction: no acknowledgement, no reader in either
+/// supervisor, no wait, and no lifecycle decision depends on it. Each line is
+/// one `write(2)` below `PIPE_BUF`, so outer and inner lines never interleave.
+fn trace(role: &str, event: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var_os(TRACE_ENV).is_some()) {
+        return;
+    }
+    let line = format!("[trace {role} {}] {event}\n", std::process::id());
+    let _ = std::io::stderr().write_all(line.as_bytes());
+}
 
 /// Runs the outer supervisor role; returns its exit status.
 #[must_use]
 #[allow(clippy::too_many_lines)] // one coherent outer supervise/relay/contain pipeline
 pub fn run_outer(arguments: &[String]) -> i32 {
+    trace("outer", format_args!("started"));
     let Some(socket) = std::env::var_os(RUSTX_CONTROL_ENV) else {
         eprintln!("interactive supervisor: control socket path is missing");
         return 1;
@@ -231,7 +250,10 @@ pub fn run_outer(arguments: &[String]) -> i32 {
     // part of the unit hierarchy — not the inner, not the server — can be
     // created while rustX might still fail its accept. Nothing is owned
     // before this returns.
-    match await_owner_attached(&mut upstream, &mut upstream_reader) {
+    trace("outer", format_args!("runtime control connected"));
+    let gate = await_owner_attached(&mut upstream, &mut upstream_reader);
+    trace("outer", format_args!("startup gate: {gate:?}"));
+    match gate {
         Ok(true) => {}
         // rustX disappeared or requested shutdown at the gate: nothing was
         // ever created, so exiting is the complete settlement.
@@ -267,6 +289,7 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             return 1;
         }
     };
+    trace("outer", format_args!("inner control listener bound"));
     // The pre-ownership acceptance is a bounded ownership state machine, not
     // a blocking one-shot accept: the inner control connection, the inner's
     // own exit, and upstream termination/control loss are all polled.
@@ -302,9 +325,14 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    trace("outer", format_args!("inner spawn attempted"));
     let mut child = match inner.spawn() {
-        Ok(child) => child,
+        Ok(child) => {
+            trace("outer", format_args!("inner spawned: pid {}", child.id()));
+            child
+        }
         Err(error) => {
+            trace("outer", format_args!("inner spawn failed: {error}"));
             // The spawn failed, so no pre-anchor child exists: an empty
             // proof-carrying `NoOwnership`.
             let _ = std::fs::remove_file(&inner_socket);
@@ -326,7 +354,10 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         &mut upstream,
         &mut upstream_reader,
     ) {
-        InnerAttachment::Attached(downstream) => downstream,
+        InnerAttachment::Attached(downstream) => {
+            trace("outer", format_args!("inner control accepted"));
+            downstream
+        }
         // The pre-ownership state machine already settled the direct inner
         // by pid and reported the outcome: no server-owned process tree
         // ever escaped the pre-ownership state.
@@ -422,10 +453,9 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                     }
                 }
                 if anchor == AnchorState::Running {
-                    match waitid(
-                        Id::Pid(Pid::from_raw(inner_pid)),
-                        WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED,
-                    ) {
+                    match crate::runtime::process_wait::observe_stopped_child(Pid::from_raw(
+                        inner_pid,
+                    )) {
                         Ok(WaitStatus::Stopped(..)) => {
                             let _ =
                                 nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL);
@@ -775,6 +805,13 @@ fn await_anchor_commit(
         loop {
             let mut frame = downstream_reader.pop();
             while let Some((kind, payload)) = frame {
+                trace(
+                    "outer",
+                    format_args!(
+                        "pre-anchor inner frame {kind:#04x} ({} bytes)",
+                        payload.len()
+                    ),
+                );
                 match classify_pre_anchor_frame(kind, &payload, inner_pid) {
                     PreAnchorFrame::AnchorCommit => {
                         // The single linearization point into the anchored,
@@ -926,29 +963,57 @@ fn conclude_pre_anchor(
     upstream: &mut std::os::unix::net::UnixStream,
     failure: Option<&str>,
 ) -> i32 {
+    trace(
+        "outer",
+        format_args!("pre-anchor cleanup entered: failure {failure:?}"),
+    );
     if let Some(message) = failure {
-        let _ = write_frame(upstream, MSG_PROCESS_CONTROL_FAILURE, message.as_bytes());
+        let written = write_frame(upstream, MSG_PROCESS_CONTROL_FAILURE, message.as_bytes());
+        trace("outer", format_args!("cleanup failure frame: {written:?}"));
     }
     let inner_pid = i32::try_from(child.id()).unwrap_or(0);
-    let _ = child.kill();
-    let reaped = if std::env::var(FAIL_PRE_ANCHOR_REAP_ENV).is_ok() {
-        // Test-only injection of the semantic state "the pre-anchor child
-        // cleanup cannot prove the reap"; the child is deliberately not
-        // waited for.
-        Err("injected pre-anchor reap failure".to_owned())
+    let killed = child.kill();
+    trace("outer", format_args!("child.kill({inner_pid}): {killed:?}"));
+    // Steal only this child's terminal status, before the designated owner
+    // attempts its normal wait. The fixture inner stays alive after sending
+    // setup-end, so ordinary pre-anchor polling cannot cache a terminal status.
+    let stolen = if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
+        trace("outer", format_args!("injected reap theft entered"));
+        let status = waitpid(Pid::from_raw(inner_pid), None);
+        trace("outer", format_args!("injected exact waitpid: {status:?}"));
+        let status = status.expect("exact foreign reap");
+        assert!(matches!(
+            status,
+            WaitStatus::Signaled(pid, Signal::SIGKILL, _) if pid.as_raw() == inner_pid
+        ));
+        true
     } else {
-        child
-            .wait()
-            .map(|_status| ())
-            .map_err(|error| error.to_string())
+        false
     };
+    let reaped = child.wait();
+    trace("outer", format_args!("child.wait(): {reaped:?}"));
+    if stolen {
+        assert_eq!(
+            reaped.as_ref().unwrap_err().raw_os_error(),
+            Some(nix::libc::ECHILD)
+        );
+    }
     match reaped {
-        Ok(()) => {
-            let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &inner_pid.to_le_bytes());
+        Ok(_) => {
+            let written = write_frame(upstream, MSG_NO_OWNERSHIP, &inner_pid.to_le_bytes());
+            trace(
+                "outer",
+                format_args!("proof-carrying no-ownership: {written:?}"),
+            );
             0
         }
         Err(error) => {
-            let _ = write_frame(
+            let error = if stolen {
+                format!("injected pre-anchor reap failure (exact wait status consumed): {error}")
+            } else {
+                error.to_string()
+            };
+            let written = write_frame(
                 upstream,
                 MSG_PROCESS_CONTROL_FAILURE,
                 format!(
@@ -958,6 +1023,7 @@ fn conclude_pre_anchor(
                 )
                 .as_bytes(),
             );
+            trace("outer", format_args!("unproven reap reported: {written:?}"));
             1
         }
     }
@@ -1115,6 +1181,7 @@ fn contain_after_abnormal_exit(
 #[must_use]
 #[allow(clippy::too_many_lines)] // one coherent inner session/spawn/reap pipeline
 pub fn run_inner(arguments: &[String]) -> i32 {
+    trace("inner", format_args!("entered run_inner"));
     let Some(inner_socket) = std::env::var_os(INNER_CONTROL_ENV) else {
         eprintln!("interactive supervisor: inner control socket path is missing");
         return 1;
@@ -1124,7 +1191,7 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         // connection exists. The outer's pre-ownership state machine must
         // reap it and report no-ownership instead of blocking forever on a
         // connection that can never arrive.
-        let _ = std::fs::write(&pid_file, std::process::id().to_string());
+        write_fixture_pid(&pid_file);
         return INNER_EXIT_BEFORE_CONNECT_STATUS;
     }
     let mut control = match std::os::unix::net::UnixStream::connect(&inner_socket) {
@@ -1134,10 +1201,12 @@ pub fn run_inner(arguments: &[String]) -> i32 {
             return 1;
         }
     };
+    trace("inner", format_args!("control socket connected"));
     if let Err(error) = fcntl(&control, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
         eprintln!("interactive supervisor: cannot configure the inner control socket: {error}");
         return 1;
     }
+    trace("inner", format_args!("control socket nonblocking"));
     let Some(program) = arguments.first() else {
         eprintln!("interactive supervisor: server program is missing");
         return 1;
@@ -1148,23 +1217,45 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         // the anchor commit point. The pid file is written after the
         // connection, so a regression can order "the inner exists and is
         // connected" against an outer loss without a sleep.
-        let _ = std::fs::write(&pid_file, std::process::id().to_string());
+        write_fixture_pid(&pid_file);
         loop {
             std::thread::sleep(POLL_INTERVAL);
         }
     }
     if let Ok(pid_file) = std::env::var(FAIL_SETSID_ENV) {
+        trace("inner", format_args!("FAIL_SETSID enabled"));
+        write_fixture_pid(&pid_file);
         // Test-only injection: `setsid()` fails after the control
-        // connection exists. This is byte-for-byte the real setsid-failure
-        // path below, so the inner stays in its parent's process group and
+        // connection exists. Like the real setsid-failure path below,
+        // the inner stays in its parent's process group and
         // its pid is provably not a process-group id.
-        let _ = std::fs::write(&pid_file, std::process::id().to_string());
-        let _ = write_frame(
+        let published = write_frame(
             &mut control,
             MSG_PROCESS_CONTROL_FAILURE,
             b"injected setsid failure after the inner control connection",
         );
-        let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
+        trace("inner", format_args!("failure frame write: {published:?}"));
+        let published = published.and_then(|()| {
+            let written = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
+            trace(
+                "inner",
+                format_args!("no-ownership frame write: {written:?}"),
+            );
+            written
+        });
+        if let Err(error) = published {
+            eprintln!("interactive supervisor: cannot publish injected setup failure: {error}");
+            return INNER_EXIT_CONTAINMENT;
+        }
+        if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
+            // Keep this exact child alive until the outer's SIGKILL. Normal
+            // try_wait therefore observes None without suppressing polling.
+            // A spurious park return cannot let the child exit naturally.
+            trace("inner", format_args!("entering intentional park"));
+            loop {
+                std::thread::park();
+            }
+        }
         return INNER_EXIT_NORMAL;
     }
     if let Err(error) = nix::unistd::setsid() {
@@ -1219,7 +1310,7 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         return INNER_EXIT_NORMAL;
     }
     if let Ok(path) = std::env::var(ANCHOR_PID_FILE_ENV) {
-        let _ = std::fs::write(&path, std::process::id().to_string());
+        write_fixture_pid(&path);
     }
     let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
     if write_frame(&mut control, MSG_ANCHOR_READY, &self_pid.to_le_bytes()).is_err() {
@@ -1255,11 +1346,16 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
         return INNER_EXIT_NORMAL;
     }
+    let environment = match crate::runtime::supervised_unit::command_environment() {
+        Ok(environment) => environment,
+        Err(error) => {
+            let _ = write_frame(&mut control, MSG_PROCESS_CONTROL_FAILURE, error.as_bytes());
+            let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
+            return INNER_EXIT_NORMAL;
+        }
+    };
     let mut command = Command::new(program);
-    command
-        .args(&arguments[1..])
-        .env_remove(RUSTX_CONTROL_ENV)
-        .env_remove(INNER_CONTROL_ENV);
+    command.args(&arguments[1..]).env_clear().envs(environment);
     let server = match command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -1380,6 +1476,19 @@ pub fn run_inner(arguments: &[String]) -> i32 {
             return INNER_EXIT_CONTAINMENT;
         }
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Writes this supervisor's pid to a fixture evidence file. A failed write is
+/// reported on stderr (never discarded), so a regression that relies on the
+/// file distinguishes "never executed" from "executed but failed".
+fn write_fixture_pid(path: &str) {
+    trace("inner", format_args!("pid file write attempted"));
+    match std::fs::write(path, std::process::id().to_string()) {
+        Ok(()) => trace("inner", format_args!("pid file written")),
+        Err(error) => {
+            eprintln!("interactive supervisor: cannot write the fixture pid file: {error}");
+        }
     }
 }
 
@@ -1645,7 +1754,10 @@ mod coalesced_gate_tests {
             ))
             .current_dir(fixture.path())
             .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/local/bin:/usr/bin:/bin"]]"#,
+            )
             .env(RUSTX_CONTROL_ENV, &socket)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1711,7 +1823,10 @@ mod coalesced_gate_tests {
             .arg("exec sleep 600")
             .current_dir(fixture.path())
             .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env(
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
+                r#"[["PATH","/usr/local/bin:/usr/bin:/bin"]]"#,
+            )
             .env(INNER_CONTROL_ENV, &socket)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

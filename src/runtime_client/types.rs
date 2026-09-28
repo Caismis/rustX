@@ -387,9 +387,14 @@ pub enum RuntimeClientSessionRequest {
 /// Version 45 clients are rejected without a compatibility projection.
 /// Version 48 adds native whole-conversation Turn/Step counts and Turn clocks.
 /// Version 49 unifies native Turn process ownership, counts and control seats.
-/// Version 50 publishes native derived read domains for incremental clients.
-/// Version 51 adds bounded canonical Tool argument previews to Trace summaries.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 51;
+/// Version 50 separates finite Jobs from durable Agents and exposes exact
+/// activation correlation and owner-arbitrated continuation controls (#411).
+/// Version 51 makes admission state, activation origin and bounded Agent listing explicit.
+/// Version 52 exposes Job publication abandonment, bounded listing metadata,
+/// and the distinction between proven absent Agent delivery and unknown delivery.
+/// This generation also includes incremental derived read domains and finite snapshots (#423).
+/// Trace summaries also publish bounded canonical Tool argument previews (#421).
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 52;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -695,41 +700,46 @@ pub enum RuntimeClientRequest {
         /// Source user-message identity.
         message_id: MessageId,
     },
-    /// Inspect one background execution.
-    BackgroundStatus {
-        /// Attachment-scoped request id.
+    JobStatus {
         id: RequestId,
-        /// The detached execution identity.
-        execution_id: ToolExecutionId,
+        job_id: ToolExecutionId,
     },
-    /// Request cancellation of one background execution.
-    ///
-    /// Acceptance and eventual settlement remain distinct: the response
-    /// carries the registry snapshot after the request, never the terminal
-    /// result.
-    BackgroundCancel {
-        /// Attachment-scoped request id.
+    JobList {
         id: RequestId,
-        /// The detached execution identity.
-        execution_id: ToolExecutionId,
     },
-    /// Inspect one subagent child (Issue #60).
-    SubagentStatus {
-        /// Attachment-scoped request id.
+    JobWait {
         id: RequestId,
-        /// The subagent identity.
-        subagent_id: crate::runtime::identity::SubagentId,
+        job_id: ToolExecutionId,
     },
-    /// Request cancellation of one subagent child (Issue #60).
-    ///
-    /// Acceptance and eventual settlement remain distinct: the response
-    /// carries the registry snapshot after the intent commit, never the
-    /// terminal result.
-    SubagentCancel {
-        /// Attachment-scoped request id.
+    JobCancel {
         id: RequestId,
-        /// The subagent identity.
-        subagent_id: crate::runtime::identity::SubagentId,
+        job_id: ToolExecutionId,
+    },
+    AgentStatus {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    AgentList {
+        id: RequestId,
+    },
+    AgentSendMessage {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        message: String,
+    },
+    AgentWait {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    AgentInterrupt {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    AgentTranscript {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        before: Option<super::snapshot::RuntimeClientTranscriptCursor>,
+        limit: usize,
     },
     /// Dispose the exact retained workspace owned by one terminal subagent.
     /// The request names only the authoritative subagent identity; it never
@@ -784,10 +794,16 @@ impl RuntimeClientRequest {
             | Self::SessionClone { id, .. }
             | Self::SessionFork { id, .. }
             | Self::SessionTreeBranch { id, .. }
-            | Self::BackgroundStatus { id, .. }
-            | Self::BackgroundCancel { id, .. }
-            | Self::SubagentStatus { id, .. }
-            | Self::SubagentCancel { id, .. }
+            | Self::JobStatus { id, .. }
+            | Self::JobList { id, .. }
+            | Self::JobWait { id, .. }
+            | Self::JobCancel { id, .. }
+            | Self::AgentStatus { id, .. }
+            | Self::AgentList { id, .. }
+            | Self::AgentSendMessage { id, .. }
+            | Self::AgentWait { id, .. }
+            | Self::AgentInterrupt { id, .. }
+            | Self::AgentTranscript { id, .. }
             | Self::SubagentWorkspaceDispose { id, .. }
             | Self::Detach { id, .. }
             | Self::Shutdown { id, .. } => *id,
@@ -821,10 +837,16 @@ impl RuntimeClientRequest {
             Self::SessionClone { .. } => "session_clone",
             Self::SessionFork { .. } => "session_fork",
             Self::SessionTreeBranch { .. } => "session_tree_branch",
-            Self::BackgroundStatus { .. } => "background_status",
-            Self::BackgroundCancel { .. } => "background_cancel",
-            Self::SubagentStatus { .. } => "subagent_status",
-            Self::SubagentCancel { .. } => "subagent_cancel",
+            Self::JobStatus { .. } => "job_status",
+            Self::JobList { .. } => "job_list",
+            Self::JobWait { .. } => "job_wait",
+            Self::JobCancel { .. } => "job_cancel",
+            Self::AgentStatus { .. } => "agent_status",
+            Self::AgentList { .. } => "agent_list",
+            Self::AgentSendMessage { .. } => "agent_send_message",
+            Self::AgentWait { .. } => "agent_wait",
+            Self::AgentInterrupt { .. } => "agent_interrupt",
+            Self::AgentTranscript { .. } => "agent_transcript",
             Self::SubagentWorkspaceDispose { .. } => "subagent_workspace_dispose",
             Self::Detach { .. } => "detach",
             Self::Shutdown { .. } => "shutdown",
@@ -857,6 +879,11 @@ impl RuntimeClientRequest {
             self,
             Self::CompactContext { .. }
                 | Self::InteractionRespond { .. }
+                | Self::JobWait { .. }
+                | Self::JobCancel { .. }
+                | Self::AgentSendMessage { .. }
+                | Self::AgentWait { .. }
+                | Self::AgentInterrupt { .. }
                 | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
         ) || self.is_session_request()
@@ -883,8 +910,9 @@ impl RuntimeClientRequest {
                 | Self::SessionClone { .. }
                 | Self::SessionFork { .. }
                 | Self::SessionTreeBranch { .. }
-                | Self::BackgroundCancel { .. }
-                | Self::SubagentCancel { .. }
+                | Self::JobCancel { .. }
+                | Self::AgentSendMessage { .. }
+                | Self::AgentInterrupt { .. }
                 | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
         )
@@ -976,7 +1004,7 @@ pub struct RuntimeClientResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
-pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
+pub enum RuntimeClientAgentWorkspaceDisposalOutcome {
     /// The retained physical worktree and its exact runtime branch were
     /// removed by this request.
     Disposed,
@@ -995,7 +1023,9 @@ pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientResult {
     /// Authoritative durable Goal state after an operation.
-    Goal { view: crate::goal::GoalView },
+    Goal {
+        view: crate::goal::GoalView,
+    },
     /// Native deletion control state, including post-commit uncertainty.
     SessionDeletion {
         result: super::session_deletion::RuntimeClientSessionDeletionResult,
@@ -1048,7 +1078,9 @@ pub enum RuntimeClientResult {
     },
     /// `transcript_page_get` succeeded.
     /// Bounded read-only Trace page of summary records.
-    TracePage { page: super::trace::TracePage },
+    TracePage {
+        page: super::trace::TracePage,
+    },
     /// Heavy inspection detail for one exact Trace record identity, or
     /// `None` when that identity names no record at the read cut.
     TraceDetail {
@@ -1142,35 +1174,43 @@ pub enum RuntimeClientResult {
         /// The redacted session model view after the update.
         model: Box<SessionModelView>,
     },
-    /// `background_status` succeeded.
-    BackgroundStatus {
-        /// The canonical registry snapshot of the execution.
-        execution: RuntimeClientBackgroundExecution,
+    Job {
+        job: RuntimeClientJob,
     },
-    /// `background_cancel` succeeded: the request was processed by the
-    /// authoritative registry. Acceptance is never terminal settlement.
-    BackgroundCancelAccepted {
-        /// The registry snapshot after processing the request.
-        execution: RuntimeClientBackgroundExecution,
+    Jobs {
+        jobs: Vec<RuntimeClientJob>,
+        returned: usize,
+        matched: usize,
+        limit: usize,
+        truncated: bool,
     },
-    /// `subagent_status` succeeded (Issue #60).
-    SubagentStatus {
-        /// The canonical registry snapshot of the child.
-        subagent: RuntimeClientSubagent,
+    Agent {
+        agent: RuntimeClientAgent,
     },
-    /// `subagent_cancel` succeeded: the intent was committed by the
-    /// authoritative registry. Acceptance is never terminal settlement.
-    SubagentCancelAccepted {
-        /// The registry snapshot after processing the request.
-        subagent: RuntimeClientSubagent,
+    Agents {
+        agents: Vec<RuntimeClientAgent>,
+        returned: usize,
+        matched: usize,
+        limit: usize,
+        truncated: bool,
+    },
+    AgentMessage {
+        accepted: crate::runtime::subagent::AgentMessageAccepted,
+    },
+    AgentWait {
+        agent_id: crate::runtime::identity::AgentId,
+        activation_id: Option<crate::runtime::identity::SubagentId>,
+        outcome: Option<crate::runtime::subagent::SubagentState>,
+        agent: RuntimeClientAgent,
     },
     /// `subagent_workspace_dispose` completed its resource transition or its
     /// deterministic idempotent/no-resource outcome.
     SubagentWorkspaceDisposed {
-        /// The authoritative terminal subagent projection after the request.
-        subagent: RuntimeClientSubagent,
+        /// Finite activation identity and its authoritative resource projection.
+        subagent_id: crate::runtime::identity::SubagentId,
+        workspace: super::snapshot::RuntimeClientAgentWorkspace,
         /// The physical-resource result, independent of logical lifecycle.
-        outcome: RuntimeClientSubagentWorkspaceDisposalOutcome,
+        outcome: RuntimeClientAgentWorkspaceDisposalOutcome,
     },
     /// `detach` succeeded.
     Detached,
@@ -1246,6 +1286,29 @@ pub enum RuntimeClientError {
     UnknownBackgroundExecution {
         /// The referenced execution identity.
         execution_id: ToolExecutionId,
+    },
+    /// The captured Job owner exhausted terminal publication and cannot make
+    /// further lifecycle progress. Its candidate is not a durable terminal.
+    JobPublicationAbandoned { job_id: ToolExecutionId },
+    /// The input frame was provably not written; no input was delivered.
+    AgentNotDelivered {
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    /// An input write was attempted, but canonical acceptance was not acknowledged.
+    /// Automatic replay could duplicate user guidance.
+    AgentDeliveryUnknown {
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    /// Message admission is closed during settlement or activation reservation.
+    AgentStopping {
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    /// No autonomous transition can make this Agent available; explicit repair is required.
+    AgentSettlement {
+        agent_id: crate::runtime::identity::AgentId,
+    },
+    UnknownAgent {
+        agent_id: crate::runtime::identity::AgentId,
     },
     /// The referenced subagent child does not exist in the authoritative
     /// conversation registry (Issue #60).
@@ -1328,16 +1391,16 @@ pub struct RuntimeClientProtocolEvent {
 
 // Re-exported for use by the public protocol docs.
 pub use super::snapshot::{
-    RuntimeClientBackgroundExecution, RuntimeClientSubagent, RuntimeClientSubagentWorkspace,
+    RuntimeClientAgent, RuntimeClientAgentWorkspace, RuntimeClientJob,
     RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
 };
 
 #[cfg(test)]
 mod tests {
     use super::{
-        RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
-        RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse,
-        RuntimeClientResult, RuntimeClientSubagent, SessionView,
+        RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAgent, RuntimeClientCursor,
+        RuntimeClientError, RuntimeClientProtocolEvent, RuntimeClientRequest,
+        RuntimeClientResponse, RuntimeClientResult, SessionView,
     };
     use chrono::{DateTime, Utc};
 
@@ -1371,7 +1434,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 51);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 52);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1389,21 +1452,24 @@ mod tests {
     /// fields and the Issue #187 logical/physical workspace projection.
     #[test]
     fn interrupted_subagent_projection_serializes_as_the_current_wire_state() {
-        let subagent = RuntimeClientSubagent {
-            subagent_id: crate::runtime::identity::SubagentId::new("subagent-1"),
-            child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
+        let subagent = RuntimeClientAgent {
+            activation_id: crate::runtime::identity::SubagentId::new("subagent-1"),
+            current_activation: None,
+            activation_state: crate::runtime::subagent::SubagentState::Interrupted,
+            agent_id: crate::runtime::identity::AgentId::new("agent-child"),
+            parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             child_conversation_id: ConversationId::new("conv_15cf935a-5ce7-72bc-89a4-dbf96abf5352"),
             agent: "conformance".to_owned(),
             definition_digest: "sha256:definition".to_owned(),
             profile_digest: "sha256:profile".to_owned(),
-            state: crate::runtime::subagent::SubagentState::Interrupted,
+            state: crate::runtime::subagent::AgentState::Inactive,
             detail: Some("child outcome unknown".to_owned()),
             observation: crate::runtime::subagent::SubagentObservation::default(),
             execution_profile: None,
             started_at: DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
                 .expect("timestamp")
                 .with_timezone(&Utc),
-            workspace: super::RuntimeClientSubagentWorkspace {
+            workspace: super::RuntimeClientAgentWorkspace {
                 borrowed_from: None,
                 logical_workspace: std::path::PathBuf::from("<shared-workspace>"),
                 isolation: super::RuntimeClientWorkspaceIsolation::Shared,
@@ -1413,7 +1479,8 @@ mod tests {
         };
 
         let value = serde_json::to_value(&subagent).expect("serialize subagent projection");
-        assert_eq!(value["state"], "interrupted");
+        assert_eq!(value["state"], "inactive");
+        assert_eq!(value["activation_state"], "interrupted");
         assert_eq!(value["agent"], "conformance");
         assert_eq!(value["definition_digest"], "sha256:definition");
         assert_eq!(value["observation"]["revision"], 0);
@@ -1422,7 +1489,7 @@ mod tests {
             "awaiting_activity"
         );
         assert_eq!(value["started_at"], "2026-09-02T10:00:00Z");
-        let decoded: RuntimeClientSubagent =
+        let decoded: RuntimeClientAgent =
             serde_json::from_value(value).expect("deserialize subagent projection");
         assert_eq!(decoded, subagent);
     }

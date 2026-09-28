@@ -125,7 +125,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
-use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view, subagent_view};
+use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view};
 use super::snapshot::{
     RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage, transcript_page_view,
 };
@@ -885,11 +885,9 @@ impl ClientInner {
                 InboundAdmissionError::Mailbox(error) => RuntimeClientError::InvalidState {
                     message: error.to_string(),
                 },
-                // The guidance-only admission gates belong to the one-shot
-                // subagent child plane (Issue #193); the human submit path
-                // never enters that class and can never observe them.
-                error @ (InboundAdmissionError::GuidanceSealed
-                | InboundAdmissionError::GuidanceCancelled) => RuntimeClientError::InvalidState {
+                // The activation guidance seal belongs to the child plane;
+                // the human submit path never enters that class.
+                error @ InboundAdmissionError::GuidanceSealed => RuntimeClientError::InvalidState {
                     message: error.to_string(),
                 },
             })?;
@@ -1617,112 +1615,190 @@ impl ClientInner {
         })
     }
 
-    /// Inspects one background execution through the conversation runtime's
-    /// authoritative registry.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownBackgroundExecution`] for an
-    /// unknown execution identity.
-    pub(crate) fn background_status(
+    pub(crate) fn job_status(
         &self,
-        execution_id: &ToolExecutionId,
+        id: &ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_session_runtime_live()?;
-        let Some(snapshot) = self
+        let snapshot = self
             .runtime
             .as_ref()
-            .and_then(|runtime| runtime.background_status(execution_id))
-        else {
-            return Err(RuntimeClientError::UnknownBackgroundExecution {
-                execution_id: execution_id.clone(),
-            });
-        };
-        Ok(RuntimeClientResult::BackgroundStatus {
-            execution: background_view(&snapshot),
+            .and_then(|r| r.background_status(id))
+            .ok_or_else(|| RuntimeClientError::UnknownBackgroundExecution {
+                execution_id: id.clone(),
+            })?;
+        Ok(RuntimeClientResult::Job {
+            job: background_view(&snapshot),
         })
     }
 
-    /// Requests cancellation of one background execution through the
-    /// authoritative registry. Acceptance and eventual settlement remain
-    /// distinct.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownBackgroundExecution`] for an
-    /// unknown execution identity.
-    pub(crate) fn background_cancel(
-        &self,
-        execution_id: &ToolExecutionId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_writable_runtime()?;
-        let Some(snapshot) = self
-            .runtime
-            .as_ref()
-            .expect("a writable Runtime Client host has a runtime")
-            .background_cancel(execution_id)
-        else {
-            return Err(RuntimeClientError::UnknownBackgroundExecution {
-                execution_id: execution_id.clone(),
-            });
-        };
-        Ok(RuntimeClientResult::BackgroundCancelAccepted {
-            execution: background_view(&snapshot),
-        })
-    }
-
-    /// Inspects one subagent child through the conversation runtime's
-    /// authoritative registry (Issue #60).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
-    /// subagent identity.
-    pub(crate) fn subagent_status(
-        &self,
-        subagent_id: &crate::runtime::identity::SubagentId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+    pub(crate) fn job_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        use crate::tools::background::MAX_JOB_LIST_LIMIT;
         self.ensure_session_runtime_live()?;
-        let Some(snapshot) = self
-            .runtime
-            .as_ref()
-            .and_then(|runtime| runtime.subagent_status(subagent_id))
-        else {
-            return Err(RuntimeClientError::UnknownSubagent {
-                subagent_id: subagent_id.clone(),
-            });
-        };
-        Ok(RuntimeClientResult::SubagentStatus {
-            subagent: subagent_view(&snapshot),
+        let listing = self.runtime.as_ref().map(|runtime| {
+            runtime
+                .background_registry()
+                .listing(false, MAX_JOB_LIST_LIMIT)
+        });
+        Ok(RuntimeClientResult::Jobs {
+            jobs: listing
+                .as_ref()
+                .map(|listing| listing.snapshots.iter().map(background_view).collect())
+                .unwrap_or_default(),
+            returned: listing.as_ref().map_or(0, |listing| listing.returned),
+            matched: listing.as_ref().map_or(0, |listing| listing.matched),
+            limit: MAX_JOB_LIST_LIMIT,
+            truncated: listing.as_ref().is_some_and(|listing| listing.truncated),
         })
     }
 
-    /// Requests cancellation of one subagent child through the
-    /// authoritative registry. Acceptance and eventual settlement remain
-    /// distinct.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
-    /// subagent identity.
-    pub(crate) fn subagent_cancel(
+    pub(crate) async fn job_wait(
         &self,
-        subagent_id: &crate::runtime::identity::SubagentId,
+        id: &ToolExecutionId,
+        cancel: bool,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        if cancel {
+            self.ensure_writable_runtime()?;
+        } else {
+            self.ensure_session_runtime_live()?;
+        }
+        let runtime = self.runtime.as_ref().ok_or_else(|| {
+            RuntimeClientError::UnknownBackgroundExecution {
+                execution_id: id.clone(),
+            }
+        })?;
+        if cancel {
+            let _ = runtime.background_cancel(id);
+        }
+        let snapshot = runtime
+            .background_registry()
+            .wait_until_terminal(id)
+            .await
+            .map_err(|error| match error {
+                crate::tools::background::BackgroundWaitError::UnknownJob => {
+                    RuntimeClientError::UnknownBackgroundExecution {
+                        execution_id: id.clone(),
+                    }
+                }
+                crate::tools::background::BackgroundWaitError::PublicationAbandoned => {
+                    RuntimeClientError::JobPublicationAbandoned { job_id: id.clone() }
+                }
+            })?;
+        Ok(RuntimeClientResult::Job {
+            job: background_view(&snapshot),
+        })
+    }
+
+    fn agent_registry(
+        &self,
+    ) -> Result<&crate::runtime::subagent::SubagentRegistry, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        self.runtime
+            .as_ref()
+            .and_then(|r| r.subagent_registry())
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "Agent registry unavailable".into(),
+            })
+    }
+
+    fn agent_view(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<super::snapshot::RuntimeClientAgent, RuntimeClientError> {
+        let registry = self.agent_registry()?;
+        let (agent, activation) = registry.agent_snapshot_with_activation(id).ok_or_else(|| {
+            RuntimeClientError::UnknownAgent {
+                agent_id: id.clone(),
+            }
+        })?;
+        Ok(super::projection::agent_view(&agent, &activation))
+    }
+
+    pub(crate) fn agent_status(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        Ok(RuntimeClientResult::Agent {
+            agent: self.agent_view(id)?,
+        })
+    }
+
+    pub(crate) fn agent_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let listing = self
+            .agent_registry()?
+            .list_agents(crate::runtime::subagent::MAX_AGENT_LIST_LIMIT);
+        let agents: Vec<_> = listing
+            .agents
+            .iter()
+            .map(|(agent, activation)| super::projection::agent_view(agent, activation))
+            .collect();
+        let returned = agents.len();
+        Ok(RuntimeClientResult::Agents {
+            agents,
+            returned,
+            matched: listing.matched,
+            limit: crate::runtime::subagent::MAX_AGENT_LIST_LIMIT,
+            truncated: returned < listing.matched,
+        })
+    }
+
+    pub(crate) async fn agent_send_message(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        message: String,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
-        let Some(snapshot) = self
-            .runtime
-            .as_ref()
-            .expect("a writable Runtime Client host has a runtime")
-            .subagent_cancel(subagent_id)
-        else {
-            return Err(RuntimeClientError::UnknownSubagent {
-                subagent_id: subagent_id.clone(),
-            });
-        };
-        Ok(RuntimeClientResult::SubagentCancelAccepted {
-            subagent: subagent_view(&snapshot),
+        let accepted = self
+            .agent_registry()?
+            .send_message(
+                id,
+                &message,
+                crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .map_err(|error| agent_control_error(id, error))?;
+        Ok(RuntimeClientResult::AgentMessage { accepted })
+    }
+
+    pub(crate) async fn agent_wait(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        interrupt: bool,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        if interrupt {
+            self.ensure_writable_runtime()?;
+        }
+        let registry = self.agent_registry()?;
+        let result = if interrupt {
+            registry.interrupt_agent(id).await
+        } else {
+            registry.wait_agent(id).await
+        }
+        .map_err(|error| agent_control_error(id, error))?;
+        let agent = self.agent_view(id)?;
+        let outcome = result.outcome.as_ref().map(|s| s.state);
+        Ok(RuntimeClientResult::AgentWait {
+            agent_id: result.agent_id,
+            activation_id: result.activation_id,
+            outcome,
+            agent,
         })
+    }
+
+    pub(crate) fn agent_transcript_page(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        before: Option<super::snapshot::RuntimeClientTranscriptCursor>,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        validate_transcript_page_limit(limit)?;
+        let agent = self.agent_registry()?.agent_snapshot(id).ok_or_else(|| {
+            RuntimeClientError::UnknownAgent {
+                agent_id: id.clone(),
+            }
+        })?;
+        self.subagent_transcript_page(&agent.latest_activation, before, limit)
     }
 
     /// Disposes one retained terminal subagent workspace through the
@@ -1765,23 +1841,24 @@ impl ClientInner {
         let (snapshot, outcome) = match result {
             crate::runtime::subagent::SubagentWorkspaceDisposal::Disposed(snapshot) => (
                 snapshot,
-                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::Disposed,
+                super::types::RuntimeClientAgentWorkspaceDisposalOutcome::Disposed,
             ),
             crate::runtime::subagent::SubagentWorkspaceDisposal::AlreadyDisposed(snapshot) => (
                 snapshot,
-                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::AlreadyDisposed,
+                super::types::RuntimeClientAgentWorkspaceDisposalOutcome::AlreadyDisposed,
             ),
             crate::runtime::subagent::SubagentWorkspaceDisposal::DisposalPending(snapshot) => (
                 snapshot,
-                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::DisposalPending,
+                super::types::RuntimeClientAgentWorkspaceDisposalOutcome::DisposalPending,
             ),
             crate::runtime::subagent::SubagentWorkspaceDisposal::NoRetainedWorkspace(snapshot) => (
                 snapshot,
-                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::NoRetainedWorkspace,
+                super::types::RuntimeClientAgentWorkspaceDisposalOutcome::NoRetainedWorkspace,
             ),
         };
         Ok(RuntimeClientResult::SubagentWorkspaceDisposed {
-            subagent: subagent_view(&snapshot),
+            subagent_id: snapshot.subagent_id.clone(),
+            workspace: super::projection::subagent_workspace_view(&snapshot),
             outcome,
         })
     }
@@ -2494,64 +2571,6 @@ impl RuntimeClientHost {
         self.inner.model_set(config)
     }
 
-    /// Inspects one background execution through the authoritative
-    /// registry.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownBackgroundExecution`] for an
-    /// unknown execution identity.
-    pub fn background_status(
-        &self,
-        execution_id: &ToolExecutionId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.background_status(execution_id)
-    }
-
-    /// Requests cancellation of one background execution through the
-    /// authoritative registry. Acceptance and eventual settlement remain
-    /// distinct.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownBackgroundExecution`] for an
-    /// unknown execution identity.
-    pub fn background_cancel(
-        &self,
-        execution_id: &ToolExecutionId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.background_cancel(execution_id)
-    }
-
-    /// Inspects one subagent child through the authoritative registry
-    /// (Issue #60).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
-    /// subagent identity.
-    pub fn subagent_status(
-        &self,
-        subagent_id: &crate::runtime::identity::SubagentId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.subagent_status(subagent_id)
-    }
-
-    /// Requests cancellation of one subagent child through the
-    /// authoritative registry. Acceptance and eventual settlement remain
-    /// distinct.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
-    /// subagent identity.
-    pub fn subagent_cancel(
-        &self,
-        subagent_id: &crate::runtime::identity::SubagentId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.subagent_cancel(subagent_id)
-    }
-
     /// Disposes one exact retained workspace owned by a terminal subagent.
     /// The operation is asynchronous because physical Git verification and
     /// removal belong to the runtime/workspace plane.
@@ -2786,6 +2805,40 @@ impl EventSubscription {
 }
 
 /// Shared parameter authority, checked before resolving child ownership or storage.
+fn agent_control_error(
+    id: &crate::runtime::identity::AgentId,
+    error: crate::runtime::subagent::AgentControlError,
+) -> RuntimeClientError {
+    match error {
+        crate::runtime::subagent::AgentControlError::NotDelivered => {
+            RuntimeClientError::AgentNotDelivered {
+                agent_id: id.clone(),
+            }
+        }
+        crate::runtime::subagent::AgentControlError::DeliveryUnknown => {
+            RuntimeClientError::AgentDeliveryUnknown {
+                agent_id: id.clone(),
+            }
+        }
+        crate::runtime::subagent::AgentControlError::Stopping => {
+            RuntimeClientError::AgentStopping {
+                agent_id: id.clone(),
+            }
+        }
+        crate::runtime::subagent::AgentControlError::Unknown(agent_id) => {
+            RuntimeClientError::UnknownAgent { agent_id }
+        }
+        crate::runtime::subagent::AgentControlError::Settlement => {
+            RuntimeClientError::AgentSettlement {
+                agent_id: id.clone(),
+            }
+        }
+        error => RuntimeClientError::InvalidState {
+            message: error.to_string(),
+        },
+    }
+}
+
 fn validate_transcript_page_limit(limit: usize) -> Result<(), RuntimeClientError> {
     if limit == 0 || limit > TRANSCRIPT_PAGE_LIMIT_MAX {
         return Err(RuntimeClientError::InvalidRequest {
@@ -2824,6 +2877,25 @@ fn read_transcript_page(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn permanent_agent_settlement_is_a_typed_non_retryable_error() {
+        let id = crate::runtime::identity::AgentId::new("agent-unavailable");
+        assert!(
+            matches!(super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::NotDelivered), crate::runtime_client::types::RuntimeClientError::AgentNotDelivered { agent_id } if agent_id == id)
+        );
+        assert!(
+            matches!(super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::DeliveryUnknown), crate::runtime_client::types::RuntimeClientError::AgentDeliveryUnknown { agent_id } if agent_id == id)
+        );
+        assert!(matches!(
+            super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::Settlement),
+            crate::runtime_client::types::RuntimeClientError::AgentSettlement { agent_id } if agent_id == id
+        ));
+        assert!(matches!(
+            super::agent_control_error(&id, crate::runtime::subagent::AgentControlError::Stopping),
+            crate::runtime_client::types::RuntimeClientError::AgentStopping { agent_id } if agent_id == id
+        ));
+    }
+
     use crate::runtime::observation::ConversationObservation;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -3149,7 +3221,7 @@ mod tests {
         )
         .await
         .unwrap_or_else(|_| panic!("{description}: terminal wait exceeded liveness guard"))
-        .unwrap_or_else(|| panic!("{description}: execution disappeared before terminal state"))
+        .unwrap_or_else(|error| panic!("{description}: Job wait failed: {error:?}"))
     }
 
     /// A fixed deterministic status clock.
@@ -3184,6 +3256,7 @@ mod tests {
         host: RuntimeClientHost,
         runtime: ConversationRuntime,
         coordinator: crate::capabilities::CapabilityCoordinator,
+        store: Option<Arc<SqliteConversationStore>>,
     }
 
     #[tokio::test]
@@ -3240,12 +3313,22 @@ mod tests {
         let conversation_id = ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
+        let store = Arc::new(
+            SqliteConversationStore::open(
+                conversation_id.clone(),
+                &dir.path().join("conversation.sqlite"),
+            )
+            .expect("store"),
+        );
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            crate::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace,
-                dir.path().join("artifacts"),
-            )
+            crate::tools::runtime::ConversationRuntimeConfig {
+                durable_binding: Some(crate::durable::ConversationStoreBinding::new(store.clone())),
+                ..crate::tools::runtime::ConversationRuntimeConfig::new(
+                    &workspace,
+                    dir.path().join("artifacts"),
+                )
+            }
             // These Runtime Client fixtures compose Agent Status and nothing
             // else: the composition must match the status engine below and
             // the extension Tool plane the coordinator is given, because
@@ -3350,6 +3433,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: Some(store),
             },
         )
     }
@@ -3451,6 +3535,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: None,
             },
         )
     }
@@ -4213,6 +4298,18 @@ mod tests {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
+        // Attempt settlement is a semantic event, not completion of the
+        // independently owned presentation read. Capture the equivalence cut
+        // only after the terminal response's decorated domain was published.
+        let terminal_read = |event: &RuntimeClientProtocolEvent| {
+            matches!(
+                &event.event, RuntimeClientEvent::ReadDomainsUpdated { transcript, .. }
+                    if transcript.entries.iter().any(|entry| entry.completed_response.is_some())
+            )
+        };
+        if !events.iter().any(terminal_read) {
+            events.extend(receive_until(&subscription, terminal_read).await);
+        }
         let (expected, n) = fixture.host.snapshot().unwrap();
         while events.last().is_none_or(|event| event.cursor < n) {
             let EventDelivery::Event(event) = subscription.next().await else {
@@ -5105,11 +5202,8 @@ mod tests {
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("attach");
         let (before, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(before.background.len(), 1);
-        assert!(matches!(
-            before.background[0].state,
-            BackgroundLifecycle::Running
-        ));
+        assert_eq!(before.jobs.len(), 1);
+        assert!(matches!(before.jobs[0].state, BackgroundLifecycle::Running));
         assert_eq!(before.inbound.pending.len(), 1);
         assert_eq!(before.inbound.pending[0].message.id.as_str(), "msg-pending");
         attachment.detach();
@@ -5117,9 +5211,9 @@ mod tests {
         // After detach the background execution still runs and the mailbox
         // item still pends; the running attempt is untouched.
         let (after, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(after.background.len(), 1);
+        assert_eq!(after.jobs.len(), 1);
         assert!(
-            matches!(after.background[0].state, BackgroundLifecycle::Running),
+            matches!(after.jobs[0].state, BackgroundLifecycle::Running),
             "detach never cancels background work"
         );
         assert_eq!(
@@ -5160,7 +5254,7 @@ mod tests {
         fixture.runtime.settlement_signal().notified().await;
         let (final_snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
-            final_snapshot.background[0].state,
+            final_snapshot.jobs[0].state,
             BackgroundLifecycle::Succeeded
         ));
     }
@@ -5498,6 +5592,7 @@ mod tests {
             host,
             runtime,
             coordinator,
+            store: _,
         } = fixture;
 
         // Clone subsystem handles out of the runtime, exactly as an embedder
@@ -5711,8 +5806,8 @@ mod tests {
         // transition before asking for the final authoritative cut.
         fixture.runtime.settlement_signal().notified().await;
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(snapshot.background.len(), 1);
-        assert_eq!(snapshot.background[0].execution_id, execution_id);
+        assert_eq!(snapshot.jobs.len(), 1);
+        assert_eq!(snapshot.jobs[0].job_id, execution_id);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5841,7 +5936,7 @@ mod tests {
         hook.wait_entered(); // SQLite COMMIT complete; native registry installation deliberately paused.
         let (during, during_cursor) = fixture.host.snapshot().unwrap();
         assert_eq!(during_cursor, cursor);
-        assert_eq!(during.background, baseline.background);
+        assert_eq!(during.jobs, baseline.jobs);
         assert_eq!(during.trace, baseline.trace);
         hook.proceed();
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = commit.await.unwrap() else {
@@ -5852,9 +5947,9 @@ mod tests {
         assert!(after_cursor > cursor);
         assert!(
             after
-                .background
+                .jobs
                 .iter()
-                .any(|record| record.execution_id == execution_id)
+                .any(|record| record.job_id == execution_id)
         );
         assert!(
             after
@@ -6330,6 +6425,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -6426,6 +6522,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -6651,34 +6748,32 @@ mod tests {
             .expect("attach");
         let (snapshot, cursor) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
-            snapshot.background[0].state,
+            snapshot.jobs[0].state,
             BackgroundLifecycle::Running
         ));
 
-        // Protocol cancel: acceptance carries the Cancelling snapshot,
-        // never the terminal result.
-        let response = attachment.handle_request(RuntimeClientRequest::BackgroundCancel {
-            id: crate::runtime_client::RequestId::new(1),
-            execution_id: execution_id.clone(),
-        });
-        let RuntimeClientResult::BackgroundCancelAccepted { execution } =
-            response.result.expect("accepted")
-        else {
-            panic!("cancel accepted result");
-        };
-        assert_eq!(execution.execution_id, execution_id);
-        assert!(matches!(execution.state, BackgroundLifecycle::Cancelling));
-
-        // Unknown executions fail explicitly.
-        let unknown = attachment.handle_request(RuntimeClientRequest::BackgroundStatus {
-            id: crate::runtime_client::RequestId::new(2),
-            execution_id: crate::runtime::identity::ToolExecutionId::new(
-                "exec_9f85dfef-c2b2-7a62-837d-620fed38822f",
-            ),
-        });
+        // Cancellation waits for physical settlement, not signal emission.
+        let cancel = fixture.host.inner.job_wait(&execution_id, true);
+        tokio::pin!(cancel);
+        assert!(futures_util::poll!(&mut cancel).is_pending());
+        assert_eq!(
+            fixture
+                .runtime
+                .background_status(&execution_id)
+                .expect("job")
+                .state,
+            BackgroundLifecycle::Cancelling
+        );
+        let unknown =
+            fixture
+                .host
+                .inner
+                .job_status(&crate::runtime::identity::ToolExecutionId::new(
+                    "exec_9f85dfef-c2b2-7a62-837d-620fed38822f",
+                ));
         assert!(matches!(
-            unknown.error,
-            Some(RuntimeClientError::UnknownBackgroundExecution { .. })
+            unknown,
+            Err(RuntimeClientError::UnknownBackgroundExecution { .. })
         ));
 
         // Settlement: the executor raced past the cancellation request and
@@ -6689,6 +6784,12 @@ mod tests {
             .subscribe_events(cursor)
             .expect("observe terminal notice attempt");
         release.send_replace(true);
+        let RuntimeClientResult::Job { job } = cancel.await.expect("settled cancel") else {
+            panic!("Job result")
+        };
+        assert_eq!(job.job_id, execution_id);
+        assert_eq!(job.state, BackgroundLifecycle::Succeeded);
+
         let terminal = await_background_terminal(
             fixture.runtime.tool_runtime().background(),
             &execution_id,
@@ -6703,8 +6804,121 @@ mod tests {
         })
         .await;
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Succeeded);
-        assert!(snapshot.background[0].result.is_some());
+        assert_eq!(snapshot.jobs[0].state, BackgroundLifecycle::Succeeded);
+        assert!(snapshot.jobs[0].result.is_some());
+    }
+
+    #[tokio::test]
+    async fn job_wait_and_cancel_report_abandoned_publication_for_the_captured_job() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let registry = fixture.runtime.background_registry();
+        let invocation = ToolInvocation {
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("job-failure-call"),
+            },
+            tool_id: ToolId::new("tool-bg"),
+            tool_name: "bg".into(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = registry
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .unwrap()
+        else {
+            panic!("accepted")
+        };
+        started.wait_for(|started| *started).await.unwrap();
+        let wait = fixture.host.inner.job_wait(&execution_id, false);
+        let cancel = fixture.host.inner.job_wait(&execution_id, true);
+        tokio::pin!(wait, cancel);
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        assert!(futures_util::poll!(&mut cancel).is_pending());
+        fixture.store.as_ref().unwrap().arm_fail_accept_times(2);
+        release.send_replace(true);
+        let results = tokio::time::timeout(BACKGROUND_LIVENESS_GUARD, async {
+            [wait.await, cancel.await]
+        })
+        .await
+        .expect("abandoned Job observers must terminate");
+        for result in results {
+            assert!(
+                matches!(result, Err(RuntimeClientError::JobPublicationAbandoned { job_id }) if job_id == execution_id)
+            );
+        }
+        assert_eq!(
+            registry.snapshot(&execution_id).unwrap().state,
+            BackgroundLifecycle::PublishingTerminal
+        );
+        assert!(
+            matches!(fixture.host.inner.job_wait(&execution_id, true).await, Err(RuntimeClientError::JobPublicationAbandoned { job_id }) if job_id == execution_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn job_list_preserves_domain_bound_order_and_omission_metadata() {
+        use crate::tools::background::MAX_JOB_LIST_LIMIT;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let registry = fixture.runtime.background_registry();
+        let mut ids = Vec::new();
+        for index in 0..MAX_JOB_LIST_LIMIT + 3 {
+            let (tool, _, release) = ParkingBackgroundTool::new();
+            let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+            let invocation = ToolInvocation {
+                id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new(format!("job-list-{index}")),
+                },
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".into(),
+                mode: ToolInvocationMode::Background,
+                arguments: serde_json::json!({}),
+            };
+            let prepared = registry
+                .prepare_dispatch(
+                    &invocation,
+                    &executor,
+                    crate::tools::environment::ToolEnvironment::new(),
+                )
+                .unwrap();
+            let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+                .commit_dispatch(prepared, &CancellationSignal::new())
+                .unwrap()
+            else {
+                panic!("accepted")
+            };
+            release.send_replace(true);
+            registry.wait_until_terminal(&execution_id).await.unwrap();
+            ids.push(execution_id);
+        }
+        let RuntimeClientResult::Jobs {
+            jobs,
+            returned,
+            matched,
+            limit,
+            truncated,
+        } = fixture.host.inner.job_list().unwrap()
+        else {
+            panic!("jobs")
+        };
+        assert_eq!(
+            (returned, matched, limit, truncated),
+            (MAX_JOB_LIST_LIMIT, ids.len(), MAX_JOB_LIST_LIMIT, true)
+        );
+        assert_eq!(
+            jobs.iter().map(|job| &job.job_id).collect::<Vec<_>>(),
+            ids.iter()
+                .rev()
+                .take(MAX_JOB_LIST_LIMIT)
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Detached background work stays visible after the originating
@@ -6768,9 +6982,9 @@ mod tests {
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Settled { .. }
         ));
-        assert_eq!(snapshot.background.len(), 1);
+        assert_eq!(snapshot.jobs.len(), 1);
         assert!(matches!(
-            snapshot.background[0].state,
+            snapshot.jobs[0].state,
             BackgroundLifecycle::Running
         ));
         release.send_replace(true);
@@ -7073,6 +7287,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -7171,6 +7386,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: None,
                 settlement_gate: Some(settlement_gate.clone()),
+                before_restore_gate: None,
                 activation_gate: None,
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -7620,6 +7836,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: None,
             },
         )
     }
@@ -7725,6 +7942,7 @@ mod tests {
                 host,
                 runtime,
                 coordinator,
+                store: None,
             },
         )
     }
@@ -9128,6 +9346,7 @@ model = "scripted/scripted"
             Some(CoordinatorProbe {
                 admission_gate: None,
                 settlement_gate: None,
+                before_restore_gate: None,
                 activation_gate: Some(gate.clone()),
                 manual_compaction_settlement_gate: None,
                 submit_gate: None,
@@ -9171,7 +9390,7 @@ model = "scripted/scripted"
         let (snapshot, cursor) = host.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(0));
         assert!(
-            snapshot.background.is_empty(),
+            snapshot.jobs.is_empty(),
             "the inert runtime contributes no background seed"
         );
 

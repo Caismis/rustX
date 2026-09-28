@@ -35,10 +35,10 @@ import type {
   InteractionSource,
   ModelInvocationView,
   SessionModelConfig,
-  RuntimeClientBackgroundExecution,
+  RuntimeClientJob,
   RuntimeClientOutcome,
   RuntimeClientSkill,
-  RuntimeClientSubagent,
+  RuntimeClientAgent,
   RuntimeClientTool,
   MessageId,
   RuntimeClientTranscriptCursor,
@@ -48,7 +48,6 @@ import type {
 } from "../protocol/app-server.ts";
 import {
   BACKGROUND_TERMINAL_STATES,
-  SUBAGENT_TERMINAL_STATES,
 } from "../protocol/app-server.ts";
 import type { PresentationState } from "./state.ts";
 
@@ -106,8 +105,8 @@ export function outcomeLabel(outcome: RuntimeClientOutcome): string {
 /** Background executions the runtime still considers active. */
 export function activeBackground(
   state: PresentationState,
-): RuntimeClientBackgroundExecution[] {
-  return state.background.filter(
+): RuntimeClientJob[] {
+  return state.jobs.filter(
     (execution) => !BACKGROUND_TERMINAL_STATES.has(execution.state),
   );
 }
@@ -115,9 +114,9 @@ export function activeBackground(
 /** Subagent children the runtime still considers active. */
 export function activeSubagents(
   state: PresentationState,
-): RuntimeClientSubagent[] {
-  return state.subagents.filter(
-    (subagent) => !SUBAGENT_TERMINAL_STATES.has(subagent.state),
+): RuntimeClientAgent[] {
+  return state.agents.filter(
+    (agent) => agent.state === "active",
   );
 }
 

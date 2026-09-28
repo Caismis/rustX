@@ -22,6 +22,25 @@ use rustx::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolResultContent,
 };
 
+fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
+    use rustx::tools::native::bash_supervisor::diagnostics::{FixtureControl, fixture_executor};
+    let mut fixture = native_fixture();
+    let mut registry = rustx::tools::executor::ToolRegistry::new();
+    for definition in fixture.registry.definitions() {
+        let executor = if definition.name == "bash" {
+            fixture_executor(FixtureControl {
+                trace: Some(trace.to_path_buf()),
+                before_term_socket: None,
+            })
+        } else {
+            fixture.registry.executor(&definition.id)
+        };
+        registry.register(definition, executor).unwrap();
+    }
+    fixture.registry = registry;
+    fixture
+}
+
 fn json_content(result: &ToolExecutionResult) -> serde_json::Value {
     for content in &result.content {
         if let ToolResultContent::Json { value } = content {
@@ -213,7 +232,10 @@ async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
 
 #[tokio::test]
 async fn bash_kill_escalates_when_term_is_ignored() {
-    let fixture = native_fixture();
+    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+    let dir = tempfile::tempdir().unwrap();
+    let trace = dir.path().join("signals");
+    let fixture = fixture_with_trace(&trace);
     let result = run_tool(
         &fixture,
         "bash",
@@ -225,6 +247,41 @@ async fn bash_kill_escalates_when_term_is_ignored() {
         ToolExecutionStatus::TimedOut,
         "a TERM-ignoring child is killed via KILL and the execution still settles"
     );
+    let evidence = std::fs::read_to_string(trace).unwrap();
+    let entries: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let term = entries
+        .iter()
+        .position(|e| {
+            matches!(
+                e.event,
+                Event::Signal {
+                    signal: libc::SIGTERM,
+                    result: Some(0),
+                    ..
+                }
+            )
+        })
+        .expect(&evidence);
+    let grace = entries
+        .iter()
+        .position(|e| matches!(e.event, Event::GraceExpired))
+        .expect(&evidence);
+    let kill = entries
+        .iter()
+        .position(|e| {
+            matches!(
+                e.event,
+                Event::Signal {
+                    signal: libc::SIGKILL,
+                    ..
+                }
+            )
+        })
+        .expect(&evidence);
+    assert!(term < grace && grace < kill, "{evidence}");
 }
 
 #[tokio::test]
@@ -341,13 +398,19 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
 #[tokio::test]
 async fn bash_background_cancellation_uses_the_same_process_group_path() {
     use rustx::tools::background::BackgroundLifecycle;
-    let fixture = native_fixture();
+    let trace_dir = tempfile::tempdir().unwrap();
+    let trace = trace_dir.path().join("supervision.jsonl");
+    let fixture = fixture_with_trace(&trace);
     let workspace = fixture.runtime.workspace().root().to_path_buf();
     let ready = workspace.join("bg-trap-ready.marker");
     let marker = workspace.join("bg-term-received.marker");
+    let trap_entered = workspace.join("bg-trap-entered.marker");
+    let marker_status = workspace.join("bg-marker-status");
     let command = format!(
-        "trap 'touch {}' TERM; touch {}; sleep 30",
+        "trap 'printf T > {}; touch {}; printf %s $? > {}' TERM; touch {}; sleep 30",
+        trap_entered.display(),
         marker.display(),
+        marker_status.display(),
         ready.display()
     );
     let registry = fixture.runtime.background().clone();
@@ -367,7 +430,7 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
         .prepare_dispatch(
             &invocation,
             &executor,
-            rustx::tools::environment::ToolEnvironment::new(),
+            fixture.runtime.environment().clone(),
         )
         .expect("prepare");
     let outcome = registry
@@ -402,7 +465,10 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
     assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
     assert!(
         marker.exists(),
-        "background cancellation TERMs the owned process group"
+        "background cancellation TERMs the owned process group: {terminal:?}\ntrap entered: {}; marker command status: {:?}\nnative evidence: {}",
+        trap_entered.exists(),
+        std::fs::read_to_string(&marker_status),
+        std::fs::read_to_string(&trace).unwrap_or_else(|error| error.to_string())
     );
 }
 
@@ -1276,5 +1342,293 @@ async fn model_selectable_bash_rejects_unusable_execution_mode() {
     assert!(
         retired.contains("__rustx_"),
         "the retired selector is a forged reserved argument, not a mode: {retired}"
+    );
+}
+
+/// A nonblocking FIFO fixture: dropping a failed test never leaves a blocking
+/// pool thread stuck opening a pipe. Readiness is kernel readiness, not a timer.
+struct SignalPipe(tokio::io::unix::AsyncFd<std::fs::File>);
+impl SignalPipe {
+    fn new(path: &std::path::Path) -> Self {
+        use std::os::unix::fs::OpenOptionsExt;
+        nix::unistd::mkfifo(
+            path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .unwrap();
+        Self(tokio::io::unix::AsyncFd::new(file).unwrap())
+    }
+    async fn read(&self) {
+        use std::io::Read;
+        loop {
+            let mut ready = self.0.readable().await.unwrap();
+            if let Ok(result) = ready.try_io(|file| file.get_ref().read_exact(&mut [0])) {
+                result.unwrap();
+                return;
+            }
+        }
+    }
+    fn release(&self) {
+        use std::io::Write;
+        self.0.get_ref().write_all(b"release\n").unwrap();
+    }
+}
+
+#[tokio::test]
+async fn background_cancel_records_term_before_trap_and_physical_terminal() {
+    tokio::time::timeout(Duration::from_secs(15), background_cancel_at_native_gate())
+        .await
+        .expect("native signal/terminal gates must settle");
+}
+
+async fn background_cancel_at_native_gate() {
+    use rustx::tools::background::BackgroundLifecycle;
+    use rustx::tools::native::bash_supervisor::diagnostics::{
+        Entry, Event, FixtureControl, fixture_executor,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Bounded native socket namespace, independent of macOS TMPDIR length.
+    let dir = tempfile::Builder::new()
+        .prefix("rx-term-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let trace = dir.path().join("trace");
+    let socket = dir.path().join("gate");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let fixture = native_fixture_with_environment(vec![
+        (
+            "RUSTX_TEST_SUPERVISION_TRACE".into(),
+            dir.path().join("untrusted-trace").display().to_string(),
+        ),
+        (
+            "RUSTX_TEST_BEFORE_TERM_SOCKET".into(),
+            "user-visible-value".into(),
+        ),
+    ]);
+    let root = fixture.runtime.workspace().root();
+    let ready_path = root.join("ready");
+    let entered_path = root.join("entered");
+    let release_path = root.join("release");
+    let ready = SignalPipe::new(&ready_path);
+    let entered = SignalPipe::new(&entered_path);
+    let release = SignalPipe::new(&release_path);
+    let marker = root.join("term-marker");
+    let command = format!(
+        "trap 'printf T > {}; read release < {}; touch {}; exit 0' TERM; printf R > {}; while :; do :; done",
+        entered_path.display(),
+        release_path.display(),
+        marker.display(),
+        ready_path.display()
+    );
+    let registry = fixture.runtime.background();
+    let executor = fixture_executor(FixtureControl {
+        trace: Some(trace.clone()),
+        before_term_socket: Some(socket),
+    });
+    let invocation = ToolInvocation {
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("gated-term"),
+        },
+        tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
+        tool_name: "bash".into(),
+        mode: ToolInvocationMode::Background,
+        arguments: serde_json::json!({"command": command}),
+    };
+    let prepared = registry
+        .prepare_dispatch(
+            &invocation,
+            &executor,
+            fixture.runtime.environment().clone(),
+        )
+        .unwrap();
+    let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+        registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .unwrap()
+    else {
+        panic!("accepted")
+    };
+    ready.read().await; // Trap is installed before this byte is emitted.
+    assert_eq!(
+        registry.cancel(&execution_id).unwrap().state,
+        BackgroundLifecycle::Cancelling
+    );
+    let (mut gate, _) = listener.accept().await.unwrap();
+    gate.read_exact(&mut [0]).await.unwrap(); // Inner owns TERMINATE, has not sent TERM.
+    assert_eq!(
+        registry.snapshot(&execution_id).unwrap().state,
+        BackgroundLifecycle::Cancelling
+    );
+    let before = std::fs::read_to_string(&trace).unwrap();
+    assert!(
+        !before
+            .lines()
+            .map(|line| serde_json::from_str::<Entry>(line).unwrap())
+            .any(|entry| matches!(entry.event, Event::Signal { .. })),
+        "{before}"
+    );
+    gate.write_all(b"go").await.unwrap();
+    entered.read().await; // Actual Bash trap delivery, independent of Job intent.
+    assert_eq!(
+        registry.snapshot(&execution_id).unwrap().state,
+        BackgroundLifecycle::Cancelling
+    );
+    release.release();
+    let terminal =
+        wait_for_lifecycle(registry, &execution_id, BackgroundLifecycle::Cancelled).await;
+    let evidence = std::fs::read_to_string(&trace).unwrap();
+    assert!(marker.exists(), "{terminal:?}\n{evidence}");
+    let entries: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let index = |predicate: fn(&Event) -> bool| {
+        entries
+            .iter()
+            .position(|e| predicate(&e.event))
+            .unwrap_or_else(|| panic!("missing event: {evidence}"))
+    };
+    let term = index(|e| {
+        matches!(
+            e,
+            Event::Signal {
+                signal: libc::SIGTERM,
+                result: Some(0),
+                ..
+            }
+        )
+    });
+    let observed = index(|e| matches!(e, Event::TerminalObserved));
+    let reaped = index(|e| matches!(e, Event::DirectChildReaped));
+    assert!(term < observed && observed < reaped, "{evidence}");
+    let Event::Signal { pgid, .. } = entries[term].event else {
+        unreachable!()
+    };
+    assert!(
+        entries[..term]
+            .iter()
+            .any(|e| matches!(e.event, Event::ShellGroup { pgid: group, .. } if group == pgid)),
+        "{evidence}"
+    );
+    // Normal TERM completion needs no grace escalation. Darwin's post-shell
+    // fallback is distinct and must occur after the sole shell reaper's report.
+    assert!(
+        !entries
+            .iter()
+            .any(|e| matches!(e.event, Event::GraceExpired)),
+        "{evidence}"
+    );
+    assert!(!dir.path().join("untrusted-trace").exists());
+    let shell = index(|e| matches!(e, Event::ShellExited { .. }));
+    for (i, entry) in entries.iter().enumerate() {
+        if matches!(
+            entry.event,
+            Event::Signal {
+                signal: libc::SIGKILL,
+                ..
+            }
+        ) {
+            assert!(i > shell, "{evidence}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        use rustx::tools::native::bash_supervisor::diagnostics::TERM_GATE_ENV;
+        let dir = tempfile::Builder::new().prefix("rx-env-").tempdir_in("/tmp").unwrap();
+        let socket = dir.path().join("gate");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let fixture = native_fixture_with_environment(vec![
+            (TERM_GATE_ENV.into(), socket.display().to_string()),
+            ("RUSTX_TEST_FAIL_SIGNAL".into(), "1".into()),
+            ("RUSTX_TEST_FORCE_ANCHOR_LOSS".into(), "1".into()),
+            ("RUSTX_TEST_FAIL_CONTAINMENT".into(), "1".into()),
+        ]);
+        let root = fixture.runtime.workspace().root();
+        let ready_path = root.join("ready");
+        let entered_path = root.join("entered");
+        let ready = SignalPipe::new(&ready_path);
+        let entered = SignalPipe::new(&entered_path);
+        let cancellation = CancellationSignal::new();
+        let controller = async {
+            ready.read().await;
+            cancellation.cancel();
+            entered.read().await;
+        };
+        // The readiness byte also proves the same-named value reached Bash.
+        let command = format!(
+            "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = '{}' || exit 7; trap 'printf T > {}; exit 0' TERM; printf R > {}; while :; do :; done",
+            socket.display(), entered_path.display(), ready_path.display()
+        );
+        let (result, ()) = tokio::join!(run_tool_with_cancellation(&fixture, "bash", serde_json::json!({"command": command}), cancellation.clone()), controller);
+        assert!(matches!(result.status, ToolExecutionStatus::Cancelled { .. }), "{result:?}");
+        // Physical settlement closes the observation interval. Any connection
+        // attempted before TERM would still be queued, even if its peer exited.
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }).await.expect("ordinary environment cancellation must settle");
+}
+
+#[tokio::test]
+async fn ordinary_environment_cannot_enable_supervisor_controls() {
+    use rustx::tools::native::bash_supervisor::diagnostics::TRACE_ENV;
+    use std::fmt::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let trace = dir.path().join("trace");
+    let anchor = dir.path().join("anchor");
+    let keys = [
+        "RUSTX_SUPERVISOR_ROLE",
+        "RUSTX_SUPERVISOR_COMMAND",
+        "RUSTX_TEST_FAIL_SIGNAL",
+        "RUSTX_TEST_FAIL_WAIT",
+        "RUSTX_TEST_FAIL_BASH_SPAWN",
+        "RUSTX_TEST_FAIL_SIGTERM_HANDLER",
+        "RUSTX_TEST_FORCE_ANCHOR_LOSS",
+        "RUSTX_TEST_OUTER_BARRIER_DIR",
+        "RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET",
+        "RUSTX_TEST_FAIL_CONTAINMENT",
+        "RUSTX_PHYSICAL_CONTINUATION",
+        "RUSTX_COMMAND_ENVIRONMENT",
+    ];
+    let mut environment: Vec<_> = keys
+        .iter()
+        .map(|key| ((*key).into(), "user-visible-value".into()))
+        .collect();
+    environment.push((TRACE_ENV.into(), trace.display().to_string()));
+    environment.push((
+        "RUSTX_SUPERVISOR_ANCHOR_PID_FILE".into(),
+        anchor.display().to_string(),
+    ));
+    environment.push((
+        "RUSTX_TEST_BEFORE_TERM_SOCKET".into(),
+        "user-visible-value".into(),
+    ));
+    let fixture = native_fixture_with_environment(environment);
+    let mut command = String::new();
+    for key in keys {
+        write!(command, "test \"${key}\" = user-visible-value || exit 9; ").unwrap();
+    }
+    command.push_str(
+        "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = user-visible-value || exit 10; printf isolated",
+    );
+    let result = run_tool(&fixture, "bash", serde_json::json!({"command": command})).await;
+    assert_eq!(result.status, ToolExecutionStatus::Success, "{result:?}");
+    assert_eq!(json_content(&result)["exit_code"], 0);
+    assert_eq!(json_content(&result)["stdout"], "isolated");
+    assert!(
+        !trace.exists(),
+        "ordinary command data enabled supervisor tracing"
+    );
+    assert!(
+        !anchor.exists(),
+        "ordinary command data enabled supervisor observability"
     );
 }

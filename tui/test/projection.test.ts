@@ -734,8 +734,8 @@ describe("presentation projection", () => {
     let state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       {
-        type: "background_execution_updated",
-        execution: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running"),
+        type: "job_updated",
+        job: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running"),
       },
       {
         type: "attempt_settled",
@@ -745,13 +745,13 @@ describe("presentation projection", () => {
     ]);
 
     // The attempt settled; the conversation-owned execution did not.
-    assert.equal(state.background.length, 1);
-    assert.equal(state.background[0]?.state, "running");
+    assert.equal(state.jobs.length, 1);
+    assert.equal(state.jobs[0]?.state, "running");
 
     state = fold(state, [
       {
-        type: "background_execution_updated",
-        execution: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "succeeded", {
+        type: "job_updated",
+        job: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "succeeded", {
           result: toolResult(),
         }),
       },
@@ -762,8 +762,8 @@ describe("presentation projection", () => {
       },
     ]);
 
-    assert.equal(state.background.length, 1, "updates replace, never duplicate");
-    assert.equal(state.background[0]?.state, "succeeded");
+    assert.equal(state.jobs.length, 1, "updates replace, never duplicate");
+    assert.equal(state.jobs[0]?.state, "succeeded");
     assert.equal(state.transcript.length, 1);
   });
 

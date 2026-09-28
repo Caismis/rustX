@@ -1,6 +1,6 @@
 import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { emptyPresentationState, mergeTranscriptPage } from "../../presentation/projection.ts";
-import type { RuntimeClientSubagent } from "../../protocol/app-server.ts";
+import type { RuntimeClientAgent } from "../../protocol/app-server.ts";
 import type { SubagentTranscript } from "../../app-server/subagent-transcript.ts";
 import type { PresentationPreferences } from "../preferences.ts";
 import type { PopupContent } from "./popup-frame.ts";
@@ -13,13 +13,13 @@ export class SubagentTranscriptView implements PopupContent {
   #height = 10;
   #lines = 0;
   readonly reader: SubagentTranscript;
-  readonly child: () => RuntimeClientSubagent | undefined;
+  readonly child: () => RuntimeClientAgent | undefined;
   readonly preferences: PresentationPreferences;
   readonly close: () => void;
   readonly changed: () => void;
   constructor(
     reader: SubagentTranscript,
-    child: () => RuntimeClientSubagent | undefined,
+    child: () => RuntimeClientAgent | undefined,
     preferences: PresentationPreferences,
     close: () => void,
     changed: () => void,

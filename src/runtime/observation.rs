@@ -230,11 +230,15 @@ pub(crate) enum ConversationObservation {
         /// The latest bounded progress notification.
         progress: ToolProgress,
     },
-    /// One subagent registry lifecycle/identity transition snapshot (Issue
-    /// #60, reclassified #178). **Reliable**: ordered FIFO, non-lossy —
-    /// every identity/lifecycle/terminal transition reaches the consumer
-    /// exactly once, in publication order.
-    SubagentLifecycle(SubagentSnapshot),
+    /// One complete registry owner transition, captured under one registry
+    /// lock and released by one durable receipt. Agent lifecycle authority
+    /// travels with the finite activation; clients cannot derive it from
+    /// activation lifecycle. Reliable, ordered, and non-lossy.
+    SubagentLifecycle {
+        /// Durable Agent authority, absent for Workflow-owned finite activations.
+        agent: Option<Box<crate::runtime::subagent::AgentSnapshot>>,
+        snapshot: SubagentSnapshot,
+    },
     /// One reliable retained-workspace resource transition. This is separate
     /// from the logical lifecycle lane: disposing a handoff updates only the
     /// resource projection and never creates another terminal transition.
@@ -590,11 +594,11 @@ impl PendingObservations {
             // subagent, so it evicts any queued activity snapshot of that
             // subagent. No consumer ever folds an activity snapshot older
             // than the lifecycle snapshot it already folded.
-            ConversationObservation::SubagentLifecycle(snapshot) => {
+            ConversationObservation::SubagentLifecycle { agent, snapshot } => {
                 state.latest_activity.remove(&snapshot.subagent_id);
                 state
                     .reliable
-                    .push_back(ConversationObservation::SubagentLifecycle(snapshot));
+                    .push_back(ConversationObservation::SubagentLifecycle { agent, snapshot });
             }
             ConversationObservation::SubagentWorkspace(snapshot) => {
                 state.latest_activity.remove(&snapshot.subagent_id);
@@ -889,9 +893,11 @@ fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::CompactionFailed { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }
         | RuntimeEvent::BackgroundTerminalPublished { .. }
+        | RuntimeEvent::AgentActivationAdmission { .. }
         | RuntimeEvent::SubagentOwnershipCommitted { .. }
         | RuntimeEvent::SubagentTerminalPublished { .. }
         | RuntimeEvent::SubagentTerminalSettled { .. }
+        | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
         | RuntimeEvent::WorkflowStarted { .. }
         | RuntimeEvent::WorkflowCompleted { .. }
         | RuntimeEvent::WorkflowFailed { .. }
@@ -989,12 +995,16 @@ mod tests {
     /// activity revision this suite distinguishes.
     fn subagent_snapshot(subagent_id: &str, revision: u64) -> SubagentSnapshot {
         SubagentSnapshot {
+            ownership: crate::events::types::SubagentOwnershipKind::Normal,
+            parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             subagent_id: SubagentId::new(subagent_id),
             child_agent_id: AgentId::new("agent-child"),
             child_conversation_id: crate::scripted_suites::common::identity::child_conversation_id(
                 subagent_id,
             ),
-            tool_call_id: ToolCallId::new("call-1"),
+            origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                tool_call_id: ToolCallId::new("call-1"),
+            },
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             profile_digest: "sha256:p1".to_owned(),
@@ -1009,8 +1019,7 @@ mod tests {
                 ..SubagentObservation::default()
             },
             profile: None,
-            publication_abandoned: false,
-            settled: false,
+            settlement: crate::runtime::subagent::SubagentSettlement::default(),
             started_at: chrono::Utc::now(),
         }
     }
@@ -1096,9 +1105,10 @@ mod tests {
         queue.push(ConversationObservation::SubagentActivity(
             subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 3),
         ));
-        queue.push(ConversationObservation::SubagentLifecycle(
-            subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 4),
-        ));
+        queue.push(ConversationObservation::SubagentLifecycle {
+            agent: None,
+            snapshot: subagent_snapshot("conv_36524fd8-f674-7fc2-8125-06d01fee0e18-subagent-1", 4),
+        });
         assert_eq!(
             queue.queued(),
             1,
@@ -1111,7 +1121,10 @@ mod tests {
         assert_eq!(drained.len(), 2);
         match (&drained[0], &drained[1]) {
             (
-                ConversationObservation::SubagentLifecycle(lifecycle),
+                ConversationObservation::SubagentLifecycle {
+                    snapshot: lifecycle,
+                    ..
+                },
                 ConversationObservation::SubagentActivity(activity),
             ) => {
                 assert_eq!(lifecycle.observation.revision, 4);

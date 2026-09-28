@@ -862,6 +862,8 @@ struct CoordinatorState {
     /// slot and the durable pending inbox, by
     /// [`ConversationRuntime::seal_parent_guidance`].
     admitted_attempts: u64,
+    /// Native child turn permits are released only after parent lifecycle admission.
+    parent_turn_permits: Option<u64>,
     /// Whether this conversation's parent-authored guidance admission is
     /// sealed (Issue #193).
     ///
@@ -983,8 +985,38 @@ impl WakeGate {
 #[derive(Debug, Default)]
 struct DrainCompletion {
     completed: AtomicBool,
-    result: Mutex<Option<Result<(), ShutdownError>>>,
+    result: Mutex<Option<NativeDrainOutcome>>,
     notify: tokio::sync::Notify,
+}
+
+/// Native physical supervision and logical/durable quiescence are distinct
+/// facts. A publication failure may keep the runtime Draining after all native
+/// owners have positively settled. The child's durable physical receipt must
+/// not lose that proof merely because logical publication failed.
+#[derive(Debug, Clone)]
+struct NativeDrainOutcome {
+    logical: Result<(), ShutdownError>,
+    physical: Result<(), Vec<String>>,
+}
+
+impl NativeDrainOutcome {
+    fn failed(
+        failures: &std::collections::BTreeSet<String>,
+        physical_failures: std::collections::BTreeSet<String>,
+    ) -> Self {
+        Self {
+            logical: Err(ShutdownError::RuntimeOwnedSettlement {
+                detail: aggregate_settlement_failures(failures),
+            }),
+            // Call only after every native supervision boundary. Durable
+            // diagnostics cannot erase that positive physical proof.
+            physical: if physical_failures.is_empty() {
+                Ok(())
+            } else {
+                Err(physical_failures.into_iter().collect())
+            },
+        }
+    }
 }
 
 /// Conservative native idle refusal; no App Server copy of execution state.
@@ -1010,6 +1042,10 @@ pub(crate) enum IdleBusyReason {
 enum DrainTrigger {
     /// Explicit runtime shutdown.
     RuntimeShutdown,
+    /// The parent transport died; interaction requests have no outcome owner.
+    ParentLost,
+    /// Child composition is being rolled back before semantic activation.
+    ChildPreparationRollback,
     /// An authoritative MCP physical-settlement failure.
     McpSettlementFailure(String),
 }
@@ -1061,13 +1097,17 @@ impl ManualCompactionCompletion {
 }
 
 impl DrainCompletion {
-    fn complete(&self, result: Result<(), ShutdownError>) {
+    fn complete(&self, result: NativeDrainOutcome) {
         *self.result.lock().expect("drain completion lock poisoned") = Some(result);
         self.completed.store(true, Ordering::Release);
         self.notify.notify_waiters();
     }
 
     async fn wait(&self) -> Result<(), ShutdownError> {
+        self.wait_outcome().await.logical
+    }
+
+    async fn wait_outcome(&self) -> NativeDrainOutcome {
         loop {
             if self.completed.load(Ordering::Acquire) {
                 return self
@@ -1132,6 +1172,8 @@ pub(crate) struct CoordinatorProbe {
     pub(crate) admission_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
+    /// Parks after durable terminal publication, before restoring conversation state.
+    pub(crate) before_restore_gate: Option<Arc<Gate>>,
     /// Parks the next activation before the lifecycle transition when
     /// armed.
     pub(crate) activation_gate: Option<Arc<Gate>>,
@@ -1454,7 +1496,7 @@ impl RuntimeInner {
         if self
             .subagents
             .as_ref()
-            .is_some_and(|s| !s.unsettled_snapshot().is_empty())
+            .is_some_and(crate::runtime::subagent::SubagentRegistry::owns_idle_work)
         {
             return Err(Busy::Subagent);
         }
@@ -1511,6 +1553,8 @@ impl RuntimeInner {
     ) -> Result<Arc<DrainCompletion>, ShutdownError> {
         let mut first = false;
         let mcp_failure = matches!(&trigger, DrainTrigger::McpSettlementFailure(_));
+        let parent_lost = matches!(&trigger, DrainTrigger::ParentLost);
+        let preparation_rollback = matches!(&trigger, DrainTrigger::ChildPreparationRollback);
         // Runtime shutdown is only a cancellation contender. The active
         // attempt's AgentCancellation remains the one cause authority, so
         // every runtime-driven interaction settlement must use the winner it
@@ -1530,17 +1574,20 @@ impl RuntimeInner {
             }
             match lifecycle_state {
                 ConversationLifecycleState::Inactive => {
-                    if !mcp_failure {
+                    if !mcp_failure && !preparation_rollback {
                         return Err(ShutdownError::Inactive);
                     }
-                    let transitioned = self.lifecycle.begin_failure_drain();
+                    let transitioned = self.lifecycle.begin_inactive_drain();
                     debug_assert!(
                         transitioned,
-                        "the coordinator lock owns the inactive failure transition"
+                        "the coordinator lock owns the inactive drain transition"
                     );
                     first = true;
                 }
                 ConversationLifecycleState::Running => {
+                    if parent_lost {
+                        self.interaction.abandon_after_parent_loss();
+                    }
                     if let Some(current) = &state.current_attempt {
                         // Take the same M9b model-turn start gate as user
                         // cancellation *before* publishing `Draining`. If a
@@ -1727,8 +1774,9 @@ impl RuntimeInner {
         self: &Arc<Self>,
         _completion: Arc<DrainCompletion>,
         interaction_cancel_reason: CancellationReason,
-    ) -> Result<(), ShutdownError> {
+    ) -> NativeDrainOutcome {
         let mut failures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut physical_failures = std::collections::BTreeSet::new();
         // This is the async reliable route boundary for child-owned
         // interactions. It runs after `Running -> Draining` has closed new
         // admission, but before the drain waits for foreground ownership, so
@@ -1797,6 +1845,7 @@ impl RuntimeInner {
             }
             self.lifecycle.wait_for_no_admissions().await;
             if let Err(details) = self.capability.drain_conversation_owned().await {
+                physical_failures.extend(details.iter().cloned());
                 failures.extend(details);
             }
             self.lifecycle.wait_for_no_admissions().await;
@@ -1816,19 +1865,30 @@ impl RuntimeInner {
                     ));
                 }
             }
+            if let Some(subagents) = &self.subagents {
+                subagents.wait_recovery_reconciliation().await;
+                for activation_id in subagents.unproven_settlements() {
+                    let detail =
+                        format!("subagent {activation_id}: physical settlement is unresolved");
+                    physical_failures.insert(detail.clone());
+                    failures.insert(detail);
+                }
+            }
             if let Some(detail) = self.durability_failure_diagnostic() {
                 failures.insert(format!("durable authority: {detail}"));
             }
             if let Some(detail) = self.lock_state().mcp_settlement_failure.clone() {
+                physical_failures.insert(detail.clone());
                 failures.insert(detail);
             }
             if !failures.is_empty() {
-                return Err(ShutdownError::RuntimeOwnedSettlement {
-                    detail: aggregate_settlement_failures(&failures),
-                });
+                return NativeDrainOutcome::failed(&failures, physical_failures);
             }
             if self.lifecycle.mark_quiescent() {
-                return Ok(());
+                return NativeDrainOutcome {
+                    logical: Ok(()),
+                    physical: Ok(()),
+                };
             }
         }
     }
@@ -2159,10 +2219,10 @@ impl RuntimeInner {
             .install_observer_and_snapshots(observer.clone());
         // ---- T2b: the subagent registry (frozen by the same inactive
         //           mailbox binding) ----
-        let subagents = self
+        let agents = self
             .subagents
             .as_ref()
-            .map(|subagents| subagents.install_observer_and_snapshots(observer.clone()))
+            .map(|subagents| subagents.install_observer_and_agent_snapshots(observer.clone()))
             .unwrap_or_default();
         pending_interactions.extend(child_pending_interactions);
         pending_interactions.sort_by(|left, right| left.interaction.cmp(&right.interaction));
@@ -2192,7 +2252,7 @@ impl RuntimeInner {
             approval_mode,
             inbound_pending,
             background,
-            subagents,
+            agents,
             pending_interactions,
             todos,
             goal,
@@ -2575,6 +2635,17 @@ impl RuntimeInner {
         attempt_id: AttemptId,
         result: crate::agent::AgentExecutionResult,
     ) {
+        #[cfg(test)]
+        let restore_gate = self
+            .probe
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|probe| probe.before_restore_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = restore_gate {
+            gate.enter();
+        }
         {
             let mut state = self.lock_state();
             // An active-attempt durable canonical-write failure means the
@@ -2693,6 +2764,9 @@ impl RuntimeInner {
         if !self.lifecycle.is_running()
             || state.current_attempt.is_some()
             || state.manual_compaction.is_some()
+            || state
+                .parent_turn_permits
+                .is_some_and(|permits| state.admitted_attempts >= permits)
         {
             return;
         }
@@ -3467,11 +3541,10 @@ impl ConversationRuntime {
         // the runtime-owned `Inactive` lifecycle and is refused. This is
         // the deterministic total-order point against any standalone child
         // ownership commit that won the race before the bind. That commit
-        // holds the registry mutex through its durable ownership write and
-        // record publication, so this authoritative pristine check blocks
-        // until it finishes and then observes the non-pristine plane — a
-        // live child started outside this runtime's ownership transfer is
-        // never silently adopted.
+        // installs an exact ownership_committing claim before its off-lock
+        // durable write. This pristine check observes that claim or the
+        // published record atomically; it never waits on SQLite or silently
+        // adopts a child started outside this runtime's ownership transfer.
         if let Some(subagents) = &config.subagents
             && !subagents.is_pristine()
         {
@@ -3616,6 +3689,7 @@ impl ConversationRuntime {
                 manual_compaction: None,
                 next_attempt_seq,
                 admitted_attempts: 0,
+                parent_turn_permits: None,
                 parent_guidance_sealed: false,
                 one_shot_cancel: None,
                 recovered_continuation,
@@ -3667,6 +3741,9 @@ impl ConversationRuntime {
             for disposal in inner.recovery.settled_subagent_disposals() {
                 subagents.restore_recovered_disposal(disposal);
             }
+            subagents
+                .restore_agents(inner.store.as_ref())
+                .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
         }
         // The runtime is the durability-health owner of its background
         // plane (Issue #63): install the narrow failure seam the
@@ -4771,32 +4848,28 @@ impl ConversationRuntime {
     /// Success means exactly: *the guidance is durably accepted into this
     /// child conversation's Pending Inbound Inbox, ahead of this
     /// conversation's terminal seal.* Because the seal is what lets the
-    /// one-shot child driver publish a terminal at all, it follows that a
+    /// activation driver publish a terminal at all, it follows that a
     /// **naturally completing** child cannot publish an answer that
     /// predates this guidance.
     ///
     /// It does **not** mean the child model has observed it, that the
     /// in-flight provider request or tool call was interrupted, that
     /// anything changed yet, or that observation is guaranteed: a later
-    /// cancellation of this conversation, or physical loss of the child
-    /// process, legitimately ends the conversation with accepted guidance
+    /// cancellation of this activation, or physical loss of the child
+    /// process, legitimately ends the activation with accepted guidance
     /// unobserved. Cancellation stays authoritative.
     ///
-    /// Three refusals and the durable acceptance all commit under the **one
-    /// coordinator lock**, which is what makes the guarantee a linearization
-    /// rather than a timing hope:
+    /// The parent registry owns admission against stopping and interruption.
+    /// Messages already admitted there must remain durably deliverable even
+    /// after child-local cancellation. The child coordinator serializes the
+    /// durable acceptance against these remaining refusal boundaries:
     ///
     /// - the conversation's terminal seal already committed
     ///   ([`InboundAdmissionError::GuidanceSealed`]);
-    /// - the one-shot cancellation intent already committed, or the live
-    ///   attempt is already cancelled
-    ///   ([`InboundAdmissionError::GuidanceCancelled`]) — cancellation is
-    ///   never overtaken and a child is never steered back toward running;
     /// - the ordinary lifecycle/durability gates.
     ///
-    /// This is the *child* half only. The parent registry arbitrates this
-    /// answer against its own cancellation linearization point before it
-    /// reports `accepted` to the model.
+    /// The seal grant follows all previously admitted messages on the same
+    /// FIFO control lane. Child cancellation cannot revoke their acceptance.
     ///
     /// Multiple accepted guidance messages preserve their acceptance order
     /// by the durable inbox's own `InboundSequence` domain; no scheduler
@@ -4806,8 +4879,7 @@ impl ConversationRuntime {
     ///
     /// Returns the same variants as
     /// [`ConversationRuntime::submit_sourced_inbound`], plus
-    /// [`InboundAdmissionError::GuidanceSealed`] and
-    /// [`InboundAdmissionError::GuidanceCancelled`].
+    /// [`InboundAdmissionError::GuidanceSealed`].
     pub(crate) fn submit_parent_guidance(
         &self,
         source: UserSource,
@@ -4856,7 +4928,7 @@ impl ConversationRuntime {
     /// construction) before it is returned, so the degraded state is
     /// observable exactly once and the runtime rejects further durable work.
     ///
-    /// The seal is absorbing. It is used only by the one-shot subagent child
+    /// The seal is absorbing for one activation. It is used by that activation
     /// driver; an ordinary interactive conversation never seals, because its
     /// coordinator simply admits the next attempt.
     ///
@@ -4873,6 +4945,19 @@ impl ConversationRuntime {
     /// steering-specific seal can never add a failure surface to Workflow
     /// execution. The isolation is decided from the child's frozen terminal
     /// mode (explicit ownership), never from incidental timing.
+    pub(crate) fn gate_child_turns(&self) {
+        let mut state = self.inner.lock_state();
+        state.parent_turn_permits = Some(0);
+    }
+
+    pub(crate) fn release_child_turn(&self) {
+        let mut state = self.inner.lock_state();
+        if let Some(permits) = &mut state.parent_turn_permits {
+            *permits = permits.saturating_add(1);
+        }
+        self.inner.wake.notify.notify_one();
+    }
+
     pub(crate) async fn seal_parent_guidance(&self, observed_terminals: u64) -> ParentGuidanceSeal {
         // Test-only gate: parked before the coordinator lock, so a competing
         // guidance submission can still take that lock and durably accept
@@ -5018,7 +5103,7 @@ impl ConversationRuntime {
         // saying so precisely is what makes the terminal race provable. It
         // is read here, inside the very critical section that performs the
         // durable acceptance below, so acceptance and the seal have one
-        // total order. Only the one-shot subagent child ever seals.
+        // total order. Only a native child activation seals its local inbox.
         if class.is_parent_guidance() && state.parent_guidance_sealed {
             return Err(InboundAdmissionError::GuidanceSealed);
         }
@@ -5036,21 +5121,9 @@ impl ConversationRuntime {
                 message: failure.diagnostic,
             });
         }
-        // Parent-authored guidance (Issue #193) also linearizes against this
-        // child's committed cancellation intent here, inside the very
-        // critical section that performs the durable acceptance below.
-        // Cancellation therefore wins outright or loses outright; there is
-        // no ordering in which a cancellation intent and a guidance
-        // acceptance both succeed.
-        if class.is_parent_guidance()
-            && (state.one_shot_cancel.is_some()
-                || state
-                    .current_attempt
-                    .as_ref()
-                    .is_some_and(|current| current.cancellation.is_cancelled()))
-        {
-            return Err(InboundAdmissionError::GuidanceCancelled);
-        }
+        // The parent Agent registry owns message-versus-interrupt arbitration.
+        // Envelopes already on its reliable lane won admission before stopping;
+        // child cancellation must not retroactively reject their durable input.
         // Test-only gate: parked while holding the coordinator lock, after
         // the shutdown/activation decision and before the durable acceptance,
         // so a race regression can prove shutdown cannot slip between the
@@ -5527,6 +5600,29 @@ impl ConversationRuntime {
         Ok(())
     }
 
+    /// The child's physical lifetime joins the one native drain and consumes
+    /// only its explicit physical result. Durable publication failure remains
+    /// a logical shutdown error, but cannot erase already-proven containment.
+    /// An inactive composition enters drain directly without ever opening
+    /// semantic admission.
+    pub(crate) async fn settle_child_physical_lifetime(
+        &self,
+        parent_lost: bool,
+    ) -> Result<(), Vec<String>> {
+        let trigger = if !self.is_activated() {
+            DrainTrigger::ChildPreparationRollback
+        } else if parent_lost {
+            DrainTrigger::ParentLost
+        } else {
+            DrainTrigger::RuntimeShutdown
+        };
+        let completion = self
+            .inner
+            .begin_drain_internal(trigger)
+            .map_err(|error| vec![format!("{error:?}")])?;
+        completion.wait_outcome().await.physical
+    }
+
     /// Returns a durable read handle for historical Request Snapshots.
     ///
     /// The returned value is a read-only handle over the durable request-fact
@@ -5707,17 +5803,15 @@ impl ConversationRuntime {
         RequestHistory::new(self.inner.store.clone()).reconstruct(identity)
     }
 
-    /// The conversation-owned subagent registry (tests only).
-    ///
-    /// The FND-06 process-death suite needs the registry the *real*
-    /// composition built so it can stage one child through
-    /// [`SubagentRegistry::push_staged_override`](crate::runtime::subagent::SubagentRegistry)
-    /// — the same seam the in-crate registry tests use — and then drive the
-    /// ownership commit through the real Agent Loop and the real `subagent`
-    /// intrinsic. It is never part of the published API.
-    #[cfg(test)]
-    pub(crate) fn subagents(&self) -> Option<&crate::runtime::subagent::SubagentRegistry> {
+    /// The conversation-owned Agent and finite activation authority.
+    pub(crate) fn subagent_registry(&self) -> Option<&crate::runtime::subagent::SubagentRegistry> {
         self.inner.subagents.as_ref()
+    }
+
+    pub(crate) fn background_registry(
+        &self,
+    ) -> &crate::tools::background::ConversationBackgroundRegistry {
+        self.inner.tool_runtime.background()
     }
 
     /// Inspects one subagent child through the authoritative registry
@@ -5846,18 +5940,52 @@ impl ConversationRuntime {
         &self.inner.settlement
     }
 
-    /// The runtime-owned Message Ledger records, or `None` while an attempt
-    /// owns the conversation state.
-    ///
-    /// This is a read-only handout of canonical state the runtime already
-    /// owns between attempts; the subagent child driver (Issue #60) reads
-    /// its final answer here after the attempt's canonical terminal event.
-    #[must_use]
-    /// Reads the canonical ledger from the durable authority.
-    ///
-    /// Every committed message is durable by definition, so a terminal
-    /// observer (Issue #60's child result extraction) races nothing even
-    /// while an attempt still owns the in-memory conversation state.
+    #[cfg(test)]
+    pub(crate) fn install_before_restore_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .unwrap()
+            .get_or_insert_with(CoordinatorProbe::default)
+            .before_restore_gate = Some(gate);
+    }
+
+    /// Select the final canonical Assistant commit owned by this exact attempt.
+    /// Terminal observation can precede coordinator restoration, so both the
+    /// ownership reference and content come from committed storage.
+    pub(crate) fn durable_final_assistant(
+        &self,
+        attempt: &AttemptId,
+    ) -> Option<crate::message::types::AssistantMessageBlock> {
+        use crate::durable::presentation::{FactQuery, FactScope};
+        let facts = self
+            .inner
+            .store
+            .read_presentation_events(&FactQuery {
+                scope: FactScope::Attempt(attempt.clone()),
+                kinds: vec!["assistant_message_committed"],
+                before: None,
+                after: 0,
+                ascending: false,
+                through: self.inner.store.presentation_frontier().ok()?,
+                limit: 1,
+            })
+            .ok()?;
+        let RuntimeEvent::AssistantMessageCommitted { message_id } = &facts.first()?.event else {
+            return None;
+        };
+        let mut messages = self
+            .inner
+            .store
+            .load_messages(std::slice::from_ref(message_id))
+            .ok()?;
+        match messages.pop()? {
+            MessageBlock::Assistant(assistant) => Some(assistant),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn durable_ledger(&self) -> Option<Vec<MessageBlock>> {
         self.inner.store.load_canonical().ok()
     }
@@ -5991,13 +6119,13 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// observer, so the handshake is one coherent cut for whatever state
     /// exists.
     pub background: Vec<BackgroundExecutionSnapshot>,
-    /// The authoritative subagent child records at the cut (Issue #60).
-    ///
-    /// Provably empty by the same argument as `background`: the registry
-    /// is composed fresh with the runtime and the mailbox is bound
-    /// inactive until activation, so no ownership can commit before the
-    /// bridge exists.
-    pub subagents: Vec<crate::runtime::subagent::SubagentSnapshot>,
+    /// Durable Agent owner state and its exact latest committed activation,
+    /// captured together under the registry lock. Recovered activation history
+    /// never determines the latest Agent by iteration order.
+    pub agents: Vec<(
+        crate::runtime::subagent::AgentSnapshot,
+        crate::runtime::subagent::SubagentSnapshot,
+    )>,
     /// The active authoritative capability snapshot.
     pub capabilities: Arc<crate::capabilities::CapabilitySnapshot>,
     /// The authoritative capability-source availability at the cut
@@ -6042,10 +6170,6 @@ pub enum InboundAdmissionError {
     /// (Issue #193): its terminal linearization point already committed, so
     /// no further semantic input can reach an Agent Loop boundary.
     GuidanceSealed,
-    /// The conversation's cancellation intent already committed (Issue
-    /// #193): guidance never overtakes cancellation and never moves a child
-    /// back toward running.
-    GuidanceCancelled,
     /// Runtime drain has begun: no further inbound admission occurs.
     Shutdown,
     /// Inbound content must not be empty.
@@ -6066,9 +6190,6 @@ impl core::fmt::Display for InboundAdmissionError {
             Self::Inactive => f.write_str("the conversation runtime is not activated"),
             Self::GuidanceSealed => {
                 f.write_str("the child conversation already committed its terminal seal")
-            }
-            Self::GuidanceCancelled => {
-                f.write_str("the child cancellation intent is already committed")
             }
             Self::Shutdown => f.write_str("the conversation runtime is shutting down"),
             Self::EmptyContent => f.write_str("inbound content must not be empty"),
@@ -6504,14 +6625,29 @@ impl BackgroundObserver for RuntimeObserver {
 // publications are reliable; live-activity publications are disposable and
 // land in the coalescing latest-value lane.
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
-    fn on_committed(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot, sequence: u64) {
+    fn on_committed(
+        &self,
+        agent: Option<&crate::runtime::subagent::AgentSnapshot>,
+        snapshot: &crate::runtime::subagent::SubagentSnapshot,
+        sequence: u64,
+    ) {
         self.push(ConversationObservation::Published {
             journal_sequence: sequence,
-            observation: Box::new(ConversationObservation::SubagentLifecycle(snapshot.clone())),
+            observation: Box::new(ConversationObservation::SubagentLifecycle {
+                agent: agent.cloned().map(Box::new),
+                snapshot: snapshot.clone(),
+            }),
         });
     }
-    fn on_snapshot(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
-        self.push(ConversationObservation::SubagentLifecycle(snapshot.clone()));
+    fn on_snapshot(
+        &self,
+        agent: Option<&crate::runtime::subagent::AgentSnapshot>,
+        snapshot: &crate::runtime::subagent::SubagentSnapshot,
+    ) {
+        self.push(ConversationObservation::SubagentLifecycle {
+            agent: agent.cloned().map(Box::new),
+            snapshot: snapshot.clone(),
+        });
     }
 
     fn on_workspace(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
@@ -6691,6 +6827,31 @@ impl ConversationRuntime {
             .lock()
             .expect("test pre-tool policy lock") = Some(policy);
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn runtime_with_recovered_registry_for_test(
+    dir: &tempfile::TempDir,
+    conversation: &ConversationId,
+    agent: &AgentId,
+    store: Arc<dyn crate::durable::ConversationStore>,
+    registry: crate::runtime::subagent::SubagentRegistry,
+) -> (
+    ConversationRuntime,
+    crate::runtime::subagent::SubagentRegistry,
+) {
+    let (_, mut config) = tests::subagent_runtime_config_with_registry(
+        dir,
+        conversation.as_str(),
+        store.clone(),
+        conversation,
+        agent,
+        agent,
+    )
+    .await;
+    let registry = registry.fresh_with_mailbox_for_test(config.tool_runtime.mailbox());
+    config.subagents = Some(registry.clone());
+    (ConversationRuntime::new(config).unwrap(), registry)
 }
 
 #[cfg(test)]
@@ -7445,7 +7606,7 @@ mod tests {
     /// Returns the registry alongside the config so a test can commit
     /// children into it before attempting construction.
     #[allow(clippy::too_many_lines)]
-    async fn subagent_runtime_config_with_registry(
+    pub(super) async fn subagent_runtime_config_with_registry(
         dir: &tempfile::TempDir,
         conversation_id: &str,
         store: Arc<dyn ConversationStore>,
@@ -7641,14 +7802,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "pre-constructed".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-pre-constructed"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "pre-constructed".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-pre-constructed"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -7723,18 +7891,13 @@ mod tests {
     /// typed. The runtime never silently adopts a child started outside its
     /// ownership transfer.
     ///
-    /// Production synchronization: the standalone commit holds the registry
-    /// mutex across its durable ownership write and record publication
-    /// (`with_running_commit` + record creation under one lock), so the
-    /// constructor's post-claim `is_pristine()` blocks until the commit
-    /// finishes and then sees the record.
+    /// Production synchronization: the registry installs the exact committing
+    /// owner before the off-lock durable append. `is_pristine` observes either
+    /// that claim or the committed record, with no empty cut between them.
     ///
-    /// Test hook: the registry's `CommitBoundaryHook` parks the commit
-    /// inside that ownership critical section (mailbox standalone decision
-    /// already crossed, registry mutex held, mailbox still unbound). The
-    /// constructor starts only after the hook is entered, so the forced
-    /// interleaving is: standalone commit in flight -> constructor binds
-    /// mailbox -> commit publishes -> post-claim check rejects.
+    /// The commit hook parks after standalone arbitration, before `SQLite`.
+    /// Construction must reject while the hook is still parked, proving both
+    /// ownership exclusion and absence of a registry I/O lock.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn a_standalone_subagent_commit_winning_the_transfer_race_rejects_construction() {
@@ -7761,7 +7924,7 @@ mod tests {
         subagents.push_staged_override(staged);
 
         // The standalone commit task: prepares privately and parks inside
-        // the ownership-commit critical section (the CommitBoundaryHook),
+        // the off-lock ownership commit boundary (the CommitBoundaryHook),
         // proving it crossed the mailbox standalone decision with the
         // mailbox still unbound.
         let commit_registry = subagents.clone();
@@ -7769,14 +7932,20 @@ mod tests {
             let prepared = commit_registry
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
-                        execution_policy:
-                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                        resolved: test_resolved_subagent("explore"),
-                        approval_mode: crate::runtime::ApprovalMode::Policy,
-                        task: "transfer race".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-transfer-race"),
-                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                        authority: crate::runtime::subagent::DurableAgentAuthority {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                            resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
+                        },
+                        admission: crate::runtime::subagent::ActivationAdmission {
+                            task: "transfer race".to_owned(),
+                            context: None,
+                            origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                tool_call_id: ToolCallId::new("call-transfer-race"),
+                            },
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                        },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
                 )
@@ -7802,9 +7971,13 @@ mod tests {
 
         // Start the constructor only now: static domain validation passes,
         // the mailbox is bound to the runtime's Inactive lifecycle, and the
-        // post-claim pristine arbitration blocks on the registry mutex held
-        // by the parked standalone commit.
+        // post-claim pristine arbitration sees the exact committing owner
+        // without waiting for its parked durability operation.
         let constructor = tokio::spawn(async move { ConversationRuntime::new(config) });
+        let construction = tokio::time::timeout(std::time::Duration::from_secs(10), constructor)
+            .await
+            .expect("constructor liveness while durability is parked")
+            .expect("constructor task");
         hook.release();
 
         let commit_outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
@@ -7818,10 +7991,6 @@ mod tests {
                 panic!("no cancellation was requested")
             }
         };
-        let construction = tokio::time::timeout(std::time::Duration::from_secs(10), constructor)
-            .await
-            .expect("constructor liveness")
-            .expect("constructor task");
         assert!(
             matches!(
                 construction,
@@ -7909,13 +8078,20 @@ mod tests {
         let error = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
-                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                    resolved: test_resolved_subagent("explore"),
-                    approval_mode: crate::runtime::ApprovalMode::Policy,
-                    task: "refused after claim".to_owned(),
-                    context: None,
-                    tool_call_id: ToolCallId::new("call-refused"),
-                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    authority: crate::runtime::subagent::DurableAgentAuthority {
+                        execution_policy:
+                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                        resolved: test_resolved_subagent("explore"),
+                        approval_mode: crate::runtime::ApprovalMode::Policy,
+                    },
+                    admission: crate::runtime::subagent::ActivationAdmission {
+                        task: "refused after claim".to_owned(),
+                        context: None,
+                        origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                            tool_call_id: ToolCallId::new("call-refused"),
+                        },
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    },
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -8718,6 +8894,7 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: Some(gate.clone()),
             settlement_gate: None,
+            before_restore_gate: None,
             activation_gate: None,
             manual_compaction_settlement_gate: None,
             submit_gate: None,
@@ -9304,6 +9481,10 @@ mod tests {
         );
         assert!(model.requests().is_empty(), "no attempt crossed activation");
 
+        assert!(
+            runtime.settle_child_physical_lifetime(false).await.is_err(),
+            "MCP containment failure must remain physically unproven"
+        );
         let shutdown = runtime.shutdown().await;
         let Err(super::ShutdownError::RuntimeOwnedSettlement { detail }) = shutdown else {
             panic!("shutdown must retain the pre-activation settlement failure: {shutdown:?}");
@@ -10170,6 +10351,7 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: None,
             settlement_gate: None,
+            before_restore_gate: None,
             activation_gate: None,
             manual_compaction_settlement_gate: None,
             submit_gate: Some(gate.clone()),
@@ -10257,6 +10439,7 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: Some(admission_gate.clone()),
             settlement_gate: None,
+            before_restore_gate: None,
             activation_gate: None,
             manual_compaction_settlement_gate: None,
             submit_gate: None,
@@ -11198,14 +11381,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "first terminal".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-subagent-one"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "first terminal".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-subagent-one"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11263,14 +11453,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "second terminal".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-subagent-two"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "second terminal".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-subagent-two"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11342,10 +11539,12 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            !subagents
+            subagents
                 .snapshot(&accepted.subagent_id)
                 .unwrap()
-                .publication_abandoned,
+                .settlement
+                .publication
+                != crate::runtime::subagent::SubagentPublication::Abandoned,
             "runtime health publication precedes registry settlement"
         );
         let settled = subagents.wait_until_settled(&accepted.subagent_id);
@@ -11360,7 +11559,10 @@ mod tests {
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
-        assert!(unresolved.publication_abandoned);
+        assert_eq!(
+            unresolved.settlement.publication,
+            crate::runtime::subagent::SubagentPublication::Abandoned
+        );
         // Issue #178: the successful answer never rides the live read
         // model, not even while its publication is unresolved; the
         // candidate remains observable through the PublishingTerminal
@@ -11456,14 +11658,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "hold the adoption gate".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-busy-subagent"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "hold the adoption gate".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-busy-subagent"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11636,14 +11845,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "owned child".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-owned"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "owned child".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-owned"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11712,13 +11928,20 @@ mod tests {
         let prepared = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
-                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                    resolved: test_resolved_subagent("explore"),
-                    approval_mode: crate::runtime::ApprovalMode::Policy,
-                    task: "rejected after failure".to_owned(),
-                    context: None,
-                    tool_call_id: ToolCallId::new("call-rejected"),
-                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    authority: crate::runtime::subagent::DurableAgentAuthority {
+                        execution_policy:
+                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                        resolved: test_resolved_subagent("explore"),
+                        approval_mode: crate::runtime::ApprovalMode::Policy,
+                    },
+                    admission: crate::runtime::subagent::ActivationAdmission {
+                        task: "rejected after failure".to_owned(),
+                        context: None,
+                        origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                            tool_call_id: ToolCallId::new("call-rejected"),
+                        },
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    },
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -11768,7 +11991,10 @@ mod tests {
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
-        assert!(unresolved.publication_abandoned);
+        assert_eq!(
+            unresolved.settlement.publication,
+            crate::runtime::subagent::SubagentPublication::Abandoned
+        );
         // Issue #178: the successful answer never rides the live read
         // model; the unresolved candidate is observable through its
         // PublishingTerminal lifecycle state, unchanged.
@@ -11865,14 +12091,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "owned".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-owned"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "owned".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-owned"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11901,11 +12134,11 @@ mod tests {
                 .subagent_transcript_store_reads
                 .load(std::sync::atomic::Ordering::Relaxed)
         };
-        let unknown = crate::runtime::identity::SubagentId::new("unknown-child");
-        for id in [&accepted.subagent_id, &unknown] {
+        let unknown = crate::runtime::identity::AgentId::new("unknown-child");
+        for id in [&accepted.child_agent_id, &unknown] {
             for limit in [0, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX + 1] {
                 assert!(matches!(
-                    attachment.subagent_transcript_page(id, None, limit),
+                    attachment.agent_transcript_page(id, None, limit),
                     Err(RuntimeClientError::InvalidRequest { .. })
                 ));
             }
@@ -11917,19 +12150,19 @@ mod tests {
         );
         for limit in [1, crate::durable::TRANSCRIPT_PAGE_LIMIT_MAX] {
             assert!(matches!(
-                attachment.subagent_transcript_page(&unknown, None, limit),
-                Err(RuntimeClientError::UnknownSubagent { subagent_id }) if subagent_id == unknown
+                attachment.agent_transcript_page(&unknown, None, limit),
+                Err(RuntimeClientError::UnknownAgent { agent_id }) if agent_id == unknown
             ));
             assert!(matches!(
-                attachment.subagent_transcript_page(&accepted.subagent_id, None, limit),
+                attachment.agent_transcript_page(&accepted.child_agent_id, None, limit),
                 Err(RuntimeClientError::RuntimeFailure { message })
                     if message.starts_with("subagent history unavailable:")
             ));
         }
         assert_eq!(
             resolver_reads(),
-            4,
-            "valid limits must reach the real resolver"
+            2,
+            "only owned Agent identities reach history storage resolution"
         );
         let _ = subagents.cancel(&accepted.subagent_id, CancellationReason::UserRequested);
         subagents
@@ -11973,14 +12206,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "owned".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-owned"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "owned".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-owned"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -12088,14 +12328,20 @@ mod tests {
             let prepared = commit_registry
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
-                        execution_policy:
-                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                        resolved: test_resolved_subagent("explore"),
-                        approval_mode: crate::runtime::ApprovalMode::Policy,
-                        task: "racing".to_owned(),
-                        context: None,
-                        tool_call_id: ToolCallId::new("call-racing"),
-                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                        authority: crate::runtime::subagent::DurableAgentAuthority {
+                            execution_policy:
+                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                            resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
+                        },
+                        admission: crate::runtime::subagent::ActivationAdmission {
+                            task: "racing".to_owned(),
+                            context: None,
+                            origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                tool_call_id: ToolCallId::new("call-racing"),
+                            },
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                        },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
                 )
@@ -12743,14 +12989,21 @@ mod tests {
                 subagents
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
-                            execution_policy:
-                                crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                            resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
-                            task: "owned".to_owned(),
-                            context: None,
-                            tool_call_id: ToolCallId::new("call-owned"),
-                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            authority: crate::runtime::subagent::DurableAgentAuthority {
+                                execution_policy:
+                                    crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                                resolved: test_resolved_subagent("explore"),
+                                approval_mode: crate::runtime::ApprovalMode::Policy,
+                            },
+                            admission: crate::runtime::subagent::ActivationAdmission {
+                                task: "owned".to_owned(),
+                                context: None,
+                                origin:
+                                    crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                                        tool_call_id: ToolCallId::new("call-owned"),
+                                    },
+                                terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            },
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -12845,13 +13098,20 @@ mod tests {
         let prepared = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
-                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                    resolved: test_resolved_subagent("explore"),
-                    approval_mode: crate::runtime::ApprovalMode::Policy,
-                    task: "rejected".to_owned(),
-                    context: None,
-                    tool_call_id: ToolCallId::new("call-rejected"),
-                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    authority: crate::runtime::subagent::DurableAgentAuthority {
+                        execution_policy:
+                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                        resolved: test_resolved_subagent("explore"),
+                        approval_mode: crate::runtime::ApprovalMode::Policy,
+                    },
+                    admission: crate::runtime::subagent::ActivationAdmission {
+                        task: "rejected".to_owned(),
+                        context: None,
+                        origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                            tool_call_id: ToolCallId::new("call-rejected"),
+                        },
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    },
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -14863,6 +15123,11 @@ mod tests {
             "the abandoned publication is honest settlement evidence: {shutdown:?}"
         );
         assert_eq!(
+            runtime.settle_child_physical_lifetime(false).await,
+            Ok(()),
+            "the native runner and callback settled; publication failure cannot erase physical proof",
+        );
+        assert_eq!(
             background.abandoned_publications(),
             vec![execution_id.clone()],
             "the abandoned fact is observable only after the callback returned"
@@ -15342,22 +15607,29 @@ mod tests {
         let prepared = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
-                    execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-                    resolved: test_resolved_subagent("reviewer"),
-                    approval_mode: ApprovalMode::Policy,
-                    task: "Produce the workflow result.".to_owned(),
-                    context: None,
-                    tool_call_id: ToolCallId::new("workflow:drain_workflow:review"),
-                    terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
-                        output_schema: serde_json::json!({
-                            "type": "object",
-                            "properties": {"summary": {"type": "string"}},
-                            "required": ["summary"],
-                            "additionalProperties": false
-                        }),
-                        workflow_id,
-                        run_id,
-                        node_id: Box::new(node_instance),
+                    authority: crate::runtime::subagent::DurableAgentAuthority {
+                        execution_policy:
+                            crate::runtime::subagent::InheritedExecutionPolicy::default(),
+                        resolved: test_resolved_subagent("reviewer"),
+                        approval_mode: ApprovalMode::Policy,
+                    },
+                    admission: crate::runtime::subagent::ActivationAdmission {
+                        task: "Produce the workflow result.".to_owned(),
+                        context: None,
+                        origin: crate::runtime::subagent::AgentActivationOrigin::CreationTool {
+                            tool_call_id: ToolCallId::new("workflow:drain_workflow:review"),
+                        },
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
+                            output_schema: serde_json::json!({
+                                "type": "object",
+                                "properties": {"summary": {"type": "string"}},
+                                "required": ["summary"],
+                                "additionalProperties": false
+                            }),
+                            workflow_id,
+                            run_id,
+                            node_id: Box::new(node_instance),
+                        },
                     },
                 },
                 &CancellationSignal::new(),
@@ -15435,7 +15707,254 @@ mod tests {
             snapshot.state,
             crate::runtime::subagent::SubagentState::Cancelled
         );
-        assert!(snapshot.settled);
+        assert!(snapshot.is_settled());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement() {
+        use crate::runtime::subagent::ipc::{
+            ChildFrame, ChildResultStatus, ParentFrame, ResultFrame, read_parent_frame,
+            write_child_frame,
+        };
+        use crate::runtime::subagent::{
+            ActivationAdmission, AgentActivationOrigin, DurableAgentAuthority,
+            InheritedExecutionPolicy, SubagentStartOutcome, SubagentStartSpec,
+            SubagentTerminalMode,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = ConversationId::generate();
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation.clone()).unwrap(),
+        );
+        let (runtime, _, subagents) = headless_runtime_over_store_with_subagents(
+            &dir,
+            conversation.as_str(),
+            store.clone(),
+            None,
+        )
+        .await;
+        runtime.activate();
+        let (mut staged, mut peer) =
+            stage_runtime_test_child(&dir.path().join("unproven-abandoned"));
+        staged.retain_for_test(
+            crate::runtime::identity::ProcessUnitId::new("unprovable-unit"),
+            i32::MAX,
+        );
+        subagents.push_staged_override(staged);
+        let cancellation = CancellationSignal::new();
+        let prepared = subagents
+            .prepare(
+                &SubagentStartSpec {
+                    authority: DurableAgentAuthority {
+                        resolved: test_resolved_subagent("reviewer"),
+                        execution_policy: InheritedExecutionPolicy::default(),
+                        approval_mode: ApprovalMode::Policy,
+                    },
+                    admission: ActivationAdmission {
+                        task: "unproven child with abandoned publication".into(),
+                        context: None,
+                        origin: AgentActivationOrigin::CreationTool {
+                            tool_call_id: ToolCallId::new("unproven-abandoned-create"),
+                        },
+                        terminal: SubagentTerminalMode::Normal,
+                    },
+                },
+                &cancellation,
+            )
+            .await
+            .unwrap();
+        let SubagentStartOutcome::Accepted(admitted) =
+            subagents.commit(prepared, &cancellation).await.unwrap()
+        else {
+            panic!("owned child");
+        };
+        assert!(matches!(
+            read_parent_frame(&mut peer).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        // The real driver holds an explicitly unprovable retained anchor.
+        // Publication fails only after that driver's physical classification.
+        store.arm_fail_accept_times(3);
+        write_child_frame(
+            &mut peer,
+            &ChildFrame::Result(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                content: Some("semantic answer".into()),
+                diagnostic: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let snapshot = subagents
+            .wait_until_settled(&admitted.subagent_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot.settlement.publication,
+            crate::runtime::subagent::SubagentPublication::Abandoned
+        );
+        assert_eq!(
+            snapshot.settlement.physical,
+            crate::runtime::subagent::SubagentPhysicalSettlement::Unproven
+        );
+        assert_eq!(subagents.unproven_settlements(), vec![admitted.subagent_id]);
+        assert!(
+            runtime.settle_child_physical_lifetime(false).await.is_err(),
+            "abandoning logical publication cannot invent a physical receipt for the containing child"
+        );
+        assert!(runtime.shutdown().await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
+        use crate::runtime::subagent::ipc::{
+            ChildFrame, ChildResultStatus, ParentFrame, ResultFrame, read_parent_frame,
+            write_child_frame,
+        };
+        use crate::runtime::subagent::{
+            ActivationAdmission, AgentActivationOrigin, DurableAgentAuthority,
+            InheritedExecutionPolicy, SubagentStartOutcome, SubagentStartSpec,
+            SubagentTerminalMode,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = ConversationId::generate();
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation.clone()).unwrap(),
+        );
+        let (runtime, _, subagents) =
+            headless_runtime_over_store_with_subagents(&dir, conversation.as_str(), store, None)
+                .await;
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("Runtime Client host");
+        let (attachment, initialized) = host
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("Runtime Client attachment");
+        let RuntimeClientResult::Initialized { cursor, .. } = initialized else {
+            panic!("expected initialization");
+        };
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("subscribe before the owner transition");
+        runtime.activate();
+        let (mut staged, mut peer) = stage_runtime_test_child(&dir.path().join("unproven-child"));
+        staged.retain_for_test(
+            crate::runtime::identity::ProcessUnitId::new("unproven-unit"),
+            i32::MAX,
+        );
+        subagents.push_staged_override(staged);
+        let prepared = subagents
+            .prepare(
+                &SubagentStartSpec {
+                    authority: DurableAgentAuthority {
+                        resolved: test_resolved_subagent("reviewer"),
+                        execution_policy: InheritedExecutionPolicy::default(),
+                        approval_mode: ApprovalMode::Policy,
+                    },
+                    admission: ActivationAdmission {
+                        task: "Exercise failed physical settlement".into(),
+                        context: None,
+                        origin: AgentActivationOrigin::CreationTool {
+                            tool_call_id: ToolCallId::new("unproven-create"),
+                        },
+                        terminal: SubagentTerminalMode::Normal,
+                    },
+                },
+                &CancellationSignal::new(),
+            )
+            .await
+            .unwrap();
+        let SubagentStartOutcome::Accepted(admitted) = subagents
+            .commit(prepared, &CancellationSignal::new())
+            .await
+            .unwrap()
+        else {
+            panic!("admission cancelled");
+        };
+        assert!(matches!(
+            read_parent_frame(&mut peer).await.unwrap(),
+            Some(ParentFrame::Delegate(_))
+        ));
+        write_child_frame(
+            &mut peer,
+            &ChildFrame::Result(ResultFrame {
+                status: ChildResultStatus::Succeeded,
+                content: Some("semantic result".into()),
+                diagnostic: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let terminal = subagents
+            .wait_until_settled(&admitted.subagent_id)
+            .await
+            .unwrap();
+        assert!(
+            !terminal.is_settled(),
+            "semantic termination cannot prove containment"
+        );
+        // Observe the actual registry -> RuntimeObserver -> PendingObservations
+        // -> RuntimeClientHost publication path. This stream receipt is the
+        // synchronization boundary: no snapshot read flushes the transition
+        // before the subscriber has independently received it.
+        let streamed = loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent {
+                    event: RuntimeClientEvent::AgentUpdated { agent },
+                    ..
+                }) if agent.agent_id == admitted.child_agent_id
+                    && agent.activation_state.is_terminal() =>
+                {
+                    break agent;
+                }
+                EventDelivery::Event(_) => {}
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("terminal Agent stream ended: {delivery:?}"),
+            }
+        };
+        assert_eq!(
+            streamed.state,
+            crate::runtime::subagent::AgentState::Unavailable
+        );
+        let (owner, activation) = subagents
+            .agent_snapshot_with_activation(&admitted.child_agent_id)
+            .expect("fresh owner snapshot");
+        let expected = crate::runtime_client::projection::agent_view(&owner, &activation);
+        assert_eq!(*streamed, expected);
+        let status = attachment.handle_request(RuntimeClientRequest::AgentStatus {
+            id: RequestId::new(1),
+            agent_id: admitted.child_agent_id.clone(),
+        });
+        assert_eq!(status.error, None);
+        assert_eq!(
+            status.result,
+            Some(RuntimeClientResult::Agent {
+                agent: expected.clone()
+            })
+        );
+        assert_eq!(
+            host.snapshot().expect("fresh host snapshot").0.agents,
+            vec![expected]
+        );
+        let error = runtime
+            .shutdown()
+            .await
+            .expect_err("unproven owner prevents quiescence");
+        assert!(
+            matches!(error, super::ShutdownError::RuntimeOwnedSettlement { ref detail }
+            if detail.contains(admitted.subagent_id.as_str()) && detail.contains("physical settlement is unresolved")),
+            "{error:?}"
+        );
+        assert!(
+            runtime.settle_child_physical_lifetime(false).await.is_err(),
+            "the explicit unresolved physical owner forbids a child recovery receipt",
+        );
+        assert!(!runtime.is_quiescent());
     }
 
     /// M9c: the foreground Bash path composes its existing physical process
@@ -17568,4 +18087,6 @@ mod tests {
         );
         assert_eq!(new_attempt.conversation_ordinal(&conversation), Some(3));
     }
+    include!("conversation_runtime/resume_shutdown_tests.rs");
+    include!("conversation_runtime/workflow_recovery_tests.rs");
 }

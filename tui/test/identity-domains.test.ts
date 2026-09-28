@@ -274,14 +274,11 @@ describe("/expand addresses one domain at a time", () => {
   });
 
   it("addresses a background execution only when told to", async () => {
-    assert.deepEqual(await expand("background exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5"), {
+    assert.deepEqual(await expand("job exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5"), {
       kind: "preference",
       preference: { type: "expand_background", executionId: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5" },
     });
-    assert.deepEqual(await expand("bg exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5"), {
-      kind: "preference",
-      preference: { type: "expand_background", executionId: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5" },
-    });
+
   });
 
   it("addresses a pending interaction only when told to", async () => {
@@ -298,7 +295,7 @@ describe("/expand addresses one domain at a time", () => {
   });
 
   it("rejects a background or interaction request with no identity", async () => {
-    for (const argument of ["background", "interaction"]) {
+    for (const argument of ["job", "interaction"]) {
       const outcome = await expand(argument);
       assert.equal(outcome.kind, "transient", argument);
       assert.equal(outcome.kind === "transient" ? outcome.level : "", "error");
