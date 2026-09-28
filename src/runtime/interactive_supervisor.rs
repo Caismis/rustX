@@ -188,9 +188,9 @@ pub(crate) const FAIL_SETSID_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SETSID";
 /// a sleep.
 pub(crate) const INNER_STALL_BEFORE_ANCHOR_ENV: &str =
     "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR";
-/// Private test-harness launch data for the exact pre-anchor wait-proof theft.
-/// Only `InteractiveTestControl` configures this; no production binary reads it.
-#[cfg(test)]
+/// Trusted semantic fixture: the setsid-failure inner remains alive until
+/// killed, then the outer consumes its exact wait status outside `Child`.
+/// Configured only by `InteractiveTestControl`, never command environment.
 pub(crate) const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
 
 /// Runs the outer supervisor role; returns its exit status.
@@ -287,7 +287,6 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut upstream, MSG_NO_OWNERSHIP, &[]);
         return 0;
     }
-    #[cfg(not(test))]
     let current_exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
@@ -295,8 +294,6 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             return 1;
         }
     };
-    #[cfg(test)]
-    let current_exe = crate::runtime::process_runner::interactive_supervisor_binary();
     let mut inner = Command::new(current_exe);
     inner.arg("inner").args(arguments);
     inner.env(INNER_CONTROL_ENV, &inner_socket);
@@ -700,7 +697,7 @@ fn attach_inner_control(
         // server spawn is gated behind the control connection, so its exit
         // here provably leaves no owned process tree; the pid-scoped
         // settlement below is the complete containment.
-        match pre_anchor_try_wait(child) {
+        match child.try_wait() {
             Ok(None) => {}
             Ok(Some(status)) => {
                 return InnerAttachment::Concluded(conclude_pre_anchor(
@@ -829,7 +826,7 @@ fn await_anchor_commit(
         // The direct inner child's exit before the commit point. Its pid is
         // not a process-group id, so only this pid-scoped wait can settle
         // it — a group-scoped wait would reach `ECHILD` without reaping it.
-        match pre_anchor_try_wait(child) {
+        match child.try_wait() {
             Ok(None) => {}
             Ok(Some(status)) => {
                 return PreAnchor::Concluded(conclude_pre_anchor(
@@ -908,18 +905,6 @@ fn classify_pre_anchor_frame(kind: u8, payload: &[u8], inner_pid: i32) -> PreAnc
     }
 }
 
-fn pre_anchor_try_wait(
-    child: &mut std::process::Child,
-) -> std::io::Result<Option<std::process::ExitStatus>> {
-    // This fixture concludes through the real setup-ending control frame.
-    // Do not let an earlier try_wait cache the proof that it intends to steal.
-    #[cfg(test)]
-    if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
-        return Ok(None);
-    }
-    child.try_wait()
-}
-
 /// Settles the pre-anchor inner **by pid** and reports the outcome.
 ///
 /// Before the anchor commit point the inner is only a direct child: its pid
@@ -945,20 +930,19 @@ fn conclude_pre_anchor(
     let inner_pid = i32::try_from(child.id()).unwrap_or(0);
     let _ = child.kill();
     // Steal only this child's terminal status, before the designated owner
-    // attempts its normal wait. No status has been cached by fixture polling.
-    #[cfg(test)]
+    // attempts its normal wait. The fixture inner stays alive after sending
+    // setup-end, so ordinary pre-anchor polling cannot cache a terminal status.
     let stolen = if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
         let status = waitpid(Pid::from_raw(inner_pid), None).expect("exact foreign reap");
         assert!(matches!(
             status,
-            WaitStatus::Exited(..) | WaitStatus::Signaled(..)
+            WaitStatus::Signaled(pid, Signal::SIGKILL, _) if pid.as_raw() == inner_pid
         ));
         true
     } else {
         false
     };
     let reaped = child.wait();
-    #[cfg(test)]
     if stolen {
         assert_eq!(
             reaped.as_ref().unwrap_err().raw_os_error(),
@@ -971,7 +955,6 @@ fn conclude_pre_anchor(
             0
         }
         Err(error) => {
-            #[cfg(test)]
             let error = if stolen {
                 format!("injected pre-anchor reap failure (exact wait status consumed): {error}")
             } else {
@@ -1185,8 +1168,8 @@ pub fn run_inner(arguments: &[String]) -> i32 {
     if let Ok(pid_file) = std::env::var(FAIL_SETSID_ENV) {
         let _ = std::fs::write(&pid_file, std::process::id().to_string());
         // Test-only injection: `setsid()` fails after the control
-        // connection exists. This is byte-for-byte the real setsid-failure
-        // path below, so the inner stays in its parent's process group and
+        // connection exists. Like the real setsid-failure path below,
+        // the inner stays in its parent's process group and
         // its pid is provably not a process-group id.
         let _ = write_frame(
             &mut control,
@@ -1194,6 +1177,14 @@ pub fn run_inner(arguments: &[String]) -> i32 {
             b"injected setsid failure after the inner control connection",
         );
         let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
+        if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
+            // Keep this exact child alive until the outer's SIGKILL. Normal
+            // try_wait therefore observes None without suppressing polling.
+            // A spurious park return cannot let the child exit naturally.
+            loop {
+                std::thread::park();
+            }
+        }
         return INNER_EXIT_NORMAL;
     }
     if let Err(error) = nix::unistd::setsid() {
@@ -1454,18 +1445,6 @@ fn await_start(
             Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
         }
     }
-}
-
-/// Subprocess entry point, not a standalone contract. Its parent supplies
-/// private launch arguments only after clearing the supervisor environment.
-#[cfg(test)]
-#[test]
-#[ignore = "subprocess entry point for the exact wait-proof theft regression"]
-fn reap_proof_fixture() {
-    let arguments: Vec<String> =
-        serde_json::from_str(&std::env::var(FAIL_PRE_ANCHOR_REAP_ENV).expect("fixture arguments"))
-            .expect("fixture arguments JSON");
-    std::process::exit(run_outer(&arguments));
 }
 
 #[cfg(all(test, target_os = "linux"))]
