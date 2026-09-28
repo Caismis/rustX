@@ -401,6 +401,8 @@ impl BackgroundLifecycle {
 /// ids.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackgroundExecutionSnapshot {
+    /// Native Bash presentation, derived from the canonical invocation.
+    pub bash: Option<crate::tools::types::BashPresentation>,
     /// The detached runtime execution identity.
     pub execution_id: ToolExecutionId,
     /// The canonical tool identity.
@@ -643,6 +645,7 @@ enum NotificationState {
 
 /// One published background record.
 struct BackgroundRecord {
+    bash: Option<crate::tools::types::BashPresentation>,
     /// Absorbing logical start frontier, owned by `mark_running`.
     executor_started: bool,
     execution_id: ToolExecutionId,
@@ -1059,6 +1062,10 @@ impl ConversationBackgroundRegistry {
         );
         let prepared = PreparedRecord {
             record: BackgroundRecord {
+                bash: crate::tools::types::BashPresentation::from_arguments(
+                    &invocation.tool_id,
+                    &invocation.arguments,
+                ),
                 executor_started: false,
                 execution_id: execution_id.clone(),
                 tool_call_id: invocation
@@ -2078,6 +2085,7 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             });
             let context = ToolExecutionContext {
+                model_invocation: None,
                 goal: None,
                 conversation_id: &registry.conversation_id,
                 execution_id: Some(&execution_id),
@@ -2160,6 +2168,7 @@ impl crate::runtime::cancellation::CancellationCause for BackgroundCancellationC
 
 fn snapshot_of(record: &BackgroundRecord) -> BackgroundExecutionSnapshot {
     BackgroundExecutionSnapshot {
+        bash: record.bash.clone(),
         execution_id: record.execution_id.clone(),
         tool_id: record.tool_id.clone(),
         tool_name: record.tool_name.clone(),
@@ -2642,6 +2651,7 @@ mod tests {
         let mut state = registry.state();
         let index = state.records.len();
         state.records.push(BackgroundRecord {
+            bash: None,
             executor_started: lifecycle != BackgroundLifecycle::Starting,
             execution_id: execution_id.clone(),
             tool_call_id: ToolCallId::new(format!("call-{id}")),
@@ -4538,6 +4548,7 @@ mod tests {
             .start(
                 read_invocation,
                 ToolExecutionContext {
+                    model_invocation: None,
                     goal: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,
@@ -4585,6 +4596,7 @@ mod tests {
             .start(
                 grep_invocation,
                 ToolExecutionContext {
+                    model_invocation: None,
                     goal: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,

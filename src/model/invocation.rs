@@ -262,22 +262,28 @@ pub fn finalize_provider_request(
 
 /// The capabilities one protocol adapter can actually represent today.
 ///
-/// All three adapters reject canonical image and file references because
-/// artifact/media resolution does not exist yet, so no protocol advertises
-/// image or file input regardless of what a catalog claims.
+/// Anthropic Messages supports resolved static PNG user and tool-result images.
+/// Other protocols and File input remain unsupported.
 #[must_use]
 pub fn adapter_capabilities(protocol: ModelProtocol) -> ModelCapabilities {
     match protocol {
-        ModelProtocol::OpenAiChatCompletions
-        | ModelProtocol::OpenAiResponses
-        | ModelProtocol::AnthropicMessages => ModelCapabilities::text_only(true, true),
+        ModelProtocol::AnthropicMessages => {
+            let mut capabilities = ModelCapabilities::text_only(true, true);
+            capabilities.input_modalities.insert(Modality::Image);
+            capabilities
+        }
+        ModelProtocol::OpenAiChatCompletions | ModelProtocol::OpenAiResponses => {
+            ModelCapabilities::text_only(true, true)
+        }
     }
 }
 
 /// The capabilities the current rustX runtime can carry end to end.
 #[must_use]
 pub fn runtime_capabilities() -> ModelCapabilities {
-    ModelCapabilities::text_only(true, true)
+    let mut capabilities = ModelCapabilities::text_only(true, true);
+    capabilities.input_modalities.insert(Modality::Image);
+    capabilities
 }
 
 /// Computes the effective client-visible capability of one model.

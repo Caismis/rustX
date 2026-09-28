@@ -162,6 +162,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
         _ => unreachable!("validated in main"),
     };
     ModelRequest {
+        images: std::collections::BTreeMap::new(),
         invocation: ModelInvocationConfig {
             model: model.to_owned(),
             protocol,

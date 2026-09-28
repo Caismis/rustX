@@ -346,11 +346,10 @@ impl ArtifactStore {
     /// Publish one bounded byte payload. Never replaces an existing artifact.
     /// # Errors
     /// Oversized content, allocation and durable write failures are returned.
-    #[cfg(test)]
     pub(crate) fn put_bounded(&self, bytes: &[u8]) -> Result<ArtifactId, ArtifactError> {
         if bytes.len() > ARTIFACT_TRANSFER_MAX {
             return Err(ArtifactError::WriteFailed(
-                "artifact exceeds fixture write limit".into(),
+                "artifact exceeds write limit".into(),
             ));
         }
         let id = self.create_artifact()?;

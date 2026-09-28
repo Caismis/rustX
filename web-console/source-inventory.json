@@ -1073,7 +1073,7 @@
       "destination": "web-console/src/presentation/agent/ToolCard.tsx",
       "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #412 adds a dedicated image variant using the existing disclosure and artifact slot; no new dependency or authority.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -1094,7 +1094,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "187f7aab0bdfdd0945bb6dbde6e4310c4750c5717786f3ab5bb54f330ac78ec0",
+      "local_sha256": "94780d064ea77e3fdf6a29cea4533e3472094e5f9d498a00f8f91087e7b909de",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",

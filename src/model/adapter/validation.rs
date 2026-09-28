@@ -69,6 +69,24 @@ pub fn validate_request(
     // could reach the network: content the invocation cannot represent is
     // rejected here, not by the provider.
     validate_content_modalities(&request.messages, &request.invocation.capabilities)?;
+    if request.images.len() > 16 {
+        return Err(invalid_request(
+            "request exceeds the 16-image limit".to_owned(),
+        ));
+    }
+    if !request.images.is_empty()
+        && (!request
+            .invocation
+            .capabilities
+            .input_modalities
+            .contains(&crate::model::catalog::Modality::Image)
+            || protocol != ModelProtocol::AnthropicMessages)
+    {
+        return Err(invalid_request(
+            "resolved images require an image-capable supported invocation".to_owned(),
+        ));
+    }
+
     if !request.tools.is_empty() && !request.invocation.capabilities.tool_calls {
         return Err(ModelError {
             kind: ModelErrorKind::Unsupported,
@@ -181,6 +199,7 @@ mod tests {
 
     fn request() -> ModelRequest {
         ModelRequest {
+            images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
                 model: "m".to_owned(),
                 protocol: ModelProtocol::OpenAiResponses,

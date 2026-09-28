@@ -14,6 +14,10 @@ pub(super) struct BashInput {
     /// The command handed to one `/bin/bash -c` invocation.
     #[schemars(length(min = 1))]
     pub command: String,
+    /// Optional presentation intent, never execution or approval authority.
+    /// One to 160 Unicode scalar values; whitespace-only values are rejected.
+    #[schemars(length(min = 1, max = 160))]
+    pub description: Option<String>,
     /// The invocation deadline in seconds. When omitted, no executor-local
     /// deadline applies: a foreground invocation is bounded by the generic
     /// Agent Loop execution-liveness hard deadline (Issue #204), and a
@@ -45,6 +49,11 @@ impl BashInput {
         if self.command.is_empty() {
             return Err("bash requires a non-empty command".to_owned());
         }
+        if let Some(description) = &self.description
+            && (description.trim().is_empty() || description.chars().count() > 160)
+        {
+            return Err("bash description must contain 1 to 160 Unicode scalar values and must not be blank".to_owned());
+        }
         Ok(())
     }
 
@@ -57,5 +66,43 @@ impl BashInput {
     /// working in [`Duration`] and never see the model-facing unit.
     pub(super) fn explicit_timeout(&self) -> Option<Duration> {
         self.timeout.map(Duration::from_secs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BashInput;
+    #[test]
+    fn description_is_bounded_unicode_presentation_only() {
+        let command = "printf '%s' unchanged";
+        for description in [
+            None,
+            Some("Run the check".to_owned()),
+            Some("😀".repeat(160)),
+            Some("\u{1b}[2J<script>".to_owned()),
+        ] {
+            let mut value = serde_json::json!({"command": command, "timeout": 42});
+            if let Some(description) = description {
+                value["description"] = description.into();
+            }
+            let input = BashInput::parse(&value).unwrap();
+            assert_eq!(input.command, command);
+            assert_eq!(
+                input.explicit_timeout(),
+                Some(std::time::Duration::from_secs(42))
+            );
+        }
+        for description in [String::new(), " \t\n".to_owned(), "😀".repeat(161)] {
+            assert!(
+                BashInput::parse(
+                    &serde_json::json!({"command": command, "description": description})
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            BashInput::parse(&serde_json::json!({"command": command, "justification": "please"}))
+                .is_err()
+        );
     }
 }

@@ -4185,6 +4185,7 @@ dependencies = [
  "libc",
  "nix",
  "pep-508",
+ "png",
  "reqwest 0.13.4",
  "rmcp",
  "rusqlite",

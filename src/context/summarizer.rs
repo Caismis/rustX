@@ -422,6 +422,7 @@ impl ContextSummarizer for ModelBackedSummarizer {
         Box::pin(async move {
             let input = request.model_input();
             let model_request = ModelRequest {
+                images: std::collections::BTreeMap::new(),
                 invocation: self.invocation.invocation_config(),
                 // The summarizer has a structurally canonical-only input
                 // boundary. Request-only execution-recovery context cannot

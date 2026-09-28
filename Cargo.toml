@@ -79,6 +79,8 @@ toml = "0.8"
 url = "2"
 sha2 = "0.10"
 base64 = "0.22"
+# Bounded validation of native managed PNG image outputs.
+png = "0.18.1"
 getrandom = "0.3.4"
 unicode-normalization = "0.1.24"
 http = "1"

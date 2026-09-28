@@ -15,7 +15,7 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
     settings_evidence: 'live_session',
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
     workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { records: [] },
-    inbound: {}, capabilities: { revision: '0' }, pending_interactions: [],
+    inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
   };
 }
 export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): RoutedInteraction {

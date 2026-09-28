@@ -122,6 +122,9 @@ pub struct ToolExecutionContext<'a> {
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,
+    /// The exact frozen primary invocation of the admitting Attempt. Missing authority
+    /// fails closed for modality-dependent native tools.
+    pub(crate) model_invocation: Option<&'a crate::model::invocation::ResolvedModelInvocation>,
     /// The one bounded runtime Questionnaire capability. This is intentionally
     /// not public: generic `ToolExecutor` implementations can observe only
     /// [`ExecutionCancellation`], while rustX-owned execution paths receive a
@@ -186,6 +189,7 @@ impl<'a> ToolExecutionContext<'a> {
             artifacts: self.artifacts,
             tool_output: self.tool_output,
             environment: self.environment,
+            model_invocation: self.model_invocation,
             questionnaire_requester: self
                 .questionnaire_requester
                 .as_ref()
@@ -223,6 +227,7 @@ impl<'a> ToolExecutionContext<'a> {
             artifacts,
             tool_output,
             environment,
+            model_invocation: None,
             questionnaire_requester: None,
             todos: None,
             goal: None,
@@ -1026,6 +1031,19 @@ impl ToolRegistry {
             composed.register(definition, executor)?;
         }
         Ok(composed)
+    }
+
+    /// Freeze the executable catalog for one exact effective model invocation.
+    pub(crate) fn for_model(
+        &self,
+        capabilities: &crate::model::catalog::ModelCapabilities,
+    ) -> Self {
+        Self::from_registrations(
+            self.registrations()
+                .into_iter()
+                .filter(|entry| model_allows_tool(&entry.definition.id, capabilities)),
+        )
+        .expect("filtering validated registrations preserves validity")
     }
 
     /// Rebuilds a validated registry from a selected set of registrations.
@@ -2042,6 +2060,7 @@ mod tests {
         .expect("managed tool output");
         let reporter = Capturing;
         let context = ToolExecutionContext {
+            model_invocation: None,
             goal: None,
             conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             execution_id: None,
@@ -2127,4 +2146,15 @@ mod settlement_conformance_tests {
         assert!(futures_util::poll!(&mut handle.completion).is_pending());
         assert_eq!(effects.load(Ordering::SeqCst), 1);
     }
+}
+
+/// Model gating shared by execution, configuration inspection and request surfaces.
+pub(crate) fn model_allows_tool(
+    id: &ToolId,
+    capabilities: &crate::model::catalog::ModelCapabilities,
+) -> bool {
+    id.as_str() != "tool-read-image"
+        || capabilities
+            .input_modalities
+            .contains(&crate::model::catalog::Modality::Image)
 }

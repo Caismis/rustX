@@ -166,6 +166,7 @@ mod tests {
 
     fn tools() -> ValidatedTools {
         let request = ModelRequest {
+            images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
                 model: "m".to_owned(),
                 protocol: ModelProtocol::OpenAiChatCompletions,

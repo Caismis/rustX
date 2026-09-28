@@ -3435,9 +3435,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   concrete bounded `NativeToolPolicies` configuration and may use any legal
   execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
   defaults are intentional per-tool values in the
-  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). Only
-  the Job and Agent control Tools are intentionally fixed
-  (foreground-only, sequential) and is outside the configurable set.
+  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). The
+  Job and Agent controls are fixed foreground/sequential Tools. Native image
+  reading is fixed foreground/parallel/approval-never; all three are outside
+  the configurable policy set.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, apply tool-owned business-argument normalization,
   validate the normalized arguments against the canonical schema, dispatch
@@ -4182,11 +4183,12 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   model-mutation rejection for that namespace. Final-component symlinks are
   followed by atomic
   Write/Edit commits so the link itself is not replaced.
-- The model-facing contracts of the six ordinary native tools are
+- The model-facing contracts of the ordinary native tools are
   `read {path, offset?, limit?}`, `write {path, content}`, `edit {path,
   edits:[{oldText, newText}]}`, `glob {pattern, path?, limit?}`,
   `grep {pattern, path?, glob?, ignoreCase?, literal?, context?, limit?}`,
-  and the unchanged `bash {command, timeout?}` contract. Read accepts
+  `bash {command, description?, timeout?}`, and capability-gated
+  `read_image {path}`. Bash description is presentation metadata only. Read accepts
   offset zero and normalizes it to one; Grep defaults to 100 matches and
   Glob to 1000 results, with larger caller limits accepted.
   Adopting the schema convention never imports another agent's runtime,
@@ -7420,3 +7422,9 @@ proven RolledBack with the original Agent, activation and origin. Physical proof
 wakes the existing idle coordinator without enqueueing or replaying content.
 Finite Workflow terminal facts persist physical proof too; recovery must neither
 replace it with false nor infer it from terminal naming or workspace disposition.
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.

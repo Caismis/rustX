@@ -2555,7 +2555,7 @@ no plugin loading, no registration macros, no generic tool factory.
 
 ##### Model-facing ordinary native tool contracts
 
-The model-facing schemas of the six *ordinary* native tools follow
+The model-facing schemas of the ordinary native tools follow
 established Pi coding-agent conventions rather than rustX-specific
 parameter vocabulary, so a model trained around modern coding agents
 recognizes the surface immediately:
@@ -2567,7 +2567,8 @@ write  { path, content }                      creates missing parent directories
 edit   { path, edits: [{ oldText, newText }] }
 glob   { pattern, path?, limit? }              omitted path = execution cwd
 grep   { pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }
-bash   { command, timeout? }                  timeout is in seconds
+bash   { command, description?, timeout? }    timeout is in seconds
+read_image { path }                          static PNG, effective Image input required
 ```
 
 For Read, Write, Edit, Grep, and Glob, a relative model path is interpreted
@@ -6854,3 +6855,9 @@ The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
 the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v27).
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.

@@ -62,7 +62,7 @@ describe("loaded resources", () => {
 
   it("omits a section the runtime published nothing for", () => {
     const state = stateOf({
-      capabilities: { revision: "1", tools: [], available_tools: [], skills: [] },
+      capabilities: { configured_tools: [], revision: "1", tools: [], available_tools: [], skills: [] },
     });
     const rendered = banner(state);
 

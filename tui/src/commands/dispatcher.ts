@@ -975,6 +975,8 @@ export function renderModel(state: PresentationState): string {
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
       `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
+      `- effective capabilities: ${attempt.model ? capabilitySummary(attempt.model.primary) : "unavailable"}`,
+      `- read_image active: ${attempt.executionSettings?.read_image_active ?? "unavailable"}`,
     );
     if (attempt.model && attempt.model.primary.model !== session.effective.model) {
       lines.push(
@@ -1004,7 +1006,7 @@ export function renderTools(state: PresentationState): string {
   }
   const lines = [
     `### Tools (capability revision ${state.capabilities.revision})`,
-    "Active tools are the exact model authority. Available but inactive tools cannot be invoked by this model.",
+    "Active tools below describe the selected configuration for the next eligible admission. An existing Attempt keeps its frozen catalog; `/model show` reports its admitted image capability. Available but inactive tools cannot be invoked.",
     "Definitions are inert. Agent/Workflow selection creates finite admitted demand before source preparation.",
   ];
   appendToolGroups(lines, "Active tools", activeGroups);

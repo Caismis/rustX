@@ -299,6 +299,7 @@ pub(crate) enum ConversationObservation {
 
     /// One complete frozen admission fact, under the coordinator lock.
     AttemptAdmitted {
+        read_image_active: bool,
         attempt_id: AttemptId,
         model: Box<AttemptModelView>,
         resource_revision: crate::runtime::identity::RuntimeResourceRevision,

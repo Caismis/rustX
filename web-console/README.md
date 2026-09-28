@@ -442,3 +442,7 @@ it directly from the authenticated App Server download capability. Web does not
 assemble ZIPs or buffer their bytes. Preparation failures use the existing alert;
 subsequent transfer status appears in the browser's download manager. See
 [Session archive](../docs/session-archive.md), including TLS proxy routing.
+
+Native image reads and Bash description/command presentation follow the
+[shared native contract](../docs/image-reading.md). Image previews use the existing
+managed artifact service, never browser access to a local path.

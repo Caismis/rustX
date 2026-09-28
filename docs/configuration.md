@@ -237,6 +237,8 @@ defaults are foreground, sequential, never. Omitted members of a replacement
 object use these product defaults, never lower-source values. Python uses the
 same invocation engine with native source policy; it has no separate authored
 policy engine. Runtime control and Plugin Tools keep their domain-owned policies.
+`read_image` has fixed foreground/parallel/approval-never policy; its selection
+still uses `agent.tools.builtin`.
 
 `app_server` accepts positive bounded `max_resident_runtimes` (8),
 `max_connections` (32), `max_external_attachments` (64), `idle_grace_ms` (300000),
@@ -451,3 +453,42 @@ and Session configuration changes do not re-resolve that child's authority.
 `subagents.max_concurrent` limits simultaneous finite child activations, not the
 number of inactive durable identities. Job controls and Agent controls are
 separate fixed foreground control Tools. See [Jobs and Agents](jobs-and-agents.md).
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.
+
+An image-capable declaration uses `protocol = "anthropic_messages"` and
+`input_modalities = ["text", "image"]` in the Model's capabilities table.
+Include `"read_image"` in `agent.tools.builtin` to express Tool intent.
+The same declaration on an unsupported adapter does not activate the Tool.
+
+For example, replace the endpoint, credential variable, wire model ID and limits
+with those of an image-capable deployment:
+
+```toml
+[providers.vision]
+base_url = "https://api.example.invalid"
+api_key = "$VISION_API_KEY"
+
+[models.vision]
+provider = "vision"
+id = "image-capable-wire-model-id"
+protocol = "anthropic_messages"
+context_window = 128000
+max_output_tokens = 4096
+
+[models.vision.capabilities]
+input_modalities = ["text", "image"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[agent.model]
+model = "vision"
+
+[agent.tools]
+builtin = ["read", "read_image", "bash"]
+```

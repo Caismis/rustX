@@ -60,6 +60,7 @@ pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
 mod input;
 mod read;
+mod read_image;
 mod registration;
 // The private native-search substrate shared by Glob and Grep. It is not a
 // tool: it is never registered, never reaches the model, and exists only
@@ -102,6 +103,7 @@ pub(crate) fn definitions(
     let mut definitions = vec![
         ask_user::definition(),
         read::definition(policies.read),
+        read_image::definition(),
         write::definition(policies.write),
         edit::definition(policies.edit),
         glob::definition(policies.glob),
@@ -353,6 +355,7 @@ pub(crate) fn native_tool_registrations(
     let mut registrations = vec![
         ask_user::registration(),
         read::registration(policies.read),
+        read_image::registration(),
         write::registration(policies.write),
         edit::registration(policies.edit),
         glob::registration(policies.glob),
@@ -403,6 +406,7 @@ fn subagent_child_registration(
 ) -> Option<NativeToolRegistration> {
     Some(match name {
         "read" => read::registration(policy),
+        "read_image" => read_image::registration(),
         "write" => write::registration(policy),
         "edit" => edit::registration(policy),
         "glob" => glob::registration(policy),

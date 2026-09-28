@@ -1956,6 +1956,7 @@ fn durable_projection(
         seed.journal_through,
     );
     let capabilities = super::snapshot::CapabilityView {
+        configured_tools: Vec::new(),
         revision: crate::runtime::identity::CapabilityRevision::new(0),
         tools: Vec::new(),
         available_tools: Vec::new(),
@@ -2249,7 +2250,11 @@ impl RuntimeClientHost {
         let mut projection = RuntimeClientProjection::new(
             seed.conversation_id.clone(),
             seed.messages.clone(),
-            super::projection::capability_view(&seed.capabilities, &seed.capability_availability),
+            super::projection::capability_view(
+                &seed.capabilities,
+                &seed.capability_availability,
+                Some(&seed.model.effective.capabilities),
+            ),
             Some(seed.model.clone()),
             replay_limit,
         );

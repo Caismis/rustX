@@ -80,7 +80,7 @@ export function emptyPresentationState(
     agents: [],
     statuses: [],
     context: { compaction_in_progress: false, compaction_count: 0 },
-    capabilities: { revision: EXACT_ZERO, tools: [], skills: [] },
+    capabilities: { configured_tools: [], revision: EXACT_ZERO, tools: [], skills: [] },
     resources: emptyResources(),
     sessionModel,
     effectivePlugins: null,

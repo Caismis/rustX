@@ -620,3 +620,70 @@ async fn file_tool_results_are_unsupported() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn anthropic_resolved_user_image_and_unsupported_placements() {
+    use base64::Engine;
+    use rustx::model::catalog::Modality;
+    let server =
+        crate::common::FixtureServer::start(|_, _| sse_fixture("anthropic", "text.sse")).await;
+    let adapter = AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new("k", server.url("")));
+    let mut bytes = Vec::new();
+    {
+        let encoder = png::Encoder::new(&mut bytes, 1, 1);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[128]).unwrap();
+    }
+    let mut request = image_user_request(ModelProtocol::AnthropicMessages, "claude-test");
+    request
+        .invocation
+        .capabilities
+        .input_modalities
+        .insert(Modality::Image);
+    request
+        .images
+        .insert(ArtifactId::new("artifact-img-1"), bytes.clone());
+    let events = crate::common::collect_events(&adapter, request.clone()).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"][0]["source"]["data"],
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    );
+    assert!(
+        !serde_json::to_string(&request)
+            .unwrap()
+            .contains(&base64::engine::general_purpose::STANDARD.encode(&bytes)),
+        "ephemeral data never enters serialized canonical request evidence"
+    );
+    let before = server.attempt_count();
+    let mut text = request.clone();
+    text.invocation
+        .capabilities
+        .input_modalities
+        .remove(&Modality::Image);
+    let mut assistant = request.clone();
+    assistant.messages[0] =
+        ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("assistant-image"),
+            content: vec![AssistantContentBlock::Image(ImageReference {
+                artifact_id: ArtifactId::new("artifact-img-1"),
+                alt: None,
+            })],
+        }));
+    let mut corrupt = request.clone();
+    corrupt
+        .images
+        .insert(ArtifactId::new("artifact-img-1"), b"invalid".to_vec());
+    let mut unresolved = request;
+    unresolved.images.clear();
+    for invalid in [text, assistant, corrupt, unresolved] {
+        let events = crate::common::collect_events(&adapter, invalid).await;
+        assert!(matches!(events.first(), Some(ModelEvent::Failed { .. })));
+        assert_eq!(
+            server.attempt_count(),
+            before,
+            "invalid request fails before network I/O"
+        );
+    }
+}

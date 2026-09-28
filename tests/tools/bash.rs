@@ -1632,3 +1632,58 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
         "ordinary command data enabled supervisor observability"
     );
 }
+
+#[tokio::test]
+async fn description_changes_neither_native_bash_execution_nor_registry_approval() {
+    let fixture = native_fixture();
+    let command = "printf stable-output";
+    let before = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|tool| tool.name == "bash")
+        .unwrap();
+    let plain = run_tool(&fixture, "bash", serde_json::json!({"command": command})).await;
+    let described = run_tool(&fixture, "bash", serde_json::json!({"command": command, "description": "Claim something entirely different"})).await;
+    assert_eq!(plain.status, described.status);
+    assert_eq!(plain.exit_code, described.exit_code);
+    assert_eq!(plain.content, described.content);
+    let after = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|tool| tool.name == "bash")
+        .unwrap();
+    assert_eq!(before.approval_policy, after.approval_policy);
+    assert_eq!(before.execution_policy, after.execution_policy);
+    assert_eq!(before.id, after.id);
+}
+
+#[tokio::test]
+async fn direct_image_read_without_attempt_authority_fails_before_path_or_artifact_work() {
+    let fixture = native_fixture();
+    let before = std::fs::read_dir(fixture.runtime.artifacts().root())
+        .unwrap()
+        .count();
+    let result = run_tool(
+        &fixture,
+        "read_image",
+        serde_json::json!({"path": "/definitely-not-present/image.png"}),
+    )
+    .await;
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Failed { ref error } if error.contains("image-capable admitted invocation"))
+    );
+    assert!(
+        result
+            .content
+            .iter()
+            .all(|block| !matches!(block, ToolResultContent::Image(_)))
+    );
+    assert_eq!(
+        std::fs::read_dir(fixture.runtime.artifacts().root())
+            .unwrap()
+            .count(),
+        before
+    );
+}

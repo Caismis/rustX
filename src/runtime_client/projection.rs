@@ -1121,7 +1121,14 @@ impl RuntimeClientProjection {
                 // capability view. One event covers both an executable
                 // revision swap and an availability-only change; the view's
                 // revision discriminates them.
-                let capabilities = capability_view(&snapshot, &availability);
+                let capabilities = capability_view(
+                    &snapshot,
+                    &availability,
+                    self.snapshot
+                        .model
+                        .as_ref()
+                        .map(|model| &model.effective.capabilities),
+                );
                 self.snapshot.capabilities = capabilities.clone();
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
             }
@@ -1145,7 +1152,11 @@ impl RuntimeClientProjection {
                 // sit at the first one holding the new capability
                 // generation beside the retired resource generation.
                 // Adjacent is not atomic; one event is.
-                let capabilities = capability_view(snapshot.capability(), &availability);
+                let capabilities = capability_view(
+                    snapshot.capability(),
+                    &availability,
+                    Some(&model.effective.capabilities),
+                );
                 let resources = resources_view(&snapshot);
                 let plugins = snapshot
                     .root_profile()
@@ -1164,6 +1175,7 @@ impl RuntimeClientProjection {
                 }]
             }
             ConversationObservation::AttemptAdmitted {
+                read_image_active,
                 attempt_id,
                 model,
                 resource_revision,
@@ -1176,8 +1188,9 @@ impl RuntimeClientProjection {
                     last_usage: None,
                     in_flight: None,
                     foreground: Vec::new(),
-                    model: Some(model),
+                    model: Some(model.clone()),
                     execution_settings: Some(super::settings::AdmittedSettings {
+                        read_image_active: Some(read_image_active),
                         resource_revision,
                         approval_mode,
                     }),
@@ -1185,8 +1198,26 @@ impl RuntimeClientProjection {
                 Vec::new()
             }
             ConversationObservation::SessionModelChanged { model } => {
+                self.snapshot.capabilities.tools = self
+                    .snapshot
+                    .capabilities
+                    .configured_tools
+                    .iter()
+                    .filter(|tool| {
+                        crate::tools::executor::model_allows_tool(
+                            &tool.id,
+                            &model.effective.capabilities,
+                        )
+                    })
+                    .cloned()
+                    .collect();
                 self.snapshot.model = Some((*model).clone());
-                vec![RuntimeClientEvent::SessionModelChanged { model }]
+                vec![
+                    RuntimeClientEvent::SessionModelChanged { model },
+                    RuntimeClientEvent::CapabilityUpdated {
+                        capabilities: self.snapshot.capabilities.clone(),
+                    },
+                ]
             }
             ConversationObservation::Shutdown => {
                 self.snapshot.shutting_down = true;
@@ -2411,6 +2442,7 @@ fn inbound_item_view(item: &InboundItem) -> InboundItemView {
 /// external Runtime Client shape.
 pub(crate) fn background_view(snapshot: &BackgroundExecutionSnapshot) -> RuntimeClientJob {
     RuntimeClientJob {
+        bash: snapshot.bash.clone(),
         job_id: snapshot.execution_id.clone(),
         tool_id: snapshot.tool_id.clone(),
         tool_name: snapshot.tool_name.clone(),
@@ -2432,6 +2464,7 @@ pub(crate) fn background_view(snapshot: &BackgroundExecutionSnapshot) -> Runtime
 pub(crate) fn capability_view(
     snapshot: &crate::capabilities::CapabilitySnapshot,
     availability: &crate::capabilities::CapabilityAvailability,
+    model: Option<&crate::model::catalog::ModelCapabilities>,
 ) -> CapabilityView {
     let project_tool =
         |definition: &crate::tools::types::ToolDefinition| super::snapshot::RuntimeClientTool {
@@ -2445,11 +2478,19 @@ pub(crate) fn capability_view(
             replay_policy: definition.replay_policy,
             origin: definition.origin.clone(),
         };
-    let tools = snapshot
+    let configured_tools: Vec<_> = snapshot
         .tool_registry()
         .definitions()
         .iter()
         .map(&project_tool)
+        .collect();
+    let tools = configured_tools
+        .iter()
+        .filter(|tool| {
+            model.is_some_and(|model| crate::tools::executor::model_allows_tool(&tool.id, model))
+                || tool.id.as_str() != "tool-read-image"
+        })
+        .cloned()
         .collect();
     let available_tools = snapshot
         .available_tools()
@@ -2498,6 +2539,7 @@ pub(crate) fn capability_view(
         })
         .collect();
     CapabilityView {
+        configured_tools,
         revision: snapshot.revision(),
         tools,
         available_tools,
@@ -2847,6 +2889,7 @@ mod tests {
             ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
             crate::runtime_client::snapshot::CapabilityView {
+                configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
                 available_tools: Vec::new(),
@@ -4016,6 +4059,7 @@ mod tests {
                 ConversationId::new("conv_d8b669b8-1b38-797b-8db2-c56430c1741d"),
                 initial_messages,
                 crate::runtime_client::snapshot::CapabilityView {
+                    configured_tools: Vec::new(),
                     revision: crate::runtime::identity::CapabilityRevision::new(1),
                     tools: Vec::new(),
                     available_tools: Vec::new(),
@@ -5686,6 +5730,7 @@ mod tests {
             ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
             crate::runtime_client::snapshot::CapabilityView {
+                configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
                 available_tools: Vec::new(),
@@ -5745,6 +5790,7 @@ mod tests {
             ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
             crate::runtime_client::snapshot::CapabilityView {
+                configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
                 available_tools: Vec::new(),
@@ -6140,6 +6186,7 @@ mod tests {
         let mut projection = projection();
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
+                bash: None,
                 execution_id: crate::runtime::identity::ToolExecutionId::new(
                     "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
                 ),
@@ -6152,6 +6199,7 @@ mod tests {
         ));
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
+                bash: None,
                 execution_id: crate::runtime::identity::ToolExecutionId::new(
                     "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
                 ),
@@ -6164,6 +6212,7 @@ mod tests {
         ));
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
+                bash: None,
                 execution_id: crate::runtime::identity::ToolExecutionId::new(
                     "exec_20eb7fc0-b69d-7476-8553-c156fdc879c3",
                 ),
@@ -6205,6 +6254,7 @@ mod tests {
         };
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
+                bash: None,
                 execution_id: crate::runtime::identity::ToolExecutionId::new(
                     "exec_60002c8f-aeff-7c09-8709-610f0ed8d415",
                 ),
@@ -6217,6 +6267,7 @@ mod tests {
         ));
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
+                bash: None,
                 execution_id: crate::runtime::identity::ToolExecutionId::new(
                     "exec_d013aabc-70aa-72fc-8b80-81767d9a64a1",
                 ),
@@ -6415,6 +6466,7 @@ mod tests {
         let fence = projection.read_domain_fence();
         let mut activation = agent_activation_snapshot(SubagentObservation::default());
         let job = BackgroundExecutionSnapshot {
+            bash: None,
             execution_id: crate::runtime::identity::ToolExecutionId::new(
                 "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
             ),
@@ -6434,6 +6486,7 @@ mod tests {
         projection.apply(owner_observation(activation.clone(), AgentState::Active));
         projection.apply(ConversationObservation::Background(
             BackgroundExecutionSnapshot {
+                bash: None,
                 state: BackgroundLifecycle::Succeeded,
                 result: Some(success_result()),
                 ..job

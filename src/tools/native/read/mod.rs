@@ -423,6 +423,7 @@ mod tests {
                     arguments: serde_json::json!({ "path": path }),
                 },
                 ToolExecutionContext {
+                    model_invocation: None,
                     goal: None,
                     conversation_id: &conversation_id,
                     execution_id: None,
@@ -613,6 +614,7 @@ mod tests {
                 arguments,
             };
             let context = ToolExecutionContext {
+                model_invocation: None,
                 goal: None,
                 conversation_id: &self.conversation_id,
                 execution_id: None,

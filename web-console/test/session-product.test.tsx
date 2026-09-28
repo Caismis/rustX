@@ -75,7 +75,7 @@ it('ordinary chrome is product-only; Inspector retains exact facts and emits no 
   fireEvent.click(within(panel).getByRole('button', { name: 'Clear log' }));
   fireEvent.click(screen.getByRole('button', { name: 'Close Inspector' }));
   expect(server.requests.slice(baseline)).toEqual([]);
-  const settled = { ...snapshot(), resources: { revision: '9007199254740993', inspection: { definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] } }, capabilities: { revision: '9007199254740994' }, attempt: { ...running(), phase: { type: 'settled' as const, outcome: { type: 'completed' as const, finish_reason: { type: 'stop' as const } } } } };
+  const settled = { ...snapshot(), resources: { revision: '9007199254740993', inspection: { definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] } }, capabilities: { configured_tools: [], revision: '9007199254740994' }, attempt: { ...running(), phase: { type: 'settled' as const, outcome: { type: 'completed' as const, finish_reason: { type: 'stop' as const } } } } };
   await act(async () => server.update('A', settled));
   expect(screen.queryByLabelText('Session status')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));

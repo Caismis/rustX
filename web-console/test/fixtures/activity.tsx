@@ -1,6 +1,9 @@
 // Explicit native-state gates. This fixture is not part of the production bundle.
 import { useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Tool } from '../../src/app/agent/Tool';
+import { ArtifactContext } from '../../src/app/components/Artifact';
+import { ArtifactResources } from '../../src/client/artifacts';
 import { RuntimeFacts } from '../../src/app/agent/Activity';
 import type { RuntimeClientAgent } from '../../../protocol/app-server/v27';
 import { Server, snapshot } from '../fixture';
@@ -18,7 +21,7 @@ const agent: RuntimeClientAgent = {
   workspace: { logical_workspace: '/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
 };
 s.agents = [agent];
-s.jobs = [{ job_id: 'job-build', tool_id: 'tool-bash', tool_name: 'Build', state: 'running' }];
+s.jobs = [{ job_id: 'job-build', tool_id: 'tool-bash', tool_name: 'Build', state: 'running', bash: { command: 'printf authoritative-command', description: 'Check the build <safely>' } }];
 server.snapshots.set('A', s);
 server.handlers.set('agent/transcript', () => ({ type: 'transcript', page: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'report', content: [{ type: 'text', text: '## Final report\nCanonical child output.' }] } } }] } }));
 server.handlers.set('agent/sendMessage', request => {
@@ -32,9 +35,11 @@ server.handlers.set('agent/wait', () => ({ type: 'agent_wait', agent_id: agent.a
 server.handlers.set('job/status', () => ({ type: 'job', job: s.jobs![0] }));
 server.handlers.set('job/wait', () => ({ type: 'job', job: s.jobs![0] }));
 server.handlers.set('job/cancel', () => { s.jobs![0] = { ...s.jobs![0], state: 'cancelled', result: { status: { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' }, duration_ms: 1, content: [{ type: 'text', text: 'Process settled' }] } }; return { type: 'job', job: s.jobs![0] }; });
+server.handlers.set('artifact/read', () => ({ type: 'artifact_bytes', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=' }));
 await server.attached('A');
+const artifacts = new ArtifactResources(server.client, 'A');
 function Fixture() {
   const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
-  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><h1>Jobs and Agents</h1><RuntimeFacts snapshot={state.views.A.snapshot!} client={server.client} sessionId="A"/></div>;
+  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><h1>Jobs and Agents</h1><ArtifactContext.Provider value={artifacts}><Tool tool={{ message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: '{"path":"sample.png"}', result: { status: { type: "success" }, duration_ms: 1, content: [{ type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><RuntimeFacts snapshot={state.views.A.snapshot!} client={server.client} sessionId="A"/></div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture/>);

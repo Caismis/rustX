@@ -4580,6 +4580,10 @@ export interface ReasoningProfileView {
  */
 export interface CapabilityView {
   /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
+  /**
    * The active monotonic capability revision.
    */
   revision: string;
@@ -5401,6 +5405,10 @@ export interface PostToolBatchOpportunityView {
  */
 export interface RuntimeClientJob {
   /**
+   * Native Bash presentation, derived from the canonical invocation.
+   */
+  bash?: BashPresentation | null;
+  /**
    * The detached runtime execution identity.
    */
   job_id: string;
@@ -5434,6 +5442,14 @@ export interface RuntimeClientJob {
    * The bounded terminal result, when terminal.
    */
   result?: ToolExecutionResult | null;
+}
+/**
+ * Presentation metadata derived from canonical native Bash arguments.
+ * Command remains the authoritative execution fact.
+ */
+export interface BashPresentation {
+  command: string;
+  description?: string | null;
 }
 /**
  * A bounded structured progress notification of one tool execution.
@@ -8263,6 +8279,11 @@ export interface ModelInvocationView1 {
  * Facts frozen together with the attempt model under native admission.
  */
 export interface AdmittedSettings {
+  /**
+   * Whether the admitted catalog publishes native image reading.
+   * Absent only when historical admission evidence is unavailable.
+   */
+  read_image_active?: boolean | null;
   resource_revision: RuntimeResourceRevision;
   approval_mode: ApprovalMode;
 }
@@ -8614,6 +8635,10 @@ export interface RuntimeClientContextView1 {
  * internals appear.
  */
 export interface CapabilityView1 {
+  /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
   /**
    * The active monotonic capability revision.
    */
@@ -9829,6 +9854,10 @@ export interface UserMessageBlock3 {
  */
 export interface RuntimeClientJob1 {
   /**
+   * Native Bash presentation, derived from the canonical invocation.
+   */
+  bash?: BashPresentation | null;
+  /**
    * The detached runtime execution identity.
    */
   job_id: string;
@@ -9963,6 +9992,10 @@ export interface RuntimeClientAgent1 {
  */
 export interface CapabilityView2 {
   /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
+  /**
    * The active monotonic capability revision.
    */
   revision: string;
@@ -10002,6 +10035,10 @@ export interface CapabilityView2 {
  * internals appear.
  */
 export interface CapabilityView3 {
+  /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
   /**
    * The active monotonic capability revision.
    */

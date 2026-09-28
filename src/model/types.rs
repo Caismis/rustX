@@ -50,6 +50,9 @@ pub enum ModelProtocol {
 /// context is settled before an adapter is called.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
+    /// Resolved managed images for transport only; never serialized into durable records.
+    #[serde(skip)]
+    pub images: crate::model::images::ResolvedImages,
     /// The immutable resolved invocation configuration of this request:
     /// model identity, protocol, output budget, opaque provider request
     /// parameters, effective capabilities, and structural compat metadata.

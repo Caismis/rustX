@@ -627,7 +627,22 @@ def app_server_user(marker: str) -> Scenario:
     )
 
 
+def image_tool_round_trip() -> Scenario:
+    return Scenario(
+        "image_tool_round_trip",
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",)),
+             Stream(Gate("image-admitted"), ToolCall("call-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("image/png", "base64", "call-image")),
+             Stream(Text("image received"), Finish("stop"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, body_contains=("Image artifact", "call-image")),
+             Stream(Gate("text-admitted"), Text("text continuation"), Finish("stop"))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",), body_contains=("image/png", "call-image")),
+             Stream(Text("image history restored"), Finish("stop"))),
+    )
+
+
 SCENARIOS = {
+    "image_tool_round_trip": image_tool_round_trip,
     "app_server_user_a": lambda: app_server_user("a"),
     "app_server_user_b": lambda: app_server_user("b"),
     "openai_chat_streamed_turn": openai_chat_streamed_turn,

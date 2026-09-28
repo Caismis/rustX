@@ -244,6 +244,7 @@ export function capabilities(revision: number): CapabilityView {
   ];
   return {
     revision: revision.toString(),
+    configured_tools: tools,
     tools,
     available_tools: tools,
     skills: [

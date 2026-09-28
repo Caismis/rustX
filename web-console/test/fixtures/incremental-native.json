@@ -55,6 +55,21 @@
           "compaction_count": 0
         },
         "capabilities": {
+          "configured_tools": [
+            {
+              "id": "tool-bg",
+              "name": "bg",
+              "description": "",
+              "input_schema": {
+                "type": "object"
+              },
+              "execution_policy": "foreground_only",
+              "concurrency_policy": "sequential",
+              "approval_policy": "never",
+              "replay_policy": "never",
+              "origin": "builtin"
+            }
+          ],
           "revision": "1",
           "tools": [
             {
@@ -138,7 +153,7 @@
               {
                 "kind": "source_root_missing",
                 "source": "workspace",
-                "root": "/tmp/.tmpw1QUby/workspace/.agents/skills"
+                "root": "/tmp/.tmpAKbaG6/workspace/.agents/skills"
               }
             ]
           },
@@ -346,6 +361,7 @@
             }
           },
           "execution_settings": {
+            "read_image_active": false,
             "resource_revision": "1",
             "approval_mode": "policy"
           }
@@ -859,12 +875,12 @@
               "steps": "2",
               "latest_turn": {
                 "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
-                "started_at": "2026-09-28T00:34:22.029528943Z",
-                "ended_at": "2026-09-28T00:34:22.047768143Z"
+                "started_at": "2026-09-28T13:57:09.083705945Z",
+                "ended_at": "2026-09-28T13:57:09.100963513Z"
               },
               "timing": {
                 "ttft_ms": 0,
-                "generation_ms": 2
+                "generation_ms": 1
               },
               "completed_responses": "1",
               "model_requests": "2",
@@ -902,8 +918,8 @@
                   "message_count": 1,
                   "tool_call_count": 1,
                   "outcome": "completed",
-                  "started_at": "2026-09-28T00:34:22.029528943Z",
-                  "ended_at": "2026-09-28T00:34:22.047768143Z"
+                  "started_at": "2026-09-28T13:57:09.083705945Z",
+                  "ended_at": "2026-09-28T13:57:09.100963513Z"
                 },
                 "response_pending": false,
                 "tool_calls": [
@@ -967,8 +983,8 @@
                   "message_count": 1,
                   "tool_call_count": 1,
                   "outcome": "completed",
-                  "started_at": "2026-09-28T00:34:22.029528943Z",
-                  "ended_at": "2026-09-28T00:34:22.047768143Z"
+                  "started_at": "2026-09-28T13:57:09.083705945Z",
+                  "ended_at": "2026-09-28T13:57:09.100963513Z"
                 },
                 "response_pending": false,
                 "tool_calls": [],
@@ -1005,8 +1021,8 @@
                   "message_count": 1,
                   "tool_call_count": 1,
                   "outcome": "completed",
-                  "started_at": "2026-09-28T00:34:22.029528943Z",
-                  "ended_at": "2026-09-28T00:34:22.047768143Z"
+                  "started_at": "2026-09-28T13:57:09.083705945Z",
+                  "ended_at": "2026-09-28T13:57:09.100963513Z"
                 },
                 "response_pending": false,
                 "completed_response": {
@@ -1016,13 +1032,13 @@
                     "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
                     "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2"
                   },
-                  "completed_at": "2026-09-28T00:34:22.047768143Z",
+                  "completed_at": "2026-09-28T13:57:09.100963513Z",
                   "surface_revision": "5",
                   "retry_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
                   "timing": {
-                    "total_duration_ms": 18,
+                    "total_duration_ms": 17,
                     "ttft_ms": 0,
-                    "generation_ms": 2
+                    "generation_ms": 1
                   }
                 },
                 "tool_calls": [],
@@ -1175,12 +1191,12 @@
             "steps": "2",
             "latest_turn": {
               "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
-              "started_at": "2026-09-28T00:34:22.029528943Z",
-              "ended_at": "2026-09-28T00:34:22.047768143Z"
+              "started_at": "2026-09-28T13:57:09.083705945Z",
+              "ended_at": "2026-09-28T13:57:09.100963513Z"
             },
             "timing": {
               "ttft_ms": 0,
-              "generation_ms": 2
+              "generation_ms": 1
             },
             "completed_responses": "1",
             "model_requests": "2",
@@ -1218,8 +1234,8 @@
                 "message_count": 1,
                 "tool_call_count": 1,
                 "outcome": "completed",
-                "started_at": "2026-09-28T00:34:22.029528943Z",
-                "ended_at": "2026-09-28T00:34:22.047768143Z"
+                "started_at": "2026-09-28T13:57:09.083705945Z",
+                "ended_at": "2026-09-28T13:57:09.100963513Z"
               },
               "response_pending": false,
               "tool_calls": [
@@ -1283,8 +1299,8 @@
                 "message_count": 1,
                 "tool_call_count": 1,
                 "outcome": "completed",
-                "started_at": "2026-09-28T00:34:22.029528943Z",
-                "ended_at": "2026-09-28T00:34:22.047768143Z"
+                "started_at": "2026-09-28T13:57:09.083705945Z",
+                "ended_at": "2026-09-28T13:57:09.100963513Z"
               },
               "response_pending": false,
               "tool_calls": [],
@@ -1321,8 +1337,8 @@
                 "message_count": 1,
                 "tool_call_count": 1,
                 "outcome": "completed",
-                "started_at": "2026-09-28T00:34:22.029528943Z",
-                "ended_at": "2026-09-28T00:34:22.047768143Z"
+                "started_at": "2026-09-28T13:57:09.083705945Z",
+                "ended_at": "2026-09-28T13:57:09.100963513Z"
               },
               "response_pending": false,
               "completed_response": {
@@ -1332,13 +1348,13 @@
                   "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
                   "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2"
                 },
-                "completed_at": "2026-09-28T00:34:22.047768143Z",
+                "completed_at": "2026-09-28T13:57:09.100963513Z",
                 "surface_revision": "5",
                 "retry_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
                 "timing": {
-                  "total_duration_ms": 18,
+                  "total_duration_ms": 17,
                   "ttft_ms": 0,
-                  "generation_ms": 2
+                  "generation_ms": 1
                 }
               },
               "tool_calls": [],
@@ -1371,7 +1387,7 @@
               "kind": "user",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.028504172Z",
+                "started_at": "2026-09-28T13:57:09.082579745Z",
                 "ended_at": null,
                 "duration_ms": null
               },
@@ -1402,9 +1418,9 @@
               "kind": "attempt",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.029528943Z",
-                "ended_at": "2026-09-28T00:34:22.047768143Z",
-                "duration_ms": "18"
+                "started_at": "2026-09-28T13:57:09.083705945Z",
+                "ended_at": "2026-09-28T13:57:09.100963513Z",
+                "duration_ms": "17"
               },
               "preview": null,
               "request": null,
@@ -1430,9 +1446,9 @@
               "kind": "step",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.029993784Z",
-                "ended_at": "2026-09-28T00:34:22.040203369Z",
-                "duration_ms": "10"
+                "started_at": "2026-09-28T13:57:09.084180484Z",
+                "ended_at": "2026-09-28T13:57:09.093723224Z",
+                "duration_ms": "9"
               },
               "preview": null,
               "request": null,
@@ -1458,8 +1474,8 @@
               "kind": "request",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.031350898Z",
-                "ended_at": "2026-09-28T00:34:22.034518051Z",
+                "started_at": "2026-09-28T13:57:09.085515445Z",
+                "ended_at": "2026-09-28T13:57:09.088589087Z",
                 "duration_ms": "3"
               },
               "preview": {
@@ -1539,7 +1555,7 @@
               "kind": "assistant",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.036237417Z",
+                "started_at": "2026-09-28T13:57:09.090156525Z",
                 "ended_at": null,
                 "duration_ms": null
               },
@@ -1576,8 +1592,8 @@
               "kind": "tool",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.038010581Z",
-                "ended_at": "2026-09-28T00:34:22.038600078Z",
+                "started_at": "2026-09-28T13:57:09.091761212Z",
+                "ended_at": "2026-09-28T13:57:09.092267979Z",
                 "duration_ms": "0"
               },
               "preview": {
@@ -1614,8 +1630,8 @@
               "kind": "step",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.040588759Z",
-                "ended_at": "2026-09-28T00:34:22.047405276Z",
+                "started_at": "2026-09-28T13:57:09.094092998Z",
+                "ended_at": "2026-09-28T13:57:09.100569900Z",
                 "duration_ms": "6"
               },
               "preview": null,
@@ -1642,8 +1658,8 @@
               "kind": "request",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.041537816Z",
-                "ended_at": "2026-09-28T00:34:22.043979486Z",
+                "started_at": "2026-09-28T13:57:09.094944036Z",
+                "ended_at": "2026-09-28T13:57:09.097292646Z",
                 "duration_ms": "2"
               },
               "preview": {
@@ -1661,12 +1677,12 @@
                 "generation": {
                   "timeline": {
                     "dispatch_ms": "2",
-                    "first_output_ms": "2",
-                    "last_output_ms": "2",
+                    "first_output_ms": "3",
+                    "last_output_ms": "3",
                     "terminal_ms": "3"
                   },
-                  "ttft_ms": "0",
-                  "generation_ms": "1",
+                  "ttft_ms": "1",
+                  "generation_ms": "0",
                   "terminal_ms": "1",
                   "output_tokens_per_second": null
                 },
@@ -1704,7 +1720,7 @@
               "kind": "assistant",
               "state": "completed",
               "timing": {
-                "started_at": "2026-09-28T00:34:22.045705092Z",
+                "started_at": "2026-09-28T13:57:09.098951487Z",
                 "ended_at": null,
                 "duration_ms": null
               },
@@ -1797,6 +1813,7 @@
             }
           },
           "execution_settings": {
+            "read_image_active": false,
             "resource_revision": "1",
             "approval_mode": "policy"
           }
@@ -1835,6 +1852,21 @@
           "compaction_count": 0
         },
         "capabilities": {
+          "configured_tools": [
+            {
+              "id": "tool-bg",
+              "name": "bg",
+              "description": "",
+              "input_schema": {
+                "type": "object"
+              },
+              "execution_policy": "foreground_only",
+              "concurrency_policy": "sequential",
+              "approval_policy": "never",
+              "replay_policy": "never",
+              "origin": "builtin"
+            }
+          ],
           "revision": "1",
           "tools": [
             {
@@ -1918,7 +1950,7 @@
               {
                 "kind": "source_root_missing",
                 "source": "workspace",
-                "root": "/tmp/.tmpw1QUby/workspace/.agents/skills"
+                "root": "/tmp/.tmpAKbaG6/workspace/.agents/skills"
               }
             ]
           },

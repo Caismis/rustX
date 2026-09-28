@@ -18,6 +18,7 @@ const SKILL_TEXT: &str = "## Skills\n\n- pdf: Create PDF documents.\n";
 
 fn request(protocol: ModelProtocol) -> ModelRequest {
     ModelRequest {
+        images: std::collections::BTreeMap::new(),
         invocation: crate::common::invocation(protocol, "m6-test"),
         messages: vec![
             rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(

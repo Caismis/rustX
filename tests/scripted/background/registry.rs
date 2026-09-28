@@ -1243,6 +1243,7 @@ fn agent_status_background_section_rendering() {
     };
     let background = vec![
         BackgroundExecutionSnapshot {
+            bash: None,
             execution_id: ToolExecutionId::new("exec_215a03ee-2332-70b6-8e2d-634da8066f98"),
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
@@ -1251,6 +1252,7 @@ fn agent_status_background_section_rendering() {
             result: None,
         },
         BackgroundExecutionSnapshot {
+            bash: None,
             execution_id: ToolExecutionId::new("exec_20eb7fc0-b69d-7476-8553-c156fdc879c3"),
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
@@ -1263,6 +1265,7 @@ fn agent_status_background_section_rendering() {
             result: None,
         },
         BackgroundExecutionSnapshot {
+            bash: None,
             execution_id: ToolExecutionId::new("exec_478f38a9-b143-721b-8cd7-16660b763e95"),
             tool_id: ToolId::new("tool-grep"),
             tool_name: "grep".to_owned(),
@@ -1652,6 +1655,7 @@ fn background_status_accounting() {
                 id: AgentStatusSectionId::new("background_execution"),
                 data: AgentStatusSectionData::BackgroundExecution {
                     executions: vec![BackgroundExecutionSnapshot {
+                        bash: None,
                         execution_id: ToolExecutionId::new(
                             "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
                         ),
@@ -1881,4 +1885,40 @@ async fn issue206_background_panic_keeps_registry_settlement_authority() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn bash_presentation_survives_background_start_and_terminal_snapshot() {
+    let fixture = background_fixture("conv_a9bc338b-2024-7ff5-80df-2691024cd19d");
+    let (executor, mut started, release) = ControlledExecutor::parking(success());
+    let mut invocation = background_invocation("bash");
+    invocation.arguments =
+        serde_json::json!({"command":"printf authoritative", "description":"Inspect <safely>"});
+    let registry = &fixture.registry;
+    let prepared = registry
+        .prepare_dispatch(
+            &invocation,
+            &(Arc::new(executor) as Arc<dyn ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .unwrap();
+    let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .unwrap()
+    else {
+        panic!("accepted")
+    };
+    await_background_started(&mut started, "native metadata has one owner").await;
+    let running = registry.snapshot(&execution_id).unwrap();
+    let bash = running.bash.as_ref().unwrap();
+    assert_eq!(bash.command, "printf authoritative");
+    assert_eq!(bash.description.as_deref(), Some("Inspect <safely>"));
+    release.send_replace(true);
+    wait_for_state(registry, &execution_id, BackgroundLifecycle::Succeeded).await;
+    let terminal = registry.snapshot(&execution_id).unwrap();
+    assert_eq!(terminal.bash, running.bash);
+    assert_eq!(terminal.result, Some(success()));
+    let restored: BackgroundExecutionSnapshot =
+        serde_json::from_value(serde_json::to_value(&terminal).unwrap()).unwrap();
+    assert_eq!(restored, terminal);
 }

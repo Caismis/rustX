@@ -153,7 +153,7 @@ describe('successful command draft consumption', () => {
     server.held.add('resources/read');
     server.handlers.set('resources/read', () => {
       if (failure) throw new RpcFailure({ code: -32000, message: 'Capability read refused' });
-      return { type: 'capabilities', capabilities: { revision: '0' } };
+      return { type: 'capabilities', capabilities: { configured_tools: [], revision: '0' } };
     });
     const input = await open('/tools');
     expect(input).toHaveProperty('value', '/tools');
@@ -167,7 +167,7 @@ describe('successful command draft consumption', () => {
 describe('inbound transport frontier', () => {
   it('counts inbound already in the bounded client pipeline before a socket slot is available', async () => {
     await subject(); server.held.add('resources/read'); server.held.add('turn/start');
-    server.handlers.set('resources/read', () => ({ type: 'capabilities', capabilities: { revision: '0' } }));
+    server.handlers.set('resources/read', () => ({ type: 'capabilities', capabilities: { configured_tools: [], revision: '0' } }));
     const reads = Array.from({ length: 8 }, () => server.client.request({ method: 'resources/read', params: { target: server.client.target('A') } }, 'capabilities'));
     const work = server.client.send('A', 'queued transport');
     expect(methods()).not.toContain('turn/start');

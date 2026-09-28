@@ -128,6 +128,7 @@ struct Driver {
 struct Setup {
     /// The model the session selects.
     model: String,
+    images: bool,
     /// The declared context window of every catalog model.
     context_window: u64,
     /// The session's safety reserve.
@@ -144,6 +145,7 @@ impl Setup {
     fn new(model: &str) -> Self {
         Self {
             model: model.to_owned(),
+            images: false,
             context_window: 128_000,
             reserve_tokens: 1_024,
             keep_recent_tokens: 8_192,
@@ -303,7 +305,7 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             serde_json::json!({
                 "provider": provider, "id": id, "protocol": protocol,
                 "context_window": window, "max_output_tokens": 1024,
-                "capabilities": text_capabilities(),
+                "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"], "tool_calls": true, "reasoning": true}) } else { text_capabilities() },
             }),
         );
     }
@@ -343,7 +345,7 @@ fn session_json(setup: &Setup) -> String {
     }
     toml::to_string_pretty(&serde_json::json!({
         "agent_id": "agent-issue47",
-        "agent": {"model": model, "skills": "all", "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash"]}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
+        "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,
@@ -1458,4 +1460,168 @@ fn dependencies() -> LocalRuntimeDependencies {
         )]))),
         ..LocalRuntimeDependencies::default()
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn image_tool_round_trip_and_text_model_switch() {
+    use base64::Engine;
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut bytes = Vec::new();
+    {
+        let encoder = png::Encoder::new(&mut bytes, 1, 1);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[128]).unwrap();
+    }
+    std::fs::write(workspace.join("sample.png"), &bytes).unwrap();
+    let Some(emulator) =
+        ProviderEmulator::start_with_workspace("image_tool_round_trip", Some(&workspace)).await
+    else {
+        return;
+    };
+    let mut setup = Setup::new(&format!("emulator-anthropic/{ANTHROPIC_MODEL}"));
+    setup.images = true;
+    let driver = Driver::start_in(root, &emulator, &setup).await;
+    driver.submit("read the image");
+    emulator.await_gate("image-admitted").await;
+    let (snapshot, _) = driver.host().snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .attempt
+            .as_ref()
+            .unwrap()
+            .execution_settings
+            .as_ref()
+            .unwrap()
+            .read_image_active,
+        Some(true)
+    );
+    assert!(
+        snapshot
+            .capabilities
+            .tools
+            .iter()
+            .any(|tool| tool.id.as_str() == "tool-read-image")
+    );
+    let text_model =
+        SessionModelConfig::of(ModelRef::parse(&format!("emulator/{CHAT_MODEL}")).unwrap());
+    assert!(
+        driver.host().model_set(text_model.clone()).is_err(),
+        "active admission cannot be replaced"
+    );
+    emulator.release_gate("image-admitted").await;
+    let (_, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    std::fs::remove_file(workspace.join("sample.png")).unwrap();
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 2);
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    assert!(body_text(&requests[1]).contains(&data));
+    assert!(body_text(&requests[1]).contains("image/png"));
+    driver
+        .host()
+        .model_set(SessionModelConfig::of(
+            rustx::model::catalog::ModelRef::parse(&format!("emulator/{CHAT_MODEL}")).unwrap(),
+        ))
+        .unwrap();
+    driver.submit("continue as text");
+    emulator.await_gate("text-admitted").await;
+    let (snapshot, _) = driver.host().snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .attempt
+            .as_ref()
+            .unwrap()
+            .execution_settings
+            .as_ref()
+            .unwrap()
+            .read_image_active,
+        Some(false)
+    );
+    assert!(
+        !snapshot
+            .capabilities
+            .tools
+            .iter()
+            .any(|tool| tool.id.as_str() == "tool-read-image")
+    );
+    let image_model = SessionModelConfig::of(
+        ModelRef::parse(&format!("emulator-anthropic/{ANTHROPIC_MODEL}")).unwrap(),
+    );
+    assert!(
+        driver.host().model_set(image_model.clone()).is_err(),
+        "text Attempt stays frozen"
+    );
+    emulator.release_gate("text-admitted").await;
+    let (_, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 3);
+    assert!(!body_text(&requests[2]).contains(&data));
+    assert!(body_text(&requests[2]).contains("Image artifact"));
+    assert!(
+        !requests[2]["body"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "read_image")
+    );
+    driver.host().model_set(image_model).unwrap();
+    driver.submit("inspect the retained image");
+    let (_, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 4);
+    assert!(
+        body_text(&requests[3]).contains(&data),
+        "canonical image survives text projection and source deletion"
+    );
+    await_history_len(&driver, 4).await;
+    let reopened = rustx::durable::SqliteConversationStore::open(
+        driver.runtime.runtime().conversation_id().clone(),
+        &driver
+            .runtime
+            .tool_runtime()
+            .tool_output()
+            .root()
+            .parent()
+            .unwrap()
+            .join("conversation.sqlite"),
+    )
+    .unwrap();
+    let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
+    let snapshots = crate::common::request_snapshots(&history);
+    assert_eq!(snapshots.len(), 4);
+    for (index, snapshot) in snapshots.iter().enumerate() {
+        let request = history.reconstruct(&snapshot.identity).unwrap();
+        let serialized = serde_json::to_string(&request).unwrap();
+        assert!(
+            !serialized.contains(&data),
+            "durable evidence contains no encoded payload"
+        );
+        if index == 2 {
+            assert!(serialized.contains("Image artifact"));
+            assert!(!serialized.contains("\"type\":\"image\""));
+            assert!(
+                serialized.contains("call-image"),
+                "historical call/result correlation survives reconstruction"
+            );
+        } else if index > 0 {
+            assert!(
+                serialized.contains("\"type\":\"image\""),
+                "canonical image reference survives reopening SQLite"
+            );
+        }
+    }
+    emulator.finish().await;
 }

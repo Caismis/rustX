@@ -1358,3 +1358,27 @@ mod tests {
         assert!(text.contains("proven unable to continue"));
     }
 }
+
+/// Presentation metadata derived from canonical native Bash arguments.
+/// Command remains the authoritative execution fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BashPresentation {
+    pub command: String,
+    pub description: Option<String>,
+}
+impl BashPresentation {
+    #[must_use]
+    pub fn from_arguments(tool_id: &ToolId, arguments: &serde_json::Value) -> Option<Self> {
+        if tool_id.as_str() != "tool-bash" {
+            return None;
+        }
+        Some(Self {
+            command: arguments.get("command")?.as_str()?.to_owned(),
+            description: arguments
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        })
+    }
+}

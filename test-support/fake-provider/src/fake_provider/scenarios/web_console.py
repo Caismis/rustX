@@ -48,6 +48,7 @@ def web_chat_history() -> Scenario:
                       Stream(Text("Uploaded workspace file received."), Finish())))
     steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Image please",)),
                       Stream(ToolCall("chat-image", "render_image", "{}"), Finish("tool_calls"))))
+    steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Image artifact", "chat-image")), Stream(Text("Image reference retained for a vision-capable model."), Finish("stop"))))
     return Scenario("web_chat_history", *steps)
 
 

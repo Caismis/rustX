@@ -82,3 +82,9 @@ visible and never replay mutations. Exact Tool assembly uses native `arguments_j
 The terminal-specific normalized model and rendering remain unchanged; sharing the
 Web raw DTO fold would require a second state representation, so no speculative
 TUI rewrite or generic package was introduced.
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.

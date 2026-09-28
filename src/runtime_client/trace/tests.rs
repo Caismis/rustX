@@ -571,7 +571,8 @@ fn tool_detail_joins_arguments_schema_and_result_from_exact_authorities() {
     let store = store("conv_5c27f0d1-93af-7a24-8e01-39d4cb3f1a22");
     start(&store);
     let frozen = request(&store, 0);
-    let call = bash_call("call-inspect");
+    let mut call = bash_call("call-inspect");
+    call.arguments["description"] = serde_json::json!("List the workspace <safely>");
     propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
     completion(&store, &frozen, None, None, 4);
     append(
@@ -625,7 +626,7 @@ fn tool_detail_joins_arguments_schema_and_result_from_exact_authorities() {
     // Arguments come from the canonical proposal, exactly as recorded.
     assert_eq!(
         tool.arguments.as_ref().unwrap().value,
-        serde_json::json!({ "command": "ls -la\necho done", "timeout": 30 })
+        serde_json::json!({ "command": "ls -la\necho done", "timeout": 30, "description": "List the workspace <safely>" })
     );
     // The schema comes from the owning request's own frozen catalog.
     let definition = tool.definition.as_ref().expect("historical definition");
@@ -1398,6 +1399,7 @@ fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
         store.conversation_id().clone(),
         vec![],
         CapabilityView {
+            configured_tools: Vec::new(),
             revision: CapabilityRevision::new(1),
             tools: vec![],
             available_tools: vec![],
@@ -1643,6 +1645,7 @@ fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
         store.conversation_id().clone(),
         vec![],
         CapabilityView {
+            configured_tools: Vec::new(),
             revision: CapabilityRevision::new(1),
             tools: vec![],
             available_tools: vec![],
@@ -1665,6 +1668,7 @@ fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
     record.native_id = Some("exec_db47f954-a31a-74a3-8706-22baacdc0747".into());
     snapshot.trace.records = vec![record];
     snapshot.jobs.push(RuntimeClientJob {
+        bash: None,
         job_id: crate::runtime::identity::ToolExecutionId::new(
             "exec_68344812-64a3-79bc-815f-6c3b32dfac91",
         ),
@@ -1747,6 +1751,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
         store.conversation_id().clone(),
         vec![],
         CapabilityView {
+            configured_tools: Vec::new(),
             revision: CapabilityRevision::new(1),
             tools: vec![],
             available_tools: vec![],
@@ -1760,6 +1765,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
     .unwrap()
     .0;
     snapshot.jobs.push(RuntimeClientJob {
+        bash: None,
         job_id: execution.clone(),
         tool_id: ToolId::new("tool"),
         tool_name: "tool".into(),
@@ -3234,6 +3240,7 @@ fn quiet_snapshot(
         store.conversation_id().clone(),
         vec![],
         CapabilityView {
+            configured_tools: Vec::new(),
             revision: CapabilityRevision::new(1),
             tools: vec![],
             available_tools: vec![],
