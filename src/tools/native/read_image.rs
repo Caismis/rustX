@@ -50,6 +50,27 @@ impl ToolExecutor for ReadImage {
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> ToolExecutionHandle<'a> {
+        Self::start_inner(
+            invocation,
+            context,
+            #[cfg(test)]
+            || {},
+            #[cfg(test)]
+            || {},
+        )
+    }
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+}
+
+impl ReadImage {
+    fn start_inner(
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'_>,
+        #[cfg(test)] before_commit: impl FnOnce() + Send + 'static,
+        #[cfg(test)] after_commit: impl FnOnce() + Send + 'static,
+    ) -> ToolExecutionHandle<'_> {
         let cancellation = context.cancellation.clone();
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
@@ -103,6 +124,8 @@ impl ToolExecutor for ReadImage {
                     Ok(bytes)
                 })
                 .await;
+                #[cfg(test)]
+                before_commit();
                 if context.cancellation.is_cancelled() {
                     return cancelled_result(context.cancellation.reason());
                 }
@@ -114,6 +137,8 @@ impl ToolExecutor for ReadImage {
                 let Ok(artifact_id) = context.artifacts.put_bounded(&bytes) else {
                     return failed_result("image artifact storage failed");
                 };
+                #[cfg(test)]
+                after_commit();
                 if context.cancellation.is_cancelled() {
                     // A reserved artifact remains owned by normal conversation retention;
                     // cancellation never publishes a successful image reference.
@@ -130,9 +155,6 @@ impl ToolExecutor for ReadImage {
             }),
             cancellation,
         )
-    }
-    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
-        crate::tools::deadline::ToolProgressCapability::None
     }
 }
 
@@ -168,6 +190,17 @@ mod tests {
         path: &str,
         cancelled: bool,
     ) -> crate::tools::types::ToolExecutionResult {
+        run_at_commit(fixture, model, path, cancelled, false, false).await
+    }
+
+    async fn run_at_commit(
+        fixture: &common::NativeFixture,
+        model: &crate::model::invocation::ResolvedModelInvocation,
+        path: &str,
+        cancelled: bool,
+        cancel_before_commit: bool,
+        cancel_after_commit: bool,
+    ) -> crate::tools::types::ToolExecutionResult {
         let call = ToolCall {
             id: crate::runtime::identity::ToolCallId::new("image"),
             tool_id: definition().id,
@@ -186,7 +219,7 @@ mod tests {
             fixture.runtime.conversation_id(),
             None,
             crate::runtime::ExecutionCancellation::detached(
-                signal,
+                signal.clone(),
                 crate::runtime::types::CancellationReason::UserRequested,
             ),
             fixture.runtime.workspace(),
@@ -196,10 +229,33 @@ mod tests {
             fixture.runtime.environment(),
         );
         context.model_invocation = Some(model);
-        ReadImage
-            .start(prepared.invocation, context)
-            .completion
-            .await
+        let before_signal = signal.clone();
+        let artifacts = fixture.runtime.artifacts().clone();
+        ReadImage::start_inner(
+            prepared.invocation,
+            context,
+            move || {
+                if cancel_before_commit {
+                    before_signal.cancel();
+                }
+            },
+            move || {
+                // put_bounded returned: the durable snapshot is already
+                // readable through the settled-writer admission boundary.
+                let lengths = crate::tools::artifacts::ArtifactStore::archive_lengths(
+                    artifacts.root(),
+                    || Ok(()),
+                )
+                .unwrap();
+                assert!(!lengths.is_empty());
+                assert!(lengths.values().all(Option::is_some));
+                if cancel_after_commit {
+                    signal.cancel();
+                }
+            },
+        )
+        .completion
+        .await
     }
 
     #[test]
@@ -248,6 +304,70 @@ mod tests {
                 .any(|tool| tool.name == "read_image"),
             "unavailable runtime image path narrows the admitted intersection"
         );
+    }
+
+    #[tokio::test]
+    async fn image_cancellation_on_each_side_of_artifact_commit_is_deterministic() {
+        use crate::runtime::identity::ArtifactId;
+        use crate::tools::artifacts::ArtifactStore;
+
+        for after_commit in [false, true] {
+            let fixture = common::native_fixture();
+            let model = invocation(true);
+            let mut bytes = Vec::new();
+            {
+                let encoder = png::Encoder::new(&mut bytes, 1, 1);
+                encoder
+                    .write_header()
+                    .unwrap()
+                    .write_image_data(&[128])
+                    .unwrap();
+            }
+            std::fs::write(fixture.runtime.workspace().root().join("image.png"), &bytes).unwrap();
+            let result = run_at_commit(
+                &fixture,
+                &model,
+                "image.png",
+                false,
+                !after_commit,
+                after_commit,
+            )
+            .await;
+            assert!(matches!(
+                result.status,
+                ToolExecutionStatus::Cancelled { .. }
+            ));
+            assert!(
+                result
+                    .content
+                    .iter()
+                    .all(|block| !matches!(block, ToolResultContent::Image(_)))
+            );
+            let reopened = ArtifactStore::new(
+                fixture.runtime.conversation_id().clone(),
+                fixture.runtime.artifacts().root(),
+            )
+            .unwrap();
+            let id = ArtifactId::new("artifact_1");
+            if after_commit {
+                assert_eq!(reopened.read_bounded(&id).unwrap(), bytes);
+                assert_eq!(reopened.create_artifact().unwrap().as_str(), "artifact_2");
+                let mut reader = ArtifactStore::open_archive_reader(reopened.root(), &id).unwrap();
+                let mut restored = Vec::new();
+                reader.read_to_end(&mut restored).unwrap();
+                assert_eq!(
+                    restored, bytes,
+                    "committed cancellation residue is settled and replayable"
+                );
+            } else {
+                assert!(reopened.read_bounded(&id).is_err());
+                assert_eq!(
+                    reopened.create_artifact().unwrap(),
+                    id,
+                    "no reservation before commit"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -303,6 +423,15 @@ mod tests {
         let ToolResultContent::Image(reference) = &result.content[1] else {
             panic!("canonical image")
         };
+        std::fs::write(root.join("image.png"), b"source replaced after commit").unwrap();
+        assert_eq!(
+            fixture
+                .runtime
+                .artifacts()
+                .read_bounded(&reference.artifact_id)
+                .unwrap(),
+            bytes
+        );
         std::fs::remove_file(root.join("image.png")).unwrap();
         assert_eq!(
             fixture

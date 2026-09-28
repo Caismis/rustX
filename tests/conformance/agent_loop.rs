@@ -167,6 +167,34 @@ impl Driver {
     async fn start_in(root: tempfile::TempDir, emulator: &ProviderEmulator, setup: &Setup) -> Self {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
+        if setup.images {
+            std::fs::create_dir_all(workspace.join(".agents/agents")).unwrap();
+            std::fs::create_dir_all(workspace.join(".agents/workflows")).unwrap();
+            std::fs::write(
+                workspace.join(".agents/agents/image_reviewer.toml"),
+                "description = \"Text-only image history reviewer.\"\ninstructions = \"Review the delegated text.\"\n[model]\nmodel = \"emulator/chat-model\"\n[tools]\nbuiltin = []\n",
+            ).unwrap();
+            let workflow = serde_json::json!({
+                "description": "Delegate a text review to an independently frozen child.",
+                "block": {
+                    "input": {"type":"object", "properties":{"task":{"type":"string"}}, "required":["task"], "additionalProperties":false},
+                    "output": {"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false},
+                    "entry":"review",
+                    "nodes": {
+                        "review": {"type":"agent", "profile":"image_reviewer", "task":"Review the delegated text.",
+                            "input":{"task":{"type":"reference","path":["args","task"]}},
+                            "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}},
+                        "done": {"type":"return","output":{"type":"reference","path":["review"]}}
+                    },
+                    "edges":[{"from":"review","to":"done"}]
+                }
+            });
+            std::fs::write(
+                workspace.join(".agents/workflows/image_review.yaml"),
+                serde_yaml::to_string(&workflow).unwrap(),
+            )
+            .unwrap();
+        }
         std::fs::write(
             root.path().join("rustx.toml"),
             format!("{}\n{}", session_json(setup), models_json(emulator, setup)),
@@ -185,6 +213,7 @@ impl Driver {
                 CREDENTIAL_VARIABLE.to_owned(),
                 CREDENTIAL_VALUE.to_owned(),
             )]))),
+            child_program: Some(PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
             ..LocalRuntimeDependencies::default()
         };
         let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
@@ -345,7 +374,7 @@ fn session_json(setup: &Setup) -> String {
     }
     toml::to_string_pretty(&serde_json::json!({
         "agent_id": "agent-issue47",
-        "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
+        "agent": {"model": model, "skills": "all", "workflows": if setup.images { vec!["image_review"] } else { vec![] }, "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,
@@ -1482,6 +1511,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     };
     let mut setup = Setup::new(&format!("emulator-anthropic/{ANTHROPIC_MODEL}"));
     setup.images = true;
+    setup.keep_recent_tokens = 0;
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("read the image");
     emulator.await_gate("image-admitted").await;
@@ -1522,6 +1552,14 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
     assert!(body_text(&requests[1]).contains(&data));
     assert!(body_text(&requests[1]).contains("image/png"));
+    let canonical_image = driver.host().snapshot().unwrap().0.messages.into_iter()
+        .find(|message| matches!(message, MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-image"))
+        .expect("native image result committed canonically");
+    assert!(
+        serde_json::to_string(&canonical_image)
+            .unwrap()
+            .contains("\"type\":\"image\"")
+    );
     driver
         .host()
         .model_set(SessionModelConfig::of(
@@ -1566,6 +1604,33 @@ async fn image_tool_round_trip_and_text_model_switch() {
     assert_eq!(requests.len(), 3);
     assert!(!body_text(&requests[2]).contains(&data));
     assert!(body_text(&requests[2]).contains("Image artifact"));
+    let messages = requests[2]["body"]["messages"].as_array().unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["role"] == "tool" && message["tool_call_id"] == "call-image")
+            .count(),
+        1
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter_map(|message| message["tool_calls"].as_array())
+            .flatten()
+            .filter(|call| call["id"] == "call-image")
+            .count(),
+        1
+    );
+    assert!(
+        driver
+            .host()
+            .snapshot()
+            .unwrap()
+            .0
+            .messages
+            .contains(&canonical_image),
+        "text projection preserves the exact canonical result"
+    );
     assert!(
         !requests[2]["body"]["tools"]
             .as_array()
@@ -1586,8 +1651,77 @@ async fn image_tool_round_trip_and_text_model_switch() {
         body_text(&requests[3]).contains(&data),
         "canonical image survives text projection and source deletion"
     );
-    await_history_len(&driver, 4).await;
-    let reopened = rustx::durable::SqliteConversationStore::open(
+    // The real child process owns a different conversation and a text-only
+    // invocation. Parent image history must not leak across that boundary.
+    driver.host().model_set(text_model).unwrap();
+    driver.submit("delegate the retained image context as text");
+    let (_, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}: {}",
+        emulator.diagnostics()
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 7);
+    for request in &requests[4..] {
+        let body = body_text(request);
+        assert!(!body.contains(&data));
+        assert!(!body.contains("image/png"));
+        assert!(!body.contains("\"type\":\"image\""));
+        assert!(!body.contains("image_url"));
+    }
+    assert!(body_text(&requests[4]).contains("call-image"));
+    assert!(body_text(&requests[6]).contains("call-image"));
+    assert!(body_text(&requests[5]).contains("workflow_output"));
+    assert!(
+        !body_text(&requests[5]).contains("call-image"),
+        "child does not inherit parent history"
+    );
+    assert!(!body_text(&requests[5]).contains("read_image"));
+    assert!(
+        driver
+            .host()
+            .snapshot()
+            .unwrap()
+            .0
+            .messages
+            .contains(&canonical_image)
+    );
+
+    // Manual compaction invokes the production summary request builder and
+    // adapter over the image-bearing canonical span, not a helper-only mock.
+    driver.host().compact_context().await.unwrap();
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 8);
+    let summary = body_text(&requests[7]);
+    assert!(summary.contains("retired-conversation"));
+    assert!(summary.contains("artifact_1"));
+    assert!(!summary.contains(&data));
+    assert!(!summary.contains("image/png"));
+    assert!(!summary.contains("\"type\":\"image\""));
+    assert!(!summary.contains("image_url"));
+    assert!(
+        driver
+            .host()
+            .snapshot()
+            .unwrap()
+            .0
+            .messages
+            .contains(&canonical_image),
+        "compaction preserves the canonical ledger"
+    );
+    assert_eq!(
+        driver
+            .runtime
+            .tool_runtime()
+            .artifacts()
+            .read_bounded(&rustx::runtime::identity::ArtifactId::new("artifact_1"))
+            .unwrap(),
+        bytes
+    );
+    await_history_len(&driver, 6).await;
+    driver.host().shutdown().await.unwrap();
+    let reopened = rustx::durable::SqliteConversationStore::open_existing(
         driver.runtime.runtime().conversation_id().clone(),
         &driver
             .runtime
@@ -1601,7 +1735,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
     let snapshots = crate::common::request_snapshots(&history);
-    assert_eq!(snapshots.len(), 4);
+    assert_eq!(snapshots.len(), 6);
     for (index, snapshot) in snapshots.iter().enumerate() {
         let request = history.reconstruct(&snapshot.identity).unwrap();
         let serialized = serde_json::to_string(&request).unwrap();
@@ -1609,7 +1743,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
             !serialized.contains(&data),
             "durable evidence contains no encoded payload"
         );
-        if index == 2 {
+        if index == 2 || index >= 4 {
             assert!(serialized.contains("Image artifact"));
             assert!(!serialized.contains("\"type\":\"image\""));
             assert!(

@@ -638,6 +638,22 @@ def image_tool_round_trip() -> Scenario:
              Stream(Gate("text-admitted"), Text("text continuation"), Finish("stop"))),
         Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",), body_contains=("image/png", "call-image")),
              Stream(Text("image history restored"), Finish("stop"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                    body_contains=("Image artifact", "call-image"), tools_include=("image_review",),
+                    body_excludes=("image/png", "image_url")),
+             Stream(ToolCall("call-image-review", "image_review", '{"task":"Review the retained image context as text."}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                    tools_include=("workflow_output",), body_contains=("Review the delegated text.",),
+                    body_excludes=("image/png", "image_url", "call-image", "read_image")),
+             Stream(ToolCall("child-output", "workflow_output", '{"summary":"text-safe child completed"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                    body_contains=("text-safe child completed", "call-image"),
+                    body_excludes=("image/png", "image_url")),
+             Stream(Text("text-safe delegation complete"), Finish("stop"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, no_direct_tools=True,
+                    body_contains=("retired-conversation", "artifact_1"),
+                    body_excludes=("image/png", "image_url")),
+             Stream(Text("Image read and text-only delegation completed."), Finish("stop"))),
     )
 
 
