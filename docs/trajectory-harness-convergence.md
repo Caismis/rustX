@@ -57,7 +57,9 @@ from its neighbors or DOM position.
 * Initial System cells move visually before Turn chrome using native
   `system_prompt.state === initial`; their Request/Step identities do not change.
 * Turn ordinal/fold/inspection and Step state/inspection are inline controls.
-  Empty native Steps remain actionable through 20px structural seats. No full-width Turn,
+  Each native Step occupies its position in `TrajectoryTurnModel.groups`: its first
+  eligible semantic seat owns its chrome, or one stable 20px fallback owns that
+  exact Step. Message groups never acquire a synthetic Step. No full-width Turn,
   Group/Step or Request row and no Event/Content headings remain.
 * Each Request selects its own native record. The marker prioritizes its own
   System cell, then its own Context cell; otherwise it owns a marker seat.
@@ -291,7 +293,8 @@ Promoted Initial System keeps its original record, Request, Attempt and Step.
 It does not consume Step chrome. The first eligible non-initial seat receives
 Turn chrome; each Step's first eligible seat receives its own Step chrome. When
 only initial cells exist for a Step, a structural fallback after Turn begins
-carries that Step. Search and fold use the same rule. Empty Turns retain their
+carries that Step at its native group position, before any later Step. Search and
+fold use the same rule; summaries carry counts, not gathered Step controls. Empty Turns retain their
 native ordering. Structure is never attached to an unrelated neighboring record.
 
 A Request-only marker remains 10px. A marker acquiring Turn/Step controls becomes
@@ -398,3 +401,103 @@ System precedes Turn, Step chrome starts after its own Turn, Request retries sta
 compact and exact, and narrow/Inspector layouts retain the native controls.
 
 Final repair fetch confirmed main remained at `a64e8ae79b2fa03da87d9995038670f179434845`; no integration or rebase was required. Final source review confirmed explicit logical target ordering, exact structural/Request selection, contained seat geometry, and unchanged Tool/protocol/Timeline/cache owners.
+
+
+## Native Step ordering repair (PR #424)
+
+Audited starting head: `8a12a86764d52d8c969370ae1906e232e5e87c8c`.
+The primary worktree still contained only unrelated untracked `.playwright-mcp/`.
+The existing dedicated branch/worktree was reused. All seven PR checks were green
+at audit; the PR was open, non-draft and had no auto-merge request.
+
+The preceding projection gathered `missingSteps` after constructing semantic
+seats and inserted them at the Turn tail. Thus an initial-only Step 1 could follow
+a semantic Step 2. Folded Turns similarly gathered Step actions on the summary.
+Correct ownership alone did not preserve native structural order.
+
+`ledgerRows` now receives the existing `TrajectoryProjection` and iterates its
+sections and each Turn's `groups` directly. Within each group it chooses visible
+seats by exact Attempt/Step membership. The first eligible seat receives the
+Step action; if no such seat exists, that iteration emits one structural seat
+with `displayKey('step-seat', attempt, step)`. Missing Steps cannot move past
+later groups. Consecutive empty Steps have separate stable keys and separate
+20px measurements, each owning exactly one Step action. No labels, IDs,
+timestamps, DOM order or adjacent content establish order or ownership.
+
+Native Initial System cells remain promoted, retaining their exact Request,
+Attempt and Step; they never consume Step chrome. Message groups remain distinct.
+Folding retains System cells and the first main content cell, then applies the
+same per-group decision before the final count-only summary. Search uses the
+existing exact structural relevance and bypasses saved folds without mutating
+them. `ledgerFocusTargets` is unchanged: Turn, Step, Request and semantic targets
+follow the final seat sequence. There is no compensating keyboard special case.
+
+### Ordering regression evidence
+
+The shared `orderedStepRecords` fixture uses equal timestamps and deliberately
+unsorted native IDs (`z-first`, `a-empty`, `m-empty`, `b-last`). Tests assert exact
+ID sequences, not merely the existence of controls.
+
+| Case | Deterministic evidence |
+| --- | --- |
+| A: initial-only Step 1, semantic Step 2 | `424 order: A initial-only first Step follows native groups in rows and logical targets`: System owner retained, System before Turn, Turn before Step 1 before Step 2, exact Inspector identities and zero-detail arrows |
+| B: semantic / empty / semantic | `424 order: B empty middle Step follows native groups in rows and logical targets`: exact ordered IDs, one 20px fallback without borrowed item/Request |
+| C: consecutive empty Steps | `424 order: C consecutive empty Steps follows native groups in rows and logical targets`: independent stable seats and exact ordered IDs |
+| D: collapsed later main row | `424 order: D folded later main row follows native groups in rows and logical targets`: earlier fallbacks remain before retained later content, summary last, fallback keys stable across folds |
+| E: search hides the normal Step seat | `424 order: search-generated fallback keeps native position and restores exact folds across locales`: native order, generated fallback, exact fold restoration, identical EN/ZH membership, zero detail reads |
+| F: virtualized browser / prepend | Four `424 order: native groups, virtual fallback and prepend` cases (1440/390 × en/zh): ordered Step Y positions, logical arrows, 20px model/style/bounds agreement, control containment, no overlap, exact focus key and native identity after fallback-to-semantic prepend, unchanged `< 2px` anchor tolerance; zero reads until semantic inspection |
+
+The pinned-container `?ordered` fixture has 150 additional Request seats to force
+virtualization. Twelve new expanded/folded/Inspector baselines were reviewed at
+1440 EN, 1440 ZH, 390 EN and 390 ZH. They show Initial System, Turn/Step 1,
+independent Step 2 and Step 3 fallbacks, then Step 4's semantic content. Four
+existing folded #421 baselines changed legitimately to separate Step actions;
+existing expanded/Inspector baselines remained unchanged. Expanded and folded
+acceptance views were re-inspected at all four viewport/locale combinations.
+
+### Preservation and validation
+
+Only `layout.ts` and its `Trajectory.tsx` call site change product behavior.
+Ledger keyboard/focus/virtualizer code, Row/CSS, Inspector, Timeline, Trace cache,
+Chat and all native/protocol/TUI sources are unchanged. Request-only, structural
+and semantic heights remain 10/20/30px. Turn/Step inspection remains summary-only.
+Runtime Client 51 / App Server 26 and the pinned Harness revision
+`477b4f420553e8a52c2fbccc464d7561b239c443` remain unchanged. Provenance descendant
+hashes reflect this local projection repair; no new Harness runtime semantics
+are imported.
+
+The first focused run passed 136 tests and failed two existing test call sites
+because the new projection argument referenced an undefined local `items`.
+Typecheck caught the same test-only mistake. Defining the existing display
+universe at that call site fixed both; assertions were not weakened. Final
+focused validation passes 138 tests, including the final stable fallback-key
+assertions. No skips, sleeps, timeout increases, suite serialization changes or
+prepend tolerance changes were introduced.
+
+Commands below were executed for this ordering repair in the dedicated worktree;
+package commands use the indicated package directory.
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
+| `cargo test --all-targets --all-features` | Pass: 3,968 tests, eight existing ignored tests; native proposal-count/lifecycle regression included |
+| `pnpm generate && pnpm check && pnpm typecheck` (protocol/app-server) | Pass; no generated drift, Runtime 51 / App Server 26 |
+| `pnpm typecheck && pnpm test` (tui) | Pass: 852 tests |
+| `pnpm typecheck` (web-console) | Pass after fixing the two test call sites above |
+| `pnpm build` (web-console) | Pass; existing Vite large-chunk advisory |
+| `pnpm test` (web-console) | Pass twice: 1,110 tests in 62 files, including the final assertions |
+| `pnpm check:i18n` (web-console) | Pass |
+| `pnpm check:provenance` (web-console) | Pass: 145 source records, 131 package notices |
+| `pnpm exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts test/trace-cache.test.ts` (web-console) | Final runs: 138 passed; initial 136 passed / two test-only failures described above |
+| `CONTAINER_ENGINE=podman RUSTX_SCREENSHOT_UPDATE=1 bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` (web-console) | Pass: 39 tests, updated affected baselines |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` (web-console) | Pass: 135 tests, screenshot comparison enabled |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` (web-console) | Pass: 39 tests against final baselines, screenshot comparison enabled |
+| `git diff --check` | Pass |
+
+No validation lane was omitted for an environment limitation. The final fetch
+confirmed `origin/main` remained `a64e8ae79b2fa03da87d9995038670f179434845` and the
+remote issue branch remained at the audited starting head. No integration was
+needed; PR #416 remains unrelated. Final review confirms fallback placement is
+inside the native group loop, every fallback owns one Step, and logical keyboard
+order follows the same rows without renderer or DOM inference.

@@ -185,3 +185,19 @@ export function semanticLedgerRecords(): TraceRecord[] {
     traceRecord(113, { kind: 'assistant', request: null, location: b, preview: { text: 'Running the native Trace regression suite.', truncated: false } }), finalTool,
   ];
 }
+
+/** Deliberately non-sorted identities and equal timestamps: group order alone owns presentation. */
+export function orderedStepRecords(initial = true, emptySteps = 2, withContext = false): TraceRecord[] {
+  const location = (step_id: string) => ({ attempt_id: 'ordered-turn', step_id });
+  const first = traceRecord(702, { location: location('z-first') });
+  first.request!.system_prompt = { state: 'initial', preview: { text: 'order-match initial prompt', truncated: false } };
+  if (withContext) first.request!.context_additions = [{ message_id: 'hidden-context', context_kind: 'native_environment', producer: { Native: 'workspace_instructions' }, source: { type: 'runtime' }, preview: { text: 'ordinary context', truncated: false }, attachments: [], truncated: false }];
+  return [
+    traceRecord(700, { kind: 'attempt', request: null, location: { attempt_id: 'ordered-turn' } }),
+    traceRecord(701, { kind: 'step', request: null, location: location('z-first') }),
+    initial ? first : traceRecord(702, { kind: 'assistant', request: null, location: location('z-first') }),
+    ...['a-empty', 'm-empty'].slice(0, emptySteps).map((id, index) => traceRecord(703 + index, { kind: 'step', request: null, location: location(id) })),
+    traceRecord(705, { kind: 'step', request: null, location: location('b-last') }),
+    traceRecord(706, { kind: 'assistant', request: null, location: location('b-last'), preview: { text: 'order-match later semantic content', truncated: false } }),
+  ];
+}

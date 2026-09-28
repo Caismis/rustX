@@ -297,7 +297,7 @@ export interface TrajectoryLedgerRow {
   summary?: string;
 }
 
-export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {
+export function ledgerRows(tx: Translate, projection: TrajectoryProjection, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {
   const turns = new Map<string, Extract<StructuralDisplayItem, { type: 'TurnHeader' }>>();
   const steps = new Map<string, Extract<StructuralDisplayItem, { type: 'GroupHeader' }>>();
   const requests = new Map<string, Extract<InspectableDisplayItem, { type: 'RequestBoundary' }>>();
@@ -315,7 +315,7 @@ export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[
     const owned = cells.filter(cell => cell.owner_record_id === owner);
     requestSeats.set(owner, (owned.find(cell => cell.type === 'SystemPromptCell') ?? owned.find(cell => cell.type === 'ContextRow') ?? marker).display_key);
   }
-  let rows: TrajectoryLedgerRow[] = items.flatMap<TrajectoryLedgerRow>(item => {
+  const seats: TrajectoryLedgerRow[] = items.flatMap<TrajectoryLedgerRow>(item => {
     if (item.type === 'HistoryBoundary') return [{ display_key: item.display_key, kind: 'history', height: 30, steps: [], turnStart: false, stepMarkers: [] }];
     if (!isInspectable(item)) return [];
     if (item.type === 'RequestBoundary' && requestSeats.get(item.owner_record_id) !== item.display_key) return [];
@@ -326,55 +326,47 @@ export function ledgerRows(tx: Translate, items: readonly TrajectoryDisplayItem[
       request: requestSeats.get(item.owner_record_id) === item.display_key ? requests.get(item.owner_record_id) : undefined,
       turnStart: false, stepMarkers: [] }];
   });
-  // Empty Turns have no content anchor. Keep their seats in native Turn order,
-  // using the same insertion rule for expanded structure and folded summaries.
-  const turnSeatIndex = (attempt: string) => {
-    const last = rows.map(row => row.turn?.attempt_id).lastIndexOf(attempt);
-    if (last >= 0) return last + 1;
-    const order = [...turns.keys()];
-    const later = new Set(order.slice(order.indexOf(attempt) + 1));
-    const next = rows.findIndex(row => row.turn && later.has(row.turn.attempt_id));
-    return next < 0 ? rows.length : next;
-  };
-  // Native classification, not text or position, promotes the initial prompt.
-  // The cell's Request and Step identities remain untouched.
-  for (const turn of turns.values()) {
-    const owned = rows.filter(row => row.turn?.attempt_id === turn.attempt_id);
-    const initial = owned.filter(row => row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial');
-    if (initial.length) {
-      const first = rows.findIndex(row => row.turn?.attempt_id === turn.attempt_id);
-      rows = rows.filter(row => !initial.includes(row));
-      rows.splice(first, 0, ...initial);
+  const rows = seats.filter(row => row.kind === 'history');
+  const isInitial = (row: TrajectoryLedgerRow) => row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial';
+  // Sections and groups are the native ordering authority. Visibility changes
+  // a group's representation, never its position relative to another group.
+  for (const section of projection.sections) {
+    if (section.kind === 'outside') {
+      rows.push(...seats.filter(row => row.item?.owner_record_id === section.record.id));
+      continue;
     }
-    if (!searching && folded.has(turn.attempt_id)) {
-      const main = owned.find(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell');
-      const retained = new Set(owned.filter(row => row.item?.type === 'SystemPromptCell' || row === main));
-      const turnSteps = [...steps.values()].filter(step => step.attempt_id === turn.attempt_id);
-      const count = cells.filter(cell => cell.type === 'RecordRow' && cell.record.location.attempt_id === turn.attempt_id).reduce((sum, cell) => sum + cell.record.calls.length, 0);
-      const summary: TrajectoryLedgerRow = { display_key: displayKey('turn-summary', turn.attempt_id), kind: 'summary', height: 20, turn, steps: turnSteps, turnStart: false, stepMarkers: [],
-        summary: tx('trajectory:ledger.fold-summary', { steps: turnSteps.length, calls: count }) };
-      rows = rows.filter(row => row.turn?.attempt_id !== turn.attempt_id || retained.has(row));
-      rows.splice(turnSeatIndex(turn.attempt_id), 0, summary);
-    } else {
-      const missingSteps = [...steps.values()].filter(step => step.attempt_id === turn.attempt_id && !owned.some(row => !initial.includes(row) && row.steps.includes(step)));
-      const needsTurn = !owned.some(row => !(row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial'));
-      if (missingSteps.length || needsTurn) {
-        rows.splice(turnSeatIndex(turn.attempt_id), 0, { display_key: displayKey('structure-marker', turn.attempt_id), kind: 'structure', height: 20, turn,
-          steps: missingSteps, turnStart: false, stepMarkers: [] });
+    const turn = turns.get(section.nativeAttemptId);
+    if (!turn) continue;
+    const owned = seats.filter(row => row.turn === turn);
+    const collapsed = !searching && folded.has(turn.attempt_id);
+    const main = owned.find(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell');
+    // Promotion changes presentation only; the native Request/Step stays intact.
+    rows.push(...owned.filter(isInitial));
+    const body: TrajectoryLedgerRow[] = [];
+    for (const group of section.groups) {
+      const step = group.kind === 'step' ? steps.get(displayKey(turn.attempt_id, group.nativeStepId)) : undefined;
+      const segment = owned.filter(row => row.item?.record.location.step_id === group.nativeStepId && !isInitial(row)
+        && (!collapsed || row.item?.type === 'SystemPromptCell' || row === main));
+      if (step) {
+        if (!segment.length) segment.push({ display_key: displayKey('step-seat', turn.attempt_id, group.nativeStepId),
+          kind: 'structure', height: 20, turn, steps: [step], stepMarkers: [], turnStart: false });
+        segment[0]!.stepMarkers = [step];
       }
+      body.push(...segment);
     }
-  }
-
-  const seenTurns = new Set<string>();
-  const seenSteps = new Set<string>();
-  for (const row of rows) {
-    // Initial System Prompt precedes Turn chrome, even though it is Step-owned.
-    const initial = row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial';
-    if (row.turn && !initial && !seenTurns.has(row.turn.attempt_id)) { row.turnStart = true; seenTurns.add(row.turn.attempt_id); }
-    row.stepMarkers = initial ? [] : row.steps.filter(step => !seenSteps.has(step.display_key));
-    for (const step of row.stepMarkers) seenSteps.add(step.display_key);
-    // A tiny Request seat cannot contain native Turn/Step controls.
-    if (row.kind === 'marker' && (row.turnStart || row.stepMarkers.length)) { row.kind = 'structure'; row.height = 20; }
+    if (collapsed) {
+      const count = cells.filter(cell => cell.type === 'RecordRow' && cell.record.location.attempt_id === turn.attempt_id).reduce((sum, cell) => sum + cell.record.calls.length, 0);
+      body.push({ display_key: displayKey('turn-summary', turn.attempt_id), kind: 'summary', height: 20, turn, steps: [], stepMarkers: [], turnStart: false,
+        summary: tx('trajectory:ledger.fold-summary', { steps: section.groups.filter(group => group.kind === 'step').length, calls: count }) });
+    }
+    if (!body.length) body.push({ display_key: displayKey('structure-marker', turn.attempt_id), kind: 'structure', height: 20, turn,
+      steps: [], stepMarkers: [], turnStart: false });
+    body[0]!.turnStart = true;
+    for (const row of body) {
+      // A tiny Request seat cannot contain native Turn/Step controls.
+      if (row.kind === 'marker' && (row.turnStart || row.stepMarkers.length)) { row.kind = 'structure'; row.height = 20; }
+    }
+    rows.push(...body);
   }
   return rows;
 }

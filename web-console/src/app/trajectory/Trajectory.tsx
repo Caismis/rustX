@@ -45,7 +45,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(projection, query), [projection, query]);
   const visible = useMemo(() => visibleItems(tx, allItems, records, calls, matches), [tx, allItems, records, calls, matches]);
-  const rows = useMemo(() => ledgerRows(tx, visible, collapsedTurns, matches !== null), [tx, visible, collapsedTurns, matches]);
+  const rows = useMemo(() => ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), [tx, projection, visible, collapsedTurns, matches]);
   const selectionItems = useMemo(() => displayUniverse(allItems, visible), [allItems, visible]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(tx, projection, mode), [tx, projection, mode]);
