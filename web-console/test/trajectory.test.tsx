@@ -10,7 +10,7 @@ import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
-import { orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
+import { manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v26';
 
 beforeEach(() => {
@@ -1324,15 +1324,15 @@ it('424: logical arrows visit exact Turn, Step, Request and semantic targets wit
   fireEvent.keyDown(turn, { key: 'ArrowUp' }); expect(document.activeElement).toBe(user);
 });
 
-it.each(['only-system', 'native-step', 'context', 'search', 'fold'] as const)('424: promoted System defers exact Step chrome and truthful fallback geometry: %s', scenario => {
+it.each(['only-system', 'native-step', 'context', 'search'] as const)('424: promoted System defers exact Step chrome and truthful fallback geometry: %s', scenario => {
   const request = richRequest(3);
   if (scenario !== 'context') request.request!.context_additions = [];
   const records = [traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' } }),
     ...(scenario === 'only-system' ? [] : [traceRecord(2, { kind: 'step', request: null })]), request];
-  if (scenario === 'context' || scenario === 'search' || scenario === 'fold') records.splice(1, 0, traceRecord(0, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' } }));
+  if (scenario === 'context' || scenario === 'search') records.splice(1, 0, traceRecord(0, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' } }));
   const items = trajectoryItems(records);
   const matches = scenario === 'search' ? searchItems(projectTrajectory(translator('en'), records), 'Frozen prompt') : null;
-  const rows = ledgerRows(translator('en'), projectTrajectory(translator('en'), records), visibleItems(translator('en'), items, records, new Set(), matches), new Set(scenario === 'fold' ? ['attempt-a'] : []), !!matches);
+  const rows = ledgerRows(translator('en'), projectTrajectory(translator('en'), records), visibleItems(translator('en'), items, records, new Set(), matches), new Set(), !!matches);
   const system = rows.find(row => row.item?.type === 'SystemPromptCell')!;
   expect(system.item?.record.location).toEqual(request.location);
   expect(system.request?.owner_record_id).toBe(request.id);
@@ -1348,7 +1348,6 @@ it.each(['only-system', 'native-step', 'context', 'search', 'fold'] as const)('4
   }
   const load = vi.fn(); show(cacheOf(records), load);
   if (scenario === 'search') fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'Frozen prompt' } });
-  if (scenario === 'fold') fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
   fireEvent.click(screen.getByRole('button', { name: 'Step 1' }));
   expect(screen.getByRole('button', { name: 'Step 1' }).getAttribute('data-step')).toBe('1');
   if (scenario !== 'only-system') expect(fact('Record')).toBe('trace:2');
@@ -1383,7 +1382,10 @@ it('424: Inspector close restores the exact structural key after folding hides a
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Turn 1' }));
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(document.activeElement).toBe(row('RecordRow', user.id));
-  // The folded Step remains an exact target on the summary seat.
+  // Hidden Step structure has no collapsed target. Expanding restores it.
+  expect(screen.queryByRole('button', { name: 'Step 1' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Expand Turn 1' }));
+  act(() => row('RecordRow', user.id).focus());
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   const step = screen.getByRole('button', { name: 'Step 1' });
   expect(document.activeElement).toBe(step);
@@ -1395,14 +1397,13 @@ it('424: Inspector close restores the exact structural key after folding hides a
 
 
 it.each([
-  ['A initial-only first Step', true, 0, false],
-  ['B empty middle Step', false, 1, false],
-  ['C consecutive empty Steps', false, 2, false],
-  ['D folded later main row', true, 2, true],
-] as const)('424 order: %s follows native groups in rows and logical targets', (_name, initial, emptySteps, folded) => {
+  ['A initial-only first Step', true, 0],
+  ['B empty middle Step', false, 1],
+  ['C consecutive empty Steps', false, 2],
+] as const)('424 order: %s follows native groups in rows and logical targets', (_name, initial, emptySteps) => {
   const records = orderedStepRecords(initial, emptySteps);
   const projection = projectTrajectory(translator('en'), records);
-  const rows = ledgerRows(translator('en'), projection, trajectoryItems(records), new Set(folded ? ['ordered-turn'] : []), false);
+  const rows = ledgerRows(translator('en'), projection, trajectoryItems(records), new Set(), false);
   const expected = ['z-first', ...['a-empty', 'm-empty'].slice(0, emptySteps), 'b-last'];
   expect(rows.flatMap(row => row.stepMarkers.map(step => step.step_id))).toEqual(expected);
   const targets = ledgerFocusTargets(rows);
@@ -1421,14 +1422,7 @@ it.each([
     expect(rows.findIndex(row => row.turnStart)).toBeGreaterThan(0);
     expect(targets.findIndex(target => target.kind === 'turn')).toBeLessThan(targets.findIndex(target => target.kind === 'step'));
   }
-  const otherFold = ledgerRows(translator('en'), projection, trajectoryItems(records), new Set(folded ? [] : ['ordered-turn']), false);
-  for (const id of ['a-empty', 'm-empty'].slice(0, emptySteps)) {
-    expect(otherFold.find(row => row.stepMarkers[0]?.step_id === id)!.display_key)
-      .toBe(rows.find(row => row.stepMarkers[0]?.step_id === id)!.display_key);
-  }
-  if (folded) expect(rows.at(-1)!.kind).toBe('summary');
   const load = vi.fn(); show(cacheOf(records), load);
-  if (folded) fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
   for (const id of expected) {
     fireEvent.click(document.querySelector(`[data-step="${id}"]`)!);
     expect(fact('Logical Step')).toBe(id);
@@ -1465,4 +1459,97 @@ it('424 order: search-generated fallback keeps native position and restores exac
   act(() => localeController.setLocale('zh')); expect(keys()).toEqual(searchingKeys);
   fireEvent.change(search, { target: { value: '' } }); expect(keys()).toEqual(foldedKeys);
   expect(load).not.toHaveBeenCalled(); act(() => localeController.setLocale('en'));
+});
+
+it.each(['many', 'initial', 'middle'] as const)('424 compact: bounded fold and exact re-expansion: %s', scenario => {
+  const records = scenario === 'many' ? manyStepRecords() : orderedStepRecords(scenario === 'initial');
+  const tx = translator('en'); const projection = projectTrajectory(tx, records); const items = trajectoryItems(records);
+  const nativeSteps = projection.sections.flatMap(section => section.kind === 'turn' ? section.groups.filter(group => group.kind === 'step').map(group => group.nativeStepId) : []);
+  const project = (folded: boolean) => ledgerRows(tx, projection, items, new Set(folded ? ['ordered-turn'] : []), false);
+  const stepIds = (rows: ReturnType<typeof project>) => ledgerFocusTargets(rows).flatMap(target => target.kind === 'step' && target.item.type === 'GroupHeader' ? [target.item.step_id] : []);
+  const expanded = project(false);
+  expect(nativeSteps).toHaveLength(scenario === 'many' ? 50 : 4);
+  expect(stepIds(expanded)).toEqual(nativeSteps);
+  expect(expanded.filter(row => row.kind === 'structure').every(row => row.height === 20 && row.stepMarkers.length === 1)).toBe(true);
+  const collapsed = project(true);
+  expect(collapsed.map(row => row.kind)).toEqual(scenario === 'middle' ? ['semantic', 'summary'] : ['semantic', 'semantic', 'summary']);
+  expect(collapsed.filter(row => row.turnStart)).toHaveLength(1);
+  expect(collapsed.at(-1)!.summary).toBe(`${nativeSteps.length} Steps · 0 Tool calls`);
+  expect(collapsed.at(-1)!.stepMarkers).toEqual([]);
+  expect(stepIds(collapsed)).toEqual([scenario === 'middle' ? 'z-first' : 'b-last']);
+  expect(collapsed.filter(row => row.kind === 'structure')).toEqual([]);
+  if (scenario !== 'middle') {
+    expect(collapsed[0]!.item?.type).toBe('SystemPromptCell');
+    expect(collapsed[0]!.item?.record.location).toEqual({ attempt_id: 'ordered-turn', step_id: 'z-first' });
+    expect(collapsed[0]!.request?.owner_record_id).toBe('trace:702');
+    expect(collapsed[0]!.stepMarkers).toEqual([]); expect(collapsed[0]!.turnStart).toBe(false);
+    expect(collapsed[1]!.item?.owner_record_id).toBe('trace:706');
+  } else expect(collapsed[0]!.item?.owner_record_id).toBe('trace:702');
+  expect(project(false)).toEqual(expanded);
+});
+
+it('424 compact: hidden Step targets disappear from arrows and return on expand without structural reads', () => {
+  const load = vi.fn(); show(cacheOf(orderedStepRecords()), load);
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
+  expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['b-last']);
+  const turn = screen.getByRole('button', { name: 'Turn 1' }); act(() => turn.focus());
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect((document.activeElement as HTMLElement).dataset.step).toBe('b-last'); expect(fact('Logical Step')).toBe('b-last');
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' }); expect(document.activeElement).toBe(turn);
+  expect(load).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Expand Turn 1' })); act(() => screen.getByRole('button', { name: 'Turn 1' }).focus());
+  for (const id of ['z-first', 'a-empty', 'm-empty', 'b-last']) {
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+    expect((document.activeElement as HTMLElement).dataset.step).toBe(id); expect(fact('Logical Step')).toBe(id);
+  }
+  expect(load).not.toHaveBeenCalled();
+});
+
+it('424 compact: search exposes a hidden Step and clearing restores exact compact rows', () => {
+  const load = vi.fn(); show(cacheOf(orderedStepRecords(false)), load);
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
+  const keys = () => [...screen.getByRole('table').querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
+  const collapsedKeys = keys();
+  expect(document.querySelectorAll('[data-display-type="StructuralSeat"]')).toHaveLength(0);
+  expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['z-first']);
+  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  fireEvent.change(search, { target: { value: 'order-match later' } });
+  expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['b-last']);
+  expect(row('RecordRow', 'trace:706')).not.toBeNull();
+  expect(document.querySelectorAll('[data-display-type="TurnSummary"]')).toHaveLength(0);
+  fireEvent.change(search, { target: { value: '' } });
+  expect(keys()).toEqual(collapsedKeys);
+  expect(document.querySelectorAll('[data-display-type="StructuralSeat"]')).toHaveLength(0);
+  expect(document.querySelectorAll('[data-display-type="TurnSummary"]')).toHaveLength(1);
+  expect(load).not.toHaveBeenCalled();
+});
+
+it.each(['structure-only', 'initial-only', 'updated-system'] as const)('424 compact: sparse Turn needs no hidden Step seats: %s', scenario => {
+  const records = orderedStepRecords().filter(record => record.kind === 'attempt' || record.kind === 'step' || (scenario !== 'structure-only' && record.kind === 'request'));
+  if (scenario === 'updated-system') {
+    const updated = traceRecord(707, { location: { attempt_id: 'ordered-turn', step_id: 'b-last' } });
+    updated.request!.system_prompt = { state: 'changed', preview: { text: 'Updated prompt', truncated: false } };
+    records.push(updated);
+  }
+  const tx = translator('en');
+  const rows = ledgerRows(tx, projectTrajectory(tx, records), trajectoryItems(records), new Set(['ordered-turn']), false);
+  expect(rows.map(row => row.kind)).toEqual(scenario === 'structure-only' ? ['summary'] : scenario === 'initial-only' ? ['semantic', 'summary'] : ['semantic', 'semantic', 'summary']);
+  expect(rows.filter(row => row.turnStart)).toHaveLength(1);
+  expect(rows.at(-1)!.summary).toBe('4 Steps · 0 Tool calls');
+  expect(ledgerFocusTargets(rows).filter(target => target.kind === 'step')).toHaveLength(scenario === 'updated-system' ? 1 : 0);
+  const load = vi.fn(); show(cacheOf(records), load);
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Turn 1' }));
+  expect(fact('Attempt')).toBe('ordered-turn'); expect(load).not.toHaveBeenCalled();
+});
+
+it('424 compact: summary counts Tool proposals from hidden semantic content', () => {
+  const records = orderedStepRecords(false);
+  records.at(-1)!.calls = [{ call_id: 'one', tool_id: 'tool-a', name: 'same' }, { call_id: 'two', tool_id: 'tool-a', name: 'same' }];
+  const tx = translator('en'); const projection = projectTrajectory(tx, records);
+  const rows = ledgerRows(tx, projection, trajectoryItems(records), new Set(['ordered-turn']), false);
+  expect(rows.map(row => row.kind)).toEqual(['semantic', 'summary']);
+  expect(rows.at(-1)!.summary).toBe('4 Steps · 2 Tool calls');
+  expect(rows.at(-1)!.stepMarkers).toEqual([]);
+  expect(rows.some(row => row.item?.owner_record_id === 'trace:706')).toBe(false);
 });

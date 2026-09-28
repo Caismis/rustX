@@ -53,11 +53,13 @@ start markers and compact summary. The renderer never discovers these relations
 from its neighbors or DOM position.
 
 * Content seats are 30px; Calls and collapsed Turn summaries are 20px;
-  Request-only seats are 10px; seats containing Turn or Step chrome are 20px.
+  Request-only seats are 10px; structural seats containing Turn or Step chrome
+  are 20px (semantic seats retain their content height).
 * Initial System cells move visually before Turn chrome using native
   `system_prompt.state === initial`; their Request/Step identities do not change.
 * Turn ordinal/fold/inspection and Step state/inspection are inline controls.
-  Each native Step occupies its position in `TrajectoryTurnModel.groups`: its first
+  In expanded/search mode, each native Step occupies its position in
+  `TrajectoryTurnModel.groups`: its first
   eligible semantic seat owns its chrome, or one stable 20px fallback owns that
   exact Step. Message groups never acquire a synthetic Step. No full-width Turn,
   Group/Step or Request row and no Event/Content headings remain.
@@ -71,7 +73,10 @@ from its neighbors or DOM position.
   substituted as native evidence. Structural selection clears detail selection
   and performs zero heavy reads.
 * Collapsed Turns retain all System cells and the first main semantic row, with
-  a compact native-membership Step/Tool-call count and actionable controls.
+  one compact native-membership Step/Tool-call count and actionable Turn chrome.
+  Only retained non-initial content carries Step chrome. Hidden Steps have no
+  fallback seats or logical focus targets until expansion; row count is bounded
+  by retained System/main content plus one summary, independently of hidden Steps.
   Search bypasses folding without mutating the saved fold sets. English and
   Chinese role/Turn/Step/Context vocabulary and native IDs share one index.
 * TanStack Virtual retains stable semantic seat keys and the existing end anchor.
@@ -293,8 +298,9 @@ Promoted Initial System keeps its original record, Request, Attempt and Step.
 It does not consume Step chrome. The first eligible non-initial seat receives
 Turn chrome; each Step's first eligible seat receives its own Step chrome. When
 only initial cells exist for a Step, a structural fallback after Turn begins
-carries that Step at its native group position, before any later Step. Search and
-fold use the same rule; summaries carry counts, not gathered Step controls. Empty Turns retain their
+carries that Step at its native group position, before any later Step in expanded
+or search mode. Collapse suppresses hidden Step seats; its summary carries counts,
+not gathered Step controls. Empty Turns retain their
 native ordering. Structure is never attached to an unrelated neighboring record.
 
 A Request-only marker remains 10px. A marker acquiring Turn/Step controls becomes
@@ -312,8 +318,9 @@ anchor for a subpixel edge difference.
   structural detail reads` proves ordering, both arrow directions, exact native
   Step evidence, zero structural detail reads and explicit Request detail reads.
 * `424: promoted System defers exact Step chrome and truthful fallback geometry`
-  covers five controlled projections: only System, loaded native Step, Context,
-  search hiding the later seat, and collapsed Turn. Native ownership stays exact.
+  covers expanded/search projections: only System, loaded native Step, Context
+  and search hiding the later seat. Compact-fold cases are covered separately
+  below. Native ownership stays exact.
 * `424: structural-only seats and request-only seats have distinct exact navigation
   and height contracts` distinguishes 20px structural and 10px Request-only seats.
 * Browser `424: exact structural arrows, seat geometry and prepend plain/virtual`
@@ -323,8 +330,9 @@ anchor for a subpixel edge difference.
   regrouping; and asserts detail-read counters before and after Request selection.
 * `424: Inspector close restores the exact structural key after folding hides a semantic target`
   proves that closing a hidden semantic selection focuses the exact Turn control,
-  arrow navigation reaches the retained semantic cell and folded Step, and closing
-  structural Inspector restores that exact Step key without a detail read.
+  arrow navigation reaches retained content, hidden Step targets are absent, and
+  expansion restores the Step; closing its Inspector restores the exact key
+  without a detail read.
 * The four `421: semantic ledger acceptance` cases now compare System/Turn/Step
   Y positions in expanded, folded and searched states, including search that
   removes the usual post-System semantic seats. Their pinned-container baselines
@@ -403,7 +411,7 @@ compact and exact, and narrow/Inspector layouts retain the native controls.
 Final repair fetch confirmed main remained at `a64e8ae79b2fa03da87d9995038670f179434845`; no integration or rebase was required. Final source review confirmed explicit logical target ordering, exact structural/Request selection, contained seat geometry, and unchanged Tool/protocol/Timeline/cache owners.
 
 
-## Native Step ordering repair (PR #424)
+## Native Step ordering repair (PR #424; expanded contract)
 
 Audited starting head: `8a12a86764d52d8c969370ae1906e232e5e87c8c`.
 The primary worktree still contained only unrelated untracked `.playwright-mcp/`.
@@ -427,7 +435,8 @@ timestamps, DOM order or adjacent content establish order or ownership.
 Native Initial System cells remain promoted, retaining their exact Request,
 Attempt and Step; they never consume Step chrome. Message groups remain distinct.
 Folding retains System cells and the first main content cell, then applies the
-same per-group decision before the final count-only summary. Search uses the
+bounded retained-content policy before the final count-only summary. Hidden Steps
+are summarized without fallback seats (see the compact-fold correction below). Search uses the
 existing exact structural relevance and bypasses saved folds without mutating
 them. `ledgerFocusTargets` is unchanged: Turn, Step, Request and semantic targets
 follow the final seat sequence. There is no compensating keyboard special case.
@@ -443,7 +452,7 @@ ID sequences, not merely the existence of controls.
 | A: initial-only Step 1, semantic Step 2 | `424 order: A initial-only first Step follows native groups in rows and logical targets`: System owner retained, System before Turn, Turn before Step 1 before Step 2, exact Inspector identities and zero-detail arrows |
 | B: semantic / empty / semantic | `424 order: B empty middle Step follows native groups in rows and logical targets`: exact ordered IDs, one 20px fallback without borrowed item/Request |
 | C: consecutive empty Steps | `424 order: C consecutive empty Steps follows native groups in rows and logical targets`: independent stable seats and exact ordered IDs |
-| D: collapsed later main row | `424 order: D folded later main row follows native groups in rows and logical targets`: earlier fallbacks remain before retained later content, summary last, fallback keys stable across folds |
+| D: collapsed later main row | Superseded by `424 compact: bounded fold and exact re-expansion: initial`: hidden earlier Steps have no seats; re-expansion restores native order |
 | E: search hides the normal Step seat | `424 order: search-generated fallback keeps native position and restores exact folds across locales`: native order, generated fallback, exact fold restoration, identical EN/ZH membership, zero detail reads |
 | F: virtualized browser / prepend | Four `424 order: native groups, virtual fallback and prepend` cases (1440/390 × en/zh): ordered Step Y positions, logical arrows, 20px model/style/bounds agreement, control containment, no overlap, exact focus key and native identity after fallback-to-semantic prepend, unchanged `< 2px` anchor tolerance; zero reads until semantic inspection |
 
@@ -501,3 +510,117 @@ remote issue branch remained at the audited starting head. No integration was
 needed; PR #416 remains unrelated. Final review confirms fallback placement is
 inside the native group loop, every fallback owns one Step, and logical keyboard
 order follows the same rows without renderer or DOM inference.
+
+
+## Compact collapsed Turns (PR #424)
+
+Audited head: `9db0ca862144c133b59feaf8c40a45fc14ed91c4`; main:
+`a64e8ae79b2fa03da87d9995038670f179434845`. The existing worktree was clean,
+all seven PR checks passed, and PR #424 was open/non-draft with auto-merge disabled.
+The primary worktree's unrelated `.playwright-mcp/` was left untouched.
+
+The expanded per-group fallback rule previously ran after collapsed content
+filtering. It recreated one 20px seat for every hidden Step, so a collapsed
+50-Step Turn still had almost 1,000px of hidden structure. Expanded and collapsed
+presentation now have distinct policies at that exact decision point:
+
+* Expanded/search: `TrajectoryTurnModel.groups` still determines order. Each Step
+  gets its first eligible exact-owned seat or its own stable 20px fallback there.
+* Collapsed: all System cells and at most one main semantic row remain, followed
+  by exactly one aggregate summary. Only a retained non-initial seat may carry
+  Step chrome. An empty segment emits nothing; hidden Steps acquire neither
+  fallback seats nor logical focus targets. The first body seat (or summary when
+  no content remains) owns actionable Turn chrome.
+
+Initial System keeps its exact Request/Attempt/Step and still precedes Turn.
+The summary counts native Step groups and Tool proposals even when their semantic
+content is hidden; it contains no individual Step actions. Search still bypasses
+saved folds, and clearing it restores exact compact row keys. Re-expansion restores
+the same native Step order and stable structural keys. No keyboard filtering or
+DOM inference was introduced: unchanged `ledgerFocusTargets` uses projected rows.
+
+### Compactness regression map
+
+| Contract | Exact test evidence |
+| --- | --- |
+| A: 50-Step bounded collapse | `424 compact: bounded fold and exact re-expansion: many`: all 50 expanded targets, 20px fallbacks, exactly three collapsed rows and one retained Step target |
+| B: initial Step 1 / main Step 4 | Same test suffix `initial`: original System Request/Step owner, no Step 1/2/3 fallback, Step 4 retained |
+| C: empty middle Steps | Same test suffix `middle`: only first semantic row and summary remain; full expansion equals the original projection including keys |
+| D: no phantom arrows | `424 compact: hidden Step targets disappear from arrows and return on expand without structural reads`: collapsed Turn ↔ retained Step, then all exact Steps after expansion, zero detail reads |
+| E: hidden content search | `424 compact: search exposes a hidden Step and clearing restores exact compact rows`: hidden Step content appears, exact collapsed keys return, no detail reads; existing bilingual restoration coverage remains |
+| Sparse partial windows | `424 compact: sparse Turn needs no hidden Step seats` for structure-only, initial-only and updated-System cases: summary/retained System supplies Turn chrome, no invented fallback |
+| Truthful aggregate | `424 compact: summary counts Tool proposals from hidden semantic content`: 4 Steps / 2 calls with the proposal row hidden |
+| F: real virtualization | Four `424 compact: fifty Steps collapse, expand and prepend` cases: native ordered Y positions, 202 → 154 total rows, virtual height 2,580 → 1,620px, Turn exactly 80px (30/30/20), no hidden DOM Steps, contained controls, exact keys after expansion, search restoration and unchanged `< 2px` Turn anchor after collapsed prepend |
+
+The `?compact` fixture uses `manyStepRecords()` (50 native groups, deliberately
+unsorted identities and equal timestamps), plus 150 Request seats to keep both
+states virtualized. All eight expanded/folded captures were visually reviewed at
+1440 EN, 1440 ZH, 390 EN and 390 ZH. Expanded captures show every Step through 50;
+folded captures show System, Turn/Step 50 with retained Assistant, then the one
+50-Step summary. Steps 1–49 are absent, not cropped or made offscreen targets.
+The existing four-Step and semantic-ledger folded references also change to
+remove hidden Step seats; their expanded/Inspector presentation is preserved.
+
+Product changes are limited to the collapsed fallback decision in `layout.ts`.
+Turn/Step/Request identity, keyboard handlers, focus restoration, 10/20/30px
+geometry, CSS, virtualizer, Inspector, Timeline, cache/#420 and native Tool owners
+are unchanged. Runtime Client stays 51, App Server stays 26; generated wire
+artifacts have no drift. Harness pin `477b4f420553e8a52c2fbccc464d7561b239c443`
+is unchanged; provenance hashes are refreshed for the changed descendants.
+
+
+### Compact-fold validation record
+
+Commands ran in the existing issue worktree; package commands use the named
+directory. No test timeout, skip, ordering sleep, prepend tolerance or suite
+worker setting was changed.
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
+| `cargo test --all-targets --all-features` | Final run: 3,968 passed, eight existing ignored; first run hit the existing managed-source preparation liveness guard, described below |
+| `cargo test --all-features --lib boundary_suites::managed_selection::fastmcp4_availability_selection_request_and_invocation_share_one_authority -- --exact` | Pass: one test, unchanged guard/assertions |
+| `pnpm generate && pnpm check && pnpm typecheck` (protocol/app-server) | Pass; no wire drift |
+| `pnpm typecheck && pnpm test` (tui) | Pass: 852 tests |
+| `pnpm typecheck` (web-console) | Pass after removing an unused new browser-test local |
+| `pnpm build` (web-console) | Pass; existing Vite chunk advisory |
+| `pnpm test` (web-console) | Pass: 1,117 tests in 62 files |
+| `pnpm check:i18n` (web-console) | Pass |
+| `pnpm check:provenance` (web-console) | Pass: 145 source records, 131 notices |
+| `pnpm exec vitest run test/trajectory.test.tsx -t '424 compact:'` (web-console, before source repair) | Expected red: five new compactness tests failed against reviewed behavior |
+| `pnpm exec vitest run test/trajectory.test.tsx test/trajectory-timing.test.ts test/trace-cache.test.ts` (web-console) | Final: 145 passed |
+| `CONTAINER_ENGINE=podman RUSTX_SCREENSHOT_UPDATE=1 bash scripts/browser-tests.sh trajectory.spec.ts --grep '424 compact:'` (web-console) | Pass: four new compactness browser cases |
+| `CONTAINER_ENGINE=podman RUSTX_SCREENSHOT_UPDATE=1 bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` (web-console) | All 43 tests passed and captures completed; wrapper subsequently exited 143. Final comparison run recorded below |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` (web-console) | Pass: 139 tests, screenshot comparison enabled, command exit 0 |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh trajectory.spec.ts trajectory-timing.spec.ts trajectory-integration.spec.ts` (web-console) | Pass: 43 tests against final baselines, command exit 0 |
+| `git diff --check` | Pass |
+
+Intermediate failures were diagnosed without weakening assertions:
+
+* The five new regression cases failed against the reviewed source because
+  hidden Step seats/targets remained present. The projection decision fixes them.
+* One new keyboard assertion retained a detached Turn DOM element across
+  expansion, when Turn chrome legitimately changed seats. Reacquiring the exact
+  Turn control fixed the test; no focus-handler changes were needed.
+* Typecheck caught an unused browser-test local; it was removed.
+* Three added sparse-window assertions used the nonexistent Inspector label
+  `Logical Attempt`. They now use the existing `Attempt` fact label.
+* The first all-target/all-feature Rust run passed 3,355 library tests but failed
+  the managed-MCP boundary's two-minute source-preparation liveness guard. The
+  exact unchanged boundary passed individually, then the complete original
+  command passed. No Rust code, guard duration or suite concurrency was changed.
+* The affected browser update run printed `43 passed` before its wrapper exited
+  with signal 143 after test completion. No browser assertion failed. The final
+  comparison invocation is independently recorded below.
+
+
+Final source review: expanded Steps still use native group order and independent
+fallback seats. Collapsed empty segments emit no seats, so hidden Steps also have
+no logical targets. System ownership, first main content, native summary counts,
+actionable Turn chrome and exact expansion/search restoration are covered above.
+The final fetch confirmed main and the remote issue branch had not moved; no
+integration with main or unrelated PR #416 was required.
+
+The final full browser command and affected comparison command both exited 0.
+No required validation lane remains blocked or unexecuted.

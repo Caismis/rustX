@@ -347,7 +347,9 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
       const step = group.kind === 'step' ? steps.get(displayKey(turn.attempt_id, group.nativeStepId)) : undefined;
       const segment = owned.filter(row => row.item?.record.location.step_id === group.nativeStepId && !isInitial(row)
         && (!collapsed || row.item?.type === 'SystemPromptCell' || row === main));
-      if (step) {
+      // Collapsed groups expose only retained content; their hidden structure
+      // is counted once by the Turn summary, without seats or focus targets.
+      if (step && (!collapsed || segment.length)) {
         if (!segment.length) segment.push({ display_key: displayKey('step-seat', turn.attempt_id, group.nativeStepId),
           kind: 'structure', height: 20, turn, steps: [step], stepMarkers: [], turnStart: false });
         segment[0]!.stepMarkers = [step];

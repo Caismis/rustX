@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
-import { orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
+import { manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v26';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -54,8 +54,8 @@ const chromeRecords = [
   traceRecord(92, { kind: 'step', request: null, location: { attempt_id: 'navigation', step_id: 'navigation-step' } }),
   ...Array.from({ length: long ? 150 : 60 }, (_, n) => traceRecord(100 + n, { location: { attempt_id: 'navigation', step_id: 'navigation-step' } })),
 ];
-const ordered = params.has('ordered');
-const orderedRecords = [...orderedStepRecords(), ...Array.from({ length: 150 }, (_, n) => traceRecord(800 + n, { location: { attempt_id: 'tail', step_id: 'tail-step' } }))];
+const ordered = params.has('ordered') || params.has('compact');
+const orderedRecords = [...(params.has('compact') ? manyStepRecords() : orderedStepRecords()), ...Array.from({ length: 150 }, (_, n) => traceRecord(800 + n, { location: { attempt_id: 'tail', step_id: 'tail-step' } }))];
 const snapshot = { records: ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
 function Fixture() {
   const [cache, setCache] = useState(() => replaceTrace(snapshot));

@@ -576,7 +576,10 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await expectStableScreenshot(page, `ledger-order-inspector-${width}-${locale}.png`);
     await page.getByRole('complementary').getByRole('button').click();
     const fold = ledger.locator('[data-attempt="ordered-turn"][data-turn-start]').getByRole('button').first();
-    await fold.click(); await checkOrder();
+    await fold.click();
+    await expect(ledger.locator('[data-attempt="ordered-turn"] [data-step]')).toHaveCount(1);
+    await expect(steps[3]!).toBeVisible();
+    await expect(ledger.locator('[data-attempt="ordered-turn"][data-display-type="StructuralSeat"]')).toHaveCount(0);
     await expect(ledger.locator('[data-display-type="TurnSummary"]')).toHaveCount(1);
     await expectStableScreenshot(page, `ledger-order-fold-${width}-${locale}.png`);
     await fold.click();
@@ -593,5 +596,74 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
     await ledger.locator('[data-owner="trace:706"]').click();
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+  });
+}
+
+for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
+  test(`424 compact: fifty Steps collapse, expand and prepend ${width} ${locale}`, async ({ page }) => {
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    await page.setViewportSize({ width, height: 1500 });
+    await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
+    await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?compact`);
+    await expect(page).toHaveTitle('Trajectory presentation contracts');
+    const ledger = page.locator('[data-trajectory-scroll]');
+    await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    const turnRows = ledger.locator('[role="row"][data-attempt="ordered-turn"]');
+    const stepControls = turnRows.locator('[data-step]');
+    const turn = turnRows.locator('[data-structural="turn"]');
+    const toggle = ledger.locator('[data-attempt="ordered-turn"][data-turn-start]').getByRole('button').first();
+    const expected = ['z-first', 'a-empty', 'm-empty', ...Array.from({ length: 46 }, (_, n) => `empty-${46 - n}`), 'b-last'];
+    const stepIds = () => stepControls.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-step')));
+    const virtualHeight = () => ledger.locator(':scope > div').first().evaluate(el => Number.parseFloat((el as HTMLElement).style.height));
+    await expect(stepControls).toHaveCount(50);
+    expect(await stepIds()).toEqual(expected);
+    await expect(ledger).toHaveAttribute('aria-rowcount', '202');
+    expect(await ledger.locator('[role="row"]').count()).toBeLessThan(202);
+    expect(await virtualHeight()).toBe(2580);
+    expect(await stepControls.evaluateAll(nodes => nodes.every((node, i) => i === 0 || node.getBoundingClientRect().y > nodes[i - 1]!.getBoundingClientRect().y))).toBe(true);
+    await expectStableScreenshot(page, `ledger-compact-expanded-${width}-${locale}.png`);
+    const keys = await stepControls.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-display-key')));
+    await toggle.click();
+    await expect(toggle).toBeFocused();
+    await expect(ledger).toHaveAttribute('aria-rowcount', '154');
+    await expect(turnRows).toHaveCount(3);
+    expect(await stepIds()).toEqual(['b-last']);
+    await expect(ledger.locator('[data-attempt="ordered-turn"][data-display-type="StructuralSeat"]')).toHaveCount(0);
+    await expect(ledger.locator('[data-attempt="ordered-turn"][data-display-type="TurnSummary"]')).toHaveCount(1);
+    await expect(turnRows.locator('[data-request-owner="trace:702"]')).toHaveAttribute('data-request-id', 'request-702');
+    expect(await virtualHeight()).toBe(1620);
+    const geometry = await turnRows.evaluateAll(rows => {
+      const boxes = rows.map(row => row.getBoundingClientRect());
+      return { heights: boxes.map(box => box.height), span: boxes.at(-1)!.bottom - boxes[0]!.top,
+        contained: rows.every((row, i) => [...row.querySelectorAll('button')].every(button => { const b = button.getBoundingClientRect(); return b.top >= boxes[i]!.top && b.bottom <= boxes[i]!.bottom; })),
+        ordered: boxes.every((box, i) => i === 0 || box.top >= boxes[i - 1]!.bottom) };
+    });
+    expect(geometry).toEqual({ heights: [30, 30, 20], span: 80, contained: true, ordered: true });
+    await expectStableScreenshot(page, `ledger-compact-fold-${width}-${locale}.png`);
+    await turn.focus(); await page.keyboard.press('ArrowDown'); await expect(stepControls).toBeFocused();
+    await page.keyboard.press('ArrowUp'); await expect(turn).toBeFocused();
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await page.getByRole('complementary').getByRole('button').click();
+    // Search exposes the hidden initial-only Step's fallback without changing saved folds.
+    const collapsedKeys = await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')));
+    const search = page.getByRole('textbox'); await search.fill('order-match');
+    expect(await stepIds()).toEqual(['z-first', 'b-last']);
+    await search.fill('');
+    expect(await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')))).toEqual(collapsedKeys);
+    await toggle.click();
+    await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    await expect(stepControls).toHaveCount(50); expect(await stepIds()).toEqual(expected);
+    expect(await stepControls.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-display-key')))).toEqual(keys);
+    // Collapse again and prepend while the exact Turn action owns the top anchor.
+    await toggle.click(); await turn.click();
+    await turn.evaluate(el => { const pane = el.closest('[data-trajectory-scroll]')!; pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top; pane.dispatchEvent(new Event('scroll')); });
+    const key = await turn.getAttribute('data-display-key'); const before = (await turn.boundingBox())!.y;
+    await page.getByRole('button', { name: locale === 'en' ? 'Load earlier records into the overview' : '将更早记录加载到概览' }).evaluate((el: HTMLButtonElement) => el.click());
+    await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+    await expect(turn).toBeFocused(); await expect(turn).toHaveAttribute('data-display-key', key!);
+    await expect.poll(async () => Math.abs((await turn.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(turnRows).toHaveCount(3); expect(await stepIds()).toEqual(['z-first']);
+    await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   });
 }

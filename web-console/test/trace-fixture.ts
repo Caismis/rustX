@@ -201,3 +201,12 @@ export function orderedStepRecords(initial = true, emptySteps = 2, withContext =
     traceRecord(706, { kind: 'assistant', request: null, location: location('b-last'), preview: { text: 'order-match later semantic content', truncated: false } }),
   ];
 }
+
+/** Fifty exact native groups, with the same first/last identities as the small ordering fixture. */
+export function manyStepRecords(): TraceRecord[] {
+  const records = orderedStepRecords();
+  records.splice(5, 0, ...Array.from({ length: 46 }, (_, index) => traceRecord(1000 + index, {
+    kind: 'step', request: null, location: { attempt_id: 'ordered-turn', step_id: `empty-${46 - index}` },
+  })));
+  return records;
+}
