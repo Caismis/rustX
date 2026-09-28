@@ -1191,7 +1191,7 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         // connection exists. The outer's pre-ownership state machine must
         // reap it and report no-ownership instead of blocking forever on a
         // connection that can never arrive.
-        let _ = std::fs::write(&pid_file, std::process::id().to_string());
+        write_fixture_pid(&pid_file);
         return INNER_EXIT_BEFORE_CONNECT_STATUS;
     }
     let mut control = match std::os::unix::net::UnixStream::connect(&inner_socket) {
@@ -1217,18 +1217,14 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         // the anchor commit point. The pid file is written after the
         // connection, so a regression can order "the inner exists and is
         // connected" against an outer loss without a sleep.
-        let _ = std::fs::write(&pid_file, std::process::id().to_string());
+        write_fixture_pid(&pid_file);
         loop {
             std::thread::sleep(POLL_INTERVAL);
         }
     }
     if let Ok(pid_file) = std::env::var(FAIL_SETSID_ENV) {
-        trace(
-            "inner",
-            format_args!("FAIL_SETSID enabled; pid file write attempted"),
-        );
-        let pid_written = std::fs::write(&pid_file, std::process::id().to_string());
-        trace("inner", format_args!("pid file write: {pid_written:?}"));
+        trace("inner", format_args!("FAIL_SETSID enabled"));
+        write_fixture_pid(&pid_file);
         // Test-only injection: `setsid()` fails after the control
         // connection exists. Like the real setsid-failure path below,
         // the inner stays in its parent's process group and
@@ -1314,7 +1310,7 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         return INNER_EXIT_NORMAL;
     }
     if let Ok(path) = std::env::var(ANCHOR_PID_FILE_ENV) {
-        let _ = std::fs::write(&path, std::process::id().to_string());
+        write_fixture_pid(&path);
     }
     let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
     if write_frame(&mut control, MSG_ANCHOR_READY, &self_pid.to_le_bytes()).is_err() {
@@ -1480,6 +1476,19 @@ pub fn run_inner(arguments: &[String]) -> i32 {
             return INNER_EXIT_CONTAINMENT;
         }
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Writes this supervisor's pid to a fixture evidence file. A failed write is
+/// reported on stderr (never discarded), so a regression that relies on the
+/// file distinguishes "never executed" from "executed but failed".
+fn write_fixture_pid(path: &str) {
+    trace("inner", format_args!("pid file write attempted"));
+    match std::fs::write(path, std::process::id().to_string()) {
+        Ok(()) => trace("inner", format_args!("pid file written")),
+        Err(error) => {
+            eprintln!("interactive supervisor: cannot write the fixture pid file: {error}");
+        }
     }
 }
 

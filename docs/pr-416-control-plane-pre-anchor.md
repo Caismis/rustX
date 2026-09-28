@@ -35,8 +35,8 @@ bytes explicit writer ownership until complete delivery or conclusive channel
 failure. The hosted FAIL_SETSID messages are much smaller than the deliberately
 oversized regression; the historical log contains no native write result.
 
-A lost setup-ending frame is a plausible explanation because the proof-theft
-inner remains alive, leaving no child-exit fallback. A future timeout now
+The hosted stall was later traced to a fixture control mis-dispatch, not a
+lost frame; see `docs/pr-416-macos-pre-anchor-root-cause.md`. A future timeout now
 passively reports PID-file existence, outer PID, non-consuming `waitid` status,
 driver events and stderr. That inspection cannot reap or establish settlement.
 No new diagnostic IPC was introduced.

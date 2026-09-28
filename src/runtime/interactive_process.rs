@@ -936,12 +936,6 @@ mod interactive_tests {
     use std::time::{Duration, Instant};
 
     use super::{InteractiveProcessSpec, InteractiveTestControl, SupervisedInteractiveProcess};
-    #[cfg(target_os = "linux")]
-    use crate::runtime::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV;
-    use crate::runtime::interactive_supervisor::{
-        ANCHOR_PID_FILE_ENV, FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV, FAIL_SIGNAL_ENV,
-        INNER_EXIT_BEFORE_CONNECT_ENV, OUTER_FAIL_ENV,
-    };
     use crate::runtime::process_runner::MAX_PROCESS_OUTPUT_BYTES;
     use std::sync::Arc;
 
@@ -996,37 +990,19 @@ mod interactive_tests {
             self.dir.path().join(name)
         }
 
-        fn spawn(
-            &self,
-            script: &str,
-            supervisor_controls: Vec<(String, String)>,
-        ) -> Result<SupervisedInteractiveProcess, String> {
-            self.spawn_with_control(script, supervisor_controls, InteractiveTestControl::new())
+        fn spawn(&self, script: &str) -> Result<SupervisedInteractiveProcess, String> {
+            self.spawn_with_control(script, InteractiveTestControl::new())
         }
 
+        /// Spawns the real supervisor unit with typed fixture controls.
+        /// Controls are never selected by environment-variable name here, so
+        /// no platform-gated constant can turn into a catch-all match arm.
         fn spawn_with_control(
             &self,
             script: &str,
-            supervisor_controls: Vec<(String, String)>,
-            mut control: InteractiveTestControl,
+            control: InteractiveTestControl,
         ) -> Result<SupervisedInteractiveProcess, String> {
             let environment = vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
-            for (key, value) in supervisor_controls {
-                match key.as_str() {
-                    OUTER_FAIL_ENV => control.outer_fail = Some(value),
-                    FAIL_SIGNAL_ENV => control.fail_signal = Some(value),
-                    ANCHOR_PID_FILE_ENV => control.anchor_pid_file = Some(value),
-                    INNER_EXIT_BEFORE_CONNECT_ENV => {
-                        control.inner_exit_before_connect = Some(value);
-                    }
-                    FAIL_SETSID_ENV => control.fail_setsid = Some(value),
-                    INNER_STALL_BEFORE_ANCHOR_ENV => {
-                        control.inner_stall_before_anchor = Some(value);
-                    }
-                    FAIL_PRE_ANCHOR_REAP_ENV => control.fail_pre_anchor_reap = true,
-                    _ => panic!("unknown fixture control: {key}"),
-                }
-            }
             let spec = InteractiveProcessSpec {
                 program: PathBuf::from("/bin/sh"),
                 args: vec!["-c".to_owned(), script.to_owned()],
@@ -1102,9 +1078,7 @@ mod interactive_tests {
             gate: gate.clone(),
         }));
         let script = format!("echo started > {}; exec sleep 30", marker.display());
-        let process = fixture
-            .spawn_with_control(&script, Vec::new(), control)
-            .expect("spawn");
+        let process = fixture.spawn_with_control(&script, control).expect("spawn");
 
         let (unit, pgid) = tokio::time::timeout(DEADLINE, offers.recv())
             .await
@@ -1171,10 +1145,27 @@ mod interactive_tests {
         stat[close + 2..].split_whitespace().nth(2)?.parse().ok()
     }
 
+    /// The kernel state letter of `pid`, or `None` once no process-table
+    /// entry remains (the pid was reaped; a zombie still has one).
+    #[cfg(target_os = "linux")]
     fn proc_state(pid: i32) -> Option<char> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let close = stat.rfind(')')?;
         stat[close + 2..].chars().next()
+    }
+
+    /// macOS has no `/proc`: its absence must never read as "reaped", so the
+    /// process table is queried through `ps`, which still lists zombies.
+    #[cfg(target_os = "macos")]
+    fn proc_state(pid: i32) -> Option<char> {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps queries the process table");
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .chars()
+            .next()
     }
 
     fn wait_for_reaped(pid: i32, description: &str) {
@@ -1325,7 +1316,7 @@ mod interactive_tests {
         let fixture = Fixture::new();
         let marker = fixture.path("started");
         let script = format!("echo started > {}; sleep 30", marker.display());
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         settle(&mut process).await;
     }
@@ -1343,7 +1334,7 @@ mod interactive_tests {
             child_pid_file.display(),
             marker.display()
         );
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let child_pid = read_pid(&child_pid_file);
         settle(&mut process).await;
@@ -1381,7 +1372,7 @@ mod interactive_tests {
             escaped = escaped.display().to_string(),
         );
         let script = format!("python3 -c {}", shell_single_quote(&program));
-        let process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let process = fixture.spawn(&script).expect("spawn");
         // The reached marker precedes the syscall. Requesting shutdown there
         // races with classification and can kill a correctly contained child.
         // Natural process settlement is the barrier after the result is written.
@@ -1442,7 +1433,7 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         settle(&mut process).await;
@@ -1464,15 +1455,9 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let process = fixture
-            .spawn(
-                &script,
-                vec![(
-                    ANCHOR_PID_FILE_ENV.to_owned(),
-                    anchor_pid_file.display().to_string(),
-                )],
-            )
-            .expect("spawn");
+        let mut control = InteractiveTestControl::new();
+        control.anchor_pid_file = Some(anchor_pid_file.display().to_string());
+        let process = fixture.spawn_with_control(&script, control).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         let inner_pid = read_pid(&anchor_pid_file);
@@ -1503,7 +1488,7 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         drop(process);
@@ -1515,11 +1500,10 @@ mod interactive_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn post_spawn_handshake_failure_settles_without_stranding() {
         let fixture = Fixture::new();
+        let mut control = InteractiveTestControl::new();
+        control.outer_fail = Some("1".to_owned());
         let process = fixture
-            .spawn(
-                "sleep 30",
-                vec![(OUTER_FAIL_ENV.to_owned(), "1".to_owned())],
-            )
+            .spawn_with_control("sleep 30", control)
             .expect("spawn");
         published_settlement(&process, "the driver must settle a handshake-failed unit")
             .await
@@ -1533,7 +1517,7 @@ mod interactive_tests {
         let fixture = Fixture::new();
         let marker = fixture.path("started");
         let script = format!("echo started > {}; sleep 30", marker.display());
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let supervisor_pid = i32::try_from(
             process
@@ -1557,7 +1541,7 @@ mod interactive_tests {
             "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             marker.display()
         );
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        let mut process = fixture.spawn(&script).expect("spawn");
         // The marker appears only if the stderr pipe keeps being drained
         // past the 64 KiB preview bound; a drain that stopped at the bound
         // would block the server on a full pipe forever.
@@ -1582,9 +1566,9 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let mut process = fixture
-            .spawn(&script, vec![(FAIL_SIGNAL_ENV.to_owned(), "1".to_owned())])
-            .expect("spawn");
+        let mut control = InteractiveTestControl::new();
+        control.fail_signal = Some("1".to_owned());
+        let mut process = fixture.spawn_with_control(&script, control).expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
         settle(&mut process).await;
@@ -1614,19 +1598,13 @@ mod interactive_tests {
             server_pid_file.display(),
             marker.display()
         );
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
         control
             .force_emergency_anchor_unavailable
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        control.anchor_pid_file = Some(anchor_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    ANCHOR_PID_FILE_ENV.to_owned(),
-                    anchor_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         wait_for_file(&marker, "server start marker");
         let server_pid = read_pid(&server_pid_file);
@@ -1701,16 +1679,10 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.inner_exit_before_connect = Some(inner_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    INNER_EXIT_BEFORE_CONNECT_ENV.to_owned(),
-                    inner_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1772,7 +1744,7 @@ mod interactive_tests {
             .force_accept_failure
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let process = fixture
-            .spawn_with_control(&script, Vec::new(), control.clone())
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1813,16 +1785,10 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.fail_setsid = Some(inner_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    FAIL_SETSID_ENV.to_owned(),
-                    inner_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1887,16 +1853,10 @@ mod interactive_tests {
         let inner_pid_file = fixture.path("inner.pid");
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
-        let control = InteractiveTestControl::new();
+        let mut control = InteractiveTestControl::new();
+        control.inner_stall_before_anchor = Some(inner_pid_file.display().to_string());
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![(
-                    INNER_STALL_BEFORE_ANCHOR_ENV.to_owned(),
-                    inner_pid_file.display().to_string(),
-                )],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = i32::try_from(
             process
@@ -1963,6 +1923,42 @@ mod interactive_tests {
             .expect("reap the adopted pre-anchor inner");
     }
 
+    /// Fixture controls reach the supervisor as exactly the seams a test
+    /// selected, on every platform. The macOS proof-theft regression once
+    /// armed the inner stall instead of the reap theft: its controls were
+    /// dispatched by environment-variable name, and a Linux-only constant
+    /// import turned one match arm into a catch-all binding on macOS.
+    #[test]
+    fn fixture_controls_configure_exactly_the_selected_supervisor_seams() {
+        use crate::runtime::interactive_supervisor::{FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV};
+        use std::collections::BTreeMap;
+        let mut control = InteractiveTestControl::new();
+        control.fail_setsid = Some("/fixture/inner.pid".to_owned());
+        control.fail_pre_anchor_reap = true;
+        let mut supervisor = tokio::process::Command::new("/bin/true");
+        control.configure_supervisor(&mut supervisor);
+        let configured: BTreeMap<String, Option<String>> = supervisor
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            configured,
+            BTreeMap::from([
+                (FAIL_PRE_ANCHOR_REAP_ENV.to_owned(), Some("1".to_owned())),
+                (
+                    FAIL_SETSID_ENV.to_owned(),
+                    Some("/fixture/inner.pid".to_owned())
+                ),
+            ])
+        );
+    }
+
     /// A pre-anchor cleanup that cannot prove the direct-inner reap.
     ///
     /// The injected seam models exactly the forbidden state: the outer's
@@ -1978,19 +1974,11 @@ mod interactive_tests {
         let server_marker = fixture.path("server-started");
         let script = format!("echo started > {}; sleep 30", server_marker.display());
         let mut control = InteractiveTestControl::new();
+        control.fail_setsid = Some(inner_pid_file.display().to_string());
+        control.fail_pre_anchor_reap = true;
         control.trace = true;
         let process = fixture
-            .spawn_with_control(
-                &script,
-                vec![
-                    (
-                        FAIL_SETSID_ENV.to_owned(),
-                        inner_pid_file.display().to_string(),
-                    ),
-                    (FAIL_PRE_ANCHOR_REAP_ENV.to_owned(), "1".to_owned()),
-                ],
-                control.clone(),
-            )
+            .spawn_with_control(&script, control.clone())
             .expect("spawn");
         let outer_pid = process
             .supervisor_child_pid
