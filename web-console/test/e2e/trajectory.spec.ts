@@ -667,3 +667,38 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   });
 }
+
+
+test('424: JSON null Step records remain exactly owned through prepend, fold, search and keyboard inspection', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?step-less`);
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  const rows = ledger.locator('[data-display-type="RecordRow"]');
+  await expect(rows).toHaveCount(2);
+  await page.getByRole('button', { name: 'Load earlier records into the overview' }).click();
+  await expect(rows).toHaveCount(3);
+  expect(await rows.evaluateAll(elements => elements.map(el => el.getAttribute('data-owner')))).toEqual(['trace:910', 'trace:911', 'trace:912']);
+  await page.getByRole('button', { name: 'Fold Turn 1' }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toHaveAttribute('data-owner', 'trace:910');
+  await expect(ledger.locator('[data-structural="step"]')).toHaveCount(0);
+  const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+  await search.fill('adopted second');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toHaveAttribute('data-owner', 'trace:911');
+  await search.fill('');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toHaveAttribute('data-owner', 'trace:910');
+  const turn = page.getByRole('button', { name: 'Turn 1', exact: true });
+  await turn.click();
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+  await turn.focus(); await page.keyboard.press('ArrowDown');
+  await expect(rows).toBeFocused();
+  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
+  await page.keyboard.press('Enter');
+  await page.getByRole('tab', { name: 'Native', exact: true }).click();
+  const inspector = page.getByRole('tabpanel');
+  await expect(inspector).toContainText('trace:910');
+  await expect(inspector).toContainText('adopted-attempt');
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+});

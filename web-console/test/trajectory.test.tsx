@@ -10,7 +10,7 @@ import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
-import { manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
+import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v27';
 
 beforeEach(() => {
@@ -1588,4 +1588,60 @@ it('finite Workflow activation origin has no fabricated Tool call or Message Too
   const panel = within(screen.getByRole('tabpanel'));
   expect(panel.getByText('Workflow', { exact: true })).toBeTruthy();
   expect(panel.queryByText('Message Tool', { exact: true })).toBeNull();
+});
+
+
+it('424: explicit-null Step membership preserves native order across partial windows, prepends, folding and search', () => {
+  const records = stepLessRecords();
+  for (const window of [records.slice(1), records]) {
+    const projection = projectTrajectory(translator('en'), window);
+    const items = trajectoryItems(window);
+    const expanded = ledgerRows(translator('en'), projection, items, new Set(), false);
+    expect(expanded.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual(window.map(record => record.id));
+    const userTargets = ledgerFocusTargets(expanded).filter(target => target.kind === 'semantic');
+    expect(userTargets.map(target => isInspectable(target.item) && target.item.owner_record_id)).toEqual(window.map(record => record.id));
+    expect(expanded.filter(row => row.item?.record.kind === 'user').every(row => row.steps.length === 0 && row.stepMarkers.length === 0)).toBe(true);
+    const folded = new Set(['adopted-attempt']);
+    const collapsed = ledgerRows(translator('en'), projection, items, folded, false);
+    expect(collapsed.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual([window[0]!.id]);
+    expect(collapsed.map(row => row.height)).toEqual([30, 20]);
+    expect(ledgerFocusTargets(collapsed).some(target => target.kind === 'step')).toBe(false);
+    const matches = searchItems(projection, window[0]!.preview!.text)!;
+    const searched = ledgerRows(translator('en'), projection, visibleItems(translator('en'), items, window, new Set(), matches), folded, true);
+    expect(searched.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual([window[0]!.id]);
+    expect(ledgerRows(translator('en'), projection, items, folded, false)).toEqual(collapsed);
+  }
+  const partial = replaceTrace({ records: records.slice(1), next_cursor: 'older' });
+  const prepended = prependTrace(partial, { records: records.slice(0, 2), next_cursor: null });
+  expect(prepended.page.records.map(record => record.id)).toEqual(records.map(record => record.id));
+});
+
+it('424: wire-null User survives folds and search, is keyboard reachable and selects only its exact Inspector owner', () => {
+  const records = stepLessRecords();
+  const load = vi.fn(); const older = vi.fn(); const select = vi.fn();
+  const ui = render(<Trajectory cache={cacheOf(records.slice(1))} loadEarlier={older} latest={noop} onSelect={select} onLoadDetail={load}/>);
+  ui.rerender(<Trajectory cache={cacheOf(records)} loadEarlier={older} latest={noop} onSelect={select} onLoadDetail={load}/>);
+  for (const record of records) expect(document.querySelectorAll(`[data-display-type="RecordRow"][data-owner="${record.id}"]`)).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
+  expect(row('RecordRow', records[0]!.id)).not.toBeNull();
+  expect(row('RecordRow', records[1]!.id)).toBeNull();
+  expect(row('RecordRow', records[2]!.id)).toBeNull();
+  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  fireEvent.change(search, { target: { value: 'adopted second' } });
+  expect(row('RecordRow', records[1]!.id)).not.toBeNull();
+  fireEvent.change(search, { target: { value: '' } });
+  expect(row('RecordRow', records[0]!.id)).not.toBeNull();
+  expect(row('RecordRow', records[1]!.id)).toBeNull();
+  const turn = screen.getByRole('button', { name: 'Turn 1' });
+  fireEvent.click(turn);
+  expect(within(structureInspector()).getByText(/exact native Attempt record is not loaded/)).toBeTruthy();
+  expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
+  act(() => turn.focus());
+  fireEvent.keyDown(turn, { key: 'ArrowDown' });
+  expect(document.activeElement).toBe(row('RecordRow', records[0]!.id));
+  fireEvent.click(row('RecordRow', records[0]!.id));
+  expect(select).toHaveBeenLastCalledWith(records[0]!.id);
+  expect(load.mock.calls).toEqual([[records[0]!.id]]);
+  fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
+  expect(within(screen.getByRole('tabpanel')).getByText(records[0]!.id)).toBeTruthy();
 });

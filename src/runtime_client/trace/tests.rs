@@ -762,6 +762,12 @@ fn adopted_inbound_becomes_a_user_record_with_canonical_content() {
     let projected = page(&store);
     let record = record_of(&projected, TraceKind::User);
     assert_eq!(record.state, TraceState::Completed);
+    let wire = serde_json::to_value(record).unwrap();
+    assert_eq!(wire["location"]["attempt_id"], "attempt-a");
+    assert_eq!(wire["location"]["step_id"], serde_json::Value::Null);
+    let round_trip: TraceRecord = serde_json::from_value(wire).unwrap();
+    assert_eq!(round_trip.location, record.location);
+
     assert_eq!(
         record.timing.duration_ms, None,
         "adoption is instantaneous, so it has no span"

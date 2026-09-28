@@ -345,7 +345,11 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     const body: TrajectoryLedgerRow[] = [];
     for (const group of section.groups) {
       const step = group.kind === 'step' ? steps.get(displayKey(turn.attempt_id, group.nativeStepId)) : undefined;
-      const segment = owned.filter(row => row.item?.record.location.step_id === group.nativeStepId && !isInitial(row)
+      // Group membership was already resolved from native locations. In
+      // particular, wire null and omitted Step identities both belong to the
+      // Attempt's message group; neither creates a synthetic Step.
+      const members = new Set(group.records.map(record => record.id));
+      const segment = owned.filter(row => row.item && members.has(row.item.owner_record_id) && !isInitial(row)
         && (!collapsed || row.item?.type === 'SystemPromptCell' || row === main));
       // Collapsed groups expose only retained content; their hidden structure
       // is counted once by the Turn summary, without seats or focus targets.

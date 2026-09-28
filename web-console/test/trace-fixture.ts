@@ -210,3 +210,18 @@ export function manyStepRecords(): TraceRecord[] {
   })));
   return records;
 }
+
+/** Native wire absence is explicit null, including adopted Attempt-owned input. */
+export function stepLessRecords(): TraceRecord[] {
+  return JSON.parse(JSON.stringify([
+    traceRecord(910, { kind: 'user', request: null, message_id: 'adopted-first',
+      location: { attempt_id: 'adopted-attempt', step_id: null },
+      preview: { text: 'adopted first input', truncated: false } }),
+    traceRecord(911, { kind: 'user', request: null, message_id: 'adopted-second',
+      location: { attempt_id: 'adopted-attempt', step_id: null },
+      preview: { text: 'adopted second input', truncated: false } }),
+    traceRecord(912, { kind: 'assistant', request: null,
+      location: { attempt_id: 'adopted-attempt', step_id: 'native-step' },
+      preview: { text: 'Step-owned answer', truncated: false } }),
+  ])) as TraceRecord[];
+}
