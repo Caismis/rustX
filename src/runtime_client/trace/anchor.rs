@@ -263,6 +263,7 @@ impl TraceProjection<'_> {
                     // A lifecycle update does not carry it, so it is resolved
                     // only when a summary row is built.
                     name: None,
+                    arguments: None,
                     // This anchor *is* the durable start fact, so execution
                     // is proven for this record by construction.
                     started: true,

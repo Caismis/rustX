@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v27.js';
+import type {ProtocolMessage} from './v29.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -100,7 +100,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 27,
+      "protocol_version": 29,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -117,7 +117,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 27,
+      "protocol_version": 29,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -239,6 +239,60 @@ export const fixtures = [
         "active_node": "node_00000000-0000-7000-8000-000000000001",
         "active_conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "node_count": 1
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "trace-tool-summary",
+    "result": {
+      "type": "trace",
+      "page": {
+        "records": [
+          {
+            "id": "trace:7",
+            "position": "trace:7",
+            "location": {
+              "attempt_id": "attempt-a",
+              "step_id": "1"
+            },
+            "kind": "tool",
+            "state": "completed",
+            "timing": {
+              "started_at": "2026-09-15T00:00:00Z",
+              "ended_at": null,
+              "duration_ms": null
+            },
+            "preview": {
+              "text": "bounded result",
+              "truncated": true
+            },
+            "request": null,
+            "tool": {
+              "call_id": "reused-call",
+              "tool_id": "tool-bash",
+              "name": "bash",
+              "arguments": {
+                "text": "{\"command\":\"bounded input",
+                "truncated": true
+              },
+              "started": true,
+              "outcome": "success",
+              "detail": null
+            },
+            "calls": [],
+            "native_id": null,
+            "agent_id": null,
+            "activation_id": null,
+            "activation_origin": null,
+            "originating_tool_call_id": null,
+            "message_id": null,
+            "attachments": [],
+            "has_detail": true,
+            "truncated": false
+          }
+        ],
+        "next_cursor": null
       }
     }
   },

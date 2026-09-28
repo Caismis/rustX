@@ -4,8 +4,8 @@ Current conversation/composer ownership is specified by
 [WEB-16](../docs/issue-406/conversation-surface.md), referencing Harness
 `477b4f420553e8a52c2fbccc464d7561b239c443`. The notes below record earlier
 layers; the resident composer, turn-local running state and Turn tails replace
-their earlier lifecycle/status ownership. App Server is now v27 / Runtime Client
-v51, with native whole-conversation Turn/Step statistics and authored model seed.
+their earlier lifecycle/status ownership. App Server is now v29 / Runtime Client
+v53, with native whole-conversation Turn/Step statistics and authored model seed.
 
 Base: `204f7ccc8fbaf4bc1b6842e02e8d0d68f19d5837`.
 Harness: `ddefc45fbc7f8e46dd73185e68295696d1297887`.
@@ -68,7 +68,7 @@ See [startup ownership](../docs/issue-419/ownership.md) for fences and failure l
 navigation and the exact native attachment. Settings target actors are shared
 with the permission seat; no configuration coordinator lives in the composer.
 
-App Server v27 / Runtime Client v51 publishes one native `turn_process` summary
+App Server v29 / Runtime Client v53 publishes one native `turn_process` summary
 on exact Assistant/Tool members for running, completed and unsuccessful Attempts.
 Control identity, cursor, counts and clock come from native evidence; failed and
 stopped Turns always remain open. CompletedResponseView still owns successful

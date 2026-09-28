@@ -230,11 +230,15 @@ jobs:
   rust-platform-boundaries:
     name: Platform-sensitive boundaries (macOS)
     runs-on: macos-latest
-    # Cold macOS compilation took 19 minutes at the reviewed Trace head;
-    # the complete suites were still progressing when the old 25-minute job
-    # deadline killed them. Keep test-level liveness guards and budget the
-    # cold build plus all mandatory boundary targets.
+    # Keep the same budget and native selectors. See docs/pr-424-validation.md
+    # for the audited cold-build cancellation and the pending native comparison.
     timeout-minutes: 40
+    env:
+      # Job-local build metadata only: assertions, overflow checks, unwind,
+      # optimization and release profiles retain their Cargo defaults.
+      # rust-cache hashes the CARGO prefix, including both settings.
+      CARGO_PROFILE_DEV_DEBUG: "1"
+      CARGO_PROFILE_TEST_DEBUG: "1"
 
     steps:
       - name: Checkout
@@ -247,10 +251,30 @@ jobs:
       # the macOS lineage: it shares nothing with any Linux lane, because the
       # action's key carries the runner OS, architecture and host triple.
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-boundaries
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Record native build environment
+        shell: bash
+        run: |
+          {
+            echo '## macOS native build measurement'
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            cargo -V
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+            echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+            echo "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG"
+            echo "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG"
+            echo 'Cargo HTML reports separate build units; /usr/bin/time -l records wall time and peak RSS per phase.'
+            echo 'Ordinary libraries, cfg(test) libraries, real binaries and binary test harnesses remain distinct Cargo units.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # The conformance target launches the provider emulator with `uv run`.
       - name: Install Python 3.12
@@ -272,7 +296,10 @@ jobs:
       # build is required: `cargo test --bins` alone does not place
       # `bash-supervisor` at `target/debug/` where the tests look for it.
       - name: Build the binaries the boundary tests exec
-        run: cargo build --bins
+        # Match the test feature set for the actual target/debug executables.
+        # Default-feature real binary builds still run in the Linux contract,
+        # boundary and TUI lanes; their validation is not replaced by harnesses.
+        run: /usr/bin/time -l cargo build --bins --all-features --timings
 
       # App Server scripted contracts live under the manager's cfg(test) module
       # to reach its private owner gates; their physical test class is still
@@ -283,14 +310,15 @@ jobs:
       # added to a binary. It is not a substitute for the explicit
       # `cargo build --bins` step above, which serves a different contract:
       # placing the real executables at `target/debug/` for tests to exec.
-      - name: Run unit tests and the in-crate boundary suites
-        run: 'cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+      - name: Compile unit and in-crate boundary test harnesses
+        run: /usr/bin/time -l cargo test --lib --bins --all-features --no-run --timings
 
-      - name: Run the external boundary targets
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+      - name: Run unit tests and the in-crate boundary suites
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+
+      - name: Compile the external boundary targets
         run: >-
-          cargo test --all-features
+          /usr/bin/time -l cargo test --all-features --no-run --timings
           --test durable
           --test process
           --test subagent
@@ -298,6 +326,28 @@ jobs:
           --test conformance
           --test cfg3_catalog
           --test cfg3_managed_output
+
+      - name: Run the external boundary targets
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: >-
+          /usr/bin/time -l cargo test --all-features
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
+      - name: Native Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+          if-no-files-found: warn
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.

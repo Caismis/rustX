@@ -1,8 +1,14 @@
-# App Server protocol v27
+# App Server protocol v29
 
-App Server v27 combines mainline incremental read-domain and Session catalog ownership with
-branch v26 Jobs and durable Agents. Neither earlier wire generation is supported.
-Runtime Client remains v52. Finite Jobs are separate from durable Agents.
+App Server v29 / Runtime Client v54 combine main's Harness semantic ledger with
+required configured Tool inventory, capability-gated image admission, and Bash
+presentation metadata. Every earlier version is rejected; there is one current
+mandatory vocabulary and no compatibility decoder.
+
+App Server v28 / Runtime Client v53 introduced bounded canonical Tool argument
+previews in Trace summaries. Full structured arguments remain in the bounded
+detail path. Current incremental read-domain and Session catalog ownership,
+finite Jobs, and durable Agents retain their native authorities.
 Agent send-message success acknowledges child canonical acceptance. A Delegate or Guidance
 frame proven unwritten returns `agent_not_delivered`; acknowledgement
 loss after a write attempt returns `agent_delivery_unknown` and
@@ -26,7 +32,7 @@ and Chat frame contract are documented in [CHAT.md](../web-console/CHAT.md).
 `job_id` and terminal lifecycle; `agents`/`agent_updated` carry stable `agent_id`,
 parent lineage, child ConversationId, current/latest activation identity and explicit
 Admitting/Active/Stopping/Inactive/Unavailable state. Controls route directly to each domain owner. A
-resumed activation updates the same Agent row. Only current v27 generated artifacts are retained, following repository policy;
+resumed activation updates the same Agent row. Only current v29 generated artifacts are retained, following repository policy;
 Older peers are rejected without a compatibility decoder. See
 [Jobs and continuable Agents](jobs-and-agents.md).
 
@@ -42,18 +48,18 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v27 / Runtime Client v52 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v29 / Runtime Client v54 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. v27/v52 retain these capabilities. A browser product preference can
+its catalog. v29/v54 retain these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
 The historical v21/v47 revision introduced `completed_process` on transcript
 entries, using committed Assistant identities and exact Tool occurrence owners
-to identify a successful Attempt and its final response. v27/v52 replace that
+to identify a successful Attempt and its final response. v29/v54 replace that
 field with `turn_process`, extending the semantic owner across outcomes. SQLite
 schema 44 retains exact completed-process members in lineage provenance,
 remapped by the native copy owner; this selective lineage policy is unchanged.
@@ -97,13 +103,13 @@ Catalog metadata after an asynchronous display-projection publication
 and every earlier version are rejected; there is no dual handling and no
 compatibility shim. Generated v16 artifacts are removed.
 
-App Server v27 also carries v16's producer identity on Trace context additions
+App Server v29 also carries v16's producer identity on Trace context additions
 and typed accepted contributions on request detail. These are historical
 RequestSnapshot facts, not live Todo/Goal authority. See
 [native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v27 identifies one complete mandatory vocabulary, including exact
+App Server v29 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
 transcripts. v12 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
@@ -211,13 +217,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v27",
+  "rustx.app-server.v29",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v27` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v29` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -234,7 +240,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v27 subprotocols above.
+endpoint/token; the browser then connects directly using the v29 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -347,7 +353,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v27; pipeline individual requests instead. This limitation is
+supported in v29; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -437,7 +443,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v27 admits at most one writable external controller per resident
+Protocol v29 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -563,8 +569,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v27.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v27.ts`: TypeScript generated from that schema using pinned
+- `v29.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v29.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -816,7 +822,7 @@ use the existing subscription as invalidation signals. Neither historical reads
 nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.md)
 for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
 
-Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 25.
+Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 29.
 Earlier versions are rejected; there are no aliases or dual-version paths.
 
 `session/trace` accepts optional `records: TraceCursor[]` (maximum 512) and returns
@@ -831,7 +837,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v27; no compatibility path is provided.
+This remains mandatory protocol v29; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -860,8 +866,8 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 52 retains it and rejects older peers by strict negotiation. This remains mandatory
-App Server protocol v27, with no compatibility field and no activation mode.
+current version 54 retains it and rejects older peers by strict negotiation. This remains mandatory
+App Server protocol v29, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -876,7 +882,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v27 includes `inbound/edit { target, expected, text }` and
+Protocol v29 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -931,7 +937,7 @@ other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
 Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 52 retains both with no
+`pending_inbound_changed` event. Current version 54 retains both with no
 compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable
@@ -1047,7 +1053,7 @@ literal values. `SourceSettings.user`, `SourceSettings.workspace`,
 redacted document view, so no source projection can carry a literal Tool
 environment value, and an override is authored by supplying a new value rather
 than by reading a lower owner's value back.
-Protocol v27 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v29 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -1171,9 +1177,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v27 and WebSocket requires `rustx.app-server.v27`.
-v26 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v27.ts`, `v27.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v29 and WebSocket requires `rustx.app-server.v29`.
+v28 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v29.ts`, `v29.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1202,8 +1208,8 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v27;
-native Runtime Client is v52.
+explicit recovery action. These recovery semantics remain in App Server v29;
+native Runtime Client is v53.
 
 ## Rich historical Trace inspection (#364)
 
@@ -1224,7 +1230,7 @@ request Context that exact request introduced, in frozen snapshot order).
 `TraceRecord` gains `originating_tool_call_id`, the exact outer `ToolCall` of a
 Background, Subagent or Workflow record. All three are resolved by native
 authority before they reach a client; no client infers them. `TraceLifecycle`
-is unchanged and never repeats them. This v27 vocabulary includes v12's
+is unchanged and never repeats them. This v29 vocabulary includes v12's
 read-only native `agent/transcript` contract and these Trace DTO changes.
 Version 19 and earlier clients are rejected without a compatibility decoder or a
 dual Trace DTO path.
@@ -1244,7 +1250,7 @@ Unknown Session/capacity use their existing failures. No raw storage/provider
 error is projected. See [Session archive safety and errors](session-archive.md).
 
 
-## Read-only native Agent conversations (v27)
+## Read-only native Agent conversations (v29)
 
 `agent/transcript { target, agent_id, before, limit }` returns the existing
 `transcript { page }` result. `target` is the **parent** AttachmentTarget (Session,
@@ -1286,7 +1292,7 @@ unavailability if lookup fails. It does not reuse cached child history or replay
 mutations.
 
 
-## Exact Job and Agent synchronization (v27)
+## Exact Job and Agent synchronization (v29)
 
 Job status is non-blocking and `job/wait` waits on the registry's exact finite
 Job ID through physical settlement. No client poll loop discovers completion;
@@ -1338,7 +1344,7 @@ update an Interrupted activation's Agent to Inactive without changing its logica
 outcome or replaying it. `subagent/disposeWorkspace` returns the finite resource
 projection `{subagent_id, workspace, outcome}`; it cannot manufacture Agent state
 or dispose a workspace still owned by a durable Agent.
-## Session startup commit and catalog invalidation (v27)
+## Session startup commit and catalog invalidation (v29)
 
 `session/create.settings.model` is optional `SessionModelConfig`. Explicit intent
 is validated and persisted by native creation; omitted intent captures the native
@@ -1353,5 +1359,24 @@ catalog membership as well as the named summary; `false` invalidates only the
 summary. Every membership visibility commit publishes invalidation independently
 of attachment or deletion cleanup. The sequence coalescer preserves an unobserved membership change even
 when a newer preview change arrives for that Session. Catalog reads must not gate
-attach or first admission. v27 is mandatory; no earlier-version decoder or compatibility path
+attach or first admission. v29 is mandatory; no earlier-version decoder or compatibility path
 is retained. See [ownership and evidence](issue-419/ownership.md).
+
+
+## Bounded Tool presentation (v29)
+
+Runtime Client v54 and App Server v29 add `TraceToolSummary.arguments`, a
+`TracePreview` of canonical JSON arguments (at most 512 UTF-8 bytes, with explicit
+`truncated`). Null means the exact canonical proposal is unavailable. The same
+native same-Step ToolCall resolution supplies name and input; lifecycle refresh
+carries neither immutable field. Full structured arguments remain in bounded
+`session/traceDetail`. Generated schemas, fixtures, Web and TUI consume only this
+vocabulary. No storage schema changes or compatibility decoder are involved.
+See [the semantic ledger contract](trajectory-harness-convergence.md).
+
+## Image admission vocabulary (#425)
+
+App Server v29 combines the v28 Harness semantic ledger with required
+`CapabilityView.configured_tools` and image/Bash Tool presentation. The required
+field changes the complete mandatory vocabulary, so v28 is rejected. Rust DTOs
+remain the sole schema authority; only the v29 generated pair is retained.

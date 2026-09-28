@@ -5,8 +5,7 @@ import type {
   TraceArtifact,
   TraceKind,
   TraceRecord,
-  TraceSystemPromptState,
-} from '../../../../protocol/app-server/v27';
+} from '../../../../protocol/app-server/v29';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { InspectableDisplayItem } from './layout';
@@ -104,62 +103,19 @@ export function CellArtifacts({ artifacts }: { artifacts: readonly TraceArtifact
   );
 }
 
-/**
- * How a row labels the server's System Prompt classification.
- *
- * The browser renders this relationship; it never derives it. `unchanged`
- * and `previous_unavailable` get no row marker: a row says something when
- * this request introduced or replaced the prompt, and stays quiet otherwise.
- */
-function systemPromptLabel(tx: Translate): Partial<Record<TraceSystemPromptState, string>> { return {
-  initial: tx('trajectory:trajectory-inspector.system-prompt'),
-  changed: tx('trajectory:copy.system-prompt-changed'),
-}; }
-
-/**
- * Server-resolved relationships shown beside a request row.
- *
- * Every value comes from the record's own summary, so a row keeps its
- * meaning when the related record is outside the loaded window.
- */
-export function CellRelations({ record }: { record: TraceRecord }) {
-  const tx = useTranslation();
-  const request = record.request;
-  if (!request) return null;
-  const system = systemPromptLabel(tx)[request.system_prompt.state];
-  const context = request.context_additions.length;
-  if (system === undefined && context === 0) return null;
-  return (
-    <span
-      className={css.relation}
-      data-changed={request.system_prompt.state === 'changed' || undefined}
-      title={request.system_prompt.preview?.text || undefined}
-    >
-      {system}
-      {context > 0 && (
-        <span>
-          {system === undefined ? '' : '· '}
-          {tx(context === 1 ? 'trajectory:context.facts.one' : 'trajectory:context.facts.other', { n: context })}
-          {request.context_truncated ? '+' : ''}
-        </span>
-      )}
-    </span>
-  );
-}
-
 export function CellContent({ record }: { record: TraceRecord }) {
   const tx = useTranslation();
   const preview = previewOf(tx, record);
-  const result = record.tool?.detail?.text || (record.tool?.outcome === 'success' ? undefined : record.tool?.outcome);
+  if (record.tool) return <div className={css.toolFlow}>
+    <div className={css.toolInput}><strong className={css.toolName}>{record.tool.name ?? record.tool.tool_id}</strong><span className={css.preview}>{record.tool.arguments?.text ?? tx('trajectory:trajectory-inspector.content-unavailable')}</span></div>
+    <span aria-hidden="true">→</span><span className={css.toolResult} data-error={record.state === 'failed' || undefined}>{record.preview?.text ?? record.tool.detail?.text ?? tx('trajectory:trajectory-inspector.content-unavailable')}</span>
+  </div>;
   return <>
-    {record.tool && <strong className={css.toolName}>{record.tool.name ?? record.tool.tool_id}</strong>}
     <div className={css.preview}>
       {record.kind === 'assistant' || record.kind === 'user' || record.kind === 'compaction'
         ? <div className={css.markdownPreview} inert><MarkdownText text={preview} /></div>
         : preview}
     </div>
-    {result && <span className={css.result} data-error={record.state === 'failed' || undefined}>→ {result}</span>}
-    <CellRelations record={record} />
     <CellArtifacts artifacts={record.attachments} />
   </>;
 }

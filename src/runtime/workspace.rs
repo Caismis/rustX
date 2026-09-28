@@ -78,6 +78,7 @@ pub(crate) fn with_physical_settlement_authority<T>(
 
 mod candidate;
 mod git_output;
+mod metadata;
 mod observation;
 mod retained_candidate;
 pub(crate) use candidate::{CandidateFreeze, CandidateScope, WorkspaceAccess, WorkspaceUse};
@@ -968,6 +969,8 @@ pub struct WorkspaceManager {
     /// authority; this lock only supplies the in-process linearization.
     disposal_lock: Arc<tokio::sync::Mutex<()>>,
     #[cfg(test)]
+    metadata_waiting: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
     pub(crate) candidate_interrupt: Arc<candidate::InspectionInterrupt>,
     #[cfg(test)]
     acquisition_hook: Option<std::sync::Arc<WorkspaceAcquireHook>>,
@@ -996,6 +999,8 @@ impl WorkspaceManager {
             parent_logical_workspace: parent_workspace.as_ref().to_path_buf(),
             runtime_root: runtime_root.as_ref().to_path_buf(),
             disposal_lock: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(test)]
+            metadata_waiting: None,
             #[cfg(test)]
             candidate_interrupt: Arc::default(),
             #[cfg(test)]
@@ -2493,6 +2498,50 @@ impl WorkspaceManager {
         args: Vec<OsString>,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<GitOutput, WorkspaceAcquireError> {
+        // Resolve through Git itself: linked worktrees have different .git
+        // paths but mutate the same common metadata. This read does not scan
+        // worktree registrations and must remain outside the metadata gate.
+        let _metadata = if args
+            .iter()
+            .any(|arg| arg == "worktree" || arg == "update-ref")
+        {
+            let common = Box::pin(supervised_workspace_git(
+                SETTLEMENT_AUTHORITY.try_with(Arc::clone).ok(),
+                cwd,
+                vec![
+                    "rev-parse".into(),
+                    "--path-format=absolute".into(),
+                    "--git-common-dir".into(),
+                ],
+                cancellation,
+            ))
+            .await?;
+            if !common.status.success() {
+                return Err(WorkspaceAcquireError::Git {
+                    operation: "resolve Git common directory".into(),
+                    detail: git_failure_detail(&common),
+                });
+            }
+            let common =
+                String::from_utf8(common.stdout).map_err(|error| WorkspaceAcquireError::Git {
+                    operation: "decode Git common directory".into(),
+                    detail: error.to_string(),
+                })?;
+            let common =
+                std::fs::canonicalize(common.trim_end_matches(['\r', '\n'])).map_err(|error| {
+                    WorkspaceAcquireError::Git {
+                        operation: "canonicalize Git common directory".into(),
+                        detail: error.to_string(),
+                    }
+                })?;
+            #[cfg(test)]
+            if let Some(waiting) = &self.metadata_waiting {
+                waiting.notify_one();
+            }
+            Some(metadata::acquire(&common, cancellation).await?)
+        } else {
+            None
+        };
         // Child-side preparation participates in the same retained-anchor
         // protocol as every native Tool. Parent cleanup additionally carries
         // durable continuation authority beyond the child's earlier receipt.
@@ -6384,6 +6433,61 @@ mod tests {
         let second_settlement = second.settle_after_child().await;
         assert_eq!(first_settlement.cleanup(), WorkspaceCleanup::Removed);
         assert_eq!(second_settlement.cleanup(), WorkspaceCleanup::Removed);
+    }
+
+    #[tokio::test]
+    async fn independent_managers_and_linked_worktrees_share_metadata_gate() {
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let dir = repository();
+            let runtime = tempfile::tempdir().unwrap();
+            let first = WorkspaceManager::new(dir.path(), runtime.path());
+            let lease = first
+                .acquire(
+                    default_isolated(),
+                    &SubagentId::new("metadata-gate-child"),
+                    &CancellationSignal::new(),
+                )
+                .await
+                .unwrap();
+            // An independently composed manager in the linked checkout must
+            // resolve the same common directory, not its private .git file.
+            let mut second = WorkspaceManager::new(lease.logical_workspace(), runtime.path());
+            let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
+            second.metadata_waiting = Some(waiting.clone());
+            let common = std::fs::canonicalize(dir.path().join(".git")).unwrap();
+            let held = super::metadata::acquire(&common, None).await.unwrap();
+            let cancellation = CancellationSignal::new();
+            let task_cancellation = cancellation.clone();
+            let task = tokio::spawn(async move {
+                second
+                    .git_raw(
+                        &second.parent_logical_workspace,
+                        vec![
+                            "update-ref".into(),
+                            "refs/heads/gate-test".into(),
+                            "HEAD".into(),
+                        ],
+                        Some(&task_cancellation),
+                    )
+                    .await
+            });
+            waiting.notified().await;
+            assert!(!ref_exists(dir.path(), "gate-test"));
+            cancellation.cancel();
+            assert!(matches!(
+                task.await.unwrap(),
+                Err(super::WorkspaceAcquireError::Cancelled)
+            ));
+            assert!(!ref_exists(dir.path(), "gate-test"));
+            drop(held);
+            // Removal and branch cleanup cross the same boundary after release.
+            assert_eq!(
+                lease.settle_after_child().await.cleanup(),
+                WorkspaceCleanup::Removed
+            );
+        })
+        .await
+        .expect("metadata gate deadlock guard");
     }
 
     #[tokio::test]

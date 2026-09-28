@@ -614,6 +614,36 @@ struct BuildState {
     notify: tokio::sync::Notify,
 }
 
+impl BuildState {
+    async fn wait(&self) -> Result<PreparedPythonPackage, PythonToolError> {
+        // The no-lost-wakeup wait: the notified future is registered before
+        // the result check, so a result published between the check and the
+        // registration is observed by the next iteration.
+        let mut notified = Box::pin(self.notify.notified());
+        loop {
+            if let Some(result) = self
+                .result
+                .lock()
+                .expect("Python build result lock")
+                .clone()
+            {
+                return result;
+            }
+            notified.as_mut().enable();
+            if self
+                .result
+                .lock()
+                .expect("Python build result lock")
+                .is_some()
+            {
+                continue;
+            }
+            notified.await;
+            notified = Box::pin(self.notify.notified());
+        }
+    }
+}
+
 /// Completes a process-local build entry if its store-owned task exits
 /// unexpectedly. The guard lives inside that detached owner task, never in a
 /// candidate preparation caller, so caller cancellation cannot release an
@@ -704,6 +734,20 @@ impl PythonToolStore {
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
             }),
         })
+    }
+
+    /// Keep production executable discovery when gating the real process backend.
+    #[cfg(test)]
+    pub(crate) fn with_runner(
+        root: PathBuf,
+        runner: Arc<dyn SupervisedProcessRunner>,
+    ) -> Result<Self, PythonToolError> {
+        Self::with_binaries_and_runner(
+            root,
+            resolve_executable("uv"),
+            resolve_executable("python3"),
+            runner,
+        )
     }
 
     /// Test constructor for deterministic recorded process backends.
@@ -830,31 +874,7 @@ impl PythonToolStore {
                 owner_guard.finish(result);
             }));
         }
-        // The no-lost-wakeup wait: the notified future is registered before
-        // the result check, so a result published between the check and the
-        // registration is observed by the next iteration.
-        let mut notified = Box::pin(state.notify.notified());
-        loop {
-            if let Some(result) = state
-                .result
-                .lock()
-                .expect("Python build result lock")
-                .clone()
-            {
-                return result;
-            }
-            notified.as_mut().enable();
-            if state
-                .result
-                .lock()
-                .expect("Python build result lock")
-                .is_some()
-            {
-                continue;
-            }
-            notified.await;
-            notified = Box::pin(state.notify.notified());
-        }
+        state.wait().await
     }
 }
 
@@ -2166,6 +2186,134 @@ mod tests {
                     stderr: Vec::new(),
                 })
             })
+        }
+    }
+
+    #[derive(Default)]
+    struct PublicationWake(std::sync::atomic::AtomicBool);
+
+    impl std::task::Wake for PublicationWake {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Drive both sides of the publication cut by polling, with no runtime
+    /// clock or scheduler delay. A notification is only a wakeup; the stored
+    /// terminal result is the authority for early and late waiters alike.
+    #[test]
+    fn preparation_owner_publishes_to_registered_and_late_waiters() {
+        use futures_util::FutureExt;
+        let state = Arc::new(BuildState {
+            result: Mutex::new(None),
+            notify: tokio::sync::Notify::new(),
+        });
+        let in_flight = Arc::new(Mutex::new(BTreeMap::from([(
+            "build".into(),
+            state.clone(),
+        )])));
+        let mut owner = BuildOwnerGuard {
+            in_flight: in_flight.clone(),
+            key: "build".into(),
+            state: state.clone(),
+            completed: false,
+        };
+        let mut first = Box::pin(state.wait());
+        let mut second = Box::pin(state.wait());
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(second.as_mut().now_or_never().is_none());
+        let first_wake = Arc::new(PublicationWake::default());
+        let second_wake = Arc::new(PublicationWake::default());
+        let first_waker = std::task::Waker::from(first_wake.clone());
+        let second_waker = std::task::Waker::from(second_wake.clone());
+        assert!(
+            std::future::Future::poll(
+                first.as_mut(),
+                &mut std::task::Context::from_waker(&first_waker)
+            )
+            .is_pending()
+        );
+        assert!(
+            std::future::Future::poll(
+                second.as_mut(),
+                &mut std::task::Context::from_waker(&second_waker)
+            )
+            .is_pending()
+        );
+        // Spurious wakeups cannot manufacture preparation completion.
+        state.notify.notify_waiters();
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(second.as_mut().now_or_never().is_none());
+        assert!(
+            std::future::Future::poll(
+                first.as_mut(),
+                &mut std::task::Context::from_waker(&first_waker)
+            )
+            .is_pending()
+        );
+        assert!(
+            std::future::Future::poll(
+                second.as_mut(),
+                &mut std::task::Context::from_waker(&second_waker)
+            )
+            .is_pending()
+        );
+        first_wake
+            .0
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        second_wake
+            .0
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(in_flight.lock().unwrap().contains_key("build"));
+        let prepared = PreparedPythonPackage {
+            fingerprint: "build".into(),
+            state_dir: PathBuf::from("prepared"),
+        };
+        owner.finish(Ok(prepared.clone()));
+        assert!(first_wake.0.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(second_wake.0.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(in_flight.lock().unwrap().is_empty());
+        for result in [
+            first.now_or_never(),
+            second.now_or_never(),
+            state.wait().now_or_never(),
+        ] {
+            assert_eq!(
+                result
+                    .expect("publication is immediately observable")
+                    .unwrap(),
+                prepared
+            );
+        }
+    }
+
+    #[test]
+    fn preparation_owner_exit_publishes_failure_to_registered_and_late_waiters() {
+        use futures_util::FutureExt;
+        let state = Arc::new(BuildState {
+            result: Mutex::new(None),
+            notify: tokio::sync::Notify::new(),
+        });
+        let in_flight = Arc::new(Mutex::new(BTreeMap::from([(
+            "build".into(),
+            state.clone(),
+        )])));
+        let owner = BuildOwnerGuard {
+            in_flight: in_flight.clone(),
+            key: "build".into(),
+            state: state.clone(),
+            completed: false,
+        };
+        let mut waiter = Box::pin(state.wait());
+        assert!(waiter.as_mut().now_or_never().is_none());
+        drop(owner);
+        assert!(in_flight.lock().unwrap().is_empty());
+        for result in [waiter.now_or_never(), state.wait().now_or_never()] {
+            assert!(
+                matches!(result.expect("owner exit publishes without another wakeup"),
+                Err(PythonToolError::Environment(reason))
+                    if reason == "the Python build owner exited before terminal publication")
+            );
         }
     }
 

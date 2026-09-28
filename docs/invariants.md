@@ -7165,7 +7165,7 @@ never bytes.
   established. Recording it never blocks on a client and never holds the
   Catalog mutex for delivery.
 
-  The integrated App Server v27 contract preserves this catalog owner alongside
+  The integrated App Server v29 contract preserves this catalog owner alongside
   finite Jobs, durable Agents and bounded client request lanes; see the
   [PR #416 integration audit](pr-416-main-integration.md).
 
@@ -7428,3 +7428,20 @@ replace it with false nor infer it from terminal naming or workspace disposition
 See [the image and Bash contract](image-reading.md) for effective capability
 intersection, Attempt-frozen publication, managed image ownership, provider
 transport, text-only history projection, and presentation-only Bash descriptions.
+
+## Repository metadata mutation ownership
+
+WorkspaceManager owns Git worktree/ref operations. A process-wide gate keyed by
+Git's canonical common directory serializes worktree add/remove, registration
+reads, and ref deletion. Linked checkouts, logical subdirectories, independent
+Conversation managers, and manager clones converge on that key. The existing
+manager disposal lock still owns the multi-step retained-disposal transaction;
+the repository gate owns only each physical Git metadata command through its
+supervised settlement. Overlay preparation and unrelated repositories proceed
+independently. Queued cancellation exits before spawning the mutation.
+
+This is local runtime coordination, not an exclusion guarantee against arbitrary
+external Git processes. Git's own ref checks and native ownership re-proofs remain
+authoritative across external mutation. Tests explicitly poll the shared gate,
+prove independent-repository progress, and cancel an independently composed
+linked-worktree manager at the gate without a ref mutation.

@@ -1,7 +1,7 @@
 import { useTranslation } from '../../../locale/react';
 import type {
   AgentStatusExtensionDocument, GoalExtensionDocument, SourceScope, SourceSettings, TodoExtensionDocument,
-} from '../../../../../protocol/app-server/v27';
+} from '../../../../../protocol/app-server/v29';
 import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';
 import { Advanced, Choice, Toggle } from '../primitives/aria';
