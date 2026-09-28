@@ -634,6 +634,18 @@ impl FrameReader {
 /// channel, never proves physical terminality, and is unrelated to TERM grace.
 const CONTROL_WRITE_BUDGET: Duration = Duration::from_secs(1);
 
+/// Admit one delivery action only while its budget is strictly positive.
+/// The same clock sample classifies expiry and derives the remaining duration.
+fn control_write_remaining(
+    now: std::time::Instant,
+    deadline: std::time::Instant,
+) -> Result<Duration, String> {
+    if now >= deadline {
+        return Err("control frame delivery deadline expired".to_owned());
+    }
+    Ok(deadline.duration_since(now))
+}
+
 /// Owns an encoded frame until all its bytes commit or the channel fails.
 struct FrameWriter {
     bytes: Vec<u8>,
@@ -661,14 +673,19 @@ impl FrameWriter {
         deadline: std::time::Instant,
     ) -> Result<(), String> {
         while self.offset < self.bytes.len() {
-            let remaining = deadline
-                .checked_duration_since(std::time::Instant::now())
-                .ok_or("control frame delivery deadline expired")?;
+            control_write_remaining(std::time::Instant::now(), deadline)?;
             match send(&self.bytes[self.offset..]) {
                 Ok(0) => return Err("control channel closed during frame delivery".to_owned()),
                 Ok(count) => self.offset += count,
                 Err(Errno::EINTR) => {}
-                Err(Errno::EAGAIN) => writable(remaining)?,
+                Err(Errno::EAGAIN) => {
+                    // Sending may consume the rest of the budget. Readiness
+                    // waiting is a separate action and must be admitted anew.
+                    writable(control_write_remaining(
+                        std::time::Instant::now(),
+                        deadline,
+                    )?)?;
+                }
                 Err(error) => return Err(format!("cannot write the control frame: {error}")),
             }
         }

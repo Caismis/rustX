@@ -1,5 +1,63 @@
 # PR #424 contract repair and native CI measurement
 
+## Deadline-boundary follow-up to `92ccf7bf`
+
+[Run 36439155085 / macOS job 108984805336](https://github.com/Caismis/rustX/actions/runs/36439155085/job/108984805336)
+ran `92ccf7bf307bff321582cfaf21d878db496c5e2e`. It failed
+`runtime::supervised_unit::frame_tests::expired_budget_never_attempts_another_write`
+with “expired writer must not send”: 2,639 passed, 1 failed, 2 ignored.
+Both external compilation and execution were skipped. The archive-finalization
+warning is not the assertion failure.
+
+The runtime code and regression are identical on `origin/main` (`f4c044e9`),
+`50208f34`, and `92ccf7bf`; their owner commit is `8fe8a0f7`. This latent deadline
+boundary bug was not introduced by Trajectory, protocol convergence or CI flags.
+`checked_duration_since` admits equality as `Some(Duration::ZERO)`. The repair
+uses one explicit clock sample to reject `now >= deadline` and derive strictly
+positive remaining time otherwise. Every send and every writable wait requires
+admission; EAGAIN cannot reuse a stale pre-send budget. The one-second budget,
+partial offsets, EINTR handling, channel closure and settlement semantics remain.
+
+A private helper is tested with explicit before/equal/after instants. The complete
+writer regression uses a captured deadline and counts operations: a subsequent
+monotonic sample can be equal or later, and both must yield zero sends, zero waits
+and offset zero. No clock tick, sleep, retry or injected clock framework is needed.
+The exact regression and helper tests are each repeated five times as additional
+validation, not as a replacement for this deterministic proof.
+
+The native run completed the real all-feature binary build in about 2m38s
+(Cargo: 2m37s), test-harness compilation in 3m03s (Cargo: 3m02s), and library
+execution in 251.58s. These completed phases are faster than the prior audited
+run below, but the full lane has **not** passed. Native external build/execution
+within the unchanged 40-minute budget remains unresolved. The workflow is
+unchanged by this runtime repair, including debug=1, all-feature binaries,
+separate compilation, timing artifacts, cache policy and native selectors.
+
+Follow-up local validation (Linux x86_64, rustc 1.95.0):
+
+- `cargo fmt --all -- --check`: passed after applying `cargo fmt --all` to the
+  initial formatting diagnostic.
+- `cargo clippy --all-targets --all-features -- -D warnings`: passed after changing
+  the test fixture subtraction to checked arithmetic (initial Clippy diagnostic).
+- `cargo test --lib --all-features -- runtime::supervised_unit::frame_tests::`:
+  all six passed, including partial/EINTR/EAGAIN, kernel backpressure and closure.
+- `cargo test --lib --all-features -- runtime::supervised_unit::frame_tests::expired_budget_never_attempts_another_write --exact`:
+  five of five independent invocations passed.
+- `cargo test --lib --all-features -- runtime::supervised_unit::frame_tests::delivery_action_requires_strictly_positive_remaining_budget --exact`:
+  five of five independent invocations passed.
+- `cargo build --bins --all-features`: passed.
+- `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::`:
+  passed: 2,669 tests, 0 failures, 2 existing ignored; all three binary harnesses
+  passed (zero tests each), 99.76s library execution.
+- `git diff --check`: passed.
+
+Native macOS execution of this follow-up remains pending. The Linux suite cannot
+establish the macOS merge gate; external native compilation/execution within the
+existing 40-minute budget must still complete in GitHub Actions.
+
+All older validation sections below describe their named source revisions and
+must not be treated as new native validation of this follow-up.
+
 ## State and delivery scope
 
 Initial clean dedicated worktree: `/home/caismis/Documents/codes/rustX-issue-421`,
