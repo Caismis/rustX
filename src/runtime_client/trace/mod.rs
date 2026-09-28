@@ -210,6 +210,7 @@ impl<'a> TraceProjection<'a> {
             next_cursor = Some(records[0].position.clone());
         }
         Ok(TracePage {
+            updates: Vec::new(),
             records,
             next_cursor,
         })

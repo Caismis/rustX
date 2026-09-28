@@ -155,10 +155,11 @@ is replayed. A recovery notice remains available when another Session is focused
 Each Session has its own target tuple (SessionId, ConversationId, runtime
 incarnation, attachment ID), cursor and snapshot. A/B notifications cannot share a
 projection. Successful attach installs the native authoritative snapshot and atomic
-subscription. Events invalidate that Session's cache: one in-flight snapshot read
-and one dirty bit coalesce bursts. `resyncRequired` causes snapshot followed by
-subscribe at the returned cursor. No unbounded event queue or browser replay log
-exists. This intentionally favors clear ownership over token-by-token rendering.
+subscription. Cursor-contiguous events deterministically fold the same read model
+below React. Full snapshots initialize, recover or explicitly reconcile; ordinary
+streaming issues none. Gaps and `resyncRequired` retire incremental continuation,
+coalesce an authoritative read, then subscribe after its cursor. Native bounded
+replay owns snapshot overlap; no browser event log exists. See [CHAT.md](CHAT.md).
 
 Session selection lives only in the Sidebar. The center header identifies the
 current Session and offers bounded actions, Inspector, and Chat/Trajectory views;
@@ -263,7 +264,7 @@ verifying affected work, Connection → Review uncertain operations permits expl
 browser-local acknowledgement of non-interaction notices. This sends no RPC,
 asserts no outcome, and never retries; Inspector remains read-only.
 
-Pending interactions come only from authoritative snapshots, including routed
+Pending interactions come from native snapshots and exact interaction events, including routed
 Subagent interactions. Approval, Questionnaire (all six native answer shapes and
 partial submissions) and Review can be answered/cancelled. Controls are disabled
 while stale, responding, acknowledged-but-refreshing, or uncertain. A lost

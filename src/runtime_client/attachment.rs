@@ -128,7 +128,7 @@ impl RuntimeAttachment {
     native_control!(capability, false);
     native_control!(model_set, true, config: crate::model::session::SessionModelConfig);
     native_control!(goal_control, true, control: crate::goal::GoalControl);
-    native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize);
+    native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize, records: Vec<super::trace::TraceCursor>);
     native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
 
     /// Await the native maintenance operation.

@@ -233,6 +233,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             after_cursor: crate::runtime_client::RuntimeClientCursor::new(EXACT),
         },
         Method::Trace {
+            records: Vec::new(),
             target: target.clone(),
             before: Some(
                 serde_json::from_str("\"trace:9007199254740993\"").expect("Trace cursor fixture"),

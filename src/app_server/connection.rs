@@ -1012,9 +1012,10 @@ async fn dispatch_runtime(
         Method::Capability { target: _ } => native_result(authority.capability()),
         Method::Trace {
             target: _,
+            records,
             before,
             limit,
-        } => native_result(authority.trace_page(before, limit)),
+        } => native_result(authority.trace_page(before, limit, records)),
         Method::TraceDetail {
             target: _,
             record_id,

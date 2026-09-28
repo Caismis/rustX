@@ -1,0 +1,1954 @@
+{
+  "initial": {
+    "jsonrpc": "2.0",
+    "id": "capture",
+    "result": {
+      "type": "snapshot",
+      "snapshot": {
+        "settings_evidence": "live_session",
+        "effective_plugins": {
+          "agent_status": {
+            "time": {
+              "enabled": true,
+              "timezone": null
+            },
+            "background": {
+              "enabled": true
+            }
+          },
+          "todo": null,
+          "goal": null
+        },
+        "workflows": {
+          "revision": "0",
+          "runs": [],
+          "omitted_runs": 0
+        },
+        "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+        "shutting_down": false,
+        "effective_approval_mode": "policy",
+        "messages": [],
+        "transcript": {
+          "statistics": {
+            "turns": "0",
+            "steps": "0",
+            "completed_responses": "0",
+            "model_requests": "0",
+            "requests_with_usage": "0"
+          },
+          "entries": []
+        },
+        "trace": {
+          "records": [],
+          "next_cursor": null
+        },
+        "trace_updates": [],
+        "inbound": {
+          "pending": []
+        },
+        "pending_interactions": [],
+        "background": [],
+        "subagents": [],
+        "statuses": [],
+        "context": {
+          "compaction_in_progress": false,
+          "compaction_count": 0
+        },
+        "capabilities": {
+          "revision": "1",
+          "tools": [
+            {
+              "id": "tool-bg",
+              "name": "bg",
+              "description": "",
+              "input_schema": {
+                "type": "object"
+              },
+              "execution_policy": "foreground_only",
+              "concurrency_policy": "sequential",
+              "approval_policy": "never",
+              "replay_policy": "never",
+              "origin": "builtin"
+            }
+          ],
+          "available_tools": [
+            {
+              "id": "tool-bg",
+              "name": "bg",
+              "description": "",
+              "input_schema": {
+                "type": "object"
+              },
+              "execution_policy": "foreground_only",
+              "concurrency_policy": "sequential",
+              "approval_policy": "never",
+              "replay_policy": "never",
+              "origin": "builtin"
+            }
+          ],
+          "skills": [],
+          "sources": []
+        },
+        "resources": {
+          "inspection": {
+            "definitions": [],
+            "resource_diagnostics": [],
+            "main": {
+              "identity": {
+                "kind": "main"
+              },
+              "source": null,
+              "tools": [
+                {
+                  "id": "tool-bg",
+                  "name": "bg",
+                  "origin": "builtin"
+                }
+              ],
+              "tool_selection": [
+                {
+                  "origin": "builtin",
+                  "name": "bg"
+                }
+              ],
+              "skills": [],
+              "agents": [],
+              "workflows": [],
+              "plugins": [
+                {
+                  "identity": "agent_status",
+                  "active": true
+                },
+                {
+                  "identity": "todo",
+                  "active": false
+                },
+                {
+                  "identity": "goal",
+                  "active": false
+                }
+              ],
+              "diagnostics": []
+            },
+            "agents": {},
+            "workflows": {},
+            "sources": {},
+            "skills": [],
+            "skill_diagnostics": [
+              {
+                "kind": "source_root_missing",
+                "source": "workspace",
+                "root": "/tmp/.tmpgTo8ZI/workspace/.agents/skills"
+              }
+            ]
+          },
+          "revision": "1",
+          "context_files": [],
+          "agent_profile": false
+        },
+        "model": {
+          "configured": {
+            "model": "scripted/scripted",
+            "requestParams": {},
+            "summaryModel": {
+              "mode": "session"
+            }
+          },
+          "effective": {
+            "model": "scripted/scripted",
+            "protocol": "openai_chat_completions",
+            "contextWindow": 1000000,
+            "modelMaxOutputTokens": 512,
+            "maxOutputTokens": 512,
+            "reasoningEnabled": false,
+            "requestParams": {},
+            "capabilities": {
+              "inputModalities": [
+                "text"
+              ],
+              "outputModalities": [
+                "text"
+              ],
+              "toolCalls": true,
+              "reasoning": false
+            },
+            "declaredCapabilities": {
+              "inputModalities": [
+                "text"
+              ],
+              "outputModalities": [
+                "text"
+              ],
+              "toolCalls": true,
+              "reasoning": false
+            }
+          },
+          "summary": {
+            "mode": "session"
+          }
+        },
+        "todos": {
+          "tasks": [],
+          "next_id": "1"
+        },
+        "goal": {
+          "current": null
+        }
+      },
+      "cursor": "0"
+    }
+  },
+  "events": [
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "1",
+        "event": {
+          "type": "inbound_enqueued",
+          "sequence": "1",
+          "message": {
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+            "content": [
+              {
+                "type": "text",
+                "text": "projection equivalence"
+              }
+            ],
+            "source": "human",
+            "kind": "message",
+            "timestamp": "2026-08-07T12:00:00Z"
+          },
+          "transcript_cursor": "1"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "2",
+        "event": {
+          "type": "inbound_drained",
+          "watermark": "1",
+          "count": 1,
+          "message_ids": [
+            "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1"
+          ]
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "3",
+        "event": {
+          "type": "message_committed",
+          "attempt_id": null,
+          "message": {
+            "role": "user",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+            "content": [
+              {
+                "type": "text",
+                "text": "projection equivalence"
+              }
+            ],
+            "source": "human",
+            "kind": "message",
+            "timestamp": "2026-08-07T12:00:00Z"
+          },
+          "transcript_cursor": "1"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "4",
+        "event": {
+          "type": "trace_changed"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "5",
+        "event": {
+          "type": "attempt_started",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "model": {
+            "primary": {
+              "model": "scripted/scripted",
+              "protocol": "openai_chat_completions",
+              "contextWindow": 1000000,
+              "modelMaxOutputTokens": 512,
+              "maxOutputTokens": 512,
+              "reasoningEnabled": false,
+              "requestParams": {},
+              "capabilities": {
+                "inputModalities": [
+                  "text"
+                ],
+                "outputModalities": [
+                  "text"
+                ],
+                "toolCalls": true,
+                "reasoning": false
+              },
+              "declaredCapabilities": {
+                "inputModalities": [
+                  "text"
+                ],
+                "outputModalities": [
+                  "text"
+                ],
+                "toolCalls": true,
+                "reasoning": false
+              }
+            },
+            "summary": {
+              "mode": "session"
+            }
+          },
+          "execution_settings": {
+            "resource_revision": "1",
+            "approval_mode": "policy"
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "6",
+        "event": {
+          "type": "attempt_turn_updated",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "turn": 1
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "7",
+        "event": {
+          "type": "message_committed",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message": {
+            "role": "user",
+            "id": "rustx-context-conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-turn-1-1",
+            "content": [
+              {
+                "type": "text",
+                "text": "<system-reminder>\nTimezone: UTC\nCurrent time: 2026-08-07 12:00:00\n</system-reminder>"
+              }
+            ],
+            "source": "runtime",
+            "kind": {
+              "context": {
+                "agent_status": {
+                  "generated_at": "2026-08-07T12:00:00Z",
+                  "modules": [
+                    "time"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "8",
+        "event": {
+          "type": "agent_status_composed",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "turn": 1,
+          "status": {
+            "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+            "turn": 1,
+            "status_message_id": "rustx-context-conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-turn-1-1",
+            "opportunities": {
+              "fresh_inbound": {
+                "target_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1"
+              }
+            },
+            "sections": [
+              {
+                "type": "temporal",
+                "current_time": "2026-08-07T12:00:00Z"
+              }
+            ],
+            "rendered": "<system-reminder>\nTimezone: UTC\nCurrent time: 2026-08-07 12:00:00\n</system-reminder>"
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "9",
+        "event": {
+          "type": "assistant_message_started",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "10",
+        "event": {
+          "type": "assistant_reasoning_delta",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+          "block_index": 0,
+          "delta": "reasoning"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "11",
+        "event": {
+          "type": "assistant_text_delta",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+          "block_index": 1,
+          "delta": "first second"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "12",
+        "event": {
+          "type": "assistant_refusal_delta",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+          "block_index": 2,
+          "delta": "refusal"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "13",
+        "event": {
+          "type": "tool_call_started",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+          "block_index": 3,
+          "call": {
+            "id": "capture-call",
+            "tool_id": "tool-bg",
+            "name": "bg"
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "14",
+        "event": {
+          "type": "tool_call_arguments_delta",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+          "block_index": 3,
+          "call_id": "capture-call",
+          "arguments_delta": "{}"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "15",
+        "event": {
+          "type": "tool_call_assembled",
+          "arguments_json": "{}",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+          "block_index": 3,
+          "call": {
+            "id": "capture-call",
+            "tool_id": "tool-bg",
+            "name": "bg",
+            "arguments": {}
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "16",
+        "event": {
+          "type": "message_committed",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message": {
+            "role": "assistant",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+            "content": [
+              {
+                "type": "reasoning",
+                "text": "reasoning"
+              },
+              {
+                "type": "text",
+                "text": "first second"
+              },
+              {
+                "type": "refusal",
+                "text": "refusal"
+              },
+              {
+                "type": "tool_call",
+                "id": "capture-call",
+                "tool_id": "tool-bg",
+                "name": "bg",
+                "arguments": {}
+              }
+            ]
+          },
+          "transcript_cursor": "2"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "17",
+        "event": {
+          "type": "tool_execution_started",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "tool_call_id": "capture-call",
+          "tool_id": "tool-bg"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "18",
+        "event": {
+          "type": "tool_execution_settled",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "tool_call_id": "capture-call",
+          "tool_id": "tool-bg",
+          "result": {
+            "status": {
+              "type": "success"
+            },
+            "content": [],
+            "duration_ms": 0,
+            "artifacts": []
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "19",
+        "event": {
+          "type": "message_committed",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message": {
+            "role": "tool",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-tool-1-capture-call",
+            "occurrence": {
+              "assistant_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+              "block_index": 3
+            },
+            "tool_call_id": "capture-call",
+            "tool_id": "tool-bg",
+            "result": {
+              "status": {
+                "type": "success"
+              },
+              "content": [],
+              "duration_ms": 0,
+              "artifacts": []
+            }
+          },
+          "transcript_cursor": "3"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "20",
+        "event": {
+          "type": "attempt_turn_updated",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "turn": 2
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "21",
+        "event": {
+          "type": "assistant_message_started",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "22",
+        "event": {
+          "type": "assistant_text_delta",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+          "block_index": 0,
+          "delta": "done"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "23",
+        "event": {
+          "type": "message_committed",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "message": {
+            "role": "assistant",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+            "content": [
+              {
+                "type": "text",
+                "text": "done"
+              }
+            ]
+          },
+          "transcript_cursor": "4"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "24",
+        "event": {
+          "type": "attempt_settled",
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "outcome": {
+            "type": "completed",
+            "finish_reason": {
+              "type": "stop"
+            }
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "25",
+        "event": {
+          "type": "trace_changed"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/event",
+      "params": {
+        "target": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000420",
+          "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+          "runtime_incarnation": "1",
+          "attachment_id": "attachment-1"
+        },
+        "cursor": "26",
+        "event": {
+          "type": "read_domains_updated",
+          "transcript": {
+            "statistics": {
+              "turns": "1",
+              "steps": "2",
+              "latest_turn": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "started_at": "2026-09-27T11:49:59.510477999Z",
+                "ended_at": "2026-09-27T11:49:59.528671516Z"
+              },
+              "timing": {
+                "ttft_ms": 0,
+                "generation_ms": 1
+              },
+              "completed_responses": "1",
+              "model_requests": "2",
+              "requests_with_usage": "0"
+            },
+            "entries": [
+              {
+                "response_pending": false,
+                "tool_calls": [],
+                "cursor": "1",
+                "item": {
+                  "type": "message",
+                  "message": {
+                    "role": "user",
+                    "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "projection equivalence"
+                      }
+                    ],
+                    "source": "human",
+                    "kind": "message",
+                    "timestamp": "2026-08-07T12:00:00Z"
+                  }
+                }
+              },
+              {
+                "turn_process": {
+                  "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                  "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                  "event_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-event-16",
+                  "control_cursor": "2",
+                  "final_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                  "message_count": 1,
+                  "tool_call_count": 1,
+                  "outcome": "completed",
+                  "started_at": "2026-09-27T11:49:59.510477999Z",
+                  "ended_at": "2026-09-27T11:49:59.528671516Z"
+                },
+                "response_pending": false,
+                "tool_calls": [
+                  {
+                    "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+                    "block_index": 3,
+                    "call_id": "capture-call",
+                    "tool_id": "tool-bg",
+                    "name": "bg",
+                    "state": {
+                      "type": "settled",
+                      "arguments": "{}",
+                      "result": {
+                        "status": {
+                          "type": "success"
+                        },
+                        "content": [],
+                        "duration_ms": 0,
+                        "artifacts": []
+                      }
+                    }
+                  }
+                ],
+                "cursor": "2",
+                "item": {
+                  "type": "message",
+                  "message": {
+                    "role": "assistant",
+                    "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+                    "content": [
+                      {
+                        "type": "reasoning",
+                        "text": "reasoning"
+                      },
+                      {
+                        "type": "text",
+                        "text": "first second"
+                      },
+                      {
+                        "type": "refusal",
+                        "text": "refusal"
+                      },
+                      {
+                        "type": "tool_call",
+                        "id": "capture-call",
+                        "tool_id": "tool-bg",
+                        "name": "bg",
+                        "arguments": {}
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "turn_process": {
+                  "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                  "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                  "event_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-event-16",
+                  "control_cursor": "2",
+                  "final_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                  "message_count": 1,
+                  "tool_call_count": 1,
+                  "outcome": "completed",
+                  "started_at": "2026-09-27T11:49:59.510477999Z",
+                  "ended_at": "2026-09-27T11:49:59.528671516Z"
+                },
+                "response_pending": false,
+                "tool_calls": [],
+                "cursor": "3",
+                "item": {
+                  "type": "message",
+                  "message": {
+                    "role": "tool",
+                    "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-tool-1-capture-call",
+                    "occurrence": {
+                      "assistant_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+                      "block_index": 3
+                    },
+                    "tool_call_id": "capture-call",
+                    "tool_id": "tool-bg",
+                    "result": {
+                      "status": {
+                        "type": "success"
+                      },
+                      "content": [],
+                      "duration_ms": 0,
+                      "artifacts": []
+                    }
+                  }
+                }
+              },
+              {
+                "turn_process": {
+                  "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                  "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                  "event_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-event-16",
+                  "control_cursor": "2",
+                  "final_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                  "message_count": 1,
+                  "tool_call_count": 1,
+                  "outcome": "completed",
+                  "started_at": "2026-09-27T11:49:59.510477999Z",
+                  "ended_at": "2026-09-27T11:49:59.528671516Z"
+                },
+                "response_pending": false,
+                "completed_response": {
+                  "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                  "origin": {
+                    "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                    "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                    "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2"
+                  },
+                  "completed_at": "2026-09-27T11:49:59.528671516Z",
+                  "surface_revision": "5",
+                  "retry_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+                  "timing": {
+                    "total_duration_ms": 18,
+                    "ttft_ms": 0,
+                    "generation_ms": 1
+                  }
+                },
+                "tool_calls": [],
+                "cursor": "4",
+                "item": {
+                  "type": "message",
+                  "message": {
+                    "role": "assistant",
+                    "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "done"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "occupancy": null,
+          "todos": {
+            "tasks": [],
+            "next_id": "1"
+          }
+        }
+      }
+    }
+  ],
+  "expected": {
+    "jsonrpc": "2.0",
+    "id": "capture",
+    "result": {
+      "type": "snapshot",
+      "snapshot": {
+        "settings_evidence": "live_session",
+        "effective_plugins": {
+          "agent_status": {
+            "time": {
+              "enabled": true,
+              "timezone": null
+            },
+            "background": {
+              "enabled": true
+            }
+          },
+          "todo": null,
+          "goal": null
+        },
+        "workflows": {
+          "revision": "0",
+          "runs": [],
+          "omitted_runs": 0
+        },
+        "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+        "shutting_down": false,
+        "effective_approval_mode": "policy",
+        "messages": [
+          {
+            "role": "user",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+            "content": [
+              {
+                "type": "text",
+                "text": "projection equivalence"
+              }
+            ],
+            "source": "human",
+            "kind": "message",
+            "timestamp": "2026-08-07T12:00:00Z"
+          },
+          {
+            "role": "user",
+            "id": "rustx-context-conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-turn-1-1",
+            "content": [
+              {
+                "type": "text",
+                "text": "<system-reminder>\nTimezone: UTC\nCurrent time: 2026-08-07 12:00:00\n</system-reminder>"
+              }
+            ],
+            "source": "runtime",
+            "kind": {
+              "context": {
+                "agent_status": {
+                  "generated_at": "2026-08-07T12:00:00Z",
+                  "modules": [
+                    "time"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "role": "assistant",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+            "content": [
+              {
+                "type": "reasoning",
+                "text": "reasoning"
+              },
+              {
+                "type": "text",
+                "text": "first second"
+              },
+              {
+                "type": "refusal",
+                "text": "refusal"
+              },
+              {
+                "type": "tool_call",
+                "id": "capture-call",
+                "tool_id": "tool-bg",
+                "name": "bg",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-tool-1-capture-call",
+            "occurrence": {
+              "assistant_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+              "block_index": 3
+            },
+            "tool_call_id": "capture-call",
+            "tool_id": "tool-bg",
+            "result": {
+              "status": {
+                "type": "success"
+              },
+              "content": [],
+              "duration_ms": 0,
+              "artifacts": []
+            }
+          },
+          {
+            "role": "assistant",
+            "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+            "content": [
+              {
+                "type": "text",
+                "text": "done"
+              }
+            ]
+          }
+        ],
+        "transcript": {
+          "statistics": {
+            "turns": "1",
+            "steps": "2",
+            "latest_turn": {
+              "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+              "started_at": "2026-09-27T11:49:59.510477999Z",
+              "ended_at": "2026-09-27T11:49:59.528671516Z"
+            },
+            "timing": {
+              "ttft_ms": 0,
+              "generation_ms": 1
+            },
+            "completed_responses": "1",
+            "model_requests": "2",
+            "requests_with_usage": "0"
+          },
+          "entries": [
+            {
+              "response_pending": false,
+              "tool_calls": [],
+              "cursor": "1",
+              "item": {
+                "type": "message",
+                "message": {
+                  "role": "user",
+                  "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "projection equivalence"
+                    }
+                  ],
+                  "source": "human",
+                  "kind": "message",
+                  "timestamp": "2026-08-07T12:00:00Z"
+                }
+              }
+            },
+            {
+              "turn_process": {
+                "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "event_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-event-16",
+                "control_cursor": "2",
+                "final_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                "message_count": 1,
+                "tool_call_count": 1,
+                "outcome": "completed",
+                "started_at": "2026-09-27T11:49:59.510477999Z",
+                "ended_at": "2026-09-27T11:49:59.528671516Z"
+              },
+              "response_pending": false,
+              "tool_calls": [
+                {
+                  "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+                  "block_index": 3,
+                  "call_id": "capture-call",
+                  "tool_id": "tool-bg",
+                  "name": "bg",
+                  "state": {
+                    "type": "settled",
+                    "arguments": "{}",
+                    "result": {
+                      "status": {
+                        "type": "success"
+                      },
+                      "content": [],
+                      "duration_ms": 0,
+                      "artifacts": []
+                    }
+                  }
+                }
+              ],
+              "cursor": "2",
+              "item": {
+                "type": "message",
+                "message": {
+                  "role": "assistant",
+                  "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+                  "content": [
+                    {
+                      "type": "reasoning",
+                      "text": "reasoning"
+                    },
+                    {
+                      "type": "text",
+                      "text": "first second"
+                    },
+                    {
+                      "type": "refusal",
+                      "text": "refusal"
+                    },
+                    {
+                      "type": "tool_call",
+                      "id": "capture-call",
+                      "tool_id": "tool-bg",
+                      "name": "bg",
+                      "arguments": {}
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "turn_process": {
+                "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "event_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-event-16",
+                "control_cursor": "2",
+                "final_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                "message_count": 1,
+                "tool_call_count": 1,
+                "outcome": "completed",
+                "started_at": "2026-09-27T11:49:59.510477999Z",
+                "ended_at": "2026-09-27T11:49:59.528671516Z"
+              },
+              "response_pending": false,
+              "tool_calls": [],
+              "cursor": "3",
+              "item": {
+                "type": "message",
+                "message": {
+                  "role": "tool",
+                  "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-tool-1-capture-call",
+                  "occurrence": {
+                    "assistant_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+                    "block_index": 3
+                  },
+                  "tool_call_id": "capture-call",
+                  "tool_id": "tool-bg",
+                  "result": {
+                    "status": {
+                      "type": "success"
+                    },
+                    "content": [],
+                    "duration_ms": 0,
+                    "artifacts": []
+                  }
+                }
+              }
+            },
+            {
+              "turn_process": {
+                "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "event_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-event-16",
+                "control_cursor": "2",
+                "final_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                "message_count": 1,
+                "tool_call_count": 1,
+                "outcome": "completed",
+                "started_at": "2026-09-27T11:49:59.510477999Z",
+                "ended_at": "2026-09-27T11:49:59.528671516Z"
+              },
+              "response_pending": false,
+              "completed_response": {
+                "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                "origin": {
+                  "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+                  "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                  "closing_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2"
+                },
+                "completed_at": "2026-09-27T11:49:59.528671516Z",
+                "surface_revision": "5",
+                "retry_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+                "timing": {
+                  "total_duration_ms": 18,
+                  "ttft_ms": 0,
+                  "generation_ms": 1
+                }
+              },
+              "tool_calls": [],
+              "cursor": "4",
+              "item": {
+                "type": "message",
+                "message": {
+                  "role": "assistant",
+                  "id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "trace": {
+          "records": [
+            {
+              "id": "trace:1",
+              "position": "trace:1",
+              "location": {
+                "attempt_id": null,
+                "step_id": null
+              },
+              "kind": "user",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.509338152Z",
+                "ended_at": null,
+                "duration_ms": null
+              },
+              "preview": {
+                "text": "projection equivalence",
+                "truncated": false
+              },
+              "request": null,
+              "tool": null,
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1",
+              "attachments": [],
+              "has_detail": true,
+              "truncated": false
+            },
+            {
+              "id": "trace:2",
+              "position": "trace:2",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": null
+              },
+              "kind": "attempt",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.510477999Z",
+                "ended_at": "2026-09-27T11:49:59.528671516Z",
+                "duration_ms": "18"
+              },
+              "preview": null,
+              "request": null,
+              "tool": null,
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": null,
+              "attachments": [],
+              "has_detail": false,
+              "truncated": false
+            },
+            {
+              "id": "trace:3",
+              "position": "trace:3",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": "1"
+              },
+              "kind": "step",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.511150265Z",
+                "ended_at": "2026-09-27T11:49:59.521433331Z",
+                "duration_ms": "10"
+              },
+              "preview": null,
+              "request": null,
+              "tool": null,
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": null,
+              "attachments": [],
+              "has_detail": false,
+              "truncated": false
+            },
+            {
+              "id": "trace:4",
+              "position": "trace:4",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": "1"
+              },
+              "kind": "request",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.512621983Z",
+                "ended_at": "2026-09-27T11:49:59.515924858Z",
+                "duration_ms": "3"
+              },
+              "preview": {
+                "text": "scripted",
+                "truncated": false
+              },
+              "request": {
+                "request_id": "request:51:conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0:1:1:0",
+                "retry_number": 0,
+                "assistant_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+                "model": "scripted",
+                "previous_failure_kind": null,
+                "failure_kind": null,
+                "usage": null,
+                "generation": {
+                  "timeline": {
+                    "dispatch_ms": "2",
+                    "first_output_ms": "2",
+                    "last_output_ms": "3",
+                    "terminal_ms": "3"
+                  },
+                  "ttft_ms": "0",
+                  "generation_ms": "1",
+                  "terminal_ms": "1",
+                  "output_tokens_per_second": null
+                },
+                "system_prompt": {
+                  "state": "initial",
+                  "preview": {
+                    "text": "",
+                    "truncated": false
+                  }
+                },
+                "predecessor": {
+                  "availability": "not_applicable"
+                },
+                "tool_catalog": "initial",
+                "context_additions": [
+                  {
+                    "message_id": "rustx-context-conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-turn-1-1",
+                    "producer": {
+                      "Native": "agent_status"
+                    },
+                    "context_kind": "agent_status",
+                    "source": {
+                      "type": "runtime"
+                    },
+                    "preview": {
+                      "text": "<system-reminder> Timezone: UTC Current time: 2026-08-07 12:00:00 </system-reminder>",
+                      "truncated": false
+                    },
+                    "attachments": [],
+                    "truncated": false
+                  }
+                ],
+                "context_truncated": false
+              },
+              "tool": null,
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": null,
+              "attachments": [],
+              "has_detail": true,
+              "truncated": false
+            },
+            {
+              "id": "trace:6",
+              "position": "trace:6",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": "1"
+              },
+              "kind": "assistant",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.517626604Z",
+                "ended_at": null,
+                "duration_ms": null
+              },
+              "preview": {
+                "text": "first second",
+                "truncated": false
+              },
+              "request": null,
+              "tool": null,
+              "calls": [
+                {
+                  "call_id": "capture-call",
+                  "tool_id": "tool-bg",
+                  "name": "bg"
+                }
+              ],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+              "attachments": [],
+              "has_detail": true,
+              "truncated": false
+            },
+            {
+              "id": "trace:7",
+              "position": "trace:7",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": "1"
+              },
+              "kind": "tool",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.519399102Z",
+                "ended_at": "2026-09-27T11:49:59.519965438Z",
+                "duration_ms": "0"
+              },
+              "preview": {
+                "text": "bg",
+                "truncated": false
+              },
+              "request": null,
+              "tool": {
+                "call_id": "capture-call",
+                "tool_id": "tool-bg",
+                "name": "bg",
+                "started": true,
+                "outcome": "success",
+                "detail": null
+              },
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-tool-1-capture-call",
+              "attachments": [],
+              "has_detail": true,
+              "truncated": false
+            },
+            {
+              "id": "trace:11",
+              "position": "trace:11",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": "2"
+              },
+              "kind": "step",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.521788341Z",
+                "ended_at": "2026-09-27T11:49:59.528321842Z",
+                "duration_ms": "6"
+              },
+              "preview": null,
+              "request": null,
+              "tool": null,
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": null,
+              "attachments": [],
+              "has_detail": false,
+              "truncated": false
+            },
+            {
+              "id": "trace:12",
+              "position": "trace:12",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": "2"
+              },
+              "kind": "request",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.522661309Z",
+                "ended_at": "2026-09-27T11:49:59.525006680Z",
+                "duration_ms": "2"
+              },
+              "preview": {
+                "text": "scripted",
+                "truncated": false
+              },
+              "request": {
+                "request_id": "request:51:conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0:1:2:0",
+                "retry_number": 0,
+                "assistant_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+                "model": "scripted",
+                "previous_failure_kind": null,
+                "failure_kind": null,
+                "usage": null,
+                "generation": {
+                  "timeline": {
+                    "dispatch_ms": "1",
+                    "first_output_ms": "2",
+                    "last_output_ms": "2",
+                    "terminal_ms": "2"
+                  },
+                  "ttft_ms": "1",
+                  "generation_ms": "0",
+                  "terminal_ms": "1",
+                  "output_tokens_per_second": null
+                },
+                "system_prompt": {
+                  "state": "unchanged",
+                  "preview": null
+                },
+                "predecessor": {
+                  "availability": "available",
+                  "request_id": "request:51:conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0:1:1:0"
+                },
+                "tool_catalog": "unchanged",
+                "context_additions": [],
+                "context_truncated": false
+              },
+              "tool": null,
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": null,
+              "attachments": [],
+              "has_detail": true,
+              "truncated": false
+            },
+            {
+              "id": "trace:14",
+              "position": "trace:14",
+              "location": {
+                "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+                "step_id": "2"
+              },
+              "kind": "assistant",
+              "state": "completed",
+              "timing": {
+                "started_at": "2026-09-27T11:49:59.526692730Z",
+                "ended_at": null,
+                "duration_ms": null
+              },
+              "preview": {
+                "text": "done",
+                "truncated": false
+              },
+              "request": null,
+              "tool": null,
+              "calls": [],
+              "native_id": null,
+              "originating_tool_call_id": null,
+              "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-2",
+              "attachments": [],
+              "has_detail": true,
+              "truncated": false
+            }
+          ],
+          "next_cursor": null
+        },
+        "trace_updates": [],
+        "attempt": {
+          "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+          "phase": {
+            "type": "settled",
+            "outcome": {
+              "type": "completed",
+              "finish_reason": {
+                "type": "stop"
+              }
+            }
+          },
+          "turn": 2,
+          "foreground": [
+            {
+              "message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-agent-1",
+              "block_index": 3,
+              "call_id": "capture-call",
+              "tool_id": "tool-bg",
+              "name": "bg",
+              "state": {
+                "type": "settled",
+                "arguments": "{}",
+                "result": {
+                  "status": {
+                    "type": "success"
+                  },
+                  "content": [],
+                  "duration_ms": 0,
+                  "artifacts": []
+                }
+              }
+            }
+          ],
+          "model": {
+            "primary": {
+              "model": "scripted/scripted",
+              "protocol": "openai_chat_completions",
+              "contextWindow": 1000000,
+              "modelMaxOutputTokens": 512,
+              "maxOutputTokens": 512,
+              "reasoningEnabled": false,
+              "requestParams": {},
+              "capabilities": {
+                "inputModalities": [
+                  "text"
+                ],
+                "outputModalities": [
+                  "text"
+                ],
+                "toolCalls": true,
+                "reasoning": false
+              },
+              "declaredCapabilities": {
+                "inputModalities": [
+                  "text"
+                ],
+                "outputModalities": [
+                  "text"
+                ],
+                "toolCalls": true,
+                "reasoning": false
+              }
+            },
+            "summary": {
+              "mode": "session"
+            }
+          },
+          "execution_settings": {
+            "resource_revision": "1",
+            "approval_mode": "policy"
+          }
+        },
+        "inbound": {
+          "pending": [],
+          "last_drain": {
+            "watermark": "1",
+            "count": 1
+          }
+        },
+        "pending_interactions": [],
+        "background": [],
+        "subagents": [],
+        "statuses": [
+          {
+            "attempt_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0",
+            "turn": 1,
+            "status_message_id": "rustx-context-conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-attempt-0-turn-1-1",
+            "opportunities": {
+              "fresh_inbound": {
+                "target_message_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b-inbound-1"
+              }
+            },
+            "sections": [
+              {
+                "type": "temporal",
+                "current_time": "2026-08-07T12:00:00Z"
+              }
+            ],
+            "rendered": "<system-reminder>\nTimezone: UTC\nCurrent time: 2026-08-07 12:00:00\n</system-reminder>"
+          }
+        ],
+        "context": {
+          "compaction_in_progress": false,
+          "compaction_count": 0
+        },
+        "capabilities": {
+          "revision": "1",
+          "tools": [
+            {
+              "id": "tool-bg",
+              "name": "bg",
+              "description": "",
+              "input_schema": {
+                "type": "object"
+              },
+              "execution_policy": "foreground_only",
+              "concurrency_policy": "sequential",
+              "approval_policy": "never",
+              "replay_policy": "never",
+              "origin": "builtin"
+            }
+          ],
+          "available_tools": [
+            {
+              "id": "tool-bg",
+              "name": "bg",
+              "description": "",
+              "input_schema": {
+                "type": "object"
+              },
+              "execution_policy": "foreground_only",
+              "concurrency_policy": "sequential",
+              "approval_policy": "never",
+              "replay_policy": "never",
+              "origin": "builtin"
+            }
+          ],
+          "skills": [],
+          "sources": []
+        },
+        "resources": {
+          "inspection": {
+            "definitions": [],
+            "resource_diagnostics": [],
+            "main": {
+              "identity": {
+                "kind": "main"
+              },
+              "source": null,
+              "tools": [
+                {
+                  "id": "tool-bg",
+                  "name": "bg",
+                  "origin": "builtin"
+                }
+              ],
+              "tool_selection": [
+                {
+                  "origin": "builtin",
+                  "name": "bg"
+                }
+              ],
+              "skills": [],
+              "agents": [],
+              "workflows": [],
+              "plugins": [
+                {
+                  "identity": "agent_status",
+                  "active": true
+                },
+                {
+                  "identity": "todo",
+                  "active": false
+                },
+                {
+                  "identity": "goal",
+                  "active": false
+                }
+              ],
+              "diagnostics": []
+            },
+            "agents": {},
+            "workflows": {},
+            "sources": {},
+            "skills": [],
+            "skill_diagnostics": [
+              {
+                "kind": "source_root_missing",
+                "source": "workspace",
+                "root": "/tmp/.tmpgTo8ZI/workspace/.agents/skills"
+              }
+            ]
+          },
+          "revision": "1",
+          "context_files": [],
+          "agent_profile": false
+        },
+        "model": {
+          "configured": {
+            "model": "scripted/scripted",
+            "requestParams": {},
+            "summaryModel": {
+              "mode": "session"
+            }
+          },
+          "effective": {
+            "model": "scripted/scripted",
+            "protocol": "openai_chat_completions",
+            "contextWindow": 1000000,
+            "modelMaxOutputTokens": 512,
+            "maxOutputTokens": 512,
+            "reasoningEnabled": false,
+            "requestParams": {},
+            "capabilities": {
+              "inputModalities": [
+                "text"
+              ],
+              "outputModalities": [
+                "text"
+              ],
+              "toolCalls": true,
+              "reasoning": false
+            },
+            "declaredCapabilities": {
+              "inputModalities": [
+                "text"
+              ],
+              "outputModalities": [
+                "text"
+              ],
+              "toolCalls": true,
+              "reasoning": false
+            }
+          },
+          "summary": {
+            "mode": "session"
+          }
+        },
+        "todos": {
+          "tasks": [],
+          "next_id": "1"
+        },
+        "goal": {
+          "current": null
+        }
+      },
+      "cursor": "26"
+    }
+  }
+}

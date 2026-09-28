@@ -300,6 +300,7 @@ export const fixtures = [
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
+      "records": [],
       "before": "trace:9007199254740993",
       "limit": 32
     }

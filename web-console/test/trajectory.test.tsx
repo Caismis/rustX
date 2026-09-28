@@ -57,7 +57,7 @@ function dragTimeline(from: number, to: number) {
 const timelineFocusOf = () => Object.fromEntries([...document.querySelectorAll<HTMLElement>('[data-owner]')].map(el => [el.dataset.owner, el.dataset.timelineFocus]));
 const focusOverlay = () => document.querySelector<HTMLElement>('[data-focus-range]');
 
-// v24 exposes two independent enums: cover their full Cartesian product,
+// v25 exposes two independent enums: cover their full Cartesian product,
 // including combinations today's all-or-nothing snapshot producer cannot emit.
 const inputMatrix = [
   ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],
@@ -897,7 +897,7 @@ it('407: a Trace epoch rebase retires Timeline focus even when record identities
 });
 
 it('407: Jump to latest rebases the read domain and leaves no stale Timeline dimming', () => {
-  // Mirrors AppServerClient.latestTrace: the resident snapshot replaces the window.
+  // Mirrors AppServerClient.latestTrace: the independently acquired Trace page replaces the window.
   const snapshot = { records: epochRecords(4, 5, 6, 7), next_cursor: 'older' };
   const epochs: number[] = [];
   function Fixture() {

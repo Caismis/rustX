@@ -2,7 +2,7 @@ import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v27';
 import type { SessionView } from '../client/app-server';
 /** Select only canonical snapshot messages. Streaming is a separately labelled
  * server projection and disappears when its canonical identity is committed. */
-export function conversation(snapshot: RuntimeClientSnapshot) {
+export function conversation(snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt'>) {
   const messages = snapshot.messages;
   const inFlight = snapshot.attempt?.in_flight;
   return { messages, streaming: inFlight && snapshot.attempt?.phase.type !== 'settled' && !messages.some(message => message.id === inFlight.message_id) ? inFlight : undefined };

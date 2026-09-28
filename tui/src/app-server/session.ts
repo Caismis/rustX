@@ -19,8 +19,8 @@
  * for exactly one Session. It owns no agent semantics: it starts nothing,
  * settles nothing, and interprets no model, tool or capability value. The
  * server is authoritative; everything held here is a projection that one fresh
- * snapshot rebuilds completely. Ordinary settlement reads refresh those facts
- * over the existing subscription, preserving safely joined history and local UI.
+ * snapshot rebuilds completely. Ordinary events, including native read-domain
+ * cuts at settlement, preserve safely joined history and local UI without rereads.
  *
  * # Identity and fencing
  *
@@ -84,7 +84,6 @@ import {
 } from "../protocol/app-server.ts";
 import {
   mergeTranscriptPage,
-  refreshFromSnapshot,
   reduce,
   replaceFromSnapshot,
 } from "../presentation/projection.ts";
@@ -123,9 +122,8 @@ export class AppServerSession {
   #released = false;
   #serverClosed = false;
   /** Serializes repairs so two resyncs cannot interleave their installs. */
-  #repair: Promise<void> = Promise.resolve();
-  #refresh: Promise<void> | undefined;
-  #refreshRequested = false;
+  #repair: Promise<void> | undefined;
+  #acquiring = false;
 
   private constructor(
     client: AppServerClient,
@@ -586,20 +584,33 @@ export class AppServerSession {
    * ends, and any observation in between is either already described by the
    * snapshot or arrives after that cursor.
    */
-  async resync(): Promise<void> {
-    if (this.#released || this.#serverClosed) return;
-    const epoch = ++this.#epoch;
-    const snapshot = await this.#client.call(
-      "session/snapshot",
-      { target: this.#target },
-      "snapshot",
-    );
-    if (epoch !== this.#epoch) {
-      return;
-    }
-    this.#resyncCount += 1;
-    this.#install(snapshot.snapshot, snapshot.cursor);
-    await this.#subscribe(snapshot.cursor);
+  resync(): Promise<void> {
+    if (this.#repair) return this.#repair;
+    if (this.#released || this.#serverClosed) return Promise.resolve();
+    this.#acquiring = true;
+    let epoch = ++this.#epoch;
+    const target = this.#target;
+    const work = (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        this.#acquiring = true;
+        const snapshot = await this.#client.call("session/snapshot", { target }, "snapshot");
+        if (epoch !== this.#epoch || this.#released || this.#serverClosed) return;
+        this.#resyncCount += 1;
+        this.#install(snapshot.snapshot, snapshot.cursor);
+        epoch = this.#epoch;
+        this.#acquiring = false;
+        try {
+          await this.#client.call("session/subscribe", { target, after_cursor: snapshot.cursor }, "subscribed");
+          return;
+        } catch (error) {
+          if (!isResyncRequired(error) || attempt === 2) throw error;
+        }
+      }
+    })().catch(error => { this.#acquiring = true; throw error; }).finally(() => {
+      if (this.#repair === work) this.#repair = undefined;
+    });
+    this.#repair = work;
+    return work;
   }
 
   /**
@@ -640,60 +651,7 @@ export class AppServerSession {
   // -------------------------------------------------------------------------
 
   #enqueueRepair(): void {
-    // Fence reads immediately, even before the serialized repair starts.
-    this.#epoch += 1;
-    this.#repair = this.#repair.then(
-      () => (this.#released ? undefined : this.resync()),
-      () => undefined,
-    );
-    void this.#repair.catch(() => {});
-  }
-
-  /** Read facts over the existing subscription; never replace presentation ownership. */
-  #enqueueRefresh(): void {
-    this.#refreshRequested = true;
-    if (this.#refresh) return;
-    this.#refresh = this.#refreshLive().finally(() => {
-      this.#refresh = undefined;
-      if (this.#refreshRequested && !this.#released && !this.#serverClosed) this.#enqueueRefresh();
-    });
-    void this.#refresh.catch(() => {});
-  }
-
-  async #refreshLive(): Promise<void> {
-    while (this.#refreshRequested && !this.#released && !this.#serverClosed) {
-      this.#refreshRequested = false;
-      const epoch = this.#epoch;
-      const target = this.#target;
-      const fresh = await this.#client.call("session/snapshot", { target }, "snapshot");
-      if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return;
-      // Events may advance while the read is in flight. Never roll them back.
-      // A subsequent read crosses that exact cursor without replaying any action.
-      if (compareExact(fresh.cursor, this.#state.cursor) < 0) {
-        this.#refreshRequested = true;
-        continue;
-      }
-      this.#state = refreshFromSnapshot(this.#state, fresh.snapshot, fresh.cursor);
-      this.#publish();
-    }
-  }
-
-  async #subscribe(afterCursor: RuntimeClientCursor): Promise<void> {
-    try {
-      await this.#client.call(
-        "session/subscribe",
-        { target: this.#target, after_cursor: afterCursor },
-        "subscribed",
-      );
-    } catch (error) {
-      if (isResyncRequired(error)) {
-        // The cursor fell out of the bounded replay window between the
-        // snapshot and the subscription. Repair authoritatively.
-        await this.resync();
-        return;
-      }
-      throw error;
-    }
+    void this.resync().catch(() => {});
   }
 
   #applyEvent(
@@ -703,13 +661,13 @@ export class AppServerSession {
     // An event at or before the installed cursor is already described by the
     // snapshot; folding it again would double-apply a fact. Cursors are exact
     // u64 decimal text, so this is a numeric comparison and never a string one.
-    if (compareExact(cursor, this.#state.cursor) <= 0) {
+    if (this.#acquiring || compareExact(cursor, this.#state.cursor) <= 0) {
       return;
     }
+    if (BigInt(cursor) !== BigInt(this.#state.cursor) + 1n) { this.#enqueueRepair(); return; }
     this.#state = reduce(this.#state, { cursor, event });
     this.#publish();
-    // Completion/statistics are native read facts, not fields to derive from events.
-    if (event.type === "attempt_settled") this.#enqueueRefresh();
+
   }
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {

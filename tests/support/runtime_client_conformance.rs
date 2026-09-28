@@ -529,6 +529,25 @@ pub async fn receive_until(
     .expect("the observation stream must not stall")
 }
 
+/// Settlement ends execution; the publication owner can still enrich the
+/// durable read cut and invalidate Trace. Prove the suffix is contiguous and
+/// contains no additional semantic settlement or mutation.
+async fn receive_read_domain_suffix(
+    driver: &mut dyn RuntimeClientProtocolDriver,
+    after: RuntimeClientCursor,
+    through: RuntimeClientCursor,
+) {
+    assert!(through >= after);
+    if through == after {
+        return;
+    }
+    let suffix = receive_until(driver, after, |event| event.cursor == through).await;
+    assert!(suffix.iter().all(|event| matches!(
+        event.event,
+        RuntimeClientEvent::TraceChanged | RuntimeClientEvent::ReadDomainsUpdated { .. }
+    )));
+}
+
 /// Counts the terminal attempt settlements in an observed event sequence.
 #[must_use]
 pub fn settlements(events: &[RuntimeClientProtocolEvent]) -> usize {
@@ -752,7 +771,9 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
     })
     .await;
-    let settled_cursor = events.last().expect("at least one event").cursor;
+    let event_cursor = events.last().expect("at least one event").cursor;
+    let (_, settled_cursor) = snapshot_of(&mut *driver, 30).await;
+    receive_read_domain_suffix(&mut *driver, event_cursor, settled_cursor).await;
 
     let response = driver
         .request(RuntimeClientRequest::Detach {
@@ -784,7 +805,10 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     else {
         panic!("initialized");
     };
-    assert_eq!(reattached, settled_cursor);
+    // A request-owned snapshot does not wait for the background materializer.
+    // Only its derived suffix may appear across detach; no semantic replay.
+    subscribe(&mut *driver, 7, settled_cursor).await;
+    receive_read_domain_suffix(&mut *driver, settled_cursor, reattached).await;
     assert_eq!(
         snapshot.messages.len(),
         3,
@@ -925,7 +949,12 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
 
     // The authoritative snapshot reflects committed state at its cursor.
     let (snapshot, snapshot_cursor) = snapshot_of(&mut *driver, 4).await;
-    assert_eq!(snapshot_cursor, rest.last().expect("settled").cursor);
+    receive_read_domain_suffix(
+        &mut *driver,
+        rest.last().expect("settled").cursor,
+        snapshot_cursor,
+    )
+    .await;
     assert_eq!(snapshot.messages.len(), 3);
     assert!(matches!(
         snapshot.attempt.expect("attempt").phase,
@@ -1207,10 +1236,12 @@ pub async fn before_start_cancellation_repairs_runtime_client(factory: &dyn Driv
     ));
 
     let (snapshot, snapshot_cursor) = snapshot_of(&mut *driver, 5).await;
-    assert_eq!(
+    receive_read_domain_suffix(
+        &mut *driver,
+        events.last().expect("settlement event").cursor,
         snapshot_cursor,
-        events.last().expect("settlement event").cursor
-    );
+    )
+    .await;
     let tool_message = snapshot
         .messages
         .iter()
@@ -1944,7 +1975,12 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
     assert!(!events.is_empty());
 
     let (settled, settled_cursor) = snapshot_of(&mut *driver, 5).await;
-    assert_eq!(settled_cursor, events.last().expect("settled").cursor);
+    receive_read_domain_suffix(
+        &mut *driver,
+        events.last().expect("settled").cursor,
+        settled_cursor,
+    )
+    .await;
     assert_eq!(settled.messages.len(), 3);
 }
 

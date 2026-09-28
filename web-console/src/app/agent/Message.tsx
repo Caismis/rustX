@@ -9,13 +9,13 @@ import { Tool } from './Tool';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v27';
 import type { ReactNode } from 'react';
 
-export function Content({ blocks, markdown = false, streaming = false, tools = [] }: { tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[] }) {
+export function Content({ blocks, markdown = false, streaming = false, tools = [], reasoningHidden = false }: { reasoningHidden?: boolean; tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[] }) {
   const tx = useTranslation();
   return blocks.map((block, index) => {
     if (block.type === 'text') return markdown ? <MarkdownText key={index} text={block.text} streaming={streaming} /> : <span key={index}>{block.text}</span>;
     if (block.type === 'uploaded_file') return <AttachmentCard key={`${block.batch_id}/${block.name}/${index}`} name={block.name} image={false} />;
     if (block.type === 'image' || block.type === 'file') return <Artifact key={block.artifact_id} id={block.artifact_id} image={block.type === 'image'} mimeType={block.type === 'file' ? block.mime_type ?? undefined : undefined} name={(block.type === 'image' ? block.alt : block.name) ?? undefined} />;
-    if (block.type === 'reasoning') return <Reasoning key={index} text={block.text ?? ''} running={streaming}/>;
+    if (block.type === 'reasoning') return <Reasoning key={index} text={block.text ?? ''} running={streaming} hidden={reasoningHidden}/>;
     if (block.type === 'refusal') return <p key={index}>{block.text}</p>;
     if (block.type === 'tool_call') {
       const id = 'call_id' in block ? block.call_id : block.id;
@@ -25,10 +25,10 @@ export function Content({ blocks, markdown = false, streaming = false, tools = [
     return null;
   });
 }
-export function Message({ message, tools = [], actions }: { message: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode }) {
+export function Message({ message, tools = [], actions, streaming = false, blocks, reasoningHidden = false }: { reasoningHidden?: boolean; message: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; blocks?: InFlightBlock[] }) {
   const tx = useTranslation();
   if (message.role === 'tool') return null; // Results belong to the native call projection, never paired here.
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content blocks={message.content} markdown/></details>;
   return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content blocks={message.content}/></UserMessage>
-    : <AssistantMessage label={tx('agent:message.assistant-response')}><Content blocks={message.content} markdown tools={tools}/></AssistantMessage>;
+    : <AssistantMessage label={tx(streaming ? 'agent:agent-transcript.streaming-response' : 'agent:message.assistant-response')}><Content blocks={blocks ?? message.content} markdown tools={tools} streaming={streaming} reasoningHidden={reasoningHidden}/></AssistantMessage>;
 }

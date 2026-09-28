@@ -103,6 +103,8 @@ pub enum Method {
     #[serde(rename = "session/trace")]
     Trace {
         target: AttachmentTarget,
+        #[serde(default)]
+        records: Vec<crate::runtime_client::trace::TraceCursor>,
         before: Option<crate::runtime_client::trace::TraceCursor>,
         limit: usize,
     },

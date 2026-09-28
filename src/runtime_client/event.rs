@@ -47,7 +47,14 @@ use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProg
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientEvent {
-    /// Presentation invalidation only; fetch an authoritative snapshot.
+    /// Native derived read domains at a committed journal cut. Published only
+    /// when durable facts change, never for publication text/argument suffixes.
+    ReadDomainsUpdated {
+        transcript: super::snapshot::RuntimeClientTranscriptPage,
+        occupancy: Option<crate::context::occupancy::ContextOccupancy>,
+        todos: Option<crate::tools::todo::TodoSnapshot>,
+    },
+    /// Independent Trace invalidation; reread Trace, not the Session snapshot.
     TraceChanged,
     /// Bounded authoritative durable Goal view. Every emission follows a
     /// committed durable transition; there is no activation-only form.
@@ -237,6 +244,8 @@ pub enum RuntimeClientEvent {
     },
     /// A tool call within the in-flight Assistant message finished assembly.
     ToolCallAssembled {
+        /// Exact native assembled representation; clients must not reserialize JSON numbers.
+        arguments_json: String,
         /// The attempt assembling the call.
         attempt_id: AttemptId,
         /// The provisional message identity.

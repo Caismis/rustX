@@ -471,7 +471,20 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     assert_eq!(response["result"]["type"], "capability");
 
     let response = adapter.exchange(r#"{"method":"snapshot_get","id":5}"#);
-    assert_eq!(response["result"]["cursor"].as_u64(), Some(expected));
+    let snapshot_cursor = response["result"]["cursor"].as_u64().unwrap();
+    while expected < snapshot_cursor {
+        let frame = adapter
+            .notification()
+            .await
+            .expect("derived publication suffix");
+        expected += 1;
+        assert_eq!(frame["cursor"].as_u64(), Some(expected));
+        assert!(matches!(
+            frame["event"]["type"].as_str(),
+            Some("trace_changed" | "read_domains_updated")
+        ));
+    }
+    assert_eq!(snapshot_cursor, expected);
 
     // Detach is never cancellation: the settled attempt and the canonical
     // history survive it, and re-initializing observes exactly that state.

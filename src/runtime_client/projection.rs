@@ -210,6 +210,17 @@ enum ForegroundSettlement {
 pub(crate) struct RuntimeClientProjection {
     seen_activations: std::collections::HashSet<crate::runtime::identity::SubagentId>,
     journal_through: u64,
+    /// Latest represented prefix that changed a durable read dependency.
+    /// Trace-only progress must not starve a Session snapshot candidate.
+    read_through: u64,
+    bootstrap_transcript_through: u64,
+    pending_transcript: std::collections::BTreeMap<MessageId, crate::durable::TranscriptCursor>,
+    publication_transcript: VecDeque<crate::runtime::identity::PublicationStreamId>,
+    read_domains_dirty: bool,
+    /// Failure of the current read-domain fence; cleared by matching success
+    /// or a new invalidating revision, never by an obsolete read.
+    read_failure: Option<String>,
+    read_revision: u64,
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
     /// Set when the cursor space is exhausted: publishing stops and
@@ -232,6 +243,130 @@ pub(crate) struct RuntimeClientProjection {
     probe: Option<crate::runtime_client::test_sync::ProjectionProbe>,
 }
 
+/// Host identity is fixed for the lifetime of a live projection. Revision
+/// fences every durable-domain observation, independently of publication cursors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReadDomainCut {
+    revision: u64,
+    through: u64,
+}
+
+type ReadDomains = Result<
+    (
+        super::snapshot::RuntimeClientTranscriptPage,
+        Option<crate::context::occupancy::ContextOccupancy>,
+    ),
+    crate::durable::ConversationStoreError,
+>;
+
+impl ReadDomainCut {
+    pub(crate) fn read(self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
+        let page =
+            store.load_transcript_page(None, crate::durable::TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?;
+        let mut page = super::snapshot::transcript_page_view(page)
+            .map_err(crate::durable::ConversationStoreError::InvalidReference)?;
+        super::response::decorate_through(store, &mut page, self.through)?;
+        let occupancy = crate::context::occupancy::read(store, self.through)?;
+        Ok((page, occupancy))
+    }
+}
+
+/// Request-owned copy, independent of the live materializer's installation fence.
+pub(crate) struct SnapshotCandidate {
+    pub(crate) snapshot: RuntimeClientSnapshot,
+    pub(crate) cursor: RuntimeClientCursor,
+    pub(crate) trace_through: u64,
+    pub(crate) read_cut: ReadDomainCut,
+    transcript_cut: Option<crate::durable::inbox::TranscriptSnapshotCut>,
+}
+impl SnapshotCandidate {
+    pub(crate) fn read_domains(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+    ) -> ReadDomains {
+        let mut page = if let Some(cut) = &self.transcript_cut {
+            super::snapshot::transcript_page_view(store.load_transcript_snapshot(cut)?)
+                .map_err(crate::durable::ConversationStoreError::InvalidReference)?
+        } else {
+            self.snapshot.transcript.clone()
+        };
+        super::response::decorate_through(store, &mut page, self.read_cut.through)?;
+        Ok((
+            page,
+            crate::context::occupancy::read(store, self.read_cut.through)?,
+        ))
+    }
+
+    pub(crate) fn materialize(
+        mut self,
+        store: &dyn crate::durable::ConversationStore,
+    ) -> Result<Self, RuntimeClientError> {
+        let (page, occupancy) =
+            self.read_domains(store)
+                .map_err(|e| RuntimeClientError::RuntimeFailure {
+                    message: e.to_string(),
+                })?;
+        self.snapshot.transcript = page;
+        self.snapshot.context.last_request_occupancy = occupancy;
+        Ok(self)
+    }
+}
+
+/// Closed observation classification. Trace invalidation belongs separately to
+/// `JournalBatch`, whose source vocabulary is owned by `PendingObservations`.
+fn invalidates_read_domains(observation: &ConversationObservation) -> bool {
+    match observation {
+        ConversationObservation::Committed { .. }
+        | ConversationObservation::PublicationSettled { .. }
+        | ConversationObservation::InboundEnqueued(_)
+        | ConversationObservation::InboundDrained(_)
+        | ConversationObservation::PendingInboundChanged(_) => true,
+        ConversationObservation::InteractionPending { audit, .. }
+        | ConversationObservation::InteractionSettled { audit, .. } => audit.is_some(),
+        ConversationObservation::Event { event, .. }
+        | ConversationObservation::ManualCompactionEvent { event } => matches!(
+            event,
+            RuntimeEvent::AttemptStarted { .. }
+                | RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AttemptCancelled { .. }
+                | RuntimeEvent::AttemptFailed { .. }
+                | RuntimeEvent::AttemptTimedOut { .. }
+                | RuntimeEvent::AttemptLimitExceeded { .. }
+                | RuntimeEvent::TurnStarted
+                | RuntimeEvent::ModelRequestStarted { .. }
+                | RuntimeEvent::ModelRequestCompleted { .. }
+                | RuntimeEvent::ModelRequestFailed { .. }
+                | RuntimeEvent::AssistantMessageCommitted { .. }
+                | RuntimeEvent::ToolMessageCommitted { .. }
+                | RuntimeEvent::CompactionStarted
+                | RuntimeEvent::CompactionCompleted { .. }
+        ),
+        ConversationObservation::JournalBatch { .. }
+        | ConversationObservation::Published { .. } => {
+            unreachable!("publication envelopes are classified through their contents")
+        }
+        ConversationObservation::Workflow(_)
+        | ConversationObservation::GoalChanged(_)
+        | ConversationObservation::InboundAdopted
+        | ConversationObservation::Status(_)
+        | ConversationObservation::PublicationOpened { .. }
+        | ConversationObservation::Publication { .. }
+        | ConversationObservation::Background(_)
+        | ConversationObservation::ToolProgress { .. }
+        | ConversationObservation::SubagentLifecycle { .. }
+        | ConversationObservation::SubagentWorkspace(_)
+        | ConversationObservation::SubagentActivity(_)
+        | ConversationObservation::Capability { .. }
+        | ConversationObservation::Resources { .. }
+        | ConversationObservation::AttemptAdmitted { .. }
+        | ConversationObservation::SessionModelChanged { .. }
+        | ConversationObservation::Shutdown
+        | ConversationObservation::InteractionRemoved { .. }
+        | ConversationObservation::DurableFailure { .. }
+        | ConversationObservation::DurabilityFailed { .. } => false,
+    }
+}
+
 impl RuntimeClientProjection {
     /// Creates the projection over one conversation with the current Surface
     /// working set and the initial capability view.
@@ -245,6 +380,13 @@ impl RuntimeClientProjection {
         Self {
             seen_activations: std::collections::HashSet::new(),
             journal_through: 0,
+            read_through: 0,
+            bootstrap_transcript_through: 0,
+            pending_transcript: std::collections::BTreeMap::new(),
+            publication_transcript: VecDeque::new(),
+            read_domains_dirty: false,
+            read_failure: None,
+            read_revision: 0,
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
@@ -357,8 +499,19 @@ impl RuntimeClientProjection {
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
         self.journal_through = seed.journal_through;
+        self.read_through = seed.journal_through;
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
+        self.bootstrap_transcript_through =
+            seed.transcript.entries.last().map_or(0, |e| e.cursor.get());
+        self.pending_transcript = seed
+            .inbound_pending
+            .iter()
+            .filter_map(|item| {
+                item.transcript_cursor()
+                    .map(|cursor| (item.message().id.clone(), cursor))
+            })
+            .collect();
         self.snapshot.shutting_down = seed.shutting_down;
         self.snapshot.effective_approval_mode = seed.approval_mode;
         self.snapshot.inbound.pending =
@@ -400,6 +553,7 @@ impl RuntimeClientProjection {
             return;
         }
         self.journal_through = envelope.sequence;
+        self.read_through = envelope.sequence;
         let event = &envelope.event;
         match event {
             RuntimeEvent::CompactionStarted
@@ -494,24 +648,72 @@ impl RuntimeClientProjection {
         if self.exhausted {
             return;
         }
+        if let ConversationObservation::Published { observation, .. } = observation {
+            self.apply(*observation);
+            return;
+        }
         if let ConversationObservation::JournalBatch {
             through,
             observations,
         } = observation
         {
-            let before = self.cursor;
+            let revision = self.read_revision;
             for observation in observations {
                 self.apply(observation);
             }
             if let Some(through) = through {
                 self.journal_through = through;
+                if self.read_revision != revision {
+                    self.read_through = through;
+                }
+                // JournalBatch is released only for a represented Trace-affecting cut.
+                self.publish(RuntimeClientEvent::TraceChanged);
             } else {
                 self.exhausted = true;
-            }
-            if self.cursor == before {
-                self.publish(RuntimeClientEvent::TraceChanged);
+                self.wake_subscribers();
             }
             return;
+        }
+        if invalidates_read_domains(&observation) {
+            self.read_through = self.journal_through;
+            self.read_domains_dirty = true;
+            self.read_failure = None;
+            self.read_revision = self
+                .read_revision
+                .checked_add(1)
+                .expect("read revision exhausted");
+        }
+        match &observation {
+            ConversationObservation::InboundEnqueued(item) => {
+                if let Some(cursor) = item.transcript_cursor() {
+                    self.pending_transcript
+                        .insert(item.message().id.clone(), cursor);
+                }
+            }
+            ConversationObservation::InboundDrained(batch) => {
+                for item in batch.items() {
+                    self.pending_transcript.remove(&item.message().id);
+                }
+            }
+            ConversationObservation::PendingInboundChanged(items) => {
+                self.pending_transcript = items
+                    .iter()
+                    .filter_map(|item| {
+                        item.transcript_cursor()
+                            .map(|cursor| (item.message().id.clone(), cursor))
+                    })
+                    .collect();
+            }
+            ConversationObservation::PublicationSettled { audit, .. } => {
+                self.publication_transcript
+                    .push_back(audit.stream_id.clone());
+                while self.publication_transcript.len()
+                    > crate::durable::TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT + 1
+                {
+                    self.publication_transcript.pop_front();
+                }
+            }
+            _ => {}
         }
         let published = self.fold(observation);
         #[cfg(test)]
@@ -553,9 +755,7 @@ impl RuntimeClientProjection {
             // it names, so folding it publishes no client-facing execution
             // fact. Trace's ledger gains a record, so its bounded
             // invalidation is the one signal this lane emits.
-            ConversationObservation::InboundAdopted => {
-                vec![RuntimeClientEvent::TraceChanged]
-            }
+            ConversationObservation::InboundAdopted => Vec::new(),
             ConversationObservation::Committed {
                 attempt_id,
                 block,
@@ -1115,6 +1315,7 @@ impl RuntimeClientProjection {
             PublicationPayload::ProposedToolCallCompleted { block_index, call } => {
                 self.set_assembled(call);
                 vec![RuntimeClientEvent::ToolCallAssembled {
+                    arguments_json: call.arguments.to_string(),
                     attempt_id: attempt_id.clone(),
                     message_id,
                     block_index: *block_index,
@@ -1139,8 +1340,8 @@ impl RuntimeClientProjection {
     ///   [`RuntimeClientProjection::fold_publication_frame`];
     /// - PROJECT: turn counting and final request usage, carrying the exact
     ///   values folded into the attempt view;
-    /// - INVALIDATE: request boundaries and retries publish only `TraceChanged`;
-    ///   their payloads stay internal and the Trace owner resolves safe reads;
+    /// - TRACE: request boundaries and retries remain internal; `JournalBatch`
+    ///   independently invalidates the represented durable Trace cut;
     /// - PROJECT: compaction start/failure and committed completion, carrying
     ///   attempt attribution when automatic and no attempt identity when
     ///   manual.
@@ -1217,12 +1418,12 @@ impl RuntimeClientProjection {
                 }
                 Vec::new()
             }
-            // Request mechanics publish only a payloadless Trace invalidation.
-            // The native Trace owner resolves safe facts on snapshot repair.
+            // Request mechanics are private. The JournalBatch owner publishes
+            // one independent Trace invalidation for the represented cut.
             RuntimeEvent::TurnCompleted
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::ModelRequestFailed { .. }
-            | RuntimeEvent::ModelRetryScheduled { .. } => vec![RuntimeClientEvent::TraceChanged],
+            | RuntimeEvent::ModelRetryScheduled { .. } => Vec::new(),
             RuntimeEvent::ContextContributionEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
                 if let Some(usage) = usage
@@ -1235,7 +1436,7 @@ impl RuntimeClientProjection {
                         usage: usage.clone(),
                     }];
                 }
-                vec![RuntimeClientEvent::TraceChanged]
+                Vec::new()
             }
             // The durable Journal event carries identity only; the projection
             // already receives the canonical body from the commit
@@ -1741,7 +1942,11 @@ impl RuntimeClientProjection {
             return;
         };
         self.cursor = RuntimeClientCursor::new(next_value);
-        let bytes = if matches!(&event, RuntimeClientEvent::WorkflowsUpdated { .. }) {
+        let bytes = if matches!(
+            &event,
+            RuntimeClientEvent::WorkflowsUpdated { .. }
+                | RuntimeClientEvent::ReadDomainsUpdated { .. }
+        ) {
             serde_json::to_vec(&event)
                 .expect("client event serialization")
                 .len()
@@ -1771,6 +1976,131 @@ impl RuntimeClientProjection {
         }
     }
 
+    pub(crate) fn set_inspection_frontier(&mut self, through: u64) {
+        self.journal_through = through;
+        self.read_through = through;
+    }
+
+    /// Capture one semantic cut. Completion never consults the moving live head.
+    pub(crate) fn snapshot_candidate(&self) -> Result<SnapshotCandidate, RuntimeClientError> {
+        #[cfg(test)]
+        self.probe_snapshot_enter();
+        self.capture_candidate()
+    }
+
+    pub(crate) fn read_domain_candidate(&self) -> Option<(ReadDomainCut, SnapshotCandidate)> {
+        self.read_domain_cut().and_then(|cut| {
+            self.capture_candidate()
+                .ok()
+                .map(|candidate| (cut, candidate))
+        })
+    }
+
+    fn capture_candidate(&self) -> Result<SnapshotCandidate, RuntimeClientError> {
+        if self.exhausted {
+            return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        Ok(SnapshotCandidate {
+            snapshot: self.snapshot.clone(),
+            cursor: self.cursor,
+            trace_through: self.journal_through,
+            read_cut: self.read_domain_fence(),
+            transcript_cut: (!matches!(
+                self.snapshot.settings_evidence,
+                super::settings::SettingsEvidence::HistoricalPartial
+            ))
+            .then(|| crate::durable::inbox::TranscriptSnapshotCut {
+                bootstrap_through: self.bootstrap_transcript_through,
+                journal_through: self.read_through,
+                messages: self
+                    .snapshot
+                    .messages
+                    .iter()
+                    .map(|message| crate::conversation::message_id_of(message).clone())
+                    .collect(),
+                publications: self.publication_transcript.iter().cloned().collect(),
+                pending: self
+                    .snapshot
+                    .inbound
+                    .pending
+                    .iter()
+                    .filter_map(|item| {
+                        self.pending_transcript
+                            .get(&item.message.id)
+                            .map(|cursor| (*cursor, item.message.clone()))
+                    })
+                    .collect(),
+            }),
+        })
+    }
+
+    /// Capture a finite derived cut; Store work must happen outside the host lock.
+    pub(crate) fn read_domain_fence(&self) -> ReadDomainCut {
+        ReadDomainCut {
+            revision: self.read_revision,
+            through: self.read_through,
+        }
+    }
+
+    pub(crate) fn read_domain_cut(&self) -> Option<ReadDomainCut> {
+        (self.read_domains_dirty && !self.exhausted).then(|| self.read_domain_fence())
+    }
+
+    /// Installation is the linearization point. A newer semantic cut retires
+    /// both successful and failed reads, leaving the newest cut dirty for repair.
+    pub(crate) fn install_read_domains(
+        &mut self,
+        cut: ReadDomainCut,
+        read: ReadDomains,
+        publish: bool,
+    ) -> bool {
+        if self.exhausted
+            || self.read_domain_fence() != cut
+            || (!self.read_domains_dirty && self.read_failure.is_none())
+        {
+            return false;
+        }
+        let (transcript, occupancy) = match read {
+            Ok(value) => value,
+            Err(error) => {
+                self.read_domains_dirty = false;
+                self.read_failure = Some(error.to_string());
+                self.wake_subscribers();
+                return true;
+            }
+        };
+        if self.read_failure.take().is_some() {
+            self.wake_subscribers();
+        }
+        self.read_domains_dirty = false;
+        if self.snapshot.transcript != transcript
+            || self.snapshot.context.last_request_occupancy != occupancy
+        {
+            self.snapshot.transcript = transcript.clone();
+            self.snapshot
+                .context
+                .last_request_occupancy
+                .clone_from(&occupancy);
+            if publish {
+                self.publish(RuntimeClientEvent::ReadDomainsUpdated {
+                    transcript,
+                    occupancy,
+                    todos: self.snapshot.todos.clone(),
+                });
+            }
+        }
+        true
+    }
+
+    pub(crate) fn initialize_read_domains(
+        &mut self,
+        store: &dyn crate::durable::ConversationStore,
+    ) {
+        self.read_domains_dirty = true;
+        let cut = self.read_domain_cut().expect("initial read cut");
+        self.install_read_domains(cut, cut.read(store), false);
+    }
+
     /// The snapshot and its cursor, linearized together.
     ///
     /// # Errors
@@ -1786,6 +2116,11 @@ impl RuntimeClientProjection {
         self.probe_snapshot_enter();
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        if let Some(message) = &self.read_failure {
+            return Err(RuntimeClientError::RuntimeFailure {
+                message: message.clone(),
+            });
         }
         Ok((self.snapshot.clone(), self.cursor))
     }
@@ -1814,6 +2149,7 @@ impl RuntimeClientProjection {
         &mut self,
         page: super::snapshot::RuntimeClientTranscriptPage,
     ) {
+        self.bootstrap_transcript_through = page.entries.last().map_or(0, |e| e.cursor.get());
         self.snapshot.transcript = page;
     }
 
@@ -1892,6 +2228,12 @@ impl RuntimeClientProjection {
             return SubscriberPoll::Closed;
         };
         let consumed = subscriber.consumed;
+        if self.read_failure.is_some() {
+            return SubscriberPoll::Lagged {
+                after_cursor: consumed,
+                earliest_serviceable: self.cursor,
+            };
+        }
         if consumed >= self.cursor {
             return SubscriberPoll::Pending;
         }
@@ -1957,6 +2299,11 @@ impl RuntimeClientProjection {
     ) -> Result<&RuntimeClientSnapshot, RuntimeClientError> {
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        if let Some(message) = &self.read_failure {
+            return Err(RuntimeClientError::RuntimeFailure {
+                message: message.clone(),
+            });
         }
         Ok(&self.snapshot)
     }
@@ -4144,6 +4491,182 @@ mod tests {
         );
     }
 
+    #[test]
+    fn journal_batch_invalidates_trace_even_when_session_events_publish() {
+        use crate::durable::presentation::JournalObserver;
+        use crate::events::types::RuntimeEventEnvelope;
+        use crate::runtime::identity::EventId;
+        use crate::runtime::observation::PendingObservations;
+        let mut projection = projection();
+        let queue = PendingObservations::new();
+        let facts = [
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+            RuntimeEvent::TurnStarted,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new("call"),
+                tool_id: ToolId::new("tool"),
+            },
+        ];
+        for (index, event) in facts.into_iter().enumerate() {
+            let sequence = index as u64 + 1;
+            queue.committed(Some(vec![RuntimeEventEnvelope {
+                schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+                event_id: EventId::new(format!("trace-{sequence}")),
+                sequence,
+                conversation_id: projection.snapshot_ref().conversation_id.clone(),
+                attempt_id: Some(attempt()),
+                turn_id: None,
+                timestamp: chrono::DateTime::UNIX_EPOCH,
+                event: event.clone(),
+            }]));
+            queue.push(ConversationObservation::Published {
+                journal_sequence: sequence,
+                observation: Box::new(event_observation(event)),
+            });
+        }
+        let batches = queue.drain();
+        assert!(matches!(
+            batches.as_slice(),
+            [ConversationObservation::JournalBatch {
+                through: Some(3),
+                ..
+            }]
+        ));
+        for batch in batches {
+            projection.apply(batch);
+        }
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeClientEvent::ToolExecutionStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeClientEvent::AttemptStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeClientEvent::AttemptTurnUpdated { .. }))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e.event, RuntimeClientEvent::TraceChanged))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_journal_batch_wakes_subscribers_without_inventing_a_trace_cut() {
+        use futures_util::FutureExt as _;
+        let mut projection = projection();
+        let (subscriber, wake) = projection.subscribe(RuntimeClientCursor::new(0)).unwrap();
+        assert!(wake.notified().now_or_never().is_none());
+        projection.apply(ConversationObservation::JournalBatch {
+            through: None,
+            observations: Vec::new(),
+        });
+        assert!(wake.notified().now_or_never().is_some());
+        assert_eq!(
+            projection.poll_subscriber(subscriber),
+            SubscriberPoll::Exhausted
+        );
+        assert_eq!(projection.cursor(), RuntimeClientCursor::new(0));
+    }
+
+    #[test]
+    fn trace_only_progress_does_not_supersede_a_durable_read_cut() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let cut = projection.read_domain_cut().unwrap();
+        projection.apply(ConversationObservation::JournalBatch {
+            through: Some(9),
+            observations: vec![event_observation(RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new("trace-only-call"),
+                tool_id: ToolId::new("tool"),
+            })],
+        });
+        assert_eq!(projection.read_domain_cut(), Some(cut));
+        assert_eq!(projection.snapshot_cut().unwrap().2, 9);
+        assert!(projection.install_read_domains(
+            cut,
+            Ok((
+                super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                None
+            )),
+            true
+        ));
+    }
+
+    #[test]
+    fn read_failure_is_superseded_by_a_new_dependency_revision() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let failed = projection.read_domain_cut().unwrap();
+        assert!(projection.install_read_domains(
+            failed,
+            Err(crate::durable::ConversationStoreError::InvalidReference(
+                "transient".into()
+            )),
+            true
+        ));
+        assert!(projection.read_failure.is_some());
+        assert!(projection.read_domain_cut().is_none());
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let next = projection.read_domain_cut().unwrap();
+        assert_ne!(next, failed);
+        assert!(
+            projection.read_failure.is_none(),
+            "failure belongs only to its dependency revision"
+        );
+        let domains = (projection.snapshot.transcript.clone(), None);
+        assert!(!projection.install_read_domains(failed, Ok(domains.clone()), true));
+        assert_eq!(projection.read_domain_cut(), Some(next));
+        assert!(projection.install_read_domains(next, Ok(domains), true));
+        assert!(projection.read_failure.is_none());
+        assert!(projection.read_domain_cut().is_none());
+        // An older in-flight read for the same fence cannot poison a cut which
+        // another successful owner has already established.
+        assert!(!projection.install_read_domains(
+            next,
+            Err(crate::durable::ConversationStoreError::InvalidReference(
+                "late failure".into()
+            )),
+            true
+        ));
+        assert!(projection.snapshot().is_ok());
+    }
+
+    #[test]
+    fn durable_read_cut_retires_stale_results_without_overwriting_semantics() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let old = projection.read_domain_cut().unwrap();
+        projection.apply(ConversationObservation::Shutdown);
+        assert_eq!(
+            projection.read_domain_cut(),
+            Some(old),
+            "shutdown does not invalidate durable domains"
+        );
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        assert!(!projection.install_read_domains(
+            old,
+            Ok((
+                super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                None
+            )),
+            true
+        ));
+        assert!(projection.snapshot_ref().shutting_down);
+        assert!(projection.read_domain_cut().is_some());
+    }
+
     fn stream_start() -> crate::publication::PublicationStreamStart {
         crate::publication::PublicationStreamStart {
             stream_id: crate::runtime::identity::PublicationStreamId::new("attempt-1-pub-1"),
@@ -4285,7 +4808,7 @@ mod tests {
     /// Request payloads stay internal; invalidation and compaction lifecycle and
     /// committed completion are projected as runtime-owned lifecycle facts.
     #[test]
-    fn request_payloads_stay_internal_and_trace_invalidation_is_projected() {
+    fn request_payloads_stay_internal_and_trace_is_owned_by_journal_batch() {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
@@ -4334,28 +4857,22 @@ mod tests {
             apply_event(&mut projection, event);
         }
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
-        assert_eq!(events.len(), 7);
-        assert!(
-            events[..3]
-                .iter()
-                .all(|event| matches!(event.event, RuntimeClientEvent::TraceChanged))
-        );
-        assert!(matches!(events[6].event, RuntimeClientEvent::TraceChanged));
+        assert_eq!(events.len(), 3);
         assert!(matches!(
-            &events[3].event,
+            &events[0].event,
             RuntimeClientEvent::ContextCompactionStarted { .. }
         ));
         assert!(matches!(
-            &events[4].event,
+            &events[1].event,
             RuntimeClientEvent::ContextCompacted { context, .. }
                 if context.compaction_count == 1
         ));
         assert!(matches!(
-            &events[5].event,
+            &events[2].event,
             RuntimeClientEvent::ContextCompactionFailed { error, .. } if error == "boom"
         ));
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-        assert_eq!(cursor, RuntimeClientCursor::new(7));
+        assert_eq!(cursor, RuntimeClientCursor::new(3));
         assert!(!snapshot.context.compaction_in_progress);
         assert_eq!(snapshot.context.compaction_count, 1);
         assert!(snapshot.attempt.is_none());
@@ -4425,8 +4942,7 @@ mod tests {
             },
         );
         let events = collect(&mut projection, RuntimeClientCursor::new(1));
-        assert_eq!(events.len(), 3);
-        assert!(matches!(events[1].event, RuntimeClientEvent::TraceChanged));
+        assert_eq!(events.len(), 2);
         assert_eq!(
             events[0].event,
             RuntimeClientEvent::AttemptTurnUpdated {
@@ -4435,7 +4951,7 @@ mod tests {
             }
         );
         assert_eq!(
-            events[2].event,
+            events[1].event,
             RuntimeClientEvent::AttemptUsageUpdated {
                 attempt_id: attempt(),
                 usage: ModelUsage {
@@ -5889,6 +6405,71 @@ mod tests {
                 owner_state
             );
         }
+    }
+
+    #[test]
+    fn agents_and_jobs_share_incremental_cursor_and_captured_snapshot_cut() {
+        use crate::runtime::subagent::{AgentState, SubagentObservation};
+        use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundLifecycle};
+        let mut projection = projection();
+        let fence = projection.read_domain_fence();
+        let mut activation = agent_activation_snapshot(SubagentObservation::default());
+        let job = BackgroundExecutionSnapshot {
+            execution_id: crate::runtime::identity::ToolExecutionId::new(
+                "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+            ),
+            tool_id: ToolId::new("bash"),
+            tool_name: "bash".into(),
+            state: BackgroundLifecycle::Running,
+            progress: None,
+            result: None,
+        };
+        projection.apply(owner_observation(activation.clone(), AgentState::Active));
+        projection.apply(ConversationObservation::Background(job.clone()));
+        let candidate = projection.snapshot_candidate().unwrap();
+        assert_eq!(candidate.cursor, RuntimeClientCursor::new(2));
+        let captured_activation = candidate.snapshot.agents[0].activation_id.clone();
+        activation.subagent_id =
+            crate::runtime::identity::SubagentId::new("conv_57d68983-5497-771e-8aaa-5f1356061698");
+        projection.apply(owner_observation(activation.clone(), AgentState::Active));
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                state: BackgroundLifecycle::Succeeded,
+                result: Some(success_result()),
+                ..job
+            },
+        ));
+        assert_eq!(
+            projection.read_domain_fence(),
+            fence,
+            "domain observations never request a durable Session reread"
+        );
+        assert_eq!(
+            candidate.snapshot.agents[0].activation_id,
+            captured_activation
+        );
+        assert_eq!(
+            candidate.snapshot.jobs[0].state,
+            BackgroundLifecycle::Running
+        );
+        let events = collect(&mut projection, candidate.cursor);
+        assert_eq!(
+            events.len(),
+            2,
+            "no unrelated Trace/read-domain invalidation"
+        );
+        assert_eq!(events[0].cursor, RuntimeClientCursor::new(3));
+        assert_eq!(events[1].cursor, RuntimeClientCursor::new(4));
+        assert!(
+            matches!(&events[0].event, RuntimeClientEvent::AgentUpdated { agent } if agent.activation_id == activation.subagent_id)
+        );
+        assert!(
+            matches!(&events[1].event, RuntimeClientEvent::JobUpdated { job } if job.state == BackgroundLifecycle::Succeeded)
+        );
+        assert_eq!(
+            candidate.snapshot.agents[0].activation_id, captured_activation,
+            "replay cannot mutate an earlier captured activation"
+        );
     }
 
     fn agent_activation_snapshot(

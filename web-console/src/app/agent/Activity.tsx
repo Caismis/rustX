@@ -4,7 +4,7 @@ import type { AppServerClient } from '../../client/app-server';
 import { AgentCard, JobCard, WorkflowCard, workflowKey } from '../components/ActivityCards';
 
 /** Rows follow native identities. An activation change never remounts its Agent. */
-export function RuntimeFacts({ snapshot, client, sessionId }: { snapshot: RuntimeClientSnapshot; client?: AppServerClient; sessionId?: string }) {
+export function RuntimeFacts({ snapshot, client, sessionId }: { snapshot: Pick<RuntimeClientSnapshot, 'jobs' | 'agents' | 'workflows'>; client?: AppServerClient; sessionId?: string }) {
   const tx = useTranslation();
   const agents = snapshot.agents ?? [];
   const jobs = snapshot.jobs ?? [];

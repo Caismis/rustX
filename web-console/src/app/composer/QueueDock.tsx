@@ -10,7 +10,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/app-server';
 import { IconChevronDownOutline14, IconQueueOutline14 } from '../../presentation/primitives/icons';
-import type { PendingInboundRef, RuntimeClientSnapshot } from '../../../../protocol/app-server/v27';
+import type { PendingInboundRef } from '../../../../protocol/app-server/v27';
 import css from './QueueDock.module.css';
 
 const QueueGlyph = () => <span className={css.lead} aria-hidden><IconQueueOutline14 /></span>;
@@ -22,7 +22,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   submissions: readonly Submission[];
   running: boolean;
   disabled?: boolean;
-  observation?: RuntimeClientSnapshot;
+  observation?: object;
   edit?: (expected: PendingInboundRef, text: string) => Promise<InboundControlOutcome>;
   remove?: (expected: PendingInboundRef) => Promise<InboundControlOutcome>;
 }) {
@@ -35,7 +35,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   latestObservation.current = observation;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [draft, setDraft] = useState<{ expected: PendingInboundRef; text: string }>();
-  const [operation, setOperation] = useState<{ status: 'pending' | 'uncertain' | 'readback'; observation?: RuntimeClientSnapshot; clearDraft?: boolean }>();
+  const [operation, setOperation] = useState<{ status: 'pending' | 'uncertain' | 'readback'; observation?: object; clearDraft?: boolean }>();
   const [notice, setNotice] = useNotice();
   useEffect(() => {
     if (operation && operation.status !== 'pending' && observation !== operation.observation) {

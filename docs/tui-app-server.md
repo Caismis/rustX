@@ -69,3 +69,16 @@ Initial `--model` intent is passed as `session/create.settings.model`; without i
 creation omits the override and the native default owner decides. Attachment reads
 that established state. TUI startup does not issue an initialization `setModel`;
 later explicit model changes remain supported. See [#419](issue-419/ownership.md).
+
+## Incremental projection (v25 / Runtime Client 50)
+
+The existing terminal presentation reducer consumes every native event and the new
+`read_domains_updated` cut (decorated transcript, statistics, Todo, occupancy).
+Ordinary settlement no longer rereads Session snapshots. Snapshot acquisition and
+subscription repair are coalesced by attachment epoch; a numeric cursor gap stops
+incremental continuation. Replay joins the new snapshot cursor, with at most three
+reacquisitions if the native replay ring moves during recovery. Read failures remain
+visible and never replay mutations. Exact Tool assembly uses native `arguments_json`.
+The terminal-specific normalized model and rendering remain unchanged; sharing the
+Web raw DTO fold would require a second state representation, so no speculative
+TUI rewrite or generic package was introduced.

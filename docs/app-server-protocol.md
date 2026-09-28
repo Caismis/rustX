@@ -1,6 +1,6 @@
 # App Server protocol v27
 
-App Server v27 combines mainline v24 Session startup/catalog ownership with
+App Server v27 combines mainline incremental read-domain and Session catalog ownership with
 branch v26 Jobs and durable Agents. Neither earlier wire generation is supported.
 Runtime Client remains v52. Finite Jobs are separate from durable Agents.
 Agent send-message success acknowledges child canonical acceptance. A Delegate or Guidance
@@ -13,6 +13,14 @@ publication and relinquished all remaining callbacks. This failure never
 turns a retained publication candidate into a canonical terminal result.
 `job/list` returns newest-first `jobs`, `returned`, `matched`, `limit`, and
 `truncated` from one registry cut; `MAX_JOB_LIST_LIMIT` is 64 for all consumers.
+
+Version 27 / Runtime Client 52 add `read_domains_updated`: native bounded decorated
+transcript (including response/TurnProcess/statistics), occupancy and Todo facts.
+Tool assembly carries exact native `arguments_json`; `session/trace` accepts bounded
+loaded record identities and returns independent `page.updates` lifecycle repairs.
+Ordinary publication suffixes remain deltas. Clients require contiguous exact
+cursors; snapshots initialize, recover, or explicitly reconcile. The Web reducer
+and Chat frame contract are documented in [CHAT.md](../web-console/CHAT.md).
 
 `jobs`/`job_updated` carry
 `job_id` and terminal lifecycle; `agents`/`agent_updated` carry stable `agent_id`,
@@ -808,10 +816,12 @@ use the existing subscription as invalidation signals. Neither historical reads
 nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.md)
 for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
 
-Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 13.
+Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 25.
 Earlier versions are rejected; there are no aliases or dual-version paths.
 
-`session/snapshot` optionally accepts `trace_records: TraceCursor[]` (maximum 512)
+`session/trace` accepts optional `records: TraceCursor[]` (maximum 512) and returns
+`page.updates` for ordinary lifecycle refresh without a Session snapshot. Explicit
+`session/snapshot` reconciliation also accepts `trace_records: TraceCursor[]` (maximum 512)
 for the client's bounded loaded window and separately retained selected record. `snapshot.trace_updates` contains typed
 native lifecycle repairs for those identities, including records older than the
 newest Trace page. Both the newest page and repairs use the Journal prefix

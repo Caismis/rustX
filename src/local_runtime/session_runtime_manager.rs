@@ -1822,6 +1822,17 @@ impl SessionRuntimeManager {
             owner.probe(&id).before_shutdown.park().await;
             #[cfg(test)]
             owner.probe(&id).draining_operations.send_replace(true);
+            let host = runtime
+                .composition
+                .lock()
+                .expect("composition mutex")
+                .as_ref()
+                .expect("resident composition")
+                .host()
+                .clone();
+            // Presentation is downstream of admitted requests and native drain.
+            // Wake read-only connection waits before waiting for those owners.
+            host.inner.cancel_presentation_reads();
             runtime
                 .operations
                 .subscribe()
@@ -1834,14 +1845,6 @@ impl SessionRuntimeManager {
                 return;
             }
             drop(live);
-            let host = runtime
-                .composition
-                .lock()
-                .expect("composition mutex")
-                .as_ref()
-                .expect("resident composition")
-                .host()
-                .clone();
             if let Err(e) = host.inner.drain_projection().await {
                 terminal.finish(Err(error(format!("projection drain failed: {e}"))));
                 return;

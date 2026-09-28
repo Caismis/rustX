@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
-import type { Request, RuntimeClientEvent } from '../../protocol/app-server/v27';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v27';
 import { cfg3Application } from './cfg3-data';
 import { Server, snapshot } from './fixture';
 afterEach(cleanup);
@@ -26,15 +26,11 @@ async function settlementReread(event: RuntimeClientEvent) {
   expect(reads(s)).toHaveLength(1);
   expect(s.requests.filter(item => item.request.method === 'session/snapshot')).toHaveLength(0);
   settled = true; s.cursor++; s.snapshots.set('A', snapshot('A'));
-  let snapshotRequest: Request | undefined;
-  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: s.target('A'), cursor: String(s.cursor), event } }); snapshotRequest = await s.waitFor('session/snapshot', 1); });
-  expect(snapshotRequest).toMatchObject({ method: 'session/snapshot', params: { target: s.target('A') } });
+  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: s.target('A'), cursor: String(s.cursor), event } }); });
   await s.waitFor('session/configuration', 2);
-  const methods = s.requests.map(item => item.request.method);
-  expect(methods.indexOf('session/snapshot')).toBeLessThan(methods.lastIndexOf('session/configuration'));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
   expect(reads(s)).toHaveLength(2);
-  expect(s.requests.filter(item => item.request.method === 'session/snapshot')).toHaveLength(1);
+  expect(s.requests.filter(item => item.request.method === 'session/snapshot')).toHaveLength(0);
   expect(s.requests.filter(item => item.request.method === 'session/adoptConfiguration')).toHaveLength(0);
 }
 

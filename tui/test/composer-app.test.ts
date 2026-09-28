@@ -119,13 +119,11 @@ test("settlement keeps the actual history overlay; resyncRequired invalidates it
   const overlay = h.focus; assert.ok(overlay instanceof PopupFrame);
   const before = overlay.render(80);
   h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor: "1", event: { type: "attempt_settled", attempt_id: "a1", outcome: { type: "completed", finish_reason: { type: "stop" } } } } });
-  const live = await nextRequest(h, "session/snapshot", 0);
-  const updated = new Promise<void>(resolve => { const stop = h.session.onState(() => { stop(); resolve(); }); });
-  h.transport.respond(live.id, { type: "snapshot", snapshot: snapshot(), cursor: "1" }); await updated;
+  assert.equal(h.transport.transportCount("session/snapshot"), 0);
   assert.equal(h.focus, overlay); assert.deepEqual(overlay.render(80), before);
   assert.equal(h.transport.transportCount("session/subscribe"), 0);
   h.session.applyNotification({ jsonrpc: "2.0", method: "session/resyncRequired", params: { target: h.target, after_cursor: "1", earliest_serviceable: "2" } });
-  const repair = await nextRequest(h, "session/snapshot", 1);
+  const repair = await nextRequest(h, "session/snapshot", 0);
   h.transport.respond(repair.id, { type: "snapshot", snapshot: snapshot(), cursor: "3" });
   const subscribe = await nextRequest(h, "session/subscribe", 0);
   h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: "3" });

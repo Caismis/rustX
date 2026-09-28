@@ -392,6 +392,7 @@ pub enum RuntimeClientSessionRequest {
 /// Version 51 makes admission state, activation origin and bounded Agent listing explicit.
 /// Version 52 exposes Job publication abandonment, bounded listing metadata,
 /// and the distinction between proven absent Agent delivery and unknown delivery.
+/// This generation also includes incremental derived read domains and finite snapshots (#423).
 pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 52;
 
 /// The external cursor of the Runtime Client observation stream.

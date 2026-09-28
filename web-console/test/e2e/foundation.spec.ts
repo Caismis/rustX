@@ -1,7 +1,8 @@
+const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect, type Locator, type Page } from '@playwright/test';
 test('Harness primitive keyboard, menu, modal, hover and disclosure contracts', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   await expect(page).toHaveTitle('Foundation contracts');
   await page.getByRole('button', { name: 'Ordinary button' }).click();
   await expect(page.getByLabel('Submissions')).toHaveText('0');
@@ -39,7 +40,7 @@ test('Harness primitive keyboard, menu, modal, hover and disclosure contracts', 
 test('portaled Menu placement, flip, shift, bounded height and anchor tracking', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const trigger = page.getByRole('button', { name: 'Actions', exact: true });
   const list = page.getByRole('menu');
   const box = async () => (await list.boundingBox())!;
@@ -182,7 +183,7 @@ async function anchorProbe(page: Page, { surface, anchor, clip }: {
 test('portaled Menu keeps its 218–360px design width inside the viewport', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const menu = nestedMenu(page);
   const long = menu.row('A deliberately long dynamic label that must truncate at the design width of the shared menu card');
   await menu.pin('position: fixed; left: 8px; top: 8px;');
@@ -216,7 +217,7 @@ test('portaled Menu keeps its 218–360px design width inside the viewport', asy
 test('Menu submenu flips, bounds its height, scrolls and follows its row', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const menu = nestedMenu(page);
   const close = async () => { await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(menu.trigger).toBeFocused(); };
   /** Keyboard-show a row's submenu: focusing the row shows it. */
@@ -290,7 +291,7 @@ test('Menu submenu flips, bounds its height, scrolls and follows its row', async
 test('Menu surfaces close when their anchor leaves layout', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const trigger = page.getByRole('button', { name: 'Actions', exact: true });
   const hideAnchor = (hidden: boolean) => page.getByRole('button', { name: 'Actions', exact: true, includeHidden: true }).evaluate((el, value) => { el.parentElement!.style.display = value ? 'none' : ''; }, hidden);
   const keyboard = () => page.evaluate(() => { const active = document.activeElement!; return active === document.body ? 'body' : active.getAttribute('role') ?? active.textContent; });
@@ -320,7 +321,7 @@ test('Menu surfaces close when their anchor leaves layout', async ({ page }) => 
 test('a Menu whose trigger scrolls out of view closes without undoing the scroll', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const pane = page.getByRole('region', { name: 'Scrolled pane' });
   const trigger = pane.getByRole('button', { name: 'Scrolled actions', exact: true });
   const owner = page.getByRole('button', { name: 'Scrolled pane header' });
@@ -392,7 +393,7 @@ test('a Menu whose trigger scrolls out of view closes without undoing the scroll
 test('a submenu whose row scrolls out of the list closes without undoing the scroll', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 900, height: 300 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const menu = nestedMenu(page);
   await menu.pin('position: fixed; left: 200px; top: 8px;');
   /** Scroll the parent's rows to their end, returning where they landed. */
@@ -456,7 +457,7 @@ test('a submenu whose row scrolls out of the list closes without undoing the scr
 test('Menu submenu keyboard layers, pointer crossing and focus return', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const menu = nestedMenu(page);
   const selection = page.getByLabel('Nested choice');
   await menu.pin('position: fixed; left: 300px; top: 8px;');
@@ -527,7 +528,7 @@ test('Menu submenu keyboard layers, pointer crossing and focus return', async ({
 test('a keyboard-owned submenu survives passive pointer hover until a pointer press takes it over', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/foundation.html');
+  await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   const menu = nestedMenu(page);
   const selection = page.getByLabel('Nested choice');
   await menu.pin('position: fixed; left: 300px; top: 8px;');

@@ -37,3 +37,9 @@ export const selectShell = (state: ClientView): ShellView => ({
   }])),
 });
 export const selectClient = (state: ClientView) => state;
+
+/** Fixed responsibility slices compare their immediate immutable fields only. */
+export function shallowEqual<T extends object | undefined>(a: T, b: T): boolean {
+  return a === b || !!a && !!b && Object.keys(a).length === Object.keys(b).length
+    && Object.keys(a).every(key => Object.is((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
+}

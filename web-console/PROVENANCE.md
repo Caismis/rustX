@@ -1,3 +1,15 @@
+## #420 incremental projection and Chat synchronization
+
+Read-only reference inspected: `477b4f420553e8a52c2fbccc464d7561b239c443`,
+`packages/client/ui-chat/src/client/chat/{ChatView.tsx,use-chat-scroll.ts,
+use-scroll-follow.ts,use-chat-viewport.ts}`. Existing pinned lineage is unchanged.
+ChatViewport retains its attributed source lineage and adopts the semantic anchor,
+follow-intent and browser-clamp attribution patterns. rustX owns the single RAF
+commit rule and native message identity adapter. Smooth native scrolling and
+Harness runtime/store authority were not imported: they do not satisfy the required
+single frame writer or rustX native authority boundary. Generated imports advance
+with the mandatory protocol; local hashes/dependency closure are refreshed.
+
 # Harness presentation provenance — WEB-RESET-01
 
 ## #406 current Harness conversation contract

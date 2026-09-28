@@ -204,10 +204,9 @@ test("T12/T16 native application notifications reject reorder and adoption sends
 test("settlement reads native response statistics instead of summing usage events", async () => {
   const h = await harness(snapshot({ attempt: attemptView() }));
   h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor: "1", event: { type: "attempt_settled", attempt_id: "a1", outcome: { type: "completed", finish_reason: { type: "stop" } } } } });
-  const read = await nextRequest(h, "session/snapshot", 0);
   const statistics = { turns: "1", steps: "1", completed_responses: "2", model_requests: "5", requests_with_usage: "4" };
-  h.transport.respond(read.id, { type: "snapshot", snapshot: snapshot({ transcript: { statistics } }), cursor: "2" });
-  await new Promise<void>(resolve => h.session.onState(() => resolve()));
+  h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor: "2", event: { type: "read_domains_updated", transcript: { statistics }, occupancy: null, todos: null } } });
+  assert.equal(h.transport.transportCount("session/snapshot"), 0);
   assert.equal(h.transport.transportCount("session/subscribe"), 0);
   assert.deepEqual(h.session.state.statistics, statistics); h.client.close();
 });
