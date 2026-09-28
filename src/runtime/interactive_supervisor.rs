@@ -188,10 +188,9 @@ pub(crate) const FAIL_SETSID_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SETSID";
 /// a sleep.
 pub(crate) const INNER_STALL_BEFORE_ANCHOR_ENV: &str =
     "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR";
-/// Test-only injection: the outer's pre-anchor cleanup cannot prove the
-/// direct inner reap. This injects the semantic state only — the direct
-/// child is never actually waited for, so the proof-carrying
-/// `MSG_NO_OWNERSHIP` must not be emitted. Independent of fixture transport.
+/// Private test-harness launch data for the exact pre-anchor wait-proof theft.
+/// Only `InteractiveTestControl` configures this; no production binary reads it.
+#[cfg(test)]
 pub(crate) const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
 
 /// Runs the outer supervisor role; returns its exit status.
@@ -288,6 +287,7 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut upstream, MSG_NO_OWNERSHIP, &[]);
         return 0;
     }
+    #[cfg(not(test))]
     let current_exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
@@ -295,6 +295,8 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             return 1;
         }
     };
+    #[cfg(test)]
+    let current_exe = crate::runtime::process_runner::interactive_supervisor_binary();
     let mut inner = Command::new(current_exe);
     inner.arg("inner").args(arguments);
     inner.env(INNER_CONTROL_ENV, &inner_socket);
@@ -698,7 +700,7 @@ fn attach_inner_control(
         // server spawn is gated behind the control connection, so its exit
         // here provably leaves no owned process tree; the pid-scoped
         // settlement below is the complete containment.
-        match child.try_wait() {
+        match pre_anchor_try_wait(child) {
             Ok(None) => {}
             Ok(Some(status)) => {
                 return InnerAttachment::Concluded(conclude_pre_anchor(
@@ -827,7 +829,7 @@ fn await_anchor_commit(
         // The direct inner child's exit before the commit point. Its pid is
         // not a process-group id, so only this pid-scoped wait can settle
         // it — a group-scoped wait would reach `ECHILD` without reaping it.
-        match child.try_wait() {
+        match pre_anchor_try_wait(child) {
             Ok(None) => {}
             Ok(Some(status)) => {
                 return PreAnchor::Concluded(conclude_pre_anchor(
@@ -906,6 +908,18 @@ fn classify_pre_anchor_frame(kind: u8, payload: &[u8], inner_pid: i32) -> PreAnc
     }
 }
 
+fn pre_anchor_try_wait(
+    child: &mut std::process::Child,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    // This fixture concludes through the real setup-ending control frame.
+    // Do not let an earlier try_wait cache the proof that it intends to steal.
+    #[cfg(test)]
+    if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
+        return Ok(None);
+    }
+    child.try_wait()
+}
+
 /// Settles the pre-anchor inner **by pid** and reports the outcome.
 ///
 /// Before the anchor commit point the inner is only a direct child: its pid
@@ -930,23 +944,39 @@ fn conclude_pre_anchor(
     }
     let inner_pid = i32::try_from(child.id()).unwrap_or(0);
     let _ = child.kill();
-    let reaped = if std::env::var(FAIL_PRE_ANCHOR_REAP_ENV).is_ok() {
-        // Test-only injection of the semantic state "the pre-anchor child
-        // cleanup cannot prove the reap"; the child is deliberately not
-        // waited for.
-        Err("injected pre-anchor reap failure".to_owned())
+    // Steal only this child's terminal status, before the designated owner
+    // attempts its normal wait. No status has been cached by fixture polling.
+    #[cfg(test)]
+    let stolen = if std::env::var_os(FAIL_PRE_ANCHOR_REAP_ENV).is_some() {
+        let status = waitpid(Pid::from_raw(inner_pid), None).expect("exact foreign reap");
+        assert!(matches!(
+            status,
+            WaitStatus::Exited(..) | WaitStatus::Signaled(..)
+        ));
+        true
     } else {
-        child
-            .wait()
-            .map(|_status| ())
-            .map_err(|error| error.to_string())
+        false
     };
+    let reaped = child.wait();
+    #[cfg(test)]
+    if stolen {
+        assert_eq!(
+            reaped.as_ref().unwrap_err().raw_os_error(),
+            Some(nix::libc::ECHILD)
+        );
+    }
     match reaped {
-        Ok(()) => {
+        Ok(_) => {
             let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &inner_pid.to_le_bytes());
             0
         }
         Err(error) => {
+            #[cfg(test)]
+            let error = if stolen {
+                format!("injected pre-anchor reap failure (exact wait status consumed): {error}")
+            } else {
+                error.to_string()
+            };
             let _ = write_frame(
                 upstream,
                 MSG_PROCESS_CONTROL_FAILURE,
@@ -1424,6 +1454,18 @@ fn await_start(
             Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
         }
     }
+}
+
+/// Subprocess entry point, not a standalone contract. Its parent supplies
+/// private launch arguments only after clearing the supervisor environment.
+#[cfg(test)]
+#[test]
+#[ignore = "subprocess entry point for the exact wait-proof theft regression"]
+fn reap_proof_fixture() {
+    let arguments: Vec<String> =
+        serde_json::from_str(&std::env::var(FAIL_PRE_ANCHOR_REAP_ENV).expect("fixture arguments"))
+            .expect("fixture arguments JSON");
+    std::process::exit(run_outer(&arguments));
 }
 
 #[cfg(all(test, target_os = "linux"))]

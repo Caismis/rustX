@@ -239,12 +239,20 @@ impl InteractiveTestControl {
                 value,
             );
         }
-        if self.fail_pre_anchor_reap {
-            supervisor.env(
-                crate::runtime::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
-                "1",
-            );
-        }
+    }
+
+    #[cfg(test)]
+    fn reap_proof_fixture_command() -> Result<tokio::process::Command, String> {
+        let mut command = tokio::process::Command::new(
+            std::env::current_exe().map_err(|error| error.to_string())?,
+        );
+        command.args([
+            "--exact",
+            "runtime::interactive_supervisor::reap_proof_fixture",
+            "--ignored",
+            "--nocapture",
+        ]);
+        Ok(command)
     }
 
     /// The observed supervisor events, in arrival order.
@@ -381,10 +389,12 @@ impl SupervisedInteractiveProcess {
         let mut supervisor = tokio::process::Command::new(
             crate::runtime::process_runner::interactive_supervisor_binary(),
         );
+        supervisor.arg("outer").arg(&program).args(&args);
+        #[cfg(test)]
+        if test_control.fail_pre_anchor_reap {
+            supervisor = InteractiveTestControl::reap_proof_fixture_command()?;
+        }
         supervisor
-            .arg("outer")
-            .arg(&program)
-            .args(&args)
             .current_dir(&cwd)
             .env_clear()
             .stdin(Stdio::piped())
@@ -396,6 +406,17 @@ impl SupervisedInteractiveProcess {
         );
         #[cfg(test)]
         test_control.configure_supervisor(&mut supervisor);
+        #[cfg(test)]
+        if test_control.fail_pre_anchor_reap {
+            let program = program.to_str().ok_or("fixture program is not UTF-8")?;
+            let arguments: Vec<_> = std::iter::once(program)
+                .chain(args.iter().map(String::as_str))
+                .collect();
+            supervisor.env(
+                crate::runtime::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
+                serde_json::to_string(&arguments).map_err(|error| error.to_string())?,
+            );
+        }
         supervisor.env(RUSTX_CONTROL_ENV, &socket_path);
         let mut child = supervisor
             .spawn()
@@ -1990,13 +2011,11 @@ mod interactive_tests {
             !server_marker.exists(),
             "no server-owned process tree may exist before the anchor commit point"
         );
-        // Test-side cleanup: the outer deliberately did not consume its
-        // direct child, so the pre-anchor inner is adopted by rustX.
-        let inner_pid = read_pid(&inner_pid_file);
-        let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(inner_pid),
-            nix::sys::signal::Signal::SIGKILL,
+        assert!(
+            !events.iter().any(|event| event == "anchor_ready"),
+            "no anchor commit may occur in the pre-anchor failure: {events:?}"
         );
-        let _ = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(inner_pid), None);
+        // The exact foreign reaper consumed the inner before the owner's
+        // failing wait. There is no orphan or test-side cleanup obligation.
     }
 }
