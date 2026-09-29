@@ -20,9 +20,9 @@ export function useClientSelector<T>(client: AppServerClient, select: (state: Cl
 }
 
 export const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-export const transportSelection = ({ connection, endpoint, generation, authorityRevision }: ClientView) => ({ connection, endpoint, generation, authorityRevision });
+export const transportSelection = ({ connection, endpoint, generation, authorityRevision, authorityId }: ClientView) => ({ connection, endpoint, generation, authorityRevision, authorityId });
 
-export type ShellView = Pick<ClientView, 'connection' | 'endpoint' | 'generation' | 'authorityRevision' | 'sessions' | 'nextOffset' | 'uncertain'> & {
+export type ShellView = Pick<ClientView, 'connection' | 'endpoint' | 'generation' | 'authorityRevision' | 'authorityId' | 'sessions' | 'nextOffset' | 'uncertain'> & {
   views: Readonly<Record<string, Pick<SessionView, 'id' | 'target' | 'summary' | 'settings' | 'attachment' | 'attachmentIntent' | 'deleting' | 'deletionRecovery' | 'recoveringDeletion'>>>;
 };
 

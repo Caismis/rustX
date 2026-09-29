@@ -2429,7 +2429,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "9454cd62ab544f5be7feb7271cda6cb0d88af43aa55452a03c8feb39b9d09423",
+      "local_sha256": "f9aebaae7444bb7038c93bb6ca4c05d382dbab7e4863faa52879947da1b37f37",
       "classification": "B"
     },
     {
@@ -2451,6 +2451,7 @@
         "../presentation/primitives/Modal",
         "../presentation/workspace/WorkspaceBrowser",
         "../presentation/workspace/types",
+        "./associations",
         "./endpoint",
         "./host",
         "react"
@@ -2486,7 +2487,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f476499b1c711137cb0e6876e228272225ed3b883065a6d7c1d509868281ce2d"
+      "local_sha256": "847496b7aed32d5335dd6551f49f553c29aa16f6998ed867a930f2bf6c0b0278"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -3206,7 +3207,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "bbc26a78df4e3edc1b2311ee2e5e6a671cb9c70b75eb2b56ecbf581daee2a1de",
+      "local_sha256": "b126c81ced9c23a2afc8b2037dc47f01cfbe9c22bf1b7dfda1fbd3cb0183bd71",
       "classification": "B",
       "additional_sources": [
         {

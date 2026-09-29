@@ -1380,3 +1380,13 @@ App Server v29 combines the v28 Harness semantic ledger with required
 `CapabilityView.configured_tools` and image/Bash Tool presentation. The required
 field changes the complete mandatory vocabulary, so v28 is rejected. Rust DTOs
 remain the sole schema authority; only the v29 generated pair is retained.
+
+### Native process identity for reconnecting presentation
+
+The current mandatory v29 `initialized` result includes `authority_id`, an opaque
+UUID allocated once by `AppServerHost`. Cloned hosts/connections share it; a new
+native process owner has a new identity even when it listens at the same endpoint.
+It is observation identity, never authorization or persistent Session membership.
+Web compares it before reconnect resynchronization and uses its existing authority
+retirement path on mismatch. Generated schema/TypeScript and strict decoders require
+this field; there is no reader for the previous result shape.

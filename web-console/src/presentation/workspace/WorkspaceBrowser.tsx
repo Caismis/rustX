@@ -10,8 +10,9 @@ import type { GroupNode, SessionNode } from './types';
 import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
-export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView, closeAllViews,
+export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sessions, selected, query, search, open, rename, fork, remove, closeView, closeAllViews,
   selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
+  unclassified?: readonly string[];
   renderSession?: (node: SessionNode, render: (node: SessionNode) => ReactNode) => ReactNode;
   workspaceSettings?: (id: string, label: string) => void;
   wide: boolean; expand: () => void; groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
@@ -57,7 +58,8 @@ export function WorkspaceBrowser({ wide, expand, groups, sessions, selected, que
           actions={group.workspaceId ? { settings: workspaceSettings ? () => workspaceSettings(group.workspaceId!, group.label) : undefined, rename: () => renameWorkspace(group.workspaceId!, group.label), delete: () => removeWorkspace(group.workspaceId!, group.label) } : undefined} />
         {!collapsed.includes(group.key) && group.sessions.map(row)}
       </div>)}
-      {!flat && !query && groups.length > 0 && sessions.some(session => !groups.some(group => group.sessions.some(member => member.id === session.id))) && <details><summary>{tx('workspace:workspace-browser.sessions-outside-registered-workspaces')}</summary>{sessions.filter(session => !groups.some(group => group.sessions.some(member => member.id === session.id))).map(row)}</details>}
+      {!flat && !query && groups.length > 0 && sessions.some(session => !unclassified.includes(session.id) && !groups.some(group => group.sessions.some(member => member.id === session.id))) && <details><summary>{tx('workspace:workspace-browser.sessions-outside-registered-workspaces')}</summary>{sessions.filter(session => !unclassified.includes(session.id) && !groups.some(group => group.sessions.some(member => member.id === session.id))).map(row)}</details>}
+      {!flat && !query && groups.length > 0 && unclassified.length > 0 && <section aria-label={tx('workspace:association.unclassified')}><p>{tx('workspace:association.unclassified')}</p>{sessions.filter(session => unclassified.includes(session.id)).map(row)}</section>}
       {!sessions.length && <p className={css.empty}>{query ? tx('workspace:workspace-browser.no-matching-sessions') : tx('workspace:workspace-browser.no-sessions-yet')}</p>}
     </div><div className={css.fade} /></div>}</div>
     {wide && (previous || next) && <div><button className={css.sessionOverflowButton} disabled={!previous} onClick={previous}>{tx('workspace:workspace-browser.previous')}</button><button className={css.sessionOverflowButton} disabled={!next} onClick={next}>{tx('workspace:workspace-browser.next')}</button></div>}

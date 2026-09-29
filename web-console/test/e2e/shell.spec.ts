@@ -128,6 +128,10 @@ test('Session product states stay concise and recovery evidence remains in Inspe
     else await expect(page.getByLabel('Session status')).toHaveCount(0);
     const ordinary = await page.locator('main').innerText();
     expect(ordinary).not.toMatch(/attempt-A|runtime_incarnation|connection_generation|Attach \/ cold resume|Unload runtime|Detach|Resync/);
+    if (mode === 'reconnect' || mode === 'uncertain') {
+      await expect(page.locator('[data-workspace-group="project"] button[data-session-id="A"]')).toBeVisible();
+      await expect(page.getByRole('status').filter({ hasText: 'Disconnected. Last confirmed groups are shown.' })).toBeVisible();
+    }
     await expectStableScreenshot(page, `session-${mode}-light.png`);
     if (mode === 'uncertain') {
       await page.getByRole('button', { name: 'Toggle Inspector' }).click();

@@ -55,7 +55,7 @@ async function host(): Promise<{ transport: FakeTransport; host: AppServerHost }
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
   transport.respond(request!.id, {
-    type: "initialized",
+    type: "initialized", authority_id: 'fixture-app-server-authority',
     protocol_version: APP_SERVER_PROTOCOL_VERSION,
     capabilities: CAPABILITIES,
   });

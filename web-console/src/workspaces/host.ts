@@ -22,30 +22,41 @@ export type WorkspaceConfigurationResult =
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }
 export interface WorkspaceCatalog {
+  /** Product Host process identity, independent of endpoint and registration metadata. */
+  authorityId: string;
   endpoint: string;
   workspaces: ProductHostWorkspace[];
   picker: { kind: 'configured'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
-export type SessionLocation = { authorized: false } | { authorized: true; workspaceId?: string };
+export type SessionLocation = { authorized: false; reason: 'denied' | 'unavailable' } | { authorized: true; workspaceId?: string };
+/** Validate the current positional contract before any display or admission consumer. */
+export function validateLocations(value: unknown, count: number): asserts value is SessionLocation[] {
+  if (!Array.isArray(value) || value.length !== count || value.some(row => !row ||
+    (row.authorized !== true && row.authorized !== false) ||
+    (row.authorized === false && !['denied', 'unavailable'].includes(row.reason)) ||
+    (row.authorized === true && row.workspaceId !== undefined && typeof row.workspaceId !== 'string'))) {
+    throw new Error('Invalid Workspace classification');
+  }
+}
 /** Typed Product Host failures stay independent of the browser client. */
 export class WorkspaceHostError extends Error {
   constructor(message: string, readonly kind?: string, readonly uncertain = false) { super(message); this.name = 'WorkspaceHostError'; }
 }
 export interface ProductHostWorkspaces {
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
-  listWorkspaces(): Promise<WorkspaceCatalog>;
+  listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   adoptWorkspace(location: string): Promise<void>;
   renameWorkspace(id: string, displayName: string): Promise<void>;
   reorderWorkspace(id: string, before?: string): Promise<void>;
   removeWorkspace(id: string): Promise<void>;
   resolveWorkspace(id: string, endpoint: string): Promise<{ cwd: string }>;
   /** Authorization is independent of registration. Exact Host-owned classification, bounded to a page. */
-  classifyLocations(cwds: readonly string[], endpoint: string): Promise<SessionLocation[]>;
+  classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal): Promise<SessionLocation[]>;
 }
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   constructor(private readonly base = '/product-host') {}
-  private async call<T>(method: string, body: unknown = {}): Promise<T> {
-    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  private async call<T>(method: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
+    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
     if (!response.ok) {
       const failure = await response.json();
       const nativeError = failure.nativeError ?? (() => {
@@ -54,16 +65,20 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       })();
       if (nativeError) throw new WorkspaceHostError(nativeError.message ?? String(nativeError), nativeError.data?.kind);
       if (failure.uncertain) throw new WorkspaceHostError(String(failure.message), undefined, true);
-      throw new WorkspaceHostError(`Workspace Host: ${failure.message}`);
+      throw new WorkspaceHostError(`Workspace Host: ${failure.message}`, failure.kind);
     }
     return response.json();
   }
-  listWorkspaces = () => this.call<WorkspaceCatalog>('list');
+  listWorkspaces = (signal?: AbortSignal) => this.call<WorkspaceCatalog>('list', {}, signal);
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
   adoptWorkspace = (location: string) => this.call<void>('adopt', { location });
   renameWorkspace = (id: string, displayName: string) => this.call<void>('rename', { id, displayName });
   reorderWorkspace = (id: string, before?: string) => this.call<void>('reorder', { id, before });
   removeWorkspace = (id: string) => this.call<void>('remove', { id });
   resolveWorkspace = (id: string, endpoint: string) => this.call<{ cwd: string }>('resolve', { id, endpoint });
-  classifyLocations = (cwds: readonly string[], endpoint: string) => this.call<SessionLocation[]>('classify', { cwds, endpoint });
+  classifyLocations = async (cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal) => {
+    const result = await this.call<unknown>('classify', { cwds, endpoint, authorityId }, signal);
+    validateLocations(result, cwds.length);
+    return result;
+  };
 }

@@ -19,7 +19,7 @@ server.snapshots.get('A')!.attempt = { attempt_id: 'attempt-A', phase: { type: '
 server.snapshots.get('B')!.pending_interactions = [interaction('approval', 'B')];
 server.snapshots.get('A')!.messages = [{ role: 'assistant', id: 'message-A', content: [{ type: 'text', text: 'The presentation shell is ready. Sessions and execution remain owned by the rustX App Server.' }] }];
 server.snapshots.get('A')!.transcript = { entries: [{ cursor: '1', item: { type: 'message', message: server.snapshots.get('A')!.messages[0] } }] };
-server.workspaceHost.listWorkspaces = async () => ({ endpoint, workspaces: [{ id: 'project', displayName: 'rustX', displayPath: '/workspace', location: 'project' }], picker: { kind: 'unavailable', reason: 'Fixture has one authorized project' } });
+server.workspaceHost.listWorkspaces = async () => ({ authorityId: 'fixture-host', endpoint, workspaces: [{ id: 'project', displayName: 'rustX', displayPath: '/workspace', location: 'project' }], picker: { kind: 'unavailable', reason: 'Fixture has one authorized project' } });
 server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/C') ? undefined : 'project' }));
 // The shell's registered Workspace supplies the same generated source contract
 // as the permission seat. User Settings retains its explicit error fixture.
