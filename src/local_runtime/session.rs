@@ -823,6 +823,7 @@ fn lineage_of(
     Ok((session.id.clone(), node.clone(), session.state.clone()))
 }
 
+mod artifacts;
 pub(crate) mod deletion;
 pub mod uploads;
 
@@ -1246,6 +1247,7 @@ impl SessionCatalog {
             &database_path,
             &conversation_id,
             &LineageSeed::history(Vec::new()),
+            None,
         )?;
         let now = Utc::now();
         let node = SessionNode {
@@ -1867,6 +1869,7 @@ impl SessionCatalog {
             node_id,
             conversation_id,
             &LineageSeed::history(seed.to_vec()),
+            None,
         )
     }
 
@@ -1892,7 +1895,14 @@ impl SessionCatalog {
             None,
             crate::local_runtime::session::LineageSide::Before,
         )?;
-        self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)
+        self.prepare_session_with_ids(
+            template,
+            session_id,
+            node_id,
+            conversation_id,
+            &seed,
+            self.lineage_artifacts(source, &seed)?.as_ref(),
+        )
     }
 
     /// Prepares an independent Session fork and returns the selected original
@@ -1923,8 +1933,14 @@ impl SessionCatalog {
         };
         let (session_id, node_id, conversation_id) = self.allocate_ids()?;
         let seed = lineage_cut(&conversation_id, source, Some(message_id), side)?;
-        let prepared =
-            self.prepare_session_with_ids(template, session_id, node_id, conversation_id, &seed)?;
+        let prepared = self.prepare_session_with_ids(
+            template,
+            session_id,
+            node_id,
+            conversation_id,
+            &seed,
+            self.lineage_artifacts(source, &seed)?.as_ref(),
+        )?;
         Ok((prepared, editor_content))
     }
 
@@ -2005,21 +2021,29 @@ impl SessionCatalog {
                 detail: "identity reservation exhausted".into(),
             })?;
         let seed = lineage_cut(&conversation_id, source, Some(message_id), side)?;
-        initialize_database(&self.product, &database_path, &conversation_id, &seed)?;
-        Ok((
-            PreparedLineage {
-                uploads: uploads::UploadRegistry::default(),
-                session_id: session_id.clone(),
-                node_id,
-                conversation_id,
-                state: template.clone(),
-                // A branch node never re-projects its Session's root-lineage
-                // display preview; `build_node_document` ignores this field.
-                display_preview: None,
-                database_path,
-            },
-            editor_content,
-        ))
+        let source_artifacts = self.lineage_artifacts(source, &seed)?;
+        let prepared = PreparedLineage {
+            uploads: uploads::UploadRegistry::default(),
+            session_id: session_id.clone(),
+            node_id,
+            conversation_id,
+            state: template.clone(),
+            // A branch node never re-projects its Session's root-lineage
+            // display preview; `build_node_document` ignores this field.
+            display_preview: None,
+            database_path,
+        };
+        if let Err(error) = initialize_database(
+            &self.product,
+            &prepared.database_path,
+            &prepared.conversation_id,
+            &seed,
+            source_artifacts.as_ref(),
+        ) {
+            self.discard_prepared_node(&prepared)?;
+            return Err(error);
+        }
+        Ok((prepared, editor_content))
     }
 
     fn prepare_session_with_ids(
@@ -2029,6 +2053,7 @@ impl SessionCatalog {
         node_id: SessionNodeId,
         conversation_id: ConversationId,
         seed: &LineageSeed,
+        source_artifacts: Option<&crate::tools::artifacts::ArtifactStore>,
     ) -> Result<PreparedLineage, SessionError> {
         self.reject_pending_identity(&session_id, &node_id, &conversation_id)?;
         self.validate_new_session_identity(&session_id, &node_id, &conversation_id)?;
@@ -2039,8 +2064,7 @@ impl SessionCatalog {
             }
         })?;
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
-        initialize_database(&self.product, &database_path, &conversation_id, seed)?;
-        Ok(PreparedLineage {
+        let prepared = PreparedLineage {
             uploads: uploads::UploadRegistry::default(),
             session_id,
             node_id,
@@ -2048,7 +2072,18 @@ impl SessionCatalog {
             state: template.clone(),
             display_preview: seed_preview(seed),
             database_path,
-        })
+        };
+        if let Err(error) = initialize_database(
+            &self.product,
+            &prepared.database_path,
+            &prepared.conversation_id,
+            seed,
+            source_artifacts,
+        ) {
+            self.discard_prepared_session(&prepared)?;
+            return Err(error);
+        }
+        Ok(prepared)
     }
 
     /// Publishes a prepared independent Session and makes it active.
@@ -3142,6 +3177,7 @@ fn initialize_database(
     path: &Path,
     conversation_id: &ConversationId,
     seed: &LineageSeed,
+    source_artifacts: Option<&crate::tools::artifacts::ArtifactStore>,
 ) -> Result<(), SessionError> {
     product.confined(path).map_err(|error| SessionError::Io {
         path: path.to_path_buf(),
@@ -3179,6 +3215,11 @@ fn initialize_database(
             path: parent.to_path_buf(),
             detail: error.to_string(),
         })?;
+    let access = Arc::new(access);
+    let materialized = source_artifacts
+        .map(|source| artifacts::materialize(source, conversation_id, parent, access.clone(), seed))
+        .transpose()?;
+    let seed = materialized.as_ref().unwrap_or(seed);
     crate::runtime::local_storage::logical_operations::record_sqlite_store_open_request();
     let store = profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.sqlite_bootstrap_ns,
@@ -3191,9 +3232,7 @@ fn initialize_database(
     // initialized as NULL in this new destination store.
     profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.lineage_initialize_ns,
-        store
-            .with_lifecycle(std::sync::Arc::new(access))
-            .initialize_lineage(seed)
+        store.with_lifecycle(access).initialize_lineage(seed)
     )
     .map_err(SessionError::Store)
 }
@@ -3614,6 +3653,234 @@ model = "provider/model"
             post_tool_batch_anchor: None,
         }];
         snapshot
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One real read/copy/publication/deletion transaction across all lineage cuts.
+    async fn managed_images_materialize_exact_clone_fork_branch_cuts() {
+        use super::{LineageSide, deletion::SessionDeleteResult};
+        use crate::model::{catalog::ModelRef, invocation::ModelSelection, types::ModelProtocol};
+        use crate::scripted_suites::{common, support::model};
+        use crate::tools::{
+            ArtifactStore,
+            executor::{PreflightOutcome, ToolExecutionContext},
+            types::*,
+        };
+        use std::sync::Arc;
+        let (_root, mut catalog, _) = open_catalog();
+        let (conversation, session, node) = append_history(&catalog, &[]);
+        let database = catalog.database_path(&session, &conversation);
+        let artifacts =
+            ArtifactStore::new(conversation.clone(), database.parent().unwrap()).unwrap();
+        artifacts.put_bounded(b"irrelevant").unwrap();
+        let fixture = common::native_fixture();
+        let path = fixture.runtime.workspace().root().join("snapshot.png");
+        let mut bytes = Vec::new();
+        png::Encoder::new(&mut bytes, 1, 1)
+            .write_header()
+            .unwrap()
+            .write_image_data(&[128])
+            .unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let mut definition =
+            model::FixtureModel::text("fixture/image", ModelProtocol::AnthropicMessages);
+        definition.extra_input_modalities.push("image");
+        let invocation = model::fixture_registry(
+            &[definition],
+            &model::ScriptedAdapterFactory::new(Arc::new(model::NullAdapter)),
+        )
+        .resolve(&ModelSelection::of(
+            ModelRef::parse("fixture/image").unwrap(),
+        ))
+        .unwrap();
+        let call = ToolCall {
+            id: crate::runtime::identity::ToolCallId::new("source-call"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-read-image"),
+            name: "read_image".into(),
+            arguments: serde_json::json!({"path":path}),
+        };
+        let PreflightOutcome::Ready(prepared) = fixture.registry.preflight(&call).unwrap() else {
+            panic!()
+        };
+        let progress = common::NoopProgress;
+        let mut context = ToolExecutionContext::new(
+            &conversation,
+            None,
+            crate::runtime::ExecutionCancellation::detached(
+                crate::runtime::CancellationSignal::new(),
+                crate::runtime::types::CancellationReason::UserRequested,
+            ),
+            fixture.runtime.workspace(),
+            &progress,
+            &artifacts,
+            fixture.runtime.tool_output(),
+            fixture.runtime.environment(),
+        );
+        context.model_invocation = Some(&invocation);
+        let result = fixture
+            .registry
+            .executor(&call.tool_id)
+            .start(prepared.invocation, context)
+            .completion
+            .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let ToolResultContent::Image(original) = &result.content[1] else {
+            panic!()
+        };
+        assert_eq!(original.artifact_id.as_str(), "artifact_2");
+        let mut history = source_history();
+        let MessageBlock::Assistant(assistant) = &mut history[1] else {
+            panic!()
+        };
+        let crate::message::types::AssistantContentBlock::ToolCall(tool_call) =
+            &mut assistant.content[1]
+        else {
+            panic!()
+        };
+        *tool_call = call.clone();
+        let MessageBlock::Tool(tool) = &mut history[2] else {
+            panic!()
+        };
+        tool.tool_id = call.tool_id;
+        tool.result = result;
+        let source_store = store_for(&catalog, &session, &conversation);
+        for message in &history {
+            source_store.append_canonical(message).unwrap();
+        }
+        let source = lineage_at(
+            &source_store,
+            &conversation,
+            source_store.load_head().unwrap().revision,
+        );
+        fs::write(&path, b"replaced").unwrap();
+        fs::remove_file(&path).unwrap();
+        let before = fs::read_dir(&catalog.root).unwrap().count();
+        let mut missing = source.clone();
+        let MessageBlock::Tool(tool) = &mut missing.canonical[2] else {
+            panic!()
+        };
+        tool.result.content.push(ToolResultContent::Image(
+            crate::message::content::ImageReference {
+                artifact_id: crate::runtime::ArtifactId::new("artifact_999"),
+                alt: None,
+            },
+        ));
+        assert!(catalog.prepare_clone_session(&state(), &missing).is_err());
+        assert_eq!(
+            fs::read_dir(&catalog.root).unwrap().count(),
+            before,
+            "failed copy removes its private allocation"
+        );
+        let rejected = catalog.prepare_clone_session(&state(), &source).unwrap();
+        catalog.arm_write_fault_before_rename();
+        assert!(
+            catalog
+                .publish_session(&rejected, SessionNodeOrigin::New)
+                .is_err()
+        );
+        assert!(catalog.snapshot(&rejected.session_id).is_err());
+        catalog.discard_prepared_session(&rejected).unwrap();
+        assert!(!rejected.database_path.parent().unwrap().exists());
+        let clone = catalog.prepare_clone_session(&state(), &source).unwrap();
+        let (fork, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                LineageSide::Before,
+            )
+            .unwrap();
+        let (branch, _) = catalog
+            .prepare_tree_node(
+                &session,
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                LineageSide::Before,
+            )
+            .unwrap();
+        let (empty, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("source-user-a"),
+                LineageSide::Before,
+            )
+            .unwrap();
+        assert!(
+            ArtifactStore::archive_lengths(empty.database_path.parent().unwrap(), || Ok(()))
+                .unwrap()
+                .is_empty()
+        );
+        catalog.discard_prepared_session(&empty).unwrap();
+        catalog
+            .publish_session(&clone, SessionNodeOrigin::New)
+            .unwrap();
+        catalog
+            .publish_session(&fork, SessionNodeOrigin::New)
+            .unwrap();
+        catalog
+            .publish_node(&session, &branch, node, SessionNodeOrigin::New)
+            .unwrap();
+        let verify = |destination: &PreparedLineage| {
+            let reopened = store_for(
+                &catalog,
+                &destination.session_id,
+                &destination.conversation_id,
+            );
+            let history = reopened.load_canonical().unwrap();
+            let mut messages = crate::model::input::canonical_input(&history);
+            crate::model::images::project(&mut messages, true);
+            let owner = ArtifactStore::new(
+                destination.conversation_id.clone(),
+                destination.database_path.parent().unwrap(),
+            )
+            .unwrap();
+            let resolved = crate::model::images::resolve(&messages, |id| {
+                owner.read_bounded(id).map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert_eq!(resolved.len(), 1);
+            assert_eq!(resolved.values().next().unwrap(), &bytes);
+            assert_eq!(resolved.keys().next().unwrap().as_str(), "artifact_1");
+            assert_eq!(
+                ArtifactStore::archive_lengths(owner.root(), || Ok(()))
+                    .unwrap()
+                    .len(),
+                1
+            );
+        };
+        verify(&clone);
+        verify(&fork);
+        verify(&branch);
+        drop(source_store);
+        drop(artifacts);
+        // Delete through the ordinary Session owner; independent destinations survive.
+        let SessionDeleteResult::Preview { preview } = catalog.delete_preview(&session) else {
+            panic!()
+        };
+        let work = catalog
+            .commit_delete(&session, &preview.target_revision)
+            .unwrap()
+            .unwrap();
+        let cleaned = work.run();
+        assert!(matches!(
+            catalog.finish_delete(&work.record, cleaned),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        for destination in [&clone, &fork] {
+            let owner = ArtifactStore::new(
+                destination.conversation_id.clone(),
+                destination.database_path.parent().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                owner
+                    .read_bounded(&crate::runtime::ArtifactId::new("artifact_1"))
+                    .unwrap(),
+                bytes
+            );
+        }
     }
 
     fn source_history() -> Vec<MessageBlock> {

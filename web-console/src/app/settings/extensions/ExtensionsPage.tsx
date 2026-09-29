@@ -1,7 +1,7 @@
 import type { Translate } from '../../../locale/translation';
 import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
-import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v28';
+import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v29';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { NativeFacts } from '../../components/NativeFacts';

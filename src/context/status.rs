@@ -1930,6 +1930,7 @@ mod tests {
 
     fn background_snapshot(index: usize, detail: &str) -> BackgroundExecutionSnapshot {
         BackgroundExecutionSnapshot {
+            bash: None,
             execution_id: ToolExecutionId::new(format!(
                 "exec_00000000-0000-7000-8000-{index:012x}"
             )),

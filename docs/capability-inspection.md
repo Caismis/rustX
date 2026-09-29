@@ -33,3 +33,9 @@ visibility with resolved User and Workspace roots.
 `rustx config show --sources` describe current prospective resolution and explicitly
 remain distinct. Admitted Attempt generation/model/resources can differ from current
 published defaults. Clients render those native facts without recomputing them.
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.

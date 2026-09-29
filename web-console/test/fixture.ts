@@ -1,6 +1,6 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v28';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v28';
+import type { TraceDetail } from '../../protocol/app-server/v29';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v29';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -15,7 +15,7 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
     settings_evidence: 'live_session',
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
     workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { records: [] },
-    inbound: {}, capabilities: { revision: '0' }, pending_interactions: [],
+    inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
   };
 }
 export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): RoutedInteraction {
@@ -74,12 +74,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 28;
+  version = 29;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v28' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v29' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };

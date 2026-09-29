@@ -96,7 +96,7 @@ impl ObservedAnchor {
                 .collect(),
             input_items: messages
                 .iter()
-                .map(|message| ObservedInputIdentity::Canonical(message.id().clone()))
+                .map(|message| input_identity(&ModelInputMessage::Canonical(message.clone())))
                 .collect(),
             non_conversation_fingerprint: non_conversation_fingerprint(
                 effective_system_prompt,
@@ -157,10 +157,12 @@ impl ObservedAnchor {
         if self.message_ids.len() > messages.len() {
             return None;
         }
-        self.message_ids
+        self.input_items
             .iter()
             .zip(messages)
-            .all(|(measured, current)| measured == current.id())
+            .all(|(measured, current)| {
+                measured == &input_identity(&ModelInputMessage::Canonical(current.clone()))
+            })
             .then_some(self.message_ids.len())
     }
 
@@ -190,24 +192,24 @@ impl ObservedAnchor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ObservedInputIdentity {
-    Canonical(MessageId),
+    Canonical(MessageId, u64),
     RequestOnly(u64),
 }
 
 fn input_identity(message: &ModelInputMessage) -> ObservedInputIdentity {
+    // Canonical identity alone is insufficient: a request-only modality
+    // projection can change the visible content of the same canonical message.
+    let bytes = serde_json::to_vec(message).expect("model input serializes");
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
     match message {
         ModelInputMessage::Canonical(message) => {
-            ObservedInputIdentity::Canonical(message.id().clone())
+            ObservedInputIdentity::Canonical(message.id().clone(), hash)
         }
-        ModelInputMessage::RequestOnly(_) => {
-            let bytes = serde_json::to_vec(message).expect("model input serializes");
-            let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-            for byte in bytes {
-                hash ^= u64::from(byte);
-                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-            ObservedInputIdentity::RequestOnly(hash)
-        }
+        ModelInputMessage::RequestOnly(_) => ObservedInputIdentity::RequestOnly(hash),
     }
 }
 
@@ -313,11 +315,12 @@ pub fn model_input_fingerprint(
 /// Estimation sees only the exact provider-visible request input: the ordered
 /// canonical/request-only messages, the exact Effective System Prompt, and
 /// the tool definitions. `SurfaceRevision`, token-measurement provenance, and
-/// any other runtime or durable store state are deliberately outside this
-/// boundary, so a custom estimator can never make token cost depend on them —
-/// a hypothetical compaction candidate and the actual post-compaction request
-/// therefore estimate identically whenever their provider-visible inputs are
-/// identical. Conversation-retention estimates remain canonical-only.
+/// mutable runtime or durable control state stay outside this boundary.
+/// Immutable managed image bytes are part of the visible input: the Attempt's
+/// image estimator resolves their validated measurements through its frozen
+/// Conversation artifact authority before adding a modality charge. Hypothetical
+/// compaction and actual requests therefore estimate identically for identical
+/// visible input. Conversation-retention estimates remain canonical-only.
 pub trait TokenEstimator: Send + Sync {
     /// The deterministic estimated input tokens of one request's
     /// provider-visible input, including non-compacted contributors such as
@@ -362,7 +365,9 @@ pub type EstimatorFunction =
 /// contributes at most 4 bytes to one token. The formula is intentionally an
 /// estimate, never provider usage. The Effective System Prompt participates
 /// in the full request estimate; the recent-conversation estimate
-/// ([`TokenEstimator::estimate_conversation_input`]) excludes it.
+/// ([`TokenEstimator::estimate_conversation_input`]) excludes it. This is the
+/// text/structure component; the Attempt-bound image estimator adds the
+/// conservative dimension-based charge after applying request projection.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultTokenEstimator;
 

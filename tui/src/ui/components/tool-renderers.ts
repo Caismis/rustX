@@ -374,16 +374,18 @@ const bashRenderer: ToolPresentationRenderer = {
     if (command === undefined) {
       return undefined;
     }
+    const description = text(fields?.["description"]);
+    const safeDescription = description?.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
     const timeout = count(fields?.["timeout"]);
     const [first, ...rest] = toLines(command);
     return {
       title: "Bash",
-      subject: `${role.chrome("$")} ${first ?? ""}${
+      subject: safeDescription ?? `${role.chrome("$")} ${first ?? ""}${
         timeout === undefined ? "" : ` ${role.meta(`(timeout ${timeout}s)`)}`
       }`,
       // The remaining lines of a multiline command are call *detail*: the
       // first line identifies the call, the rest is bounded by the shell.
-      detail: rest.map((line) => `  ${line}`),
+      detail: (safeDescription === undefined ? rest : toLines(command)).map((line) => `  ${line}`),
     };
   },
   renderResult(result, _args) {
@@ -620,6 +622,10 @@ const todoRenderer: ToolPresentationRenderer = {
  */
 const RENDERERS: ReadonlyMap<ToolId, ToolPresentationRenderer> = new Map([
   ["tool-bash", bashRenderer],
+  ["tool-read-image", {
+    renderCall(args) { const path = text(record(args)?.["path"]); return { title: "Read image", subject: path }; },
+    renderResult(result) { return { detail: (result.content ?? []).flatMap(block => block.type === "image" ? [`Image artifact: ${block.artifact_id}`] : block.type === "text" ? toLines(block.text) : []) }; },
+  }],
   ["tool-read", readRenderer],
   ["tool-grep", grepRenderer],
   ["tool-glob", globRenderer],

@@ -209,7 +209,7 @@ describe("footer", () => {
     const rendered = footer(
       stateOf({
         model: sessionModel("alpha/model-a"),
-        capabilities: { revision: "3" },
+        capabilities: { configured_tools: [], revision: "3" },
       }),
       "connected",
     );
@@ -241,14 +241,14 @@ describe("footer", () => {
 
   it("surfaces unavailable optional capabilities without dying (Issue #81)", () => {
     const healthy = footer(
-      stateOf({ capabilities: { revision: "3", sources: [] } }),
+      stateOf({ capabilities: { configured_tools: [], revision: "3", sources: [] } }),
       "connected",
     );
     assert.doesNotMatch(healthy, /unavailable/);
 
     const degraded = footer(
       stateOf({
-        capabilities: {
+        capabilities: { configured_tools: [],
           revision: "3",
           sources: [
             { source: { type: "mcp", server_id: "python:echo" }, state: { type: "ready" } },
@@ -419,7 +419,7 @@ describe("footer", () => {
         last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
       }),
       jobs: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
-      capabilities: { revision: "9" },
+      capabilities: { configured_tools: [], revision: "9" },
     });
 
     const wide = footer(state, "connected", 200);

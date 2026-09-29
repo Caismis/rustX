@@ -714,6 +714,7 @@ mod tests {
             prepared.runs[0].id.conversation_id.clone(),
             vec![],
             crate::runtime_client::CapabilityView {
+                configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: vec![],
                 available_tools: vec![],

@@ -149,7 +149,7 @@ describe("session model A -> B invariant", () => {
         tool_call_id: "c1",
         tool_id: "tool-bash",
       },
-      { type: "capability_updated", capabilities: { revision: "9" } },
+      { type: "capability_updated", capabilities: { configured_tools: [], revision: "9" } },
       {
         type: "inbound_enqueued",
         sequence: "1",

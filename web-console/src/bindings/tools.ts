@@ -1,7 +1,7 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v28';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v29';
 import type { ToolCardView } from '../presentation/agent/ToolCard';
 import { json } from './projection';
-const variants: Record<string, ToolCardView['variant']> = { 'tool-bash': 'bash', 'tool-read': 'read', 'tool-write': 'write', 'tool-edit': 'edit', 'tool-glob': 'search', 'tool-grep': 'search' };
+const variants: Record<string, ToolCardView['variant']> = { 'tool-bash': 'bash', 'tool-read': 'read', 'tool-read-image': 'image', 'tool-write': 'write', 'tool-edit': 'edit', 'tool-glob': 'search', 'tool-grep': 'search' };
 /** Finite formatting of one native lifecycle. Never joins call/result messages. */
 export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   const variant = variants[tool.tool_id] ?? 'generic';
@@ -16,7 +16,7 @@ export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   const edits = variant === 'edit' && Array.isArray(args.edits) ? args.edits.filter((edit): edit is { oldText: string; newText: string } => !!edit && typeof edit.oldText === 'string' && typeof edit.newText === 'string') : [];
   return { id: tool.call_id, path: string('path'), exitCode: result?.exit_code, truncated: result?.truncation?.truncated,
     diffs: variant === 'edit' ? edits.map(edit => ({ path: string('path') ?? '', oldText: edit.oldText, newText: edit.newText })) : variant === 'write' && string('content') !== undefined ? [{ path: string('path') ?? '', oldText: null, newText: string('content')! }] : undefined, nativeName: tool.name, title: tool.name, variant, state,
-    summary: detail ?? string(variant === 'bash' ? 'command' : variant === 'search' ? 'pattern' : 'path') ?? tool.call_id,
+    summary: (variant === 'bash' ? string('description') : undefined) ?? detail ?? string(variant === 'bash' ? 'command' : variant === 'search' ? 'pattern' : 'path') ?? tool.call_id,
     input: variant === 'bash' ? string('command') ?? tool.state.arguments : tool.state.arguments,
     output: [detail, output].filter(Boolean).join('\n') || undefined };
 }

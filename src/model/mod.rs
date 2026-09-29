@@ -95,3 +95,5 @@ pub(crate) fn chat_protocol() -> ModelProtocol {
 pub mod uploads;
 
 pub mod request_shape;
+
+pub mod images;

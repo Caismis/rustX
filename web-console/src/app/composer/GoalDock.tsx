@@ -8,7 +8,7 @@ import { useTranslation } from '../../locale/react';
 // offers Pause and a stopped one offers Resume — never both, and never a
 // separate arm/play step. There is no create, clear or complete control here.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { GoalMutation, GoalRef, GoalSnapshot } from '../../../../protocol/app-server/v28';
+import type { GoalMutation, GoalRef, GoalSnapshot } from '../../../../protocol/app-server/v29';
 import type { GoalDockState } from '../../bindings/composer-context';
 import type { GoalControlOutcome } from '../../client/app-server';
 import {

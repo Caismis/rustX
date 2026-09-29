@@ -3435,9 +3435,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   concrete bounded `NativeToolPolicies` configuration and may use any legal
   execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
   defaults are intentional per-tool values in the
-  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). Only
-  the Job and Agent control Tools are intentionally fixed
-  (foreground-only, sequential) and is outside the configurable set.
+  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). The
+  Job and Agent controls are fixed foreground/sequential Tools. Native image
+  reading is fixed foreground/parallel/approval-never; all three are outside
+  the configurable policy set.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, apply tool-owned business-argument normalization,
   validate the normalized arguments against the canonical schema, dispatch
@@ -4182,11 +4183,12 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   model-mutation rejection for that namespace. Final-component symlinks are
   followed by atomic
   Write/Edit commits so the link itself is not replaced.
-- The model-facing contracts of the six ordinary native tools are
+- The model-facing contracts of the ordinary native tools are
   `read {path, offset?, limit?}`, `write {path, content}`, `edit {path,
   edits:[{oldText, newText}]}`, `glob {pattern, path?, limit?}`,
   `grep {pattern, path?, glob?, ignoreCase?, literal?, context?, limit?}`,
-  and the unchanged `bash {command, timeout?}` contract. Read accepts
+  `bash {command, description?, timeout?}`, and capability-gated
+  `read_image {path}`. Bash description is presentation metadata only. Read accepts
   offset zero and normalizes it to one; Grep defaults to 100 matches and
   Glob to 1000 results, with larger caller limits accepted.
   Adopting the schema convention never imports another agent's runtime,
@@ -7163,7 +7165,7 @@ never bytes.
   established. Recording it never blocks on a client and never holds the
   Catalog mutex for delivery.
 
-  The integrated App Server v28 contract preserves this catalog owner alongside
+  The integrated App Server v29 contract preserves this catalog owner alongside
   finite Jobs, durable Agents and bounded client request lanes; see the
   [PR #416 integration audit](pr-416-main-integration.md).
 
@@ -7420,3 +7422,40 @@ proven RolledBack with the original Agent, activation and origin. Physical proof
 wakes the existing idle coordinator without enqueueing or replaying content.
 Finite Workflow terminal facts persist physical proof too; recovery must neither
 replace it with false nor infer it from terminal naming or workspace disposition.
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.
+
+## Repository metadata mutation ownership
+
+WorkspaceManager owns Git worktree/ref operations. A process-wide gate keyed by
+Git's canonical common directory serializes worktree add/remove, registration
+reads, and ref deletion. Linked checkouts, logical subdirectories, independent
+Conversation managers, and manager clones converge on that key. The existing
+manager disposal lock still owns the multi-step retained-disposal transaction;
+the repository gate owns only each physical Git metadata command through its
+supervised settlement. Overlay preparation and unrelated repositories proceed
+independently. Queued cancellation exits before spawning the mutation. The owned gate transfers
+into the physical supervision task before spawn; dropping or aborting the caller
+cannot release it before child settlement and output drainage. A real Git
+reference-transaction hook regression proves caller-abort exclusion and independent
+repository progress with FIFO synchronization.
+
+This is local runtime coordination, not an exclusion guarantee against arbitrary
+external Git processes. Git's own ref checks and native ownership re-proofs remain
+authoritative across external mutation. Tests explicitly poll the shared gate,
+prove independent-repository progress, and cancel an independently composed
+linked-worktree manager at the gate without a ref mutation.
+
+### Image input capability across protocols
+
+Effective Image input covers both canonical User and ToolResult image content.
+Anthropic Messages, OpenAI Responses and Chat Completions advertise that same
+capability. The frozen model declaration remains authoritative. Chat follows the
+extended OpenAI-compatible/vLLM multimodal Tool message contract; endpoint
+incompatibility is a provider error, never a capability downgrade or synthetic
+User fallback. All adapters consume the same newest-16 request projection and
+Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md).

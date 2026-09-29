@@ -394,7 +394,8 @@ pub enum RuntimeClientSessionRequest {
 /// and the distinction between proven absent Agent delivery and unknown delivery.
 /// This generation also includes incremental derived read domains and finite snapshots (#423).
 /// Version 53 adds bounded canonical Tool argument previews to Trace summaries (#421).
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 53;
+/// Version 54 adds required configured Tool inventory and image/Bash presentation (#425).
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 54;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1434,7 +1435,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 53);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 54);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

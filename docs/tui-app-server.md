@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol 28. It does not parse
+The TUI is a projection/control client of App Server protocol 29. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v28.ts`](../protocol/app-server/v28.ts).
+[`protocol/app-server/v29.ts`](../protocol/app-server/v29.ts).
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
@@ -24,7 +24,7 @@ it does not replay Save, adoption or other prior side effects.
 See [configuration](configuration.md) and [development](../DEVELOPMENT.md) for launch
 commands, and [the protocol](app-server-protocol.md) for transport/attachment semantics.
 
-## Durable Session lifecycle (v28)
+## Durable Session lifecycle (v29)
 
 `/resume` opens a durable Session and implicitly ensures a compatible runtime.
 Closing a view only detaches. No manual unload command or ordinary residency
@@ -34,7 +34,7 @@ control submission until authoritative settlement. Success focuses an existing
 Session or opens the empty selector, without automatically creating a Session.
 Lost deletion responses are never replayed; reconnection inspects native state.
 
-`session/summaryInvalidated` is part of the mandatory v28 vocabulary and is
+`session/summaryInvalidated` is part of the mandatory v29 vocabulary and is
 decoded with its mandatory `catalog_changed` scope and routed by Session identity. The TUI
 holds no cached Session summary — `/resume` reads the catalog afresh every time
 it opens — so the notification is accepted and declined: it is never folded into
@@ -52,7 +52,7 @@ generations fence late reads and paging. Reconnect/resync remembers only the
 selected AgentId and reconstructs through `agent/transcript` on the current
 parent AttachmentTarget, displaying explicit unavailable history when needed.
 No child Session/Composer or HITL owner is created. See the
-[protocol contract](app-server-protocol.md#read-only-native-agent-conversations-v28).
+[protocol contract](app-server-protocol.md#read-only-native-agent-conversations-v29).
 
 ## Job and Agent control
 
@@ -70,7 +70,7 @@ creation omits the override and the native default owner decides. Attachment rea
 that established state. TUI startup does not issue an initialization `setModel`;
 later explicit model changes remain supported. See [#419](issue-419/ownership.md).
 
-## Incremental projection (v28 / Runtime Client 53)
+## Incremental projection (v29 / Runtime Client 54)
 
 The existing terminal presentation reducer consumes every native event and the new
 `read_domains_updated` cut (decorated transcript, statistics, Todo, occupancy).
@@ -82,3 +82,9 @@ visible and never replay mutations. Exact Tool assembly uses native `arguments_j
 The terminal-specific normalized model and rendering remain unchanged; sharing the
 Web raw DTO fold would require a second state representation, so no speculative
 TUI rewrite or generic package was introduced.
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.

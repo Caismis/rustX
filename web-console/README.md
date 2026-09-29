@@ -69,7 +69,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v28` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v29` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -131,7 +131,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v28.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v29.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -442,3 +442,7 @@ it directly from the authenticated App Server download capability. Web does not
 assemble ZIPs or buffer their bytes. Preparation failures use the existing alert;
 subsequent transfer status appears in the browser's download manager. See
 [Session archive](../docs/session-archive.md), including TLS proxy routing.
+
+Native image reads and Bash description/command presentation follow the
+[shared native contract](../docs/image-reading.md). Image previews use the existing
+managed artifact service, never browser access to a local path.

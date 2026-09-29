@@ -402,6 +402,7 @@ pub(crate) struct AgentExecutionRuntimePolicy {
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,
+    admitted_tools: std::sync::Arc<ToolRegistry>,
     cancellation: &'a AgentCancellation,
     tool_runtime: &'a ConversationToolRuntime,
     /// The conversation-level durable authority. Tool execution receives
@@ -1151,6 +1152,15 @@ impl<'a> AgentExecution<'a> {
                 },
             ));
         }
+        context_runtime.engine.set_image_projection(
+            tool_runtime.artifacts().clone(),
+            request
+                .model
+                .primary()
+                .capabilities()
+                .input_modalities
+                .contains(&crate::model::catalog::Modality::Image),
+        );
         let snapshot = capability.snapshot();
         let lifecycle = context_runtime
             .native_composition
@@ -1189,7 +1199,14 @@ impl<'a> AgentExecution<'a> {
                 .initialize(conversation.ledger().audit_records())
                 .map_err(MailboxError::Durable)?;
         }
+        let admitted_tools = std::sync::Arc::new(
+            capability
+                .snapshot()
+                .tool_registry()
+                .for_model(request.model.primary().capabilities()),
+        );
         Ok(Self {
+            admitted_tools,
             conversation,
             generation_policy: frozen_generation_policy(&request),
             request,
@@ -2672,7 +2689,34 @@ impl<'a> AgentExecution<'a> {
             .engine
             .project_uploads(&mut request_messages)
             .map_err(|error| Self::context_failure_terminal(&error))?;
-        let request = self.model_request_from_projection(&projection, request_messages);
+        let mut request = self.model_request_from_projection(&projection, request_messages);
+        crate::model::images::project(
+            &mut request.messages,
+            request
+                .invocation
+                .capabilities
+                .input_modalities
+                .contains(&crate::model::catalog::Modality::Image),
+        );
+        if request
+            .invocation
+            .capabilities
+            .input_modalities
+            .contains(&crate::model::catalog::Modality::Image)
+        {
+            request.images = crate::model::images::resolve(&request.messages, |id| {
+                self.tool_runtime
+                    .artifacts()
+                    .read_bounded(id)
+                    .map_err(|_| "image artifact is unavailable".to_owned())
+            })
+            .map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    error,
+                ))
+            })?;
+        }
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
@@ -2928,7 +2972,7 @@ impl<'a> AgentExecution<'a> {
         self.last_request_anchor = Some(prepared.anchor.clone());
         self.last_request_estimated_input = Some(prepared.estimated_input);
         self.last_request_id = Some(prepared.snapshot.request_id.clone());
-        let reconstructed = self
+        let mut reconstructed = self
             .store
             .reconstruct_model_request(&prepared.snapshot.request_id)
             .map_err(|error| {
@@ -2946,6 +2990,25 @@ impl<'a> AgentExecution<'a> {
                     },
                 }
             })?;
+        if reconstructed
+            .invocation
+            .capabilities
+            .input_modalities
+            .contains(&crate::model::catalog::Modality::Image)
+        {
+            reconstructed.images = crate::model::images::resolve(&reconstructed.messages, |id| {
+                self.tool_runtime
+                    .artifacts()
+                    .read_bounded(id)
+                    .map_err(|_| "image artifact is unavailable".to_owned())
+            })
+            .map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    error,
+                ))
+            })?;
+        }
         if reconstructed != prepared.request {
             self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
             self.durable_failure = Some(
@@ -3176,7 +3239,7 @@ impl<'a> AgentExecution<'a> {
 
     /// The immutable `ToolRegistry` handle of the pinned capability snapshot.
     fn tool_registry(&self) -> &ToolRegistry {
-        self.capability.snapshot().tool_registry()
+        &self.admitted_tools
     }
 
     /// The `AttemptFailed` terminal of a durable-authority failure: the
@@ -4907,6 +4970,7 @@ impl<'a> AgentExecution<'a> {
             None => context,
         };
         let mut context = context;
+        context.model_invocation = Some(self.request.model.primary());
         if let Some(goal) = self.tool_runtime.goal() {
             context.goal = Some(Box::new(crate::goal::GoalToolContext {
                 domain: goal.clone(),
@@ -5106,6 +5170,7 @@ impl<'a> AgentExecution<'a> {
             effective_system_prompt.push_str(&hint.reason);
         }
         ModelRequest {
+            images: std::collections::BTreeMap::new(),
             invocation: primary.invocation_config(),
             messages,
             tools,

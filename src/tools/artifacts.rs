@@ -312,6 +312,32 @@ impl ArtifactStore {
         })
     }
 
+    /// Materialize one settled artifact in this Conversation, with a lineage-wide byte budget.
+    pub(crate) fn copy_from(
+        &self,
+        source: &Self,
+        id: &ArtifactId,
+        remaining: &mut u64,
+    ) -> std::io::Result<ArtifactId> {
+        let mut reader = Self::open_archive_reader(source.root(), id)?;
+        if reader.len > *remaining {
+            return Err(std::io::Error::other(
+                "lineage artifact byte budget exceeded",
+            ));
+        }
+        let id = self.create_artifact().map_err(std::io::Error::other)?;
+        let mut writer = self.open_writer(&id).map_err(std::io::Error::other)?;
+        let expected = reader.len;
+        let length = std::io::copy(&mut reader.by_ref().take(expected + 1), &mut writer)?;
+        if length != expected {
+            return Err(std::io::Error::other("settled artifact length changed"));
+        }
+        writer.file.sync_all()?;
+        File::open(self.root())?.sync_all()?;
+        *remaining -= length;
+        Ok(id)
+    }
+
     /// Read a finite artifact through its conversation-owned identity.
     /// # Errors
     /// Missing, invalid, non-regular or oversized artifacts are refused.
@@ -346,11 +372,10 @@ impl ArtifactStore {
     /// Publish one bounded byte payload. Never replaces an existing artifact.
     /// # Errors
     /// Oversized content, allocation and durable write failures are returned.
-    #[cfg(test)]
     pub(crate) fn put_bounded(&self, bytes: &[u8]) -> Result<ArtifactId, ArtifactError> {
         if bytes.len() > ARTIFACT_TRANSFER_MAX {
             return Err(ArtifactError::WriteFailed(
-                "artifact exceeds fixture write limit".into(),
+                "artifact exceeds write limit".into(),
             ));
         }
         let id = self.create_artifact()?;

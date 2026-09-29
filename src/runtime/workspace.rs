@@ -78,6 +78,7 @@ pub(crate) fn with_physical_settlement_authority<T>(
 
 mod candidate;
 mod git_output;
+mod metadata;
 mod observation;
 mod retained_candidate;
 pub(crate) use candidate::{CandidateFreeze, CandidateScope, WorkspaceAccess, WorkspaceUse};
@@ -968,6 +969,8 @@ pub struct WorkspaceManager {
     /// authority; this lock only supplies the in-process linearization.
     disposal_lock: Arc<tokio::sync::Mutex<()>>,
     #[cfg(test)]
+    metadata_waiting: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
     pub(crate) candidate_interrupt: Arc<candidate::InspectionInterrupt>,
     #[cfg(test)]
     acquisition_hook: Option<std::sync::Arc<WorkspaceAcquireHook>>,
@@ -996,6 +999,8 @@ impl WorkspaceManager {
             parent_logical_workspace: parent_workspace.as_ref().to_path_buf(),
             runtime_root: runtime_root.as_ref().to_path_buf(),
             disposal_lock: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(test)]
+            metadata_waiting: None,
             #[cfg(test)]
             candidate_interrupt: Arc::default(),
             #[cfg(test)]
@@ -2493,6 +2498,51 @@ impl WorkspaceManager {
         args: Vec<OsString>,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<GitOutput, WorkspaceAcquireError> {
+        // Resolve through Git itself: linked worktrees have different .git
+        // paths but mutate the same common metadata. This read does not scan
+        // worktree registrations and must remain outside the metadata gate.
+        let metadata = if args
+            .iter()
+            .any(|arg| arg == "worktree" || arg == "update-ref")
+        {
+            let common = Box::pin(supervised_workspace_git(
+                SETTLEMENT_AUTHORITY.try_with(Arc::clone).ok(),
+                cwd,
+                vec![
+                    "rev-parse".into(),
+                    "--path-format=absolute".into(),
+                    "--git-common-dir".into(),
+                ],
+                cancellation,
+                None,
+            ))
+            .await?;
+            if !common.status.success() {
+                return Err(WorkspaceAcquireError::Git {
+                    operation: "resolve Git common directory".into(),
+                    detail: git_failure_detail(&common),
+                });
+            }
+            let common =
+                String::from_utf8(common.stdout).map_err(|error| WorkspaceAcquireError::Git {
+                    operation: "decode Git common directory".into(),
+                    detail: error.to_string(),
+                })?;
+            let common =
+                std::fs::canonicalize(common.trim_end_matches(['\r', '\n'])).map_err(|error| {
+                    WorkspaceAcquireError::Git {
+                        operation: "canonicalize Git common directory".into(),
+                        detail: error.to_string(),
+                    }
+                })?;
+            #[cfg(test)]
+            if let Some(waiting) = &self.metadata_waiting {
+                waiting.notify_one();
+            }
+            Some(metadata::acquire(&common, cancellation).await?)
+        } else {
+            None
+        };
         // Child-side preparation participates in the same retained-anchor
         // protocol as every native Tool. Parent cleanup additionally carries
         // durable continuation authority beyond the child's earlier receipt.
@@ -2501,6 +2551,7 @@ impl WorkspaceManager {
             cwd,
             args,
             cancellation,
+            metadata,
         ))
         .await
     }
@@ -3030,6 +3081,7 @@ async fn supervised_workspace_git(
     cwd: &Path,
     args: Vec<OsString>,
     cancellation: Option<&CancellationSignal>,
+    metadata: Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> Result<GitOutput, WorkspaceAcquireError> {
     use crate::runtime::process_runner::{
         ProcessOutcomeIntent, SupervisedCommandRunner, SupervisedCommandSpec,
@@ -3061,6 +3113,8 @@ async fn supervised_workspace_git(
         cancellation: cancellation.cloned().unwrap_or_default(),
     };
     let task = tokio::spawn(async move {
+        // The physical owner retains exclusion even if its caller is aborted.
+        let _metadata = metadata;
         let (mut runner, stdout, stderr) =
             SupervisedCommandRunner::spawn_with_continuation(&spec, None, continuation.as_ref())
                 .map_err(|error| WorkspaceAcquireError::Git {
@@ -6384,6 +6438,127 @@ mod tests {
         let second_settlement = second.settle_after_child().await;
         assert_eq!(first_settlement.cleanup(), WorkspaceCleanup::Removed);
         assert_eq!(second_settlement.cleanup(), WorkspaceCleanup::Removed);
+    }
+
+    #[tokio::test]
+    async fn caller_abort_keeps_metadata_gate_until_physical_git_settlement() {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let dir = repository();
+            let other = repository();
+            let runtime = tempfile::tempdir().unwrap();
+            let pipe = |name: &str| {
+                let path = runtime.path().join(name);
+                nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRWXU).unwrap();
+                let file = std::fs::OpenOptions::new().read(true).write(true)
+                    .custom_flags(nix::libc::O_NONBLOCK).open(&path).unwrap();
+                (path, tokio::io::unix::AsyncFd::new(file).unwrap())
+            };
+            let (ready_path, ready) = pipe("ready");
+            let (release_path, release) = pipe("release");
+            let hooks = runtime.path().join("hooks");
+            std::fs::create_dir(&hooks).unwrap();
+            let hook = hooks.join("reference-transaction");
+            std::fs::write(&hook, format!(
+                "#!/bin/sh\nif [ \"$1\" = prepared ]; then\n printf R > '{}'\n read release < '{}'\nfi\n",
+                ready_path.display(), release_path.display()
+            )).unwrap();
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let first = WorkspaceManager::new(dir.path(), runtime.path());
+            let caller = tokio::spawn(async move {
+                first.git_raw(&first.parent_logical_workspace, vec![
+                    "-c".into(), format!("core.hooksPath={}", hooks.display()).into(),
+                    "update-ref".into(), "refs/heads/first".into(), "HEAD".into(),
+                ], None).await
+            });
+            // The real Git child is inside its metadata transaction, not merely scheduled.
+            loop {
+                let mut guard = ready.readable().await.unwrap();
+                if let Ok(result) = guard.try_io(|fd| fd.get_ref().read_exact(&mut [0])) {
+                    result.unwrap(); break;
+                }
+            }
+            caller.abort();
+            assert!(caller.await.err().unwrap().is_cancelled());
+            let common = std::fs::canonicalize(dir.path().join(".git")).unwrap();
+            let mut admission = Box::pin(super::metadata::acquire(&common, None));
+            assert!(std::future::Future::poll(admission.as_mut(), &mut std::task::Context::from_waker(std::task::Waker::noop())).is_pending());
+            drop(admission);
+            let mut second = WorkspaceManager::new(dir.path(), runtime.path());
+            let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
+            second.metadata_waiting = Some(waiting.clone());
+            let next = tokio::spawn(async move {
+                second.git_raw(&second.parent_logical_workspace,
+                    vec!["update-ref".into(), "refs/heads/second".into(), "HEAD".into()], None).await
+            });
+            waiting.notified().await;
+            assert!(!ref_exists(dir.path(), "second"));
+            let independent = WorkspaceManager::new(other.path(), runtime.path());
+            assert!(independent.git_raw(other.path(),
+                vec!["update-ref".into(), "refs/heads/independent".into(), "HEAD".into()], None)
+                .await.unwrap().status.success());
+            assert!(!ref_exists(dir.path(), "first"));
+            release.get_ref().write_all(b"release\n").unwrap();
+            assert!(next.await.unwrap().unwrap().status.success());
+            assert!(ref_exists(dir.path(), "first"));
+            assert!(ref_exists(dir.path(), "second"));
+        }).await.expect("physical Git settlement deadlock guard");
+    }
+
+    #[tokio::test]
+    async fn independent_managers_and_linked_worktrees_share_metadata_gate() {
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let dir = repository();
+            let runtime = tempfile::tempdir().unwrap();
+            let first = WorkspaceManager::new(dir.path(), runtime.path());
+            let lease = first
+                .acquire(
+                    default_isolated(),
+                    &SubagentId::new("metadata-gate-child"),
+                    &CancellationSignal::new(),
+                )
+                .await
+                .unwrap();
+            // An independently composed manager in the linked checkout must
+            // resolve the same common directory, not its private .git file.
+            let mut second = WorkspaceManager::new(lease.logical_workspace(), runtime.path());
+            let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
+            second.metadata_waiting = Some(waiting.clone());
+            let common = std::fs::canonicalize(dir.path().join(".git")).unwrap();
+            let held = super::metadata::acquire(&common, None).await.unwrap();
+            let cancellation = CancellationSignal::new();
+            let task_cancellation = cancellation.clone();
+            let task = tokio::spawn(async move {
+                second
+                    .git_raw(
+                        &second.parent_logical_workspace,
+                        vec![
+                            "update-ref".into(),
+                            "refs/heads/gate-test".into(),
+                            "HEAD".into(),
+                        ],
+                        Some(&task_cancellation),
+                    )
+                    .await
+            });
+            waiting.notified().await;
+            assert!(!ref_exists(dir.path(), "gate-test"));
+            cancellation.cancel();
+            assert!(matches!(
+                task.await.unwrap(),
+                Err(super::WorkspaceAcquireError::Cancelled)
+            ));
+            assert!(!ref_exists(dir.path(), "gate-test"));
+            drop(held);
+            // Removal and branch cleanup cross the same boundary after release.
+            assert_eq!(
+                lease.settle_after_child().await.cleanup(),
+                WorkspaceCleanup::Removed
+            );
+        })
+        .await
+        .expect("metadata gate deadlock guard");
     }
 
     #[tokio::test]

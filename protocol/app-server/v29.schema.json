@@ -6731,6 +6731,13 @@
       "description": "The deterministic capability projection.\n\nProjected from the active [`CapabilitySnapshot`]\n([`crate::capabilities::CapabilitySnapshot`]) plus the\ncoordinator-owned availability state (Issue #81): the revision, the\nactive Tool catalog, the complete available Tool catalog, the deterministic\nmodel-visible Skill catalog, and the typed per-source availability. No\nexecutors, environment paths, package-manager state, or private dependency\ninternals appear.",
       "type": "object",
       "properties": {
+        "configured_tools": {
+          "description": "Configured Tool intent before effective model gating.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeClientTool"
+          }
+        },
         "revision": {
           "description": "The active monotonic capability revision.",
           "$ref": "#/$defs/CapabilityRevision"
@@ -6770,13 +6777,9 @@
       },
       "additionalProperties": false,
       "required": [
+        "configured_tools",
         "revision"
       ]
-    },
-    "CapabilityRevision": {
-      "description": "A monotonic revision counter for the capability set observed by an attempt.\n\nA running attempt snapshots one immutable `CapabilityRevision` when it\nstarts and keeps it for its entire lifetime. The revision is a counter,\nnot a provider-specific string: every capability mutation atomically swaps\nthe whole capability set and increments the revision.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "RuntimeClientTool": {
       "description": "One external tool catalog entry.",
@@ -6951,6 +6954,11 @@
           "additionalProperties": false
         }
       ]
+    },
+    "CapabilityRevision": {
+      "description": "A monotonic revision counter for the capability set observed by an attempt.\n\nA running attempt snapshots one immutable `CapabilityRevision` when it\nstarts and keeps it for its entire lifetime. The revision is a counter,\nnot a provider-specific string: every capability mutation atomically swaps\nthe whole capability set and increments the revision.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "RuntimeClientSkill": {
       "description": "One external Skill catalog entry.",
@@ -9157,6 +9165,17 @@
       "description": "The external background execution read model.\n\nProjected from the authoritative [`ConversationBackgroundRegistry`]\n([`crate::tools::background::ConversationBackgroundRegistry`]); the\ncontainer shape belongs to the Runtime Client protocol while the\nlifecycle, progress, and result leaf types are stable runtime-owned\nvalue contracts. No internal task handles or process ids ever appear.",
       "type": "object",
       "properties": {
+        "bash": {
+          "description": "Native Bash presentation, derived from the canonical invocation.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BashPresentation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "job_id": {
           "description": "The detached runtime execution identity.",
           "$ref": "#/$defs/ToolExecutionId"
@@ -9202,6 +9221,25 @@
         "tool_id",
         "tool_name",
         "state"
+      ]
+    },
+    "BashPresentation": {
+      "description": "Presentation metadata derived from canonical native Bash arguments.\nCommand remains the authoritative execution fact.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command"
       ]
     },
     "BackgroundLifecycle": {
@@ -15578,6 +15616,13 @@
       "description": "Facts frozen together with the attempt model under native admission.",
       "type": "object",
       "properties": {
+        "read_image_active": {
+          "description": "Whether the admitted catalog publishes native image reading.\nAbsent only when historical admission evidence is unavailable.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "resource_revision": {
           "$ref": "#/$defs/RuntimeResourceRevision"
         },

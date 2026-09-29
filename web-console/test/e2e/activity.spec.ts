@@ -29,3 +29,27 @@ test('durable Agent detail remains selected through interruption and resume; Job
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: '/tmp/rustx-411-web-activity-mobile.png', fullPage: true });
 });
+
+
+test('image row previews managed bytes and Bash description expands to authoritative command', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('http://127.0.0.1:5174/test/fixtures/activity.html');
+  await expect(page).toHaveTitle('rustX Jobs and Agents');
+  const job = page.getByRole('region', { name: 'Job Build' });
+  await expect(job).toContainText('Check the build <safely>');
+  await job.getByRole('button', { name: /Build/ }).click();
+  await expect(job).toContainText('printf authoritative-command');
+  const image = page.locator('[data-tool-call-id="read-image"]');
+  await expect(image).toHaveAttribute('data-tool-renderer', 'image');
+  await image.getByRole('button', { expanded: false }).click();
+  await image.getByRole('button', { name: 'Load attachment' }).click();
+  await expect(image.getByRole('img', { name: 'artifact_1', exact: true })).toBeVisible();
+  await expect.poll(() => image.getByRole('img', { name: 'artifact_1', exact: true }).evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 1)).toBe(true);
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: '/tmp/rustx-412-tools-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/rustx-412-tools-mobile.png', fullPage: true });
+});

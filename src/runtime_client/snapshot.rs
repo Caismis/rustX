@@ -827,6 +827,8 @@ pub struct InboundDrainView {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientJob {
+    /// Native Bash presentation, derived from the canonical invocation.
+    pub bash: Option<crate::tools::types::BashPresentation>,
     /// The detached runtime execution identity.
     pub job_id: ToolExecutionId,
     /// The canonical tool identity.
@@ -1169,6 +1171,8 @@ pub struct PostToolBatchOpportunityView {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct CapabilityView {
+    /// Configured Tool intent before effective model gating.
+    pub configured_tools: Vec<RuntimeClientTool>,
     /// The active monotonic capability revision.
     pub revision: CapabilityRevision,
     /// The deterministic active Tool catalog in registry order. Model

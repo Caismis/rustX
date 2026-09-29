@@ -134,6 +134,71 @@ fn deletion_uncertain_visibility_never_cleans_and_recovery_confirms_same_record(
 }
 
 #[test]
+fn session_deletion_reclaims_committed_image_without_a_published_reference() {
+    use crate::tools::artifacts::ArtifactStore;
+
+    let (dir, mut catalog, preview) = fixture();
+    let root = ProductRoot::existing(dir.path()).unwrap();
+    let path = residue(root.root(), &preview)[0].clone();
+    let conversation_id = match &preview.scopes[0] {
+        DeletionScope::Node {
+            conversation_id, ..
+        }
+        | DeletionScope::Child {
+            conversation_id, ..
+        } => conversation_id.clone(),
+    };
+    let access = Arc::new(ConversationAccess::existing(&root, &path).unwrap());
+    let store = ArtifactStore::new(conversation_id.clone(), &path)
+        .unwrap()
+        .with_lifecycle(Some(access));
+    let mut bytes = Vec::new();
+    {
+        let encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[128])
+            .unwrap();
+    }
+    // Exactly the residue left when read_image observes cancellation after
+    // put_bounded commits but before publishing its ImageReference.
+    let id = store.put_bounded(&bytes).unwrap();
+    assert_eq!(store.read_bounded(&id).unwrap(), bytes);
+    assert!(
+        matches!(
+            catalog
+                .commit_delete(&preview.session_id, &preview.target_revision)
+                .unwrap(),
+            Err(SessionDeleteResult::Blocked {
+                reason: DeletionBlocker::ResourceConflict,
+                ..
+            })
+        ),
+        "the live artifact owner prevents deletion"
+    );
+    drop(store);
+    let reopened = ArtifactStore::new(conversation_id, &path).unwrap();
+    assert_eq!(reopened.read_bounded(&id).unwrap(), bytes);
+    assert_eq!(reopened.create_artifact().unwrap().as_str(), "artifact_2");
+    drop(reopened);
+    let work = catalog
+        .commit_delete(&preview.session_id, &preview.target_revision)
+        .unwrap()
+        .unwrap();
+    let cleaned = work.run();
+    assert!(matches!(
+        catalog.finish_delete(&work.record, cleaned),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    assert!(
+        !path.exists(),
+        "the session owner reclaims both bytes and reservations"
+    );
+    assert!(catalog.recover_deletions().is_empty());
+}
+
+#[test]
 fn deletion_cleanup_owns_frozen_plan_without_root_guard_and_identity_is_absorbing() {
     let (dir, mut catalog, preview) = fixture();
     let root = ProductRoot::existing(dir.path()).unwrap();
@@ -201,7 +266,8 @@ fn deletion_cleanup_owns_frozen_plan_without_root_guard_and_identity_is_absorbin
                 preview.session_id.clone(),
                 node_id.clone(),
                 conversation_id.clone(),
-                &LineageSeed::history(vec![])
+                &LineageSeed::history(vec![]),
+                None,
             )
             .is_err()
     );

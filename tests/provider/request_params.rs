@@ -339,9 +339,8 @@ async fn responses_compat_owns_storage_structure() {
 // ---------------------------------------------------------------------------
 
 /// A raw catalog claim is intersected with the adapter/protocol capability
-/// and the current runtime capability; image input is never advertised
-/// because no adapter can transmit it yet, and canonical file input resolves
-/// as unsupported.
+/// and the current runtime capability; all adapters transmit image input.
+/// Canonical File input remains unsupported.
 #[test]
 fn effective_capabilities_intersect_the_raw_claim() {
     let generous = ModelCapabilities {
@@ -360,8 +359,8 @@ fn effective_capabilities_intersect_the_raw_claim() {
         let effective = effective_capabilities(&generous, protocol);
         assert!(effective.input_modalities.contains(&Modality::Text));
         assert!(
-            !effective.input_modalities.contains(&Modality::Image),
-            "image input must not be advertised while no adapter can transmit it"
+            effective.input_modalities.contains(&Modality::Image),
+            "all implemented image paths are advertised"
         );
         assert!(
             !effective.input_modalities.contains(&Modality::File),
@@ -488,6 +487,7 @@ fn the_invocation_configuration_is_credential_free_and_serializable() {
     assert_eq!(decoded, invocation);
 
     let request = ModelRequest {
+        images: std::collections::BTreeMap::new(),
         invocation,
         messages: Vec::new(),
         tools: Vec::new(),

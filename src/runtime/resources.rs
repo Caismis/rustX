@@ -338,6 +338,7 @@ impl RuntimeResourceSnapshot {
         let tools = self
             .capability
             .tool_registry()
+            .for_model(model.snapshot().primary().capabilities())
             .definitions()
             .iter()
             .map(crate::tools::schema::compile_model_definition)
@@ -347,6 +348,7 @@ impl RuntimeResourceSnapshot {
             binding,
             model.snapshot().primary().context_window(),
             crate::model::ModelRequest {
+                images: std::collections::BTreeMap::new(),
                 invocation: model.snapshot().primary().invocation_config(),
                 messages: Vec::new(),
                 tools,
@@ -368,6 +370,7 @@ impl RuntimeResourceSnapshot {
             summary_binding,
             model.snapshot().summary_invocation().context_window(),
             crate::model::ModelRequest {
+                images: std::collections::BTreeMap::new(),
                 invocation: model.snapshot().summary_invocation().invocation_config(),
                 messages: Vec::new(),
                 tools: Vec::new(),

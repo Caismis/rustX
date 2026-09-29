@@ -2507,6 +2507,7 @@ mod tests {
             id,
             vec![],
             crate::runtime_client::snapshot::CapabilityView {
+                configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: vec![],
                 available_tools: vec![],

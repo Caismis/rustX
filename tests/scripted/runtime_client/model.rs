@@ -69,8 +69,7 @@ fn fixture_models() -> Vec<FixtureModel> {
                     "on": {"enabled": true, "requestParams": {"thinking": {"type": "enabled"}}}
                 }
             }))
-            // A generous raw claim, so the effective intersection is visibly
-            // narrower than the declaration.
+            // Explicit Image intent is supported by the Chat adapter/runtime.
             .claiming_input("image"),
         FixtureModel::text("beta/model-b", ModelProtocol::OpenAiChatCompletions)
             .with_context_window(32_000)
@@ -192,12 +191,12 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
         "the catalog claim is preserved for explanation"
     );
     assert!(
-        !model
+        model
             .effective
             .capabilities
             .input_modalities
             .contains(&rustx::model::Modality::Image),
-        "image input is never advertised while no adapter can transmit it"
+        "declared Image input is admitted by the implemented Chat image path"
     );
 
     // The effective request parameters are provider-owned config and carry no
@@ -273,11 +272,11 @@ async fn the_catalog_query_exposes_safe_selectable_models() {
             .declared_capabilities
             .input_modalities
             .contains(&rustx::model::Modality::Image)
-            && !primary
+            && primary
                 .effective_capabilities
                 .input_modalities
                 .contains(&rustx::model::Modality::Image),
-        "the view distinguishes the raw claim from the effective capability"
+        "the view reports both the declared Image intent and effective Chat Image support"
     );
     // The credential *source kind* is safe; the value never is.
     assert_eq!(primary.credential_source, CredentialSourceView::Literal);

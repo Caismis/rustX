@@ -138,7 +138,7 @@ async fn image_references_are_unsupported() {
         &crate::common::FixtureServer,
     )> = vec![
         (
-            "openai-chat",
+            "openai_chat",
             Box::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
                 "k",
                 chat_server.url("/v1"),
@@ -147,7 +147,7 @@ async fn image_references_are_unsupported() {
             &chat_server,
         ),
         (
-            "openai-responses",
+            "openai_responses",
             Box::new(OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(
                 "k",
                 responses_server.url("/v1"),
@@ -619,4 +619,257 @@ async fn file_tool_results_are_unsupported() {
         &server,
     )
     .await;
+}
+
+#[tokio::test]
+async fn anthropic_resolved_user_image_and_unsupported_placements() {
+    use base64::Engine;
+    use rustx::model::catalog::Modality;
+    let server =
+        crate::common::FixtureServer::start(|_, _| sse_fixture("anthropic", "text.sse")).await;
+    let adapter = AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new("k", server.url("")));
+    let mut bytes = Vec::new();
+    {
+        let encoder = png::Encoder::new(&mut bytes, 1, 1);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[128]).unwrap();
+    }
+    let mut request = image_user_request(ModelProtocol::AnthropicMessages, "claude-test");
+    request
+        .invocation
+        .capabilities
+        .input_modalities
+        .insert(Modality::Image);
+    request
+        .images
+        .insert(ArtifactId::new("artifact-img-1"), bytes.clone());
+    let events = crate::common::collect_events(&adapter, request.clone()).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"][0]["source"]["data"],
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    );
+    assert!(
+        !serde_json::to_string(&request)
+            .unwrap()
+            .contains(&base64::engine::general_purpose::STANDARD.encode(&bytes)),
+        "ephemeral data never enters serialized canonical request evidence"
+    );
+    let before = server.attempt_count();
+    let mut text = request.clone();
+    text.invocation
+        .capabilities
+        .input_modalities
+        .remove(&Modality::Image);
+    let mut assistant = request.clone();
+    assistant.messages[0] =
+        ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("assistant-image"),
+            content: vec![AssistantContentBlock::Image(ImageReference {
+                artifact_id: ArtifactId::new("artifact-img-1"),
+                alt: None,
+            })],
+        }));
+    let mut corrupt = request.clone();
+    corrupt
+        .images
+        .insert(ArtifactId::new("artifact-img-1"), b"invalid".to_vec());
+    let mut unresolved = request;
+    unresolved.images.clear();
+    for invalid in [text, assistant, corrupt, unresolved] {
+        let events = crate::common::collect_events(&adapter, invalid).await;
+        assert!(matches!(events.first(), Some(ModelEvent::Failed { .. })));
+        assert_eq!(
+            server.attempt_count(),
+            before,
+            "invalid request fails before network I/O"
+        );
+    }
+}
+
+/// Every Image-capable protocol preserves canonical placement, part ordering,
+/// exact bytes and parallel call correlation. Invalid inputs never reach HTTP.
+#[tokio::test]
+async fn all_protocols_transport_user_and_ordered_tool_images() {
+    use base64::Engine;
+    use rustx::model::catalog::Modality;
+    for (protocol, fixture) in [
+        (ModelProtocol::OpenAiChatCompletions, "openai_chat"),
+        (ModelProtocol::OpenAiResponses, "openai_responses"),
+        (ModelProtocol::AnthropicMessages, "anthropic"),
+    ] {
+        let server = crate::common::FixtureServer::start(move |_, _| {
+            sse_fixture(
+                fixture,
+                if fixture == "anthropic" {
+                    "text.sse"
+                } else {
+                    "plain_text.sse"
+                },
+            )
+        })
+        .await;
+        let adapter: Box<dyn ModelAdapter> = match protocol {
+            ModelProtocol::OpenAiChatCompletions => Box::new(OpenAiChatCompletionsAdapter::new(
+                OpenAiAdapterConfig::new("k", server.url("/v1")),
+            )),
+            ModelProtocol::OpenAiResponses => Box::new(OpenAiResponsesAdapter::new(
+                OpenAiAdapterConfig::new("k", server.url("/v1")),
+            )),
+            ModelProtocol::AnthropicMessages => Box::new(AnthropicMessagesAdapter::new(
+                AnthropicAdapterConfig::new("k", server.url("")),
+            )),
+        };
+        let mut bytes = Vec::new();
+        png::Encoder::new(&mut bytes, 1, 1)
+            .write_header()
+            .unwrap()
+            .write_image_data(&[128])
+            .unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let image = ImageReference {
+            artifact_id: ArtifactId::new("artifact-img-1"),
+            alt: None,
+        };
+        let mut request = history_request(protocol, "explicit-image-model");
+        request
+            .invocation
+            .capabilities
+            .input_modalities
+            .insert(Modality::Image);
+        request.images.insert(image.artifact_id.clone(), bytes);
+        if let ModelInputMessage::Canonical(MessageBlock::User(user)) = &mut request.messages[0] {
+            user.content.push(UserContentBlock::Image(image.clone()));
+        }
+        if let ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) =
+            &mut request.messages[1]
+        {
+            let AssistantContentBlock::ToolCall(mut call) = assistant.content[1].clone() else {
+                panic!()
+            };
+            call.id = ToolCallId::new("call_2");
+            assistant
+                .content
+                .push(AssistantContentBlock::ToolCall(call));
+        }
+        if let ModelInputMessage::Canonical(MessageBlock::Tool(tool)) = &mut request.messages[2] {
+            tool.result.content = vec![
+                ToolResultContent::Text(TextBlock { text: "A".into() }),
+                ToolResultContent::Image(image.clone()),
+                ToolResultContent::Text(TextBlock { text: "B".into() }),
+                ToolResultContent::Image(image),
+            ];
+        }
+        let mut second = request.messages[2].clone();
+        if let ModelInputMessage::Canonical(MessageBlock::Tool(tool)) = &mut second {
+            tool.id = MessageId::new("msg-t2");
+            tool.tool_call_id = ToolCallId::new("call_2");
+            tool.occurrence = rustx::message::types::ToolCallOccurrenceRef::new(
+                MessageId::new("msg-a1"),
+                rustx::message::types::ContentBlockIndex::new(2),
+            );
+        }
+        request.messages.insert(3, second);
+        let canonical = request.messages.clone();
+        for image_enabled in [true, false, true] {
+            let mut projected = request.clone();
+            if !image_enabled {
+                projected
+                    .invocation
+                    .capabilities
+                    .input_modalities
+                    .remove(&Modality::Image);
+                projected.images.clear();
+            }
+            rustx::model::images::project(&mut projected.messages, image_enabled);
+            let before = server.attempt_count();
+            let events = crate::common::collect_events(adapter.as_ref(), projected).await;
+            assert!(
+                matches!(events.last(), Some(ModelEvent::Completed { .. })),
+                "{protocol:?}: {events:?}"
+            );
+            let body: serde_json::Value =
+                serde_json::from_str(&server.request_body(usize::try_from(before).unwrap()))
+                    .unwrap();
+            let serialized = body.to_string();
+            assert_eq!(
+                serialized.matches(&encoded).count(),
+                if image_enabled { 5 } else { 0 }
+            );
+            if !image_enabled {
+                assert!(serialized.contains("Image artifact"));
+                continue;
+            }
+            match protocol {
+                ModelProtocol::OpenAiChatCompletions => {
+                    let messages = body["messages"].as_array().unwrap();
+                    assert_eq!(messages.iter().filter(|m| m["role"] == "user").count(), 2);
+                    for id in ["call_1", "call_2"] {
+                        let tool = messages.iter().find(|m| m["tool_call_id"] == id).unwrap();
+                        assert_eq!(tool["role"], "tool");
+                        assert_eq!(tool["content"][0]["text"], "A");
+                        assert_eq!(
+                            tool["content"][1]["image_url"]["url"],
+                            format!("data:image/png;base64,{encoded}")
+                        );
+                        assert_eq!(tool["content"][2]["text"], "B");
+                        assert_eq!(tool["content"][3]["type"], "image_url");
+                    }
+                }
+                ModelProtocol::OpenAiResponses => {
+                    let items = body["input"].as_array().unwrap();
+                    assert_eq!(items.iter().filter(|m| m["role"] == "user").count(), 2);
+                    for id in ["call_1", "call_2"] {
+                        let tool = items
+                            .iter()
+                            .find(|m| m["type"] == "function_call_output" && m["call_id"] == id)
+                            .unwrap();
+                        assert_eq!(tool["output"][0]["text"], "A");
+                        assert_eq!(
+                            tool["output"][1]["image_url"],
+                            format!("data:image/png;base64,{encoded}")
+                        );
+                        assert_eq!(tool["output"][2]["text"], "B");
+                        assert_eq!(tool["output"][3]["type"], "input_image");
+                    }
+                }
+                ModelProtocol::AnthropicMessages => {
+                    let tools: Vec<_> = body["messages"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|m| m["content"].as_array().unwrap())
+                        .filter(|p| p["type"] == "tool_result")
+                        .collect();
+                    assert_eq!(tools.len(), 2);
+                    for (tool, id) in tools.iter().zip(["call_1", "call_2"]) {
+                        assert_eq!(tool["tool_use_id"], id);
+                        assert_eq!(tool["content"][0]["text"], "A");
+                        assert_eq!(tool["content"][1]["source"]["data"], encoded);
+                        assert_eq!(tool["content"][2]["text"], "B");
+                        assert_eq!(tool["content"][3]["type"], "image");
+                    }
+                }
+            }
+        }
+        assert_eq!(request.messages, canonical);
+        let before = server.attempt_count();
+        let mut missing = request.clone();
+        missing.images.clear();
+        let mut corrupt = request.clone();
+        corrupt
+            .images
+            .values_mut()
+            .for_each(|bytes| *bytes = b"bad PNG".to_vec());
+        let mut oversized = request.clone();
+        oversized
+            .messages
+            .extend(std::iter::repeat_n(request.messages[2].clone(), 7));
+        for invalid in [missing, corrupt, oversized] {
+            let events = crate::common::collect_events(adapter.as_ref(), invalid).await;
+            assert!(matches!(events.first(), Some(ModelEvent::Failed { .. })));
+            assert_eq!(server.attempt_count(), before);
+        }
+    }
 }

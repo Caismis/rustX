@@ -311,3 +311,9 @@ A recovered child activation may retain Interrupted while a later
 `SubagentPhysicalSettlementProven` fact proves its native physical containment.
 The Agent registry owns bounded reconciliation of exact incarnation receipts and
 released leases; neither Tool retry nor a terminal label grants that proof.
+
+## Image Tool and Bash presentation (#412)
+
+See [the image and Bash contract](image-reading.md) for effective capability
+intersection, Attempt-frozen publication, managed image ownership, provider
+transport, text-only history projection, and presentation-only Bash descriptions.

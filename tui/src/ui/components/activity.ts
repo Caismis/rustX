@@ -129,6 +129,11 @@ export function renderBackground(
       terminal ? role.meta(execution.state) : role.pending(execution.state)
     } ${role.meta(execution.job_id)}`,
   ];
+  if (execution.bash) {
+    const safe = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+    lines.push(`  ${safe(execution.bash.description ?? execution.bash.command)}`);
+    if (isBackgroundExecutionExpanded(preferences, execution.job_id)) lines.push(`  $ ${safe(execution.bash.command)}`);
+  }
   const progress = describeProgress(execution.progress);
   if (progress !== undefined) {
     lines.push(`  ${role.meta(progress)}`);

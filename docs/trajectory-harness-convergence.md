@@ -22,9 +22,9 @@ includes it through `f4c044e9`, as recorded in the current validation document.
 | Tool proposal and historical definition | `trace/detail.rs::step_tool_call`, `owning_request_snapshot`, `trace/tool.rs` |
 | Immutable request-relative presentation | `trace/summary.rs`, `record.rs`; native predecessor and Context joins |
 | Tool summary and lifecycle separation | `TraceToolSummary` in `trace/types.rs`, `record.rs` immutable materialization, `anchor.rs` lifecycle evidence |
-| Runtime protocol | `src/runtime_client/types.rs`; reviewed main 52, current 53 |
-| App Server protocol and schemas | `src/app_server/protocol.rs`, `schema.rs`, `examples/generate_app_server_protocol.rs`; reviewed main 27, current 28 |
-| Generated consumers | `protocol/app-server/{generate.mjs,package.json,type-contracts.ts,fixtures.json,fixtures.ts,v28.ts,v28.schema.json}` |
+| Runtime protocol | `src/runtime_client/types.rs`; reviewed main 52, current 54 |
+| App Server protocol and schemas | `src/app_server/protocol.rs`, `schema.rs`, `examples/generate_app_server_protocol.rs`; reviewed main 27, current 29 |
+| Generated consumers | `protocol/app-server/{generate.mjs,package.json,type-contracts.ts,fixtures.json,fixtures.ts,v29.ts,v29.schema.json}` |
 | Web transport and Trace cache | `web-console/src/client/{app-server.ts,trace.ts}` |
 | TUI transport and decoding | `tui/src/app-server/{client.ts,websocket-transport.ts}`, `tui/src/protocol/{app-server.ts,decoder.ts}` |
 | Native grouping, selection, folding | `web-console/src/app/trajectory/{layout.ts,Trajectory.tsx}` |
@@ -116,7 +116,7 @@ Lifecycle refresh resolves none of these immutable proposal facts. Results remai
 the bounded canonical ToolMessage preview, and an absent result is not replaced
 by the Tool name. The ledger shows input → result without a detail read.
 
-Runtime Client 53 and App Server 28 are the sole current vocabulary. Rust generation,
+Runtime Client 54 and App Server 29 are the sole current vocabulary. Rust generation,
 JSON schema, TypeScript, native serialized fixture, Web and TUI move atomically.
 The previous generated files are removed. No dual decoder, flags, aliases,
 protocol fallback, runtime events or storage migration are added.

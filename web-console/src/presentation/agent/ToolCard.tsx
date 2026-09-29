@@ -14,10 +14,10 @@ import { SearchTextBlock } from '../primitives/SearchBlock';
 
 export interface ToolCardView {
  id: string; nativeName?: string; identity?: 'call' | 'job'; title: string; summary: string; state: 'assembled' | 'running' | 'success' | 'failure' | 'cancelled' | 'uncertain' | 'starting' | 'cancelling' | 'publishing_terminal';
- variant: 'generic' | 'bash' | 'read' | 'write' | 'edit' | 'search'; input?: string; output?: string;
+ variant: 'generic' | 'bash' | 'image' | 'read' | 'write' | 'edit' | 'search'; input?: string; output?: string;
  artifacts?: ReactNode; path?: string; exitCode?: number | null; truncated?: boolean; diffs?: DiffHunk[];
 }
-const icons = { generic: IconSparkle16, bash: IconApiOutline14, read: IconBrowseOutline16, write: IconEditOutline16, edit: IconEditOutline16, search: IconSearchOutline16 };
+const icons = { image: IconBrowseOutline16, generic: IconSparkle16, bash: IconApiOutline14, read: IconBrowseOutline16, write: IconEditOutline16, edit: IconEditOutline16, search: IconSearchOutline16 };
 /** One dispatch path, one native call. Expansion never changes lifecycle. */
 export function ToolCard({ tool, children }: { tool: ToolCardView; children?: ReactNode }) {
   const tx = useTranslation();

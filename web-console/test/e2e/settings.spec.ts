@@ -81,6 +81,16 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
     await settings.getByLabel('read', { exact: true }).uncheck();
     await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
+    await expect(settings.getByLabel('read_image', { exact: true })).not.toBeChecked();
+    await expect(settings.getByRole('form', { name: 'read_image policy', exact: true })).toHaveCount(0);
+    await settings.getByLabel('read_image', { exact: true }).check();
+    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await expect(settings.getByLabel('read_image', { exact: true })).toBeChecked();
+    await settings.getByLabel('read_image', { exact: true }).uncheck();
+    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click(); await saved('Native Tools');
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await expect(settings.getByLabel('read_image', { exact: true })).not.toBeChecked();
     // Source families share exact/all/none selection without activating definitions.
     for (const [family, id] of [['MCP', 'absent-mcp'], ['Managed Python', 'absent-python']]) {
       await choose(settings, 'Source family', family);

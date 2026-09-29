@@ -262,22 +262,22 @@ pub fn finalize_provider_request(
 
 /// The capabilities one protocol adapter can actually represent today.
 ///
-/// All three adapters reject canonical image and file references because
-/// artifact/media resolution does not exist yet, so no protocol advertises
-/// image or file input regardless of what a catalog claims.
+/// Image covers static PNG input in both User and `ToolResult` content on every
+/// supported protocol. Chat uses the extended multimodal Tool message contract.
+/// File input remains unsupported.
 #[must_use]
-pub fn adapter_capabilities(protocol: ModelProtocol) -> ModelCapabilities {
-    match protocol {
-        ModelProtocol::OpenAiChatCompletions
-        | ModelProtocol::OpenAiResponses
-        | ModelProtocol::AnthropicMessages => ModelCapabilities::text_only(true, true),
-    }
+pub fn adapter_capabilities(_protocol: ModelProtocol) -> ModelCapabilities {
+    let mut capabilities = ModelCapabilities::text_only(true, true);
+    capabilities.input_modalities.insert(Modality::Image);
+    capabilities
 }
 
 /// The capabilities the current rustX runtime can carry end to end.
 #[must_use]
 pub fn runtime_capabilities() -> ModelCapabilities {
-    ModelCapabilities::text_only(true, true)
+    let mut capabilities = ModelCapabilities::text_only(true, true);
+    capabilities.input_modalities.insert(Modality::Image);
+    capabilities
 }
 
 /// Computes the effective client-visible capability of one model.

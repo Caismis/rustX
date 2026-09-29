@@ -11076,6 +11076,7 @@ mod tests {
             RuntimeEvent::ModelRequestStarted { ref request_id, .. } if request_id == &snapshot.request_id
         ));
         let expected = ModelRequest {
+            images: std::collections::BTreeMap::new(),
             invocation,
             messages: crate::model::input::canonical_input(&[a.clone(), b.clone()]),
             tools: Vec::new(),

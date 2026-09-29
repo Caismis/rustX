@@ -627,7 +627,59 @@ def app_server_user(marker: str) -> Scenario:
     )
 
 
+def image_tool_round_trip() -> Scenario:
+    return Scenario(
+        "image_tool_round_trip",
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",)),
+             Stream(Gate("image-admitted"), ToolCall("call-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("image/png", "base64", "call-image")),
+             Stream(Text("image received"), Finish("stop"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, body_contains=("Image artifact", "call-image")),
+             Stream(Gate("text-admitted"), Text("text continuation"), Finish("stop"))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",), body_contains=("image/png", "call-image")),
+             Stream(Text("image history restored"), Finish("stop"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                    body_contains=("Image artifact", "call-image"), tools_include=("image_review",),
+                    body_excludes=("image/png", "image_url")),
+             Stream(ToolCall("call-image-review", "image_review", '{"task":"Review the retained image context as text."}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                    tools_include=("workflow_output",), body_contains=("Review the delegated text.",),
+                    body_excludes=("image/png", "image_url", "call-image", "read_image")),
+             Stream(ToolCall("child-output", "workflow_output", '{"summary":"text-safe child completed"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                    body_contains=("text-safe child completed", "call-image"),
+                    body_excludes=("image/png", "image_url")),
+             Stream(Text("text-safe delegation complete"), Finish("stop"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, no_direct_tools=True,
+                    body_contains=("retired-conversation", "artifact_1"),
+                    body_excludes=("image/png", "image_url")),
+             Stream(Text("Image read and text-only delegation completed."), Finish("stop"))),
+    )
+
+
+def image_budget_continuation(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, name="image_budget_continuation") -> Scenario:
+    steps = [
+        Step(Expect(protocol=protocol, model=model, tools_include=("read_image",)),
+             Stream(Gate("image-budget-admitted"), *(ToolCall(f"parallel-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(17)), Finish("tool_calls"))),
+        Step(Expect(protocol=protocol, model=model, body_contains=("image/png", "Image artifact")),
+             Stream(Text("seventeen successful images continue"), Finish("stop"))),
+    ]
+    if protocol != ANTHROPIC_MESSAGES:
+        text_model = CHAT_MODEL if protocol == OPENAI_CHAT_COMPLETIONS else RESPONSES_MODEL
+        steps.extend([
+            Step(Expect(protocol=protocol, model=text_model, body_contains=("Image artifact",), body_excludes=("image/png",)),
+                 Stream(Text("text projection"), Finish("stop"))),
+            Step(Expect(protocol=protocol, model=model, tools_include=("read_image",), body_contains=("image/png", "Image artifact")),
+                 Stream(Text("images restored"), Finish("stop"))),
+        ])
+    return Scenario(name, *steps)
+
+
 SCENARIOS = {
+    "image_budget_chat": lambda: image_budget_continuation(OPENAI_CHAT_COMPLETIONS, "chat-image", "image_budget_chat"),
+    "image_budget_responses": lambda: image_budget_continuation(OPENAI_RESPONSES, "responses-image", "image_budget_responses"),
+    "image_budget_continuation": image_budget_continuation,
+    "image_tool_round_trip": image_tool_round_trip,
     "app_server_user_a": lambda: app_server_user("a"),
     "app_server_user_b": lambda: app_server_user("b"),
     "openai_chat_streamed_turn": openai_chat_streamed_turn,

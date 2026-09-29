@@ -123,6 +123,9 @@ impl EffectivePlugins {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct AdmittedSettings {
+    /// Whether the admitted catalog publishes native image reading.
+    /// Absent only when historical admission evidence is unavailable.
+    pub read_image_active: Option<bool>,
     pub resource_revision: crate::runtime::identity::RuntimeResourceRevision,
     pub approval_mode: ApprovalMode,
 }

@@ -177,7 +177,7 @@ export class CommandDispatcher {
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v28.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v29.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -498,7 +498,7 @@ export class CommandDispatcher {
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v28.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v29.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
     else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
@@ -975,6 +975,8 @@ export function renderModel(state: PresentationState): string {
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
       `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
+      `- effective capabilities: ${attempt.model ? capabilitySummary(attempt.model.primary) : "unavailable"}`,
+      `- read_image active: ${attempt.executionSettings?.read_image_active ?? "unavailable"}`,
     );
     if (attempt.model && attempt.model.primary.model !== session.effective.model) {
       lines.push(
@@ -1004,7 +1006,7 @@ export function renderTools(state: PresentationState): string {
   }
   const lines = [
     `### Tools (capability revision ${state.capabilities.revision})`,
-    "Active tools are the exact model authority. Available but inactive tools cannot be invoked by this model.",
+    "Active tools below describe the selected configuration for the next eligible admission. An existing Attempt keeps its frozen catalog; `/model show` reports its admitted image capability. Available but inactive tools cannot be invoked.",
     "Definitions are inert. Agent/Workflow selection creates finite admitted demand before source preparation.",
   ];
   appendToolGroups(lines, "Active tools", activeGroups);

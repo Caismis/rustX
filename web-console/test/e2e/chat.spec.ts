@@ -167,13 +167,19 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const canonical = page.getByLabel('Canonical conversation');
     const load = canonical.getByRole('button', { name: 'Load attachment' });
-    // This fixture intentionally refuses image continuation. Wait for the exact
-    // native terminal so transient Tool placement cannot reset expansion.
+    // Text-only continuation keeps a useful artifact reference while durable
+    // image content remains available to the managed preview.
     await expectSettled(page);
-    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('unsupported');
+    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('completed');
     await page.getByRole('button', { name: 'Close Inspector' }).click();
     await expect(canonical.locator('[data-tool-call-id="chat-image"]')).toHaveCount(1);
-    await canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false }).click();
+    const expandImage = async () => {
+      const process = canonical.locator('[data-turn-process]').last();
+      if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+      const disclosure = canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false });
+      if (await disclosure.count()) await disclosure.click();
+    };
+    await expandImage();
     await expect(load).toHaveCount(1);
     const decode = async () => {
       await load.click();
@@ -190,7 +196,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(await urlCount()).toBe(1);
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
-    await canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false }).click();
+    await expandImage();
     await expect(load).toHaveCount(1);
     expect(await urlCount()).toBe(0);
     await decode();
@@ -219,8 +225,25 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(trajectory.locator(`[data-trace-id="${stableToolId}"]`)).toHaveCount(1);
     expect(await trajectory.innerText()).not.toContain(fixture.workspaceA);
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
-    expect((await fixture.control('requests')).requests).toHaveLength(37);
+    expect((await fixture.control('requests')).requests).toHaveLength(38);
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
+    // Every native lineage control preserves independently readable managed images.
+    const copiedImage = async () => {
+      const process = canonical.locator('[data-turn-process]').last();
+      if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+      const disclosure = canonical.locator('[data-tool-call-id]').last().getByRole('button', { expanded: false });
+      if (await disclosure.count()) await disclosure.click();
+      await expect(load).toHaveCount(1);
+      await decode();
+    };
+    await page.getByRole('button', { name: 'Fork to new Session', exact: true }).last().click();
+    await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
+    await expect(page.getByRole('dialog', { name: '/fork', exact: true })).toHaveCount(0);
+    await copiedImage();
+    await page.getByRole('button', { name: 'Branch in this Session', exact: true }).last().click();
+    await page.getByRole('dialog', { name: '/branch', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
+    await expect(page.getByRole('dialog', { name: '/branch', exact: true })).toHaveCount(0);
+    await copiedImage();
     expect(errors).toEqual([]); passed = true;
   } catch (error) {
     await showInspector(page);

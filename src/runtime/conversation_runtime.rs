@@ -3140,6 +3140,13 @@ impl RuntimeInner {
             .capability
             .acquire_attempt_lease_for(resources.capability().clone());
         self.observe(ConversationObservation::AttemptAdmitted {
+            read_image_active: resources
+                .capability()
+                .tool_registry()
+                .for_model(model.primary().capabilities())
+                .definitions()
+                .iter()
+                .any(|tool| tool.id.as_str() == "tool-read-image"),
             attempt_id: attempt_id.clone(),
             model: Box::new(model.view()),
             resource_revision: resources.revision(),

@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v28';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v29';
 import { AgentControls } from '../src/app/agent/AgentControls';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -199,4 +199,25 @@ it('native Goal activity specializes outcomes without generic cards and retains 
  ui.rerender(<Tool tool={{ ...tool, tool_id: 'mcp.create_goal' }}/>);
  expect(ui.container.querySelector('[data-goal-activity]')).toBeNull();
  expect(ui.container.querySelector('[data-tool-renderer="generic"]')).toBeTruthy();
+});
+
+it('Bash description is safe collapsed text while expanded detail retains command', () => {
+ const tool: ForegroundToolExecution = { message_id: 'a', block_index: 0, call_id: 'description-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'running', arguments: JSON.stringify({ command: 'printf authoritative', description: '<img src=x onerror=alert(1)>' }) } };
+ const ui = render(<Tool tool={tool}/>);
+ expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
+ expect(ui.container.querySelector('img')).toBeNull();
+ fireEvent.click(screen.getByText('bash'));
+ expect(ui.container.textContent).toContain('printf authoritative');
+ const view = toolCard(tool);
+ expect(view.state).toBe('running');
+ expect(view.input).toBe('printf authoritative');
+});
+it('image reads have a dedicated renderer and retain managed image references after replay', () => {
+ const tool: ForegroundToolExecution = { message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: 'sample.png' }), result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'image', artifact_id: 'artifact_1' }] } } };
+ expect(toolCard(tool).variant).toBe('image');
+ expect(toolCard(JSON.parse(JSON.stringify(tool)))).toEqual(toolCard(tool));
+ const ui = render(<Tool tool={tool}/>);
+ expect(ui.container.querySelector('[data-tool-renderer="image"]')).toBeTruthy();
+ fireEvent.click(screen.getByText('read_image'));
+ expect(ui.container.textContent).toContain('artifact_1');
 });

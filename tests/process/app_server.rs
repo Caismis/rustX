@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":28,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":29,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -232,9 +232,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v28"),
+            Some("rustx.app-server.v29"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v28, rustx-token.wrong"),
+            Some("rustx.app-server.v29, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {

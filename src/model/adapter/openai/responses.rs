@@ -1371,13 +1371,13 @@ fn translate_inputs(
     for block in blocks {
         match block {
             ModelInputMessage::Canonical(MessageBlock::User(user)) => {
-                input_items.push(translate_user_input(user)?);
+                input_items.push(translate_user_input(user, &request.images)?);
             }
             ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
                 input_items.extend(translate_assistant_inputs(assistant)?);
             }
             ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => {
-                input_items.push(translate_tool_result(tool)?);
+                input_items.push(translate_tool_result(tool, &request.images)?);
             }
             ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
@@ -1421,6 +1421,7 @@ fn tail_after_boundary(request: &ModelRequest) -> Result<&[ModelInputMessage], M
 
 fn translate_user_input(
     user: &crate::message::types::UserMessageBlock,
+    images: &crate::model::images::ResolvedImages,
 ) -> Result<serde_json::Value, ModelError> {
     let mut content = Vec::new();
     for block in &user.content {
@@ -1431,12 +1432,16 @@ fn translate_user_input(
                     "text": text.text,
                 }));
             }
+            crate::message::types::UserContentBlock::Image(image) => {
+                content.push(
+                    serde_json::to_value(responses_image_part(image, images)?)
+                        .map_err(|error| invalid_request(&error.to_string()))?,
+                );
+            }
             crate::message::types::UserContentBlock::UploadedFile(_)
-            | crate::message::types::UserContentBlock::Image(_)
             | crate::message::types::UserContentBlock::File(_) => {
                 return Err(unsupported(
-                    "OpenAI Responses cannot represent canonical image/file references \
-                     without artifact resolution",
+                    "OpenAI Responses cannot represent canonical file references",
                 ));
             }
         }
@@ -1476,6 +1481,13 @@ fn translate_assistant_inputs(
                 // is replayed; anything else fails explicitly instead of
                 // degrading into a fabricated summary item.
                 match &reasoning.provider_state {
+                    // Stored continuation adds a state-only canonical block even
+                    // when the response contains no reasoning. On a fresh request
+                    // (including a model switch), that pointer is not input content;
+                    // the surrounding canonical text/calls/results are replayed.
+                    Some(ProviderContinuationState::OpenAiResponses(
+                        OpenAiResponsesContinuation::Stored { .. },
+                    )) if reasoning.text.as_deref().is_none_or(str::is_empty) => {}
                     Some(ProviderContinuationState::OpenAiResponses(
                         OpenAiResponsesContinuation::Stateless { items: preserved },
                     )) => {
@@ -1521,23 +1533,60 @@ fn translate_assistant_inputs(
     Ok(items)
 }
 
+/// Encode one request-owned PNG using the SDK input image representation.
+fn responses_image_part(
+    image: &crate::message::content::ImageReference,
+    images: &crate::model::images::ResolvedImages,
+) -> Result<async_openai::types::responses::InputContent, ModelError> {
+    use async_openai::types::responses::{InputContent, InputImageContent};
+    Ok(InputContent::InputImage(InputImageContent {
+        image_url: Some(super::image_data_url(image, images).map_err(|error| unsupported(&error))?),
+        ..Default::default()
+    }))
+}
+
 /// Translates the canonical model-facing tool-result projection into the
 /// Responses function-call-output shape. Projection policy, status rendering,
 /// and aggregate bounding are owned by the Tool Plane.
 fn translate_tool_result(
     tool: &crate::message::types::ToolMessageBlock,
+    images: &crate::model::images::ResolvedImages,
 ) -> Result<serde_json::Value, ModelError> {
-    let projection = tool.result.model_facing_projection();
-    if projection.contains_non_text_content() {
-        return Err(unsupported(
-            "OpenAI Responses cannot represent file/image tool results",
-        ));
-    }
-    Ok(serde_json::json!({
-        "type": "function_call_output",
-        "call_id": tool.tool_call_id,
-        "output": projection.as_text(),
-    }))
+    use async_openai::types::responses::{
+        FunctionCallOutput, FunctionCallOutputItemParam, InputContent, InputTextContent,
+    };
+    let parts = tool.result.image_projection().map_err(unsupported)?;
+    let output = if parts
+        .iter()
+        .any(|part| matches!(part, crate::tools::types::ModelToolResultPart::Image(_)))
+    {
+        FunctionCallOutput::Content(
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    crate::tools::types::ModelToolResultPart::Text(text) => {
+                        Ok(InputContent::InputText(InputTextContent { text }))
+                    }
+                    crate::tools::types::ModelToolResultPart::Image(image) => {
+                        responses_image_part(&image, images)
+                    }
+                })
+                .collect::<Result<Vec<_>, ModelError>>()?,
+        )
+    } else {
+        FunctionCallOutput::Text(tool.result.model_facing_projection().as_text())
+    };
+    let item = FunctionCallOutputItemParam {
+        call_id: tool.tool_call_id.as_str().to_owned(),
+        output,
+        id: None,
+        status: None,
+    };
+    // Item supplies the protocol discriminator around the SDK-owned output.
+    serde_json::to_value(async_openai::types::responses::Item::FunctionCallOutput(
+        item,
+    ))
+    .map_err(|error| invalid_request(&error.to_string()))
 }
 
 /// Only model-facing tool fields are sent; runtime semantics stay behind.
@@ -1794,7 +1843,8 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message).expect("translate cancelled result");
+        let encoded = translate_tool_result(&message, &crate::model::images::ResolvedImages::new())
+            .expect("translate cancelled result");
         assert_eq!(
             encoded["output"].as_str().expect("text output"),
             "Tool call was cancelled (reason: user_requested). Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
@@ -1838,7 +1888,9 @@ mod tests {
                     managed_output: None,
                 },
             };
-            let encoded = translate_tool_result(&message).expect("translate status result");
+            let encoded =
+                translate_tool_result(&message, &crate::model::images::ResolvedImages::new())
+                    .expect("translate status result");
             let output = encoded["output"].as_str().expect("text output");
             assert_eq!(
                 output,
@@ -1877,7 +1929,8 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message).expect("translate failed tool result");
+        let encoded = translate_tool_result(&message, &crate::model::images::ResolvedImages::new())
+            .expect("translate failed tool result");
         let projection = message.result.model_facing_projection();
         assert_eq!(encoded["call_id"], "call-failed");
         assert_eq!(

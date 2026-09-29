@@ -243,6 +243,13 @@ impl RequestSnapshot {
         canonical: &[crate::message::types::MessageBlock],
     ) -> Result<ModelRequest, RequestReconstructionError> {
         let mut messages = canonical_input(canonical);
+        crate::model::images::project(
+            &mut messages,
+            self.invocation
+                .capabilities
+                .input_modalities
+                .contains(&crate::model::catalog::Modality::Image),
+        );
         self.upload_projection
             .apply(&mut messages)
             .map_err(RequestReconstructionError::Conversation)?;
@@ -262,6 +269,7 @@ impl RequestSnapshot {
         }
         let Some(source) = self.unresolved_output_carryover_source.as_ref() else {
             return Ok(ModelRequest {
+                images: std::collections::BTreeMap::new(),
                 invocation: self.invocation.clone(),
                 messages,
                 tools: self.tool_definitions.clone(),
@@ -320,6 +328,7 @@ impl RequestSnapshot {
             );
         }
         Ok(ModelRequest {
+            images: std::collections::BTreeMap::new(),
             invocation: self.invocation.clone(),
             messages,
             tools: self.tool_definitions.clone(),

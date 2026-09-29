@@ -106,6 +106,7 @@ async fn run_with_control(
     let tool = BashTool::with_test_control(control);
     let reporter = NoopProgress;
     let context = ToolExecutionContext {
+        model_invocation: None,
         goal: None,
         conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         execution_id: None,

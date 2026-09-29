@@ -398,21 +398,15 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
 #[tokio::test]
 async fn bash_background_cancellation_uses_the_same_process_group_path() {
     use rustx::tools::background::BackgroundLifecycle;
+    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event};
     let trace_dir = tempfile::tempdir().unwrap();
     let trace = trace_dir.path().join("supervision.jsonl");
     let fixture = fixture_with_trace(&trace);
     let workspace = fixture.runtime.workspace().root().to_path_buf();
-    let ready = workspace.join("bg-trap-ready.marker");
-    let marker = workspace.join("bg-term-received.marker");
-    let trap_entered = workspace.join("bg-trap-entered.marker");
-    let marker_status = workspace.join("bg-marker-status");
-    let command = format!(
-        "trap 'printf T > {}; touch {}; printf %s $? > {}' TERM; touch {}; sleep 30",
-        trap_entered.display(),
-        marker.display(),
-        marker_status.display(),
-        ready.display()
-    );
+    let ready_path = workspace.join("bg-ready");
+    let ready = SignalPipe::new(&ready_path);
+    // Readiness is OS-backed; no user-shell trap must beat the TERM grace.
+    let command = format!("printf R > {}; while :; do :; done", ready_path.display());
     let registry = fixture.runtime.background().clone();
     let executor = fixture
         .registry
@@ -445,30 +439,58 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
     // deadlock guard): wait until the execution is running.
     let running = wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Running).await;
     assert_eq!(running.state, BackgroundLifecycle::Running);
-    // Deterministic readiness: the TERM trap is installed before the ready
-    // marker is written, and cancellation happens only afterwards.
-    for _ in 0..200 {
-        if ready.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(
-        ready.exists(),
-        "the background trap readiness marker never appeared"
-    );
+    tokio::time::timeout(Duration::from_secs(15), ready.read())
+        .await
+        .expect("background shell readiness");
     let cancelling = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
     // The terminal settlement follows the cancellation path.
     let terminal =
         wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
     assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
+    let evidence = std::fs::read_to_string(&trace).unwrap();
+    let entries: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let index = |predicate: fn(&Event) -> bool| {
+        entries
+            .iter()
+            .position(|entry| predicate(&entry.event))
+            .unwrap_or_else(|| panic!("missing native event: {evidence}"))
+    };
+    let term = index(|event| {
+        matches!(
+            event,
+            Event::Signal {
+                signal: libc::SIGTERM,
+                result: Some(0),
+                ..
+            }
+        )
+    });
+    let Event::Signal { pgid, .. } = entries[term].event else {
+        unreachable!()
+    };
     assert!(
-        marker.exists(),
-        "background cancellation TERMs the owned process group: {terminal:?}\ntrap entered: {}; marker command status: {:?}\nnative evidence: {}",
-        trap_entered.exists(),
-        std::fs::read_to_string(&marker_status),
-        std::fs::read_to_string(&trace).unwrap_or_else(|error| error.to_string())
+        entries[..term].iter().any(
+            |entry| matches!(entry.event, Event::ShellGroup { pgid: group, .. } if group == pgid)
+        ),
+        "{evidence}"
+    );
+    let settled = index(|event| matches!(event, Event::GroupChildrenReaped));
+    let observed = index(|event| matches!(event, Event::TerminalObserved));
+    let published = index(|event| matches!(event, Event::TerminalPublished));
+    let reaped = index(|event| matches!(event, Event::DirectChildReaped));
+    // The sender logs publication after writing the frame; receiver logging
+    // may precede it. Only causal owner order is a runtime invariant.
+    assert!(
+        term < settled
+            && settled < published
+            && published < reaped
+            && settled < observed
+            && observed < reaped,
+        "{evidence}"
     );
 }
 
@@ -1630,5 +1652,60 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
     assert!(
         !anchor.exists(),
         "ordinary command data enabled supervisor observability"
+    );
+}
+
+#[tokio::test]
+async fn description_changes_neither_native_bash_execution_nor_registry_approval() {
+    let fixture = native_fixture();
+    let command = "printf stable-output";
+    let before = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|tool| tool.name == "bash")
+        .unwrap();
+    let plain = run_tool(&fixture, "bash", serde_json::json!({"command": command})).await;
+    let described = run_tool(&fixture, "bash", serde_json::json!({"command": command, "description": "Claim something entirely different"})).await;
+    assert_eq!(plain.status, described.status);
+    assert_eq!(plain.exit_code, described.exit_code);
+    assert_eq!(plain.content, described.content);
+    let after = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|tool| tool.name == "bash")
+        .unwrap();
+    assert_eq!(before.approval_policy, after.approval_policy);
+    assert_eq!(before.execution_policy, after.execution_policy);
+    assert_eq!(before.id, after.id);
+}
+
+#[tokio::test]
+async fn direct_image_read_without_attempt_authority_fails_before_path_or_artifact_work() {
+    let fixture = native_fixture();
+    let before = std::fs::read_dir(fixture.runtime.artifacts().root())
+        .unwrap()
+        .count();
+    let result = run_tool(
+        &fixture,
+        "read_image",
+        serde_json::json!({"path": "/definitely-not-present/image.png"}),
+    )
+    .await;
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Failed { ref error } if error.contains("image-capable admitted invocation"))
+    );
+    assert!(
+        result
+            .content
+            .iter()
+            .all(|block| !matches!(block, ToolResultContent::Image(_)))
+    );
+    assert_eq!(
+        std::fs::read_dir(fixture.runtime.artifacts().root())
+            .unwrap()
+            .count(),
+        before
     );
 }

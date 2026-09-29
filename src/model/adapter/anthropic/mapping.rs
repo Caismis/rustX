@@ -444,9 +444,10 @@ fn translate_messages(
                                 "text": text.text,
                             }));
                         }
-                        UserContentBlock::UploadedFile(_)
-                        | UserContentBlock::Image(_)
-                        | UserContentBlock::File(_) => {
+                        UserContentBlock::Image(image) => {
+                            content.push(image_block(image, &request.images)?);
+                        }
+                        UserContentBlock::UploadedFile(_) | UserContentBlock::File(_) => {
                             return Err(unsupported(
                                 "Anthropic cannot represent canonical image/file references                                  without artifact resolution",
                             ));
@@ -474,7 +475,7 @@ fn translate_messages(
                 });
             }
             ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => {
-                pending_tool_results.push(translate_tool_result(tool_message)?);
+                pending_tool_results.push(translate_tool_result(tool_message, &request.images)?);
             }
             ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
@@ -516,7 +517,7 @@ fn translate_messages(
 /// canonical text alone and no signature is ever fabricated.
 fn translate_assistant_content(
     assistant: &crate::message::types::AssistantMessageBlock,
-    tools: &ValidatedTools,
+    _tools: &ValidatedTools,
     continuation: Option<&AnthropicContinuation>,
     is_last_assistant: bool,
 ) -> Result<Vec<serde_json::Value>, ModelError> {
@@ -581,16 +582,6 @@ fn translate_assistant_content(
                 content.push(state.opaque.clone());
             }
             AssistantContentBlock::ToolCall(call) => {
-                // Request-side history integrity: a canonical call replayed
-                // into a request whose tool surface no longer declares it is
-                // an invalid request, not a malformed model generation.
-                if tools.resolve(&call.name).is_none() {
-                    return Err(invalid_request(&format!(
-                        "canonical history replays the tool name {:?}, which this request does \
-                         not declare",
-                        call.name
-                    )));
-                }
                 content.push(serde_json::json!({
                     "type": "tool_use",
                     "id": call.id,
@@ -624,28 +615,40 @@ fn translate_assistant_content(
 /// and aggregate bounding are owned by the Tool Plane.
 fn translate_tool_result(
     tool: &crate::message::types::ToolMessageBlock,
+    images: &crate::model::images::ResolvedImages,
 ) -> Result<serde_json::Value, ModelError> {
-    let projection = tool.result.model_facing_projection();
-    if projection.contains_non_text_content() {
-        return Err(unsupported(
-            "Anthropic cannot represent file/image tool results",
-        ));
-    }
-    let content: Vec<serde_json::Value> = projection
-        .parts()
-        .iter()
-        .map(|text| {
-            serde_json::json!({
-                "type": "text",
-                "text": text,
-            })
+    let content = tool
+        .result
+        .image_projection()
+        .map_err(unsupported)?
+        .into_iter()
+        .map(|part| match part {
+            crate::tools::types::ModelToolResultPart::Text(text) => {
+                Ok(serde_json::json!({"type":"text", "text":text}))
+            }
+            crate::tools::types::ModelToolResultPart::Image(image) => image_block(&image, images),
         })
-        .collect();
+        .collect::<Result<Vec<_>, ModelError>>()?;
     Ok(serde_json::json!({
         "type": "tool_result",
         "tool_use_id": tool.tool_call_id,
         "content": content,
     }))
+}
+
+/// Wire image encoding belongs exclusively to this adapter.
+fn image_block(
+    image: &crate::message::content::ImageReference,
+    images: &crate::model::images::ResolvedImages,
+) -> Result<serde_json::Value, ModelError> {
+    use base64::Engine;
+    let bytes = images
+        .get(&image.artifact_id)
+        .ok_or_else(|| unsupported("unresolved image artifact"))?;
+    crate::model::images::validate_png(bytes).map_err(|error| unsupported(&error))?;
+    Ok(
+        serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(bytes) } }),
+    )
 }
 
 /// Anthropic requires `tool_result` blocks to form one user message directly
@@ -861,7 +864,8 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message).expect("translate cancelled result");
+        let encoded = translate_tool_result(&message, &std::collections::BTreeMap::new())
+            .expect("translate cancelled result");
         assert_eq!(
             encoded["content"][0]["text"],
             "Tool call was cancelled (reason: parent_cancelled). Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
@@ -905,7 +909,8 @@ mod tests {
                     managed_output: None,
                 },
             };
-            let encoded = translate_tool_result(&message).expect("translate status result");
+            let encoded = translate_tool_result(&message, &std::collections::BTreeMap::new())
+                .expect("translate status result");
             let projection = message.result.model_facing_projection();
             let wire_parts: Vec<String> = encoded["content"]
                 .as_array()
@@ -951,7 +956,8 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message).expect("translate failed tool result");
+        let encoded = translate_tool_result(&message, &std::collections::BTreeMap::new())
+            .expect("translate failed tool result");
         let projection = message.result.model_facing_projection();
         let wire_parts: Vec<String> = encoded["content"]
             .as_array()
