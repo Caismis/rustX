@@ -1,4 +1,3 @@
-import { carrierFetch } from '../carrier/http.ts';
 import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v29.ts';
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
@@ -40,7 +39,14 @@ export function validateLocations(value: unknown, count: number): asserts value 
 }
 /** Typed Product Host failures stay independent of the browser client. */
 export class WorkspaceHostError extends Error {
-  constructor(message: string, readonly kind?: string, readonly uncertain = false) { super(message); this.name = 'WorkspaceHostError'; }
+  readonly kind?: string;
+  readonly uncertain: boolean;
+  constructor(message: string, kind?: string, uncertain = false) {
+    super(message);
+    this.name = 'WorkspaceHostError';
+    this.kind = kind;
+    this.uncertain = uncertain;
+  }
 }
 export interface ProductHostWorkspaces {
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
@@ -52,33 +58,4 @@ export interface ProductHostWorkspaces {
   resolveWorkspace(id: string, endpoint: string): Promise<{ cwd: string }>;
   /** Authorization is independent of registration. Exact Host-owned classification, bounded to a page. */
   classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal): Promise<SessionLocation[]>;
-}
-export class HttpWorkspaceHost implements ProductHostWorkspaces {
-  constructor(private readonly base = '/product-host') {}
-  private async call<T>(method: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
-    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-    if (!response.ok) {
-      const failure = await response.json();
-      const nativeError = failure.nativeError ?? (() => {
-        if (typeof failure.message !== 'string') return undefined;
-        try { return JSON.parse(failure.message).nativeError; } catch { return undefined; }
-      })();
-      if (nativeError) throw new WorkspaceHostError(nativeError.message ?? String(nativeError), nativeError.data?.kind);
-      if (failure.uncertain) throw new WorkspaceHostError(String(failure.message), undefined, true);
-      throw new WorkspaceHostError(`Workspace Host: ${failure.message}`, failure.kind);
-    }
-    return response.json();
-  }
-  listWorkspaces = (signal?: AbortSignal) => this.call<WorkspaceCatalog>('list', {}, signal);
-  configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
-  adoptWorkspace = (location: string) => this.call<void>('adopt', { location });
-  renameWorkspace = (id: string, displayName: string) => this.call<void>('rename', { id, displayName });
-  reorderWorkspace = (id: string, before?: string) => this.call<void>('reorder', { id, before });
-  removeWorkspace = (id: string) => this.call<void>('remove', { id });
-  resolveWorkspace = (id: string, endpoint: string) => this.call<{ cwd: string }>('resolve', { id, endpoint });
-  classifyLocations = async (cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal) => {
-    const result = await this.call<unknown>('classify', { cwds, endpoint, authorityId }, signal);
-    validateLocations(result, cwds.length);
-    return result;
-  };
 }

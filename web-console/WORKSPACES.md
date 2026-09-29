@@ -12,6 +12,15 @@ set of absolute roots and one rustX endpoint. Construction canonicalizes roots;
 resolution rechecks physical identity. The browser submits opaque registration or
 configured-location handles, never paths to authorize. `host/http.ts` exposes the
 small typed `src/workspaces/host.ts` contract using same-origin JSON POSTs.
+That environment-neutral module owns Workspace/configuration DTOs, pure result
+validation, and the single `WorkspaceHostError` class. Its runtime syntax must be
+loadable by native Node type stripping; generated protocol imports remain type-only.
+Both Node Host modules import that contract directly, preserving `instanceof`
+identity. `src/workspaces/http-host.ts` alone owns the browser `HttpWorkspaceHost`
+adapter and its `carrierFetch` dependency; browser composition imports it directly.
+The neutral module never re-exports the browser adapter. Dev's transitive compiler
+scope enforces `erasableSyntaxOnly`, and a clean native child regression exercises
+real Host classification and HTTP authority-error serialization.
 
 Normal local development uses [the dev launcher](../DEVELOPMENT.md), which owns
 the ephemeral config and metadata. The following describes the distinct case of
