@@ -20,8 +20,8 @@ it('Host metadata groups exact native cwd without owning Session state; unregist
   const before = JSON.stringify(sessions);
   symlinkSync(a, join(directory, 'alias'));
   mkdirSync(join(a, 'descendant'));
-  expect(await host.classifyLocations([join(a, 'descendant')], endpoint)).toEqual([{ authorized: false }]);
-  expect(await host.classifyLocations([a, b, join(directory, 'alias'), a + '-outside'], endpoint)).toEqual([{ authorized: true, workspaceId: alpha.id }, { authorized: true, workspaceId: beta.id }, { authorized: true, workspaceId: alpha.id }, { authorized: false }]);
+  expect(await host.classifyLocations([join(a, 'descendant')], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
+  expect(await host.classifyLocations([a, b, join(directory, 'alias'), a + '-outside'], endpoint)).toEqual([{ authorized: true, workspaceId: alpha.id }, { authorized: true, workspaceId: beta.id }, { authorized: true, workspaceId: alpha.id }, { authorized: false, reason: 'unavailable' }]);
   await host.renameWorkspace(alpha.id, 'Renamed'); await host.reorderWorkspace(beta.id, alpha.id);
   expect((await host.listWorkspaces()).workspaces.map(row => row.displayName)).toEqual(['Beta', 'Renamed']);
   expect(await host.resolveWorkspace(alpha.id, endpoint)).toEqual({ cwd: a });
@@ -58,4 +58,35 @@ it('canonical endpoint identity accepts URL equivalence and rejects different ho
   expect(await f.host.classifyLocations([f.a], 'ws://localhost:80/./')).toEqual([{ authorized: true, workspaceId: id }]);
   await expect(f.host.resolveWorkspace(id, 'ws://localhost:81/')).rejects.toThrow('different rustX process');
   await expect(f.host.resolveWorkspace(id, 'ws://example.test/')).rejects.toThrow('different rustX process');
+});
+
+it('unavailable roots fail fresh admission, unregister preserves it, and symlink/replacement revoke it', async () => {
+  const { host, a, b, config, endpoint } = fixture();
+  const [workspace] = (await host.listWorkspaces()).workspaces;
+  const { WorkspaceSessionNavigation } = await import('../src/workspaces/navigation');
+  const { NavigationEpoch } = await import('../src/client/navigation');
+  const client = { getSnapshot: () => ({ generation: 1, endpoint }), request: async () => ({ settings: { cwd: a } }) } as unknown as import('../src/client/app-server').AppServerClient;
+  const admission = new WorkspaceSessionNavigation(host, client, new NavigationEpoch());
+  expect(await admission.admit('native-session', () => true)).toBe(true);
+  rmSync(a, { recursive: true });
+  expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'unavailable' }]);
+  await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
+  mkdirSync(a); await host.removeWorkspace(workspace.id);
+  expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: true }]);
+  expect(await admission.admit('native-session', () => true)).toBe(true);
+  rmSync(a, { recursive: true }); symlinkSync(b, a);
+  expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
+  await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
+  const replacement = new LocalWorkspaceHost({ ...config, roots: config.roots.filter(root => root.cwd !== a) });
+  expect((await replacement.listWorkspaces()).authorityId).not.toBe((await host.listWorkspaces()).authorityId);
+  await expect(replacement.classifyLocations([b], endpoint, (await host.listWorkspaces()).authorityId)).rejects.toThrow('replaced');
+});
+
+it('the HTTP carrier preserves definitive Host replacement observations', async () => {
+  const f = fixture(); const service = await startWorkspaceHost(f.config);
+  try {
+    const response = await fetch(`${service.url}/product-host/classify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwds: [f.a], endpoint: f.endpoint, authorityId: 'retired-host' }) });
+    expect(response.status).toBe(400);
+    expect((await response.json()).kind).toBe('authority_replaced');
+  } finally { await service.stop(); }
 });

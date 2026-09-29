@@ -110,7 +110,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(other.session.id).toMatch(/^ses_[0-9a-f-]+$/);
     expect((await remoteB.readSettings(other.session.id)).settings.cwd).toBe(b.workspaceA);
     expect((await read()).settings.cwd).toBe(a.workspaceA);
-    expect(await a.workspaceHost.host.classifyLocations([b.workspaceA], a.endpoint)).toEqual([{ authorized: false }]);
+    expect(await a.workspaceHost.host.classifyLocations([b.workspaceA], a.endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
     expect(existsSync(join(a.directory, 'state', 'rustx', 'trust'))).toBe(false);
     expect(readFileSync(join(a.workspaceA, 'rustx.toml'), 'utf8')).toContain('Workspace guidance');
     expect(errors).toEqual([]);

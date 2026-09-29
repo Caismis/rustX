@@ -1,5 +1,5 @@
 import type { AppServerClient } from '../client/app-server';
-import type { ProductHostWorkspaces } from './host';
+import { validateLocations, type ProductHostWorkspaces } from './host';
 /** The Web admission/navigation owner. No trust decisions or durable membership. */
 export class WorkspaceSessionNavigation {
   constructor(private readonly host: ProductHostWorkspaces, private readonly client: AppServerClient, private readonly navigation: import('../client/navigation').NavigationEpoch) {}
@@ -14,8 +14,10 @@ export class WorkspaceSessionNavigation {
     if (!valid()) return;
     const endpoint = this.client.getSnapshot().endpoint;
     if (!endpoint) throw new Error('No connected rustX endpoint.');
-    const [location] = await this.host.classifyLocations([settings.settings.cwd], endpoint);
-    if (valid()) return location;
+    const locations = await this.host.classifyLocations([settings.settings.cwd], endpoint);
+    if (!valid()) return;
+    validateLocations(locations, 1);
+    return locations[0];
   }
   admit = async (id: string, current: () => boolean) => {
     const location = await this.classifySession(id, current);

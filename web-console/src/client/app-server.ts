@@ -72,6 +72,8 @@ export interface UncertainOperation {
 export interface ClientView {
   configuration?: Readonly<Record<string, ConfigurationApplication>>;
   authorityRevision?: number;
+  /** Native AppServerHost identity; unlike generation, stable across reconnect. */
+  authorityId?: string;
   detached?: readonly DetachedEvidence[];
   endpoint?: string;
   connection: ConnectionState;
@@ -242,6 +244,21 @@ export class AppServerClient {
   restoreViews(ids: readonly string[]) {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
   }
+  private retireAuthority() {
+    this.firstSubmissions.retireAuthority();
+    const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
+      .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
+    // Admission reserved capacity for close-time evidence before synchronous fencing.
+    // Generation-guarded continuations cannot create new Session diagnostics;
+    // model/cancellation continuations only update already-reserved Session rows.
+    const detached = [...(this.state.detached ?? [])];
+    if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
+    this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
+    this.listEpoch++; this.listOffset = 0; this.listQuery = '';
+    this.log.clear();
+    this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
+      authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
+  }
   // Browser transport authority, not a durable server identity. Reconnect alone
   // can restore wanted Session intent; replacement must retire it after fencing.
   isSameAuthority(endpoint: string) { return !this.state.endpoint || new URL(endpoint).href === this.state.endpoint; }
@@ -260,19 +277,7 @@ export class AppServerClient {
     if (this.closing) await this.closing;
     if (generation !== this.state.generation || attempt !== this.connectionAttempt) return;
     if (replacing) {
-      this.firstSubmissions.retireAuthority();
-      const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
-        .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
-      // Admission reserved capacity for close-time evidence before synchronous fencing.
-      // Generation-guarded continuations cannot create new Session diagnostics;
-      // model/cancellation continuations only update already-reserved Session rows.
-      const detached = [...(this.state.detached ?? [])];
-      if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
-      this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
-      this.listEpoch++; this.listOffset = 0; this.listQuery = '';
-      this.log.clear();
-      this.publish({ views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
-        authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
+      this.retireAuthority();
     }
     this.publish({ configuration: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     // Ownership commits after close/retirement, before attempting the new transport.
@@ -300,9 +305,21 @@ export class AppServerClient {
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 29 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+      if (!hello.authority_id || hello.protocol_version !== 29 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
         throw new Error('Incompatible App Server protocol or capabilities. Protocol v29 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
+      if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
+        try { this.admitAuthorityReplacement(); }
+        catch (error) {
+          // Keep unresolved operation diagnostics under their old authority, but
+          // retire presentation now. No summaries or attachments from the new
+          // process may be read until replacement can safely commit.
+          this.publish({ sessions: [], authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
+          throw error;
+        }
+        this.retireAuthority();
+      }
+      this.publish({ authorityId: hello.authority_id });
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.listSessions();
@@ -754,9 +771,16 @@ export class AppServerClient {
       throw error;
     }
   }
+  private deletionListeners = new Set<(id: string) => void>();
+  subscribeSessionDeletion = (listener: (id: string) => void) => {
+    this.deletionListeners.add(listener);
+    return () => { this.deletionListeners.delete(listener); };
+  };
   private settleDeletion(id: string, result: RuntimeClientSessionDeletionResult): void {
     const committed = result.status === 'committed_cleanup_pending' || result.status === 'committed_durability_uncertain';
     if (committed || result.status === 'deleted' || result.status === 'not_found') {
+      this.publish({ sessions: this.state.sessions.filter(row => row.id !== id) });
+      this.deletionListeners.forEach(listener => listener(id));
       this.retireAttachmentWork(id);
       this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
       if (committed) {

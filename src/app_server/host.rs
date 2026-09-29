@@ -43,6 +43,7 @@ impl HostState {
 }
 #[derive(Debug)]
 struct HostInner {
+    authority_id: String,
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
@@ -80,6 +81,10 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    pub(crate) fn authority_id(&self) -> &str {
+        &self.0.authority_id
+    }
+
     pub(crate) fn archives(&self) -> &super::archive_download::ArchiveDownloads {
         &self.0.archives
     }
@@ -88,6 +93,7 @@ impl AppServerHost {
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
         manager.bind_process_policy(policy);
         Self(Arc::new(HostInner {
+            authority_id: uuid::Uuid::new_v4().to_string(),
             manager,
             state: Mutex::default(),
             requests: watch::channel(0).0,

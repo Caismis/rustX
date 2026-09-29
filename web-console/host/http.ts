@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { ProductHostWorkspaces } from '../src/workspaces/host.ts';
+import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
 import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
 /** Workspace authority only. The launcher carrier authenticates before this handler;
  * independently managed deployments supply their own browser authentication. */
@@ -27,7 +27,7 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           value = await host.configureWorkspace(string('id'), string('endpoint'), body.operation); break;
         case 'classify': {
           if (!Array.isArray(body.cwds) || body.cwds.some((cwd: unknown) => typeof cwd !== 'string')) throw new Error('Expected bounded cwds');
-          value = await host.classifyLocations(body.cwds, string('endpoint')); break;
+          value = await host.classifyLocations(body.cwds, string('endpoint'), body.authorityId === undefined ? undefined : string('authorityId')); break;
         }
         default: throw new Error('Unknown Host operation');
       }
@@ -35,6 +35,7 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
     } catch (error) {
       response.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify({
         message: String(error),
+        kind: error instanceof WorkspaceHostError ? error.kind : undefined,
         nativeError: error instanceof AppServerRequestError ? error.error : undefined,
         uncertain: error instanceof UncertainOutcomeError,
       }));

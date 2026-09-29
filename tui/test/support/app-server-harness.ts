@@ -67,7 +67,7 @@ export async function harness(
   const connecting = AppServerClient.initialize({ transport });
   const initialize = (await transport.log.awaitMethod("initialize")).at(-1)!;
   transport.respond(initialize.id, {
-    type: "initialized",
+    type: "initialized", authority_id: 'fixture-app-server-authority',
     protocol_version: APP_SERVER_PROTOCOL_VERSION,
     capabilities: SERVER_CAPABILITIES,
   });

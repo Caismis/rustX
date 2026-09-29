@@ -68,7 +68,7 @@ async function initialized(): Promise<{
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
   transport.respond(request!.id, {
-    type: "initialized",
+    type: "initialized", authority_id: 'fixture-app-server-authority',
     protocol_version: APP_SERVER_PROTOCOL_VERSION,
     capabilities: CAPABILITIES,
   });
@@ -136,7 +136,7 @@ describe("initialization", () => {
     const pending = AppServerClient.initialize({ transport });
     const [request] = await transport.log.awaitMethod("initialize");
     transport.respond(request!.id, {
-      type: "initialized",
+      type: "initialized", authority_id: 'fixture-app-server-authority',
       protocol_version: 28,
       capabilities: CAPABILITIES,
     });
