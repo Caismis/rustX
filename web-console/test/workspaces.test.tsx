@@ -535,3 +535,14 @@ it('UX-04 native authority replacement at the same endpoint retires presentation
   await act(async () => old.resolve([{ authorized: true, workspaceId: 'wB' }, { authorized: true, workspaceId: 'wA' }]));
   expect(screen.getByRole('button', { name: 'Open Session A' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group')).toBe('wA');
 });
+
+it('UX-04 replacement of the Product Host admission owner fences an older successful admission', async () => {
+  await server.connect();
+  const old = deferred<boolean>();
+  server.client.setAttachmentAdmission(() => old.promise);
+  const pending = server.client.admitAttachment('A');
+  server.client.setAttachmentAdmission(async () => false);
+  old.resolve(true);
+  expect(await pending).toBe(false);
+  expect(methods()).not.toContain('session/attach');
+});
