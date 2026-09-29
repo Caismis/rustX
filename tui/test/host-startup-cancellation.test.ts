@@ -3,7 +3,7 @@ import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AppServerHost } from '../src/app-server/host.ts';
@@ -38,4 +38,28 @@ process.stdin.once('data',()=>{
 it('already aborted startup refuses before creating a native child', async () => {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(AppServerHost.spawnLocal({ binary: '/must-not-be-spawned', launch: {}, signal: controller.signal }), { name: 'AbortError' });
+});
+
+// The budget is below two default grace steps, so passing also proves the
+// option reaches waitOrTerminate rather than the 5s default.
+it('initialization failure escalates an unresponsive owned child after its startup grace', { timeout: 5_000 }, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'rustx-tui-startup-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const pidFile = join(directory, 'pid');
+  const binary = join(directory, 'runtime');
+  // Ends the handshake by closing its output, then ignores SIGTERM and stdin EOF.
+  writeFileSync(binary, `#!/usr/bin/env node
+import {closeSync, writeFileSync} from 'node:fs';
+process.on('SIGTERM',()=>{});
+process.stdin.resume();
+setInterval(()=>{},1000);
+writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
+closeSync(1);
+`, { mode: 0o700 });
+  await assert.rejects(
+    AppServerHost.spawnLocal({ binary, launch: {}, terminationGraceMs: 50 }),
+    /could not start the App Server/,
+  );
+  // Only the startup grace's SIGKILL escalation can have ended this child.
+  assert.throws(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0), { code: 'ESRCH' });
 });

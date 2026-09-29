@@ -198,7 +198,8 @@ impl McpDispatchSeam {
 struct OwnedRequest {
     id: RequestId,
     token: Option<ProgressToken>,
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Names the request to the deterministic test probes only.
+    #[cfg(test)]
     tool: String,
 }
 
@@ -206,24 +207,34 @@ fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
     let ClientJsonRpcMessage::Request(request) = message else {
         return None;
     };
-    let (tool, token) = match &request.request {
-        ClientRequest::CallToolRequest(call) => (
-            call.params.name.to_string(),
-            request.request.get_meta().get_progress_token(),
-        ),
-        ClientRequest::GetTaskRequest(_) => (GET_TASK_METHOD.to_owned(), None),
-        ClientRequest::UpdateTaskRequest(_) => (UPDATE_TASK_METHOD.to_owned(), None),
-        ClientRequest::CancelTaskRequest(_) => (CANCEL_TASK_METHOD.to_owned(), None),
+    let token = match &request.request {
+        ClientRequest::CallToolRequest(_) => request.request.get_meta().get_progress_token(),
+        ClientRequest::GetTaskRequest(_)
+        | ClientRequest::UpdateTaskRequest(_)
+        | ClientRequest::CancelTaskRequest(_) => None,
         _ => return None,
     };
     Some(OwnedRequest {
         id: request.id.clone(),
         token,
-        tool,
+        #[cfg(test)]
+        tool: probe_label(&request.request),
     })
 }
 
-/// The SEP-2663 method names, used as the seam's own request labels.
+/// The test probes' label: the tool name, or the task-control method.
+#[cfg(test)]
+fn probe_label(request: &ClientRequest) -> String {
+    match request {
+        ClientRequest::CallToolRequest(call) => call.params.name.to_string(),
+        ClientRequest::GetTaskRequest(_) => GET_TASK_METHOD.to_owned(),
+        ClientRequest::UpdateTaskRequest(_) => UPDATE_TASK_METHOD.to_owned(),
+        ClientRequest::CancelTaskRequest(_) => CANCEL_TASK_METHOD.to_owned(),
+        _ => unreachable!("only owned requests are labelled"),
+    }
+}
+
+/// The SEP-2663 task-control method names.
 pub(crate) const GET_TASK_METHOD: &str = "tasks/get";
 pub(crate) const UPDATE_TASK_METHOD: &str = "tasks/update";
 pub(crate) const CANCEL_TASK_METHOD: &str = "tasks/cancel";

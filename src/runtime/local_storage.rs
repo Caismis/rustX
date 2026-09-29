@@ -1087,6 +1087,22 @@ mod tests {
         assert!(process.wait().unwrap().success());
         assert!(ProductController::acquire(root.root()).is_ok());
     }
+    /// Each shared mutation guard is an independent lock owner: releasing one
+    /// never admits a freeze while another transaction is still open.
+    #[test]
+    fn every_open_ownership_mutation_holds_off_a_freeze() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = ProductRoot::existing(directory.path()).unwrap();
+        let first = root.ownership_mutation().unwrap();
+        let second = root.ownership_mutation().unwrap();
+        drop(first);
+        assert_eq!(
+            root.freeze_ownership().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        drop(second);
+        assert!(root.freeze_ownership().is_ok());
+    }
     #[test]
     fn management_lock_lookup_is_noncreating_and_paths_fail_closed() {
         let directory = tempfile::tempdir().unwrap();
