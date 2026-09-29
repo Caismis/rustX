@@ -17,14 +17,22 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 function hostFixture(picker = true) {
   let rows = ['A', 'B'].map(id => ({ id: `w${id}`, displayName: `Workspace ${id}`, location: `root-${id}`, displayPath: `/workspace/${id}` }));
   const host: ProductHostWorkspaces = {
-    listWorkspaces: vi.fn(async (): Promise<WorkspaceCatalog> => ({ endpoint, workspaces: rows, picker: picker ? { kind: 'configured', locations: [{ id: 'root-C', displayName: 'Workspace C' }] } : { kind: 'unavailable', reason: 'Directory picker unavailable' } })),
-    classifyLocations: vi.fn(async (cwds: readonly string[]) => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: rows.find(row => row.displayPath === cwd)?.id } : { authorized: false as const })),
+    listWorkspaces: vi.fn(async (): Promise<WorkspaceCatalog> => ({ authorityId: 'fixture-host', endpoint, workspaces: rows, picker: picker ? { kind: 'configured', locations: [{ id: 'root-C', displayName: 'Workspace C' }] } : { kind: 'unavailable', reason: 'Directory picker unavailable' } })),
+    classifyLocations: vi.fn(async (cwds: readonly string[]) => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: rows.find(row => row.displayPath === cwd)?.id } : { authorized: false as const, reason: 'denied' as const })),
     resolveWorkspace: vi.fn(async id => { const row = rows.find(row => row.id === id); if (!row) throw new Error('Unauthorized'); return { cwd: row.displayPath }; }),
     renameWorkspace: vi.fn(async (id, displayName) => { rows = rows.map(row => row.id === id ? { ...row, displayName } : row); }),
     reorderWorkspace: vi.fn(async () => {}), removeWorkspace: vi.fn(async id => { rows = rows.filter(row => row.id !== id); }),
     adoptWorkspace: vi.fn(async () => {}),
   };
   return host;
+}
+function holdAdmission(host: ProductHostWorkspaces, promise: ReturnType<ProductHostWorkspaces['classifyLocations']>) {
+  const classify = host.classifyLocations;
+  let pending = true;
+  host.classifyLocations = vi.fn((cwds, route, authority, signal) => {
+    if (authority === undefined && pending) { pending = false; return promise; }
+    return classify(cwds, route, authority, signal);
+  });
 }
 async function mount(host = hostFixture()) {
   await server.connect();
@@ -205,7 +213,7 @@ it('stale authorized summary cannot authorize current outside cwd', async () => 
   const host = await mount();
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
-  expect(screen.getByRole('alert').textContent).toContain('not authorized');
+  expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('not authorized'))).toBe(true);
   expect(screen.getByRole('button', { name: 'Open Session A' })).toBeTruthy();
   expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint);
   expect(methods()).not.toContain('session/attach'); expect(server.loaded.size).toBe(0);
@@ -213,7 +221,7 @@ it('stale authorized summary cannot authorize current outside cwd', async () => 
 });
 it('unauthorized saved views cannot cold attach on initial restoration or reconnect', async () => {
   const host = hostFixture();
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ authorityId: 'fixture-host', endpoint, openViews: ['A'] }));
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={host} />); await server.connect(); });
   await act(async () => { server.client.disconnect(); await server.connect(); });
@@ -235,7 +243,7 @@ it('toolbar cold resume and sidebar Fork share admission and refuse an unauthori
 });
 it.each(['navigation', 'connection'] as const)('late Host authorization cannot attach after superseding %s', async supersession => {
   const host = await mount(), gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
-  vi.mocked(host.classifyLocations).mockReturnValueOnce(gate.promise);
+  holdAdmission(host, gate.promise);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(methods()).not.toContain('session/attach');
   if (supersession === 'navigation') fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' }));
@@ -312,7 +320,7 @@ it('the shared transport attachment entry fails closed without an admission owne
 
 it('a newer Open is not swallowed by an obsolete authorization for the same Session', async () => {
   const host = await mount(), gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
-  vi.mocked(host.classifyLocations).mockReturnValueOnce(gate.promise);
+  holdAdmission(host, gate.promise);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
@@ -478,4 +486,52 @@ it('S1-10 an authority replacement rejects a late owning Workspace lookup', asyn
   vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...before, authorityRevision: (before.authorityRevision ?? 0) + 1 });
   await act(async () => { gate.resolve(catalog); });
   expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+});
+
+it('UX-04 keeps confirmed groups while a cloned native page refresh is gated', async () => {
+  const host = await mount();
+  const group = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group');
+  expect(group()).toBe('wA');
+  const gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
+  vi.mocked(host.classifyLocations).mockReturnValueOnce(gate.promise);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
+  expect(group()).toBe('wA');
+  await act(async () => gate.resolve([{ authorized: true, workspaceId: 'wA' }, { authorized: true, workspaceId: 'wB' }]));
+});
+
+it('UX-04 shares selected membership across a gated reconnect without authorizing attachment', async () => {
+  const host = await mount();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const selected = () => screen.getByRole('button', { name: 'Select Workspace Workspace A' }).getAttribute('aria-current');
+  expect(selected()).toBe('page');
+  const gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
+  host.classifyLocations = vi.fn((_cwds, _endpoint, authority) => authority ? gate.promise : Promise.resolve([{ authorized: false as const, reason: 'denied' as const }]));
+  await act(async () => { await server.client.disconnect(); });
+  expect(selected()).toBe('page');
+  expect(screen.getByRole('button', { name: 'Open Session A' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group')).toBe('wA');
+  const before = methods().filter(method => method === 'session/attach').length;
+  await act(async () => { await server.connect(); });
+  expect(selected()).toBe('page');
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(before);
+  expect(server.client.getSnapshot().views.A.attachment).not.toBe('attached');
+  await act(async () => gate.resolve([{ authorized: true, workspaceId: 'wA' }, { authorized: true, workspaceId: 'wB' }]));
+  expect(selected()).toBe('page');
+});
+
+it('UX-04 native authority replacement at the same endpoint retires presentation and old callbacks', async () => {
+  const host = await mount();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const old = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
+  vi.mocked(host.classifyLocations).mockReturnValueOnce(old.promise);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
+  const revision = server.client.getSnapshot().authorityRevision ?? 0;
+  server.authorityId = 'replacement-native';
+  await act(async () => { await server.client.disconnect(); await server.connect(); });
+  expect(server.client.getSnapshot().authorityRevision).toBe(revision + 1);
+  expect(document.querySelector('[aria-label^="Select Workspace"][aria-current="page"]')).toBeNull();
+  expect(server.client.getSnapshot().views).toEqual({});
+  await act(async () => old.resolve([{ authorized: true, workspaceId: 'wB' }, { authorized: true, workspaceId: 'wA' }]));
+  expect(screen.getByRole('button', { name: 'Open Session A' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group')).toBe('wA');
 });

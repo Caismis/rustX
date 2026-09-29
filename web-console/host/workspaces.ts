@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, exists
 import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
+import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread } from '../src/workspaces/host.ts';
 import { AppServerClient } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
@@ -17,6 +18,7 @@ export interface LocalHostConfig {
 }
 type Registration = { id: string; location: string; displayName: string };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
+  private readonly authorityId = randomUUID();
   private registrations: Registration[];
   private readonly roots: LocalHostConfig['roots'];
   private readonly config: LocalHostConfig;
@@ -53,7 +55,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (!sameEndpoint(endpoint, this.config.endpoint)) throw new Error('Workspace Host belongs to a different rustX process');
   }
   async listWorkspaces(): Promise<WorkspaceCatalog> {
-    return { endpoint: this.config.endpoint,
+    return { authorityId: this.authorityId, endpoint: this.config.endpoint,
       workspaces: this.registrations.map(row => ({ ...row, displayPath: this.roots.find(root => root.id === row.location)!.cwd })),
       picker: this.config.picker ? { kind: 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
@@ -125,20 +127,23 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       } finally { await client.close(); }
     });
   }
-  async classifyLocations(cwds: readonly string[], endpoint: string): Promise<SessionLocation[]> {
+  async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {
     this.route(endpoint);
+    if (authorityId !== undefined && authorityId !== this.authorityId) throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
     if (cwds.length > 32) throw new Error('Host classification is bounded to 32 summaries');
     // Exact canonical root membership is deliberate. No recursive allocation or
-    // filesystem sandbox is implied; missing directories remain ungrouped.
+    // filesystem sandbox is implied. Unavailable reads are not definitive denials.
     const roots = new Map<string, string>();
     for (const root of this.roots) { try { roots.set(this.cwd(root.id), root.id); } catch { /* unavailable */ } }
     return cwds.map(cwd => {
       try {
-        const location = isAbsolute(cwd) ? roots.get(realpathSync(cwd)) : undefined;
-        if (location === undefined) return { authorized: false };
+        const canonical = isAbsolute(cwd) ? realpathSync(cwd) : undefined;
+        if (this.roots.some(root => root.cwd === cwd && canonical !== root.cwd)) return { authorized: false, reason: 'denied' };
+        const location = canonical ? roots.get(canonical) : undefined;
+        if (location === undefined) return { authorized: false, reason: this.roots.some(root => root.cwd === cwd) ? 'unavailable' : 'denied' };
         const workspaceId = this.registrations.find(row => row.location === location)?.id;
         return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
-      } catch { return { authorized: false }; }
+      } catch { return { authorized: false, reason: 'unavailable' }; }
     });
   }
 }
