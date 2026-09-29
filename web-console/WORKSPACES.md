@@ -173,7 +173,10 @@ Product Host generates its own per-instance `WorkspaceCatalog.authorityId`; disp
 classification submits that identity and a replacement Host refuses it with the
 HTTP-preserved `authority_replaced` kind. That definitive observation immediately
 retires display evidence, even if the next explicit catalog read fails. The refusal
-does not start an automatic retry loop. Host-object
+does not start an automatic retry loop. Definitive Host replacement invalidates
+pending navigation continuations; the client also rejects admission results from
+a replaced admission callback. Both are refusal fences, never grants from display
+evidence. Host-object
 replacement also constructs a new projection. None of these identifiers grant access.
 
 Native `session/list` summaries own the visible page's IDs/cwds; selected off-page
