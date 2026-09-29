@@ -82,7 +82,12 @@ export interface LocalAppServerOptions
   launch: AppServerChildOptions["launch"];
   /** Startup cancellation belongs to the composition root, not transport semantics. */
   signal?: AbortSignal;
-  /** How long the owned child gets to exit after the shutdown sequence. */
+  /**
+   * Grace for each escalation step of initialization-failure cleanup only:
+   * when the handshake fails or startup is cancelled, the owned child is sent
+   * SIGTERM and stdin EOF, then `waitOrTerminate` escalates after this grace.
+   * Normal shutdown never uses it; it waits for the child's own settlement.
+   */
   terminationGraceMs?: number;
 }
 
@@ -99,7 +104,6 @@ export interface AppServerHostComposition {
   ownership: ProcessOwnership;
   /** The owned child, present exactly when `ownership` is `owned_child`. */
   child?: AppServerChild;
-  terminationGraceMs?: number;
 }
 
 /**
@@ -177,12 +181,7 @@ export class AppServerHost {
     try {
       const client = await AppServerClient.initialize({ transport });
       options.signal?.throwIfAborted();
-      return new AppServerHost({
-        client,
-        ownership: "owned_child",
-        child,
-        terminationGraceMs: options.terminationGraceMs,
-      });
+      return new AppServerHost({ client, ownership: "owned_child", child });
     } catch (error) {
       // The child is ours, so a failed handshake must not leave it running.
       const stderr = child.stderrTail().text.trim();

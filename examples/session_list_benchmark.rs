@@ -28,7 +28,7 @@ use std::time::Instant;
 use rustx::durable::{ConversationStore, SqliteConversationStore, conversation_store_open_count};
 use rustx::local_runtime::configuration::SessionConfigInput;
 use rustx::local_runtime::session::{
-    SESSION_LIST_PAGE_LIMIT, SessionPersistentState, SessionSummary,
+    SESSION_LIST_PAGE_LIMIT, SessionId, SessionListPage, SessionPersistentState,
 };
 use rustx::local_runtime::session_controller::SessionController;
 use rustx::message::content::TextBlock;
@@ -125,11 +125,120 @@ fn subject_text(index: usize) -> String {
     }
 }
 
+/// The display name `seed` gives Session `index`.
+fn seeded_name(index: usize) -> Option<String> {
+    if !index.is_multiple_of(4) {
+        return None;
+    }
+    let region = if index.is_multiple_of(8) {
+        "north"
+    } else {
+        "south"
+    };
+    Some(format!("{region}-project-{index}"))
+}
+
+/// What one seeded Session must be listed as, known from seeding alone.
+struct SeededRow {
+    id: SessionId,
+    name: Option<String>,
+    preview: String,
+}
+
+fn seeded_rows(ids: &[SessionId]) -> Vec<SeededRow> {
+    ids.iter()
+        .enumerate()
+        .map(|(index, id)| SeededRow {
+            id: id.clone(),
+            name: seeded_name(index),
+            preview: expected_preview(&subject_text(index)),
+        })
+        .collect()
+}
+
+/// The documented one-line preview: whitespace runs collapse to one space,
+/// and a line past 120 characters keeps 119 and marks the cut with `…`.
+fn expected_preview(subject: &str) -> String {
+    let line = subject.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= 120 {
+        return line;
+    }
+    let kept = line.chars().take(119).collect::<String>();
+    format!("{}\u{2026}", kept.trim_end())
+}
+
+/// The page the Session list contract prescribes for the seeded rows: creation
+/// order, a trimmed case-insensitive substring match on identity, name or
+/// preview, then `offset` and `limit` over the matching rows.
+fn expected_page<'a>(
+    rows: &'a [SeededRow],
+    query: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> (Vec<&'a SeededRow>, Option<usize>) {
+    let query = query.map(|value| value.trim().to_lowercase());
+    let matching = rows
+        .iter()
+        .filter(|row| {
+            query.as_ref().is_none_or(|query| {
+                row.id.as_str().to_lowercase().contains(query)
+                    || row
+                        .name
+                        .as_ref()
+                        .is_some_and(|name| name.to_lowercase().contains(query))
+                    || row.preview.to_lowercase().contains(query)
+            })
+        })
+        .collect::<Vec<_>>();
+    let page = matching
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .copied()
+        .collect::<Vec<_>>();
+    let end = offset + page.len();
+    (page, (end < matching.len()).then_some(end))
+}
+
+/// Rejects any page that differs from the expectation in its rows, their
+/// order, their displayed facts, or its continuation.
+fn check_page(
+    expected: &(Vec<&SeededRow>, Option<usize>),
+    actual: &SessionListPage,
+) -> Result<(), String> {
+    let (rows, next_offset) = expected;
+    if actual.sessions.len() != rows.len() {
+        return Err(format!(
+            "expected {} rows, got {}",
+            rows.len(),
+            actual.sessions.len()
+        ));
+    }
+    for (position, (row, summary)) in rows.iter().zip(&actual.sessions).enumerate() {
+        if summary.id != row.id
+            || summary.name != row.name
+            || summary.preview.as_deref() != Some(row.preview.as_str())
+        {
+            return Err(format!(
+                "row {position}: expected {} {:?} {:?}, got {} {:?} {:?}",
+                row.id, row.name, row.preview, summary.id, summary.name, summary.preview
+            ));
+        }
+    }
+    if actual.next_offset != *next_offset {
+        return Err(format!(
+            "expected next offset {next_offset:?}, got {:?}",
+            actual.next_offset
+        ));
+    }
+    Ok(())
+}
+
 /// Seeds `params.sessions` Sessions through the real owners: the controller's
 /// own session creation, one canonical history per root conversation appended
 /// through the durable store with production durability, and a name on every
 /// fourth Session (half `north-*`, half `south-*`).
-async fn seed(params: &Params) -> Result<Vec<rustx::local_runtime::session::SessionId>, String> {
+async fn seed(params: &Params) -> Result<Vec<SessionId>, String> {
     let controller = SessionController::open(&params.root).map_err(|error| format!("{error:?}"))?;
     let workspace = params.root.join("workspace");
     std::fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
@@ -169,14 +278,9 @@ async fn seed(params: &Params) -> Result<Vec<rustx::local_runtime::session::Sess
                 .map_err(|error| format!("{error:?}"))?;
         }
         drop(store);
-        if index.is_multiple_of(4) {
-            let region = if index.is_multiple_of(8) {
-                "north"
-            } else {
-                "south"
-            };
+        if let Some(name) = seeded_name(index) {
             controller
-                .rename_session(&session.id, &format!("{region}-project-{index}"))
+                .rename_session(&session.id, &name)
                 .await
                 .map_err(|error| format!("{error:?}"))?;
         }
@@ -283,7 +387,8 @@ struct WorkloadResult {
     offset: usize,
     limit: usize,
     reps: usize,
-    /// Rows returned by the single untimed warmup call.
+    /// Rows returned by the single untimed warmup call, checked against the
+    /// seeded fixture before timing starts.
     warmup_rows: usize,
     wall_ms: f64,
     ops_per_sec: f64,
@@ -298,16 +403,20 @@ struct WorkloadResult {
 async fn measure(
     controller: &SessionController,
     units: &SystemUnits,
+    rows: &[SeededRow],
     name: &'static str,
     query: Option<&str>,
     offset: usize,
     reps: usize,
 ) -> Result<WorkloadResult, String> {
-    // One untimed warmup pass per workload.
+    let expected = expected_page(rows, query, offset, SESSION_LIST_PAGE_LIMIT);
+    let invalid = |error: String| format!("workload {name} returned a wrong page: {error}");
+    // One untimed warmup pass per workload; a wrong result is never timed.
     let warmup = controller
         .list_sessions(query, offset, SESSION_LIST_PAGE_LIMIT)
         .await
         .map_err(|error| format!("{error:?}"))?;
+    check_page(&expected, &warmup).map_err(invalid)?;
     let started = Instant::now();
     let cpu_before = cpu_seconds(units);
     let opens_before = conversation_store_open_count();
@@ -365,6 +474,7 @@ async fn main() -> Result<(), String> {
     // Real usage: the app server holds one controller; every repetition of
     // every workload reuses this one handle.
     let controller = SessionController::open(&params.root).map_err(|error| format!("{error:?}"))?;
+    let rows = seeded_rows(&ids);
     let middle = params.sessions / 2;
     let last = params.sessions.saturating_sub(SESSION_LIST_PAGE_LIMIT);
     let id_probe = ids[middle].as_str();
@@ -382,7 +492,8 @@ async fn main() -> Result<(), String> {
         // Even sessions open with "alpha": a known ~50% of rows.
         ("search_preview", Some("alpha"), 0),
     ] {
-        workloads.push(measure(&controller, &units, name, query, offset, params.reps).await?);
+        workloads
+            .push(measure(&controller, &units, &rows, name, query, offset, params.reps).await?);
     }
 
     let report = serde_json::json!({
@@ -407,9 +518,111 @@ async fn main() -> Result<(), String> {
     Ok(())
 }
 
-// Referenced so the benchmark's seeding stays honest about the row shape it
-// searches: the workloads above never inspect rows, they measure the path.
-#[allow(dead_code)]
-fn row_preview(row: &SessionSummary) -> Option<&str> {
-    row.preview.as_deref()
+/// The workload checker must refuse wrong pages, so a broken list path can
+/// never be reported as a fast successful workload.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustx::local_runtime::session::{SessionNodeId, SessionSummary};
+
+    const ID_PREFIX: &str = "ses_00000000-0000-7000-8000-";
+
+    /// Canonical UUIDv7 identities whose last group spells the row index.
+    fn rows(count: usize) -> Vec<SeededRow> {
+        let ids = (0..count)
+            .map(|index| SessionId::new(format!("{ID_PREFIX}{index:012}")))
+            .collect::<Vec<_>>();
+        seeded_rows(&ids)
+    }
+
+    fn indices(page: &[&SeededRow]) -> Vec<usize> {
+        page.iter()
+            .map(|row| row.id.as_str()[ID_PREFIX.len()..].parse().unwrap())
+            .collect()
+    }
+
+    fn listed(rows: &[&SeededRow], next_offset: Option<usize>) -> SessionListPage {
+        SessionListPage {
+            sessions: rows
+                .iter()
+                .map(|row| SessionSummary {
+                    cwd: PathBuf::from("/workspace"),
+                    id: row.id.clone(),
+                    name: row.name.clone(),
+                    preview: Some(row.preview.clone()),
+                    updated_at: chrono::DateTime::UNIX_EPOCH,
+                    active_node: SessionNodeId::new("node_00000000-0000-7000-8000-000000000000"),
+                })
+                .collect(),
+            next_offset,
+        }
+    }
+
+    #[test]
+    fn expected_pages_follow_offsets_limits_and_search_fields() {
+        let rows = rows(10);
+        for (query, offset, page, next) in [
+            (None, 0, vec![0, 1, 2, 3], Some(4)),
+            (None, 6, vec![6, 7, 8, 9], None),
+            (None, 8, vec![8, 9], None),
+            (None, 10, vec![], None),
+            (Some("  NORTH-project "), 0, vec![0, 8], None),
+            (Some("south-project"), 0, vec![4], None),
+            (Some("alpha"), 0, vec![0, 2, 4, 6], Some(4)),
+            (Some("alpha"), 4, vec![8], None),
+            (Some("-000000000003"), 0, vec![3], None),
+            (Some("8000-00000000000"), 4, vec![4, 5, 6, 7], Some(8)),
+            (Some("absent"), 0, vec![], None),
+        ] {
+            let expected = expected_page(&rows, query, offset, 4);
+            assert_eq!(indices(&expected.0), page, "{query:?} at {offset}");
+            assert_eq!(expected.1, next, "{query:?} at {offset}");
+        }
+        assert_eq!(rows[1].preview, "beta topic 1: short brief");
+        assert!(
+            rows[0]
+                .preview
+                .starts_with("alpha topic 0: a very long discussion")
+        );
+        assert!(rows[0].preview.ends_with('\u{2026}'));
+        assert!(rows[0].preview.chars().count() <= 120);
+    }
+
+    #[test]
+    fn check_page_accepts_the_exact_page_and_rejects_every_other() {
+        let rows = rows(10);
+        let expected = expected_page(&rows, Some("alpha"), 0, 4);
+        check_page(&expected, &listed(&expected.0, expected.1)).unwrap();
+        let empty = expected_page(&rows, Some("absent"), 0, 4);
+        check_page(&empty, &listed(&[], None)).unwrap();
+
+        assert!(check_page(&expected, &listed(&[], None)).is_err());
+        let same_count = [&rows[1], &rows[3], &rows[5], &rows[7]];
+        assert!(check_page(&expected, &listed(&same_count, expected.1)).is_err());
+        let mut reordered = expected.0.clone();
+        reordered.swap(0, 1);
+        assert!(check_page(&expected, &listed(&reordered, expected.1)).is_err());
+        let mut page = listed(&expected.0, expected.1);
+        page.sessions[2].preview = None;
+        assert!(check_page(&expected, &page).is_err());
+        let mut page = listed(&expected.0, expected.1);
+        page.sessions[0].name = None;
+        assert!(check_page(&expected, &page).is_err());
+        assert!(check_page(&expected, &listed(&expected.0, None)).is_err());
+    }
+
+    #[test]
+    fn an_invalid_expectation_is_rejected_against_a_correct_page() {
+        let rows = rows(10);
+        let correct = expected_page(&rows, None, 0, 4);
+        let page = listed(&correct.0, correct.1);
+        for wrong in [
+            expected_page(&rows, None, 1, 4),
+            expected_page(&rows, None, 0, 3),
+            expected_page(&rows, Some("beta"), 0, 4),
+            expected_page(&rows[..4], None, 0, 4),
+        ] {
+            assert!(check_page(&wrong, &page).is_err());
+        }
+    }
 }

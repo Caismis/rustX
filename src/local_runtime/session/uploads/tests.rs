@@ -9,7 +9,34 @@ use crate::message::types::{
 use crate::model::uploads::UploadProjectionResolver;
 use crate::runtime::conversation_runtime::Gate;
 use crate::runtime::identity::MessageId;
+use std::cell::RefCell;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::sync::Arc;
+
+type Checkpoint = (&'static str, Box<dyn FnOnce() -> io::Result<()>>);
+thread_local! {
+    /// One armed action for a native `materialize` stage. It lives on the
+    /// arming test's thread, so no concurrently running test can consume it.
+    static CHECKPOINT: RefCell<Option<Checkpoint>> = const { RefCell::new(None) };
+}
+/// Deterministic fault/substitution seam called by native `materialize`.
+pub(super) fn materialize_checkpoint(stage: &str) -> io::Result<()> {
+    let armed = CHECKPOINT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_some_and(|(armed, _)| *armed == stage) {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    armed.map_or(Ok(()), |(_, action)| action())
+}
+fn arm_checkpoint(stage: &'static str, action: impl FnOnce() -> io::Result<()> + 'static) {
+    CHECKPOINT.with(|slot| assert!(slot.replace(Some((stage, Box::new(action)))).is_none()));
+}
+fn checkpoint_consumed() -> bool {
+    CHECKPOINT.with(|slot| slot.borrow().is_none())
+}
 fn tempdir() -> std::io::Result<tempfile::TempDir> {
     tempfile::tempdir_in(std::env::temp_dir().canonicalize()?)
 }
@@ -1099,4 +1126,312 @@ async fn restored_editor_uploads_are_ordered_owned_and_prepared_before_publicati
             1
         );
     }
+}
+
+/// Failed materialization keeps the durable not-ready claim (deletion work)
+/// and never yields a usable receipt, even though bytes are already visible.
+#[tokio::test]
+async fn native_sync_failures_never_commit_ready() {
+    for stage in ["file sync", "directory sync"] {
+        let root = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let id = controller
+            .create_session(settings(workspace.path()))
+            .await
+            .unwrap()
+            .session
+            .id;
+        arm_checkpoint(stage, || {
+            Err(io::Error::other("injected native sync failure"))
+        });
+        let error = controller
+            .upload(&id, None, vec![file("payload.txt", &[42; 4096])])
+            .await
+            .unwrap_err();
+        assert!(checkpoint_consumed(), "{stage} was never reached");
+        assert!(
+            matches!(&error, SessionError::Catalog { detail } if detail == "injected native sync failure"),
+            "{stage}: {error}"
+        );
+        drop(controller);
+        let controller = SessionController::open(root.path()).unwrap();
+        let registry = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&id)
+            .unwrap();
+        let [(batch, allocation)] = registry.allocations.iter().collect::<Vec<_>>()[..] else {
+            panic!("{stage}: exactly one durable claim");
+        };
+        assert!(!allocation.ready, "{stage}");
+        assert_eq!(allocation.workspace, workspace.path());
+        assert_eq!(allocation.files[0].name, "payload.txt");
+        let path = file_path(workspace.path(), &id, batch, "payload.txt");
+        assert_eq!(std::fs::read(&path).unwrap(), [42_u8; 4096]);
+        assert!(registry.receipts(&id, batch).is_err(), "{stage}");
+        let receipt = UploadReceipt {
+            session_id: id.clone(),
+            batch_id: batch.clone(),
+            token: allocation.files[0].token.clone(),
+        };
+        assert!(controller.uploaded_content(&id, &[receipt]).await.is_err());
+        delete(&controller, &id).await;
+        assert!(!path.exists(), "{stage}: the claim is deletion work");
+    }
+}
+
+/// Complete synced bytes still produce no receipt when the ready commit fails.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_registry_commit_failure_never_issues_a_receipt() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let id = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session
+        .id;
+    let gate = Arc::new(Gate::default());
+    let release = gate.arm_scoped();
+    *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+    let worker = controller.clone();
+    let upload_id = id.clone();
+    let upload = tokio::spawn(async move {
+        worker
+            .upload(&upload_id, None, vec![file("synced.txt", b"complete")])
+            .await
+    });
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    controller
+        .catalog
+        .lock()
+        .await
+        .arm_write_fault_before_rename();
+    drop(release);
+    assert!(matches!(
+        upload.await.unwrap(),
+        Err(SessionError::CatalogCommit {
+            error: super::super::CatalogCommitError::NotCommitted { .. }
+        })
+    ));
+    *controller.upload_commit_gate.lock().unwrap() = None;
+    let registry = controller
+        .catalog
+        .lock()
+        .await
+        .upload_registry(&id)
+        .unwrap();
+    let [(batch, allocation)] = registry.allocations.iter().collect::<Vec<_>>()[..] else {
+        panic!("exactly one durable claim");
+    };
+    assert!(!allocation.ready);
+    assert_eq!(
+        std::fs::read(file_path(workspace.path(), &id, batch, "synced.txt")).unwrap(),
+        b"complete"
+    );
+    assert!(registry.receipts(&id, batch).is_err());
+    let receipt = UploadReceipt {
+        session_id: id.clone(),
+        batch_id: batch.clone(),
+        token: allocation.files[0].token.clone(),
+    };
+    assert!(controller.uploaded_content(&id, &[receipt]).await.is_err());
+}
+
+/// A declared component is substituted at the `directory sync` checkpoint:
+/// after every file was written and synced through retained descriptors,
+/// before the directory sync barriers and the readiness re-open. The synced
+/// bytes stay with the moved object, and the re-open's identity check refuses
+/// to publish the substituted tree. This proves nothing about a substitution
+/// before or between the file writes.
+#[tokio::test]
+async fn declared_path_substitution_during_materialization_never_commits_ready() {
+    for component in ["workspace", ".agents", "uploads", "session", "batch"] {
+        let root = tempdir().unwrap();
+        let holder = tempdir().unwrap();
+        let workspace = holder.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let id = controller
+            .create_session(settings(&workspace))
+            .await
+            .unwrap()
+            .session
+            .id;
+        let owned = workspace.join(".agents/uploads").join(id.as_str());
+        let parked = holder.path().join("parked");
+        let (declared, target, base) = (owned.clone(), parked.clone(), workspace.clone());
+        arm_checkpoint("directory sync", move || {
+            let batch = std::fs::read_dir(&declared)?.next().unwrap()?.file_name();
+            let moved = match component {
+                "workspace" => base,
+                ".agents" => base.join(".agents"),
+                "uploads" => base.join(".agents/uploads"),
+                "session" => declared.clone(),
+                _ => declared.join(&batch),
+            };
+            std::fs::rename(moved, target)?;
+            std::fs::create_dir_all(declared.join(batch))
+        });
+        let error = controller
+            .upload(&id, None, vec![file("payload.txt", b"retained")])
+            .await
+            .unwrap_err();
+        assert!(checkpoint_consumed(), "{component}");
+        assert!(
+            matches!(&error, SessionError::Catalog { detail }
+                if detail == "upload path changed during materialization"),
+            "{component}: {error}"
+        );
+        let registry = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&id)
+            .unwrap();
+        let [(batch, allocation)] = registry.allocations.iter().collect::<Vec<_>>()[..] else {
+            panic!("{component}: exactly one durable claim");
+        };
+        assert!(!allocation.ready, "{component}");
+        assert!(registry.receipts(&id, batch).is_err(), "{component}");
+        let suffix = match component {
+            "workspace" => Path::new(".agents/uploads").join(id.as_str()).join(batch),
+            ".agents" => Path::new("uploads").join(id.as_str()).join(batch),
+            "uploads" => Path::new(id.as_str()).join(batch),
+            "session" => PathBuf::from(batch),
+            _ => PathBuf::new(),
+        };
+        assert_eq!(
+            std::fs::read(parked.join(suffix).join("payload.txt")).unwrap(),
+            b"retained"
+        );
+        assert_eq!(
+            std::fs::read_dir(owned.join(batch)).unwrap().count(),
+            0,
+            "{component}: the substituted tree is never adopted"
+        );
+    }
+}
+
+#[test]
+fn workspace_policy_and_missing_upload_inspection_create_nothing() {
+    let root = tempdir().unwrap();
+    assert!(validate_workspace(Path::new("relative")).is_err());
+    assert!(validate_workspace(&root.path().join("../bad")).is_err());
+    assert!(
+        session_directory(
+            root.path(),
+            &SessionId::new("ses_84097828-fc31-78c8-8292-10df48901a85"),
+            false
+        )
+        .is_err()
+    );
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
+/// Native traversal rejects a symlink at any declared component, whatever it
+/// points at; only the trusted boundary's canonical spelling is traversed.
+#[test]
+fn every_symlinked_declared_component_fails_closed() {
+    for location in ["ancestor", "root", "intermediate", "leaf"] {
+        for target in ["inside", "outside", "dangling"] {
+            let root = tempdir().unwrap();
+            let outside = tempdir().unwrap();
+            let suffix = match location {
+                "ancestor" => "workspace/.agents/uploads/session/batch",
+                "root" => ".agents/uploads/session/batch",
+                "intermediate" => "session/batch",
+                _ => "",
+            };
+            std::fs::create_dir_all(root.path().join("real").join(suffix)).unwrap();
+            std::fs::create_dir_all(outside.path().join(suffix)).unwrap();
+            let destination = match target {
+                "inside" => PathBuf::from("real"),
+                "outside" => outside.path().to_path_buf(),
+                _ => PathBuf::from("absent"),
+            };
+            symlink(destination, root.path().join("link")).unwrap();
+            let declared = if suffix.is_empty() {
+                root.path().join("link")
+            } else {
+                root.path().join("link").join(suffix)
+            };
+            assert!(stable_directory(&declared).is_err(), "{location}/{target}");
+            match declared.canonicalize() {
+                Ok(canonical) => assert!(stable_directory(&canonical).is_ok()),
+                Err(_) => assert_eq!(target, "dangling", "{location}"),
+            }
+        }
+    }
+}
+
+/// Acquired parent -> next component renamed and a link installed -> resume.
+#[test]
+fn component_replaced_after_parent_acquisition_fails_closed() {
+    for target in ["inside", "outside", "dangling"] {
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        std::fs::create_dir(root.path().join("next")).unwrap();
+        let parent = stable_directory(root.path()).unwrap();
+        std::fs::rename(root.path().join("next"), root.path().join("parked")).unwrap();
+        let destination = match target {
+            "inside" => PathBuf::from("parked"),
+            "outside" => outside.path().to_path_buf(),
+            _ => PathBuf::from("missing"),
+        };
+        symlink(destination, root.path().join("next")).unwrap();
+        assert!(
+            directory_at(&parent, OsStr::new("next")).is_err(),
+            "{target}"
+        );
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn materialized_modes_and_leaf_types_are_verified() {
+    let root = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let id = SessionId::new("ses_84097828-fc31-78c8-8292-10df48901a85");
+    let files = vec![file("payload.txt", &[42; 4096])];
+    let mut registry = UploadRegistry::default();
+    let batch = registry.claim(root.path().to_path_buf(), &files).unwrap();
+    registry.materialize(&id, &batch, &files).unwrap();
+    registry.verify_materialized(&id, &batch).unwrap();
+    let leaf = file_path(root.path(), &id, &batch, "payload.txt");
+    let directory = leaf.parent().unwrap();
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&leaf), 0o600);
+    assert_eq!(mode(directory), 0o700);
+    std::fs::write(directory.join("inside"), b"keep").unwrap();
+    std::fs::write(outside.path().join("outside"), b"keep").unwrap();
+    std::fs::remove_file(&leaf).unwrap();
+    for target in [
+        PathBuf::from("inside"),
+        outside.path().join("outside"),
+        PathBuf::from("dangling"),
+    ] {
+        symlink(&target, &leaf).unwrap();
+        assert!(
+            registry.verify_materialized(&id, &batch).is_err(),
+            "{target:?}"
+        );
+        std::fs::remove_file(&leaf).unwrap();
+    }
+    // Nonblocking open: a FIFO without a writer is rejected, never waited on.
+    nix::unistd::mkfifo(&leaf, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+    assert!(registry.verify_materialized(&id, &batch).is_err());
+    std::fs::remove_file(&leaf).unwrap();
+    std::fs::create_dir(&leaf).unwrap();
+    assert!(registry.verify_materialized(&id, &batch).is_err());
+    assert_eq!(std::fs::read(directory.join("inside")).unwrap(), b"keep");
+    assert_eq!(
+        std::fs::read(outside.path().join("outside")).unwrap(),
+        b"keep"
+    );
 }

@@ -56,11 +56,11 @@ use crate::runtime::workspace::{WorkspaceSnapshot, WorkspaceUse};
 /// local state before `Ready` (catalog file, durable store, capability
 /// plane), so a handshake that outlasts this bound is a hung child; the
 /// stage is then torn down. This is a supervision policy bound, never a
-/// test synchronization mechanism.
-#[cfg(not(test))]
+/// test synchronization mechanism, and tests run under the same bound: a
+/// real child's startup time depends on the host, so a shortened test bound
+/// would turn a slow real startup into a spurious handshake failure. Its
+/// expiry is proven on controlled time.
 const STARTUP_LIVENESS: Duration = Duration::from_mins(1);
-#[cfg(test)]
-const STARTUP_LIVENESS: Duration = Duration::from_secs(5);
 
 /// The grace a child gets to drain after a `Cancel` frame before the
 /// supervisor escalates to `SIGTERM` on the child's process group.
@@ -1318,14 +1318,7 @@ impl StagedChild {
         cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<(), SpawnError> {
         let expected = crate::runtime::identity::SubagentId::new(subagent_id);
-        handshake_core(
-            &mut self.control,
-            &mut self.child,
-            &mut self.retained,
-            &expected,
-            cancellation,
-        )
-        .await
+        self.bounded_handshake(&expected, cancellation).await
     }
 
     /// Completes the startup handshake: awaits `Ready` (or an honest
@@ -1335,11 +1328,20 @@ impl StagedChild {
         spec: &SubagentChildSpec,
         cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<(), SpawnError> {
+        self.bounded_handshake(&spec.subagent_id, cancellation)
+            .await
+    }
+
+    async fn bounded_handshake(
+        &mut self,
+        expected: &crate::runtime::identity::SubagentId,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<(), SpawnError> {
         let handshake = handshake_core(
             &mut self.control,
             &mut self.child,
             &mut self.retained,
-            &spec.subagent_id,
+            expected,
             cancellation,
         );
         match tokio::time::timeout(STARTUP_LIVENESS, handshake).await {
@@ -2268,6 +2270,49 @@ mod tests {
             runtime_root: dir.path().join("child"),
             _dir: dir,
         }
+    }
+
+    /// The startup liveness bound is the one-minute supervision policy in
+    /// every build, tests included: a silent child is still awaited just
+    /// before that bound and is refused exactly when it elapses.
+    ///
+    /// The clock is paused and the stand-in child never writes, so the only
+    /// synchronization point is the handshake parked on its control-channel
+    /// read while controlled time reaches the bound; no wall-clock duration
+    /// decides the outcome.
+    #[tokio::test(start_paused = true)]
+    async fn startup_liveness_refuses_a_silent_child_only_at_its_policy_bound() {
+        let policy = std::time::Duration::from_mins(1);
+        let mut silent = stage();
+        let signal = CancellationSignal::new();
+        let started = tokio::time::Instant::now();
+        let refused = {
+            let handshake = silent
+                .staged
+                .handshake_for_test("conv_57d68983-5497-771e-8aaa-5f1356061697", &signal);
+            tokio::pin!(handshake);
+            let just_before = std::time::Duration::from_millis(59_999);
+            assert!(
+                tokio::time::timeout(just_before, handshake.as_mut())
+                    .await
+                    .is_err(),
+                "a silent child is still awaited just before the bound"
+            );
+            handshake.await
+        };
+        assert!(
+            matches!(
+                &refused,
+                Err(super::SpawnError::Handshake { detail })
+                    if detail == "the child did not answer Ready within the startup liveness bound"
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(started.elapsed(), policy);
+
+        // Physical teardown observes a real process exit on real time.
+        tokio::time::resume();
+        silent.staged.rollback().await.expect("rollback");
     }
 
     /// The start gate makes saturation deterministic: no driver command can
