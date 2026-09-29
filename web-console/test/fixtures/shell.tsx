@@ -20,7 +20,12 @@ server.snapshots.get('B')!.pending_interactions = [interaction('approval', 'B')]
 server.snapshots.get('A')!.messages = [{ role: 'assistant', id: 'message-A', content: [{ type: 'text', text: 'The presentation shell is ready. Sessions and execution remain owned by the rustX App Server.' }] }];
 server.snapshots.get('A')!.transcript = { entries: [{ cursor: '1', item: { type: 'message', message: server.snapshots.get('A')!.messages[0] } }] };
 server.workspaceHost.listWorkspaces = async () => ({ authorityId: 'fixture-host', endpoint, workspaces: [{ id: 'project', displayName: 'rustX', displayPath: '/workspace', location: 'project' }], picker: { kind: 'unavailable', reason: 'Fixture has one authorized project' } });
-server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/C') ? undefined : 'project' }));
+// Reference tests explicitly release the cold display baseline after its first paint.
+// Other shell consumers keep the ordinary immediate fixture response.
+let releaseAssociations!: () => void;
+const associationGate = new Promise<void>(resolve => { releaseAssociations = resolve; });
+if (!new URL(location.href).searchParams.has('association-gate')) releaseAssociations();
+server.workspaceHost.classifyLocations = async cwds => { await associationGate; return cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/C') ? undefined : 'project' })); };
 // The shell's registered Workspace supplies the same generated source contract
 // as the permission seat. User Settings retains its explicit error fixture.
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
@@ -30,10 +35,10 @@ server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
 };
 await server.attached('A', 'B');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
-createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 
 // Isolated fixture controls, never reachable from the production application.
 window.sessionFixture = {
+  releaseAssociations,
   async stream(text) {
     const next = structuredClone(server.snapshots.get('A')!);
     next.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, in_flight: { message_id: 'stream-A', blocks: [{ type: 'text', block_index: 0, text }] } };
@@ -73,4 +78,10 @@ window.sessionFixture = {
     if (mode === 'reconnect' || mode === 'uncertain') server.socket.close();
   },
 };
-declare global { interface Window { sessionFixture: { stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+// Static other-Session uncertainty references start from the settled wire state.
+// Reconnect interleavings are exercised by the separate product-state and
+// workspace-associations browser tests, not incidental screenshot setup paints.
+if (new URL(location.href).searchParams.get('initial') === 'other-uncertain') await window.sessionFixture.presentation('other-uncertain');
+createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
+
+declare global { interface Window { sessionFixture: { releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
