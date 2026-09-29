@@ -460,10 +460,14 @@ See [the image and Bash contract](image-reading.md) for effective capability
 intersection, Attempt-frozen publication, managed image ownership, provider
 transport, text-only history projection, and presentation-only Bash descriptions.
 
-An image-capable declaration uses `protocol = "anthropic_messages"` and
-`input_modalities = ["text", "image"]` in the Model's capabilities table.
+An image-capable declaration uses `input_modalities = ["text", "image"]` in
+the Model's capabilities table with any supported protocol: `anthropic_messages`,
+`openai_responses`, or `openai_chat_completions`.
 Include `"read_image"` in `agent.tools.builtin` to express Tool intent.
-The same declaration on an unsupported adapter does not activate the Tool.
+Image covers both User and ToolResult inputs. Chat Completions assumes the
+extended OpenAI-compatible/vLLM multimodal Tool contract; incompatible endpoints
+return ordinary provider errors without fallback. Text-only declarations stay
+text-only and do not activate the Tool.
 
 For example, replace the endpoint, credential variable, wire model ID and limits
 with those of an image-capable deployment:

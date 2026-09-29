@@ -7449,3 +7449,13 @@ external Git processes. Git's own ref checks and native ownership re-proofs rema
 authoritative across external mutation. Tests explicitly poll the shared gate,
 prove independent-repository progress, and cancel an independently composed
 linked-worktree manager at the gate without a ref mutation.
+
+### Image input capability across protocols
+
+Effective Image input covers both canonical User and ToolResult image content.
+Anthropic Messages, OpenAI Responses and Chat Completions advertise that same
+capability. The frozen model declaration remains authoritative. Chat follows the
+extended OpenAI-compatible/vLLM multimodal Tool message contract; endpoint
+incompatibility is a provider error, never a capability downgrade or synthetic
+User fallback. All adapters consume the same newest-16 request projection and
+Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md).

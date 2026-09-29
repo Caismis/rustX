@@ -75,12 +75,11 @@ pub fn validate_request(
         ));
     }
     if !request.images.is_empty()
-        && (!request
+        && !request
             .invocation
             .capabilities
             .input_modalities
             .contains(&crate::model::catalog::Modality::Image)
-            || protocol != ModelProtocol::AnthropicMessages)
     {
         return Err(invalid_request(
             "resolved images require an image-capable supported invocation".to_owned(),

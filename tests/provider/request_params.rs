@@ -339,7 +339,7 @@ async fn responses_compat_owns_storage_structure() {
 // ---------------------------------------------------------------------------
 
 /// A raw catalog claim is intersected with the adapter/protocol capability
-/// and the current runtime capability; only Anthropic can transmit image input.
+/// and the current runtime capability; all adapters transmit image input.
 /// Canonical File input remains unsupported.
 #[test]
 fn effective_capabilities_intersect_the_raw_claim() {
@@ -358,10 +358,9 @@ fn effective_capabilities_intersect_the_raw_claim() {
     ] {
         let effective = effective_capabilities(&generous, protocol);
         assert!(effective.input_modalities.contains(&Modality::Text));
-        assert_eq!(
+        assert!(
             effective.input_modalities.contains(&Modality::Image),
-            protocol == ModelProtocol::AnthropicMessages,
-            "only the implemented Anthropic image path is advertised"
+            "all implemented image paths are advertised"
         );
         assert!(
             !effective.input_modalities.contains(&Modality::File),

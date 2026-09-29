@@ -657,17 +657,27 @@ def image_tool_round_trip() -> Scenario:
     )
 
 
-def image_budget_continuation() -> Scenario:
-    return Scenario(
-        "image_budget_continuation",
-        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",)),
-             Stream(*(ToolCall(f"parallel-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(17)), Finish("tool_calls"))),
-        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("image/png", "Image artifact")),
+def image_budget_continuation(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, name="image_budget_continuation") -> Scenario:
+    steps = [
+        Step(Expect(protocol=protocol, model=model, tools_include=("read_image",)),
+             Stream(Gate("image-budget-admitted"), *(ToolCall(f"parallel-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(17)), Finish("tool_calls"))),
+        Step(Expect(protocol=protocol, model=model, body_contains=("image/png", "Image artifact")),
              Stream(Text("seventeen successful images continue"), Finish("stop"))),
-    )
+    ]
+    if protocol != ANTHROPIC_MESSAGES:
+        text_model = CHAT_MODEL if protocol == OPENAI_CHAT_COMPLETIONS else RESPONSES_MODEL
+        steps.extend([
+            Step(Expect(protocol=protocol, model=text_model, body_contains=("Image artifact",), body_excludes=("image/png",)),
+                 Stream(Text("text projection"), Finish("stop"))),
+            Step(Expect(protocol=protocol, model=model, tools_include=("read_image",), body_contains=("image/png", "Image artifact")),
+                 Stream(Text("images restored"), Finish("stop"))),
+        ])
+    return Scenario(name, *steps)
 
 
 SCENARIOS = {
+    "image_budget_chat": lambda: image_budget_continuation(OPENAI_CHAT_COMPLETIONS, "chat-image", "image_budget_chat"),
+    "image_budget_responses": lambda: image_budget_continuation(OPENAI_RESPONSES, "responses-image", "image_budget_responses"),
     "image_budget_continuation": image_budget_continuation,
     "image_tool_round_trip": image_tool_round_trip,
     "app_server_user_a": lambda: app_server_user("a"),

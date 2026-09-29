@@ -96,8 +96,8 @@ list. Native generated configuration remains authoritative.
 | Protocol | Effective Image input | Placements | Formats |
 | --- | --- | --- | --- |
 | Anthropic Messages | Yes, when declared | User image blocks and image blocks inside Tool results | Static PNG only |
-| OpenAI Chat Completions | No | Text only | None |
-| OpenAI Responses | No | Text only | None |
+| OpenAI Chat Completions | Yes, when declared | User image parts and multimodal Tool messages | Static PNG only |
+| OpenAI Responses | Yes, when declared | User input images and function-call output images | Static PNG only |
 
 Assistant image output, canonical File references, unresolved images, invalid
 PNG data and unsupported protocol placements fail before network I/O. Direct
@@ -106,9 +106,24 @@ adapter calls remain fail-closed for text-only effective invocations.
 The runtime resolves opaque artifact identities through a finite read boundary.
 `ModelRequest.images` is ephemeral provider-neutral encoded data and is excluded
 from serialization. Canonical ToolCall, ToolResult, Ledger, Request Snapshot and
-Trace retain references, never base64 or provider image objects. Anthropic owns
-base64 encoding and `image/source` wire construction, including `tool_result`
-placement and `tool_use_id` correlation. No canonical User turn is fabricated.
+Trace retain references, never base64 or provider image objects. Each adapter owns
+base64 encoding and wire placement. Anthropic uses `image/source` within User or
+`tool_result` content with `tool_use_id`. Chat uses `image_url` data URLs within
+User or Tool content with `tool_call_id`. Responses uses `input_image` data URLs
+within User input or native `function_call_output.output` parts with `call_id`.
+All preserve text/image ordering. No canonical User turn is fabricated.
+
+rustX does not model User-image and ToolResult-image capability separately.
+Effective Image capability covers canonical image input in all supported input
+placements. All three adapters advertise Image; the explicit model declaration
+remains the per-model gate. No existing declaration is automatically expanded.
+
+Chat Completions image transport follows the extended OpenAI-compatible/vLLM-style
+multimodal Tool message contract. When a model is configured with Image input
+capability, rustX assumes that Tool-result image content is supported by that
+endpoint. Remote incompatibility surfaces as a normal provider/protocol error.
+There are no provider/model/hostname checks, capability downgrades, synthetic User
+fallbacks, or retries that strip images.
 
 When switching to text-only input, request projection replaces images with a
 short artifact-reference sentence. It preserves message identities, Tool calls,

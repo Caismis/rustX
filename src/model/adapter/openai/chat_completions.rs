@@ -35,15 +35,13 @@ use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestAssistantMessageContentPart,
     ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartRefusal,
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
-    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
-    ChatCompletionRequestToolMessageContent, ChatCompletionRequestToolMessageContentPart,
-    ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
-    ChatCompletionRequestUserMessageContentPart, ChatCompletionStreamOptions, ChatCompletionTool,
-    ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FunctionCall,
-    FunctionObject,
+    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
+    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, CompletionUsage,
+    CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
 };
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::message::types::ContentBlockIndex;
 use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
@@ -1432,12 +1430,9 @@ fn construct_request(
         .map(|message| message.reasoning.clone())
         .collect();
     let mut builder = CreateChatCompletionRequestArgs::default();
-    builder.model(request.model().to_owned()).messages(
-        messages
-            .into_iter()
-            .map(|message| message.message)
-            .collect::<Vec<_>>(),
-    );
+    builder
+        .model(request.model().to_owned())
+        .messages(Vec::<ChatCompletionRequestMessage>::new());
     if request.invocation.compat.chat_stream_usage == ChatStreamUsage::Supported {
         builder.stream_options(ChatCompletionStreamOptions {
             include_usage: Some(true),
@@ -1464,6 +1459,13 @@ fn construct_request(
             "failed to serialize the Chat Completions request: {e}"
         ))
     })?;
+    value["messages"] = serde_json::to_value(
+        messages
+            .iter()
+            .map(|message| &message.message)
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| invalid_request(&format!("failed to serialize Chat messages: {error}")))?;
     let wire_messages = value
         .get_mut("messages")
         .and_then(serde_json::Value::as_array_mut)
@@ -1516,8 +1518,30 @@ fn construct_request(
 /// Translates the canonical message list into typed Chat Completions
 /// messages, rejecting canonical content the protocol cannot represent
 /// without changing its meaning.
+// The SDK's hosted-schema Tool content is text-only. This typed BYOT extension
+// defines rustX's single extended OpenAI-compatible multimodal Tool contract.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ChatMessage {
+    Standard(ChatCompletionRequestMessage),
+    Tool(MultimodalToolMessage),
+}
+
+#[derive(Serialize)]
+struct MultimodalToolMessage {
+    role: ToolRole,
+    tool_call_id: String,
+    content: Vec<ChatCompletionRequestUserMessageContentPart>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ToolRole {
+    Tool,
+}
+
 struct TranslatedChatMessage {
-    message: ChatCompletionRequestMessage,
+    message: ChatMessage,
     reasoning: Option<String>,
 }
 
@@ -1530,38 +1554,50 @@ fn translate_messages(
     let reasoning_replay = request.invocation.compat.chat_reasoning_replay;
     if !request.effective_system_prompt.is_empty() {
         system_messages.push(TranslatedChatMessage {
-            message: ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(
-                    request.effective_system_prompt.clone(),
-                ),
-                name: None,
-            }),
+            message: ChatMessage::Standard(ChatCompletionRequestMessage::System(
+                ChatCompletionRequestSystemMessage {
+                    content: ChatCompletionRequestSystemMessageContent::Text(
+                        request.effective_system_prompt.clone(),
+                    ),
+                    name: None,
+                },
+            )),
             reasoning: None,
         });
     }
     for block in &request.messages {
         let (translated, reasoning) = match block {
-            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
-                (translate_user_message(user)?, None)
-            }
+            ModelInputMessage::Canonical(MessageBlock::User(user)) => (
+                ChatMessage::Standard(translate_user_message(user, &request.images)?),
+                None,
+            ),
             ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
                 let (message, reasoning) =
                     translate_assistant_message(assistant, reasoning_replay)?;
-                (ChatCompletionRequestMessage::Assistant(message), reasoning)
+                (
+                    ChatMessage::Standard(ChatCompletionRequestMessage::Assistant(message)),
+                    reasoning,
+                )
             }
             ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => (
-                ChatCompletionRequestMessage::Tool(translate_tool_message(tool_message)?),
+                ChatMessage::Tool(translate_tool_message(tool_message, &request.images)?),
                 None,
             ),
             ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
-            )) => (translate_runtime_context(&carryover.render()), None),
+            )) => (
+                ChatMessage::Standard(translate_runtime_context(&carryover.render())),
+                None,
+            ),
         };
         let translated = TranslatedChatMessage {
             message: translated,
             reasoning,
         };
-        if matches!(&translated.message, ChatCompletionRequestMessage::System(_)) {
+        if matches!(
+            &translated.message,
+            ChatMessage::Standard(ChatCompletionRequestMessage::System(_))
+        ) {
             system_messages.push(translated);
         } else {
             transcript_messages.push(translated);
@@ -1592,6 +1628,7 @@ fn translate_runtime_context(text: &str) -> ChatCompletionRequestMessage {
 
 fn translate_user_message(
     user: &crate::message::types::UserMessageBlock,
+    images: &crate::model::images::ResolvedImages,
 ) -> Result<ChatCompletionRequestMessage, ModelError> {
     let mut parts = Vec::new();
     for content in &user.content {
@@ -1603,11 +1640,13 @@ fn translate_user_message(
                     },
                 ));
             }
+            crate::message::types::UserContentBlock::Image(image) => {
+                parts.push(chat_image_part(image, images)?);
+            }
             crate::message::types::UserContentBlock::UploadedFile(_)
-            | crate::message::types::UserContentBlock::Image(_)
             | crate::message::types::UserContentBlock::File(_) => {
                 return Err(unsupported(
-                    "OpenAI Chat Completions cannot represent canonical image/file references without artifact resolution",
+                    "OpenAI Chat Completions cannot represent canonical file references",
                 ));
             }
         }
@@ -1714,30 +1753,48 @@ fn translate_assistant_message(
     ))
 }
 
+/// Encode one request-owned PNG using the SDK image content part.
+fn chat_image_part(
+    image: &crate::message::content::ImageReference,
+    images: &crate::model::images::ResolvedImages,
+) -> Result<ChatCompletionRequestUserMessageContentPart, ModelError> {
+    use async_openai::types::chat::{ChatCompletionRequestMessageContentPartImage, ImageUrl};
+    Ok(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+        ChatCompletionRequestMessageContentPartImage {
+            image_url: ImageUrl {
+                url: super::image_data_url(image, images).map_err(|error| unsupported(&error))?,
+                detail: None,
+            },
+        },
+    ))
+}
+
 /// Translates the canonical model-facing tool-result projection into the
 /// provider's tool-message shape. Projection policy, status rendering, and
 /// aggregate bounding are owned by the Tool Plane.
 fn translate_tool_message(
     message: &ToolMessageBlock,
-) -> Result<ChatCompletionRequestToolMessage, ModelError> {
-    let projection = message.result.model_facing_projection();
-    if projection.contains_non_text_content() {
-        return Err(unsupported(
-            "OpenAI Chat Completions cannot represent file/image tool results",
-        ));
-    }
-    let parts = projection
-        .parts()
-        .iter()
-        .cloned()
-        .map(|text| {
-            ChatCompletionRequestToolMessageContentPart::Text(
-                ChatCompletionRequestMessageContentPartText { text },
-            )
+    images: &crate::model::images::ResolvedImages,
+) -> Result<MultimodalToolMessage, ModelError> {
+    let parts = message
+        .result
+        .image_projection()
+        .map_err(unsupported)?
+        .into_iter()
+        .map(|part| match part {
+            crate::tools::types::ModelToolResultPart::Text(text) => {
+                Ok(ChatCompletionRequestUserMessageContentPart::Text(
+                    ChatCompletionRequestMessageContentPartText { text },
+                ))
+            }
+            crate::tools::types::ModelToolResultPart::Image(image) => {
+                chat_image_part(&image, images)
+            }
         })
-        .collect();
-    Ok(ChatCompletionRequestToolMessage {
-        content: ChatCompletionRequestToolMessageContent::Array(parts),
+        .collect::<Result<Vec<_>, ModelError>>()?;
+    Ok(MultimodalToolMessage {
+        role: ToolRole::Tool,
+        content: parts,
         tool_call_id: message.tool_call_id.as_str().to_owned(),
     })
 }
@@ -1907,7 +1964,8 @@ mod tests {
             },
         };
         let encoded = serde_json::to_string(
-            &translate_tool_message(&message).expect("translate cancelled result"),
+            &translate_tool_message(&message, &crate::model::images::ResolvedImages::new())
+                .expect("translate cancelled result"),
         )
         .expect("serialize provider message");
         assert!(encoded.contains("runtime_shutdown"));
@@ -1952,7 +2010,8 @@ mod tests {
                 },
             };
             let encoded = serde_json::to_value(
-                translate_tool_message(&message).expect("translate status result"),
+                translate_tool_message(&message, &crate::model::images::ResolvedImages::new())
+                    .expect("translate status result"),
             )
             .expect("serialize provider message");
             let projection = message.result.model_facing_projection();
@@ -2006,7 +2065,8 @@ mod tests {
             },
         };
         let encoded = serde_json::to_value(
-            translate_tool_message(&message).expect("translate rejected tool result"),
+            translate_tool_message(&message, &crate::model::images::ResolvedImages::new())
+                .expect("translate rejected tool result"),
         )
         .expect("serialize provider message");
         assert_eq!(encoded["tool_call_id"], "call-failed");

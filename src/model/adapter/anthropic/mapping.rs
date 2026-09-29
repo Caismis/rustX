@@ -617,62 +617,18 @@ fn translate_tool_result(
     tool: &crate::message::types::ToolMessageBlock,
     images: &crate::model::images::ResolvedImages,
 ) -> Result<serde_json::Value, ModelError> {
-    let projection = tool.result.model_facing_projection();
-    if tool
+    let content = tool
         .result
-        .content
-        .iter()
-        .any(|block| matches!(block, crate::tools::types::ToolResultContent::File(_)))
-    {
-        return Err(unsupported("Anthropic cannot represent file tool results"));
-    }
-    let mut content: Vec<serde_json::Value> = Vec::new();
-    if tool
-        .result
-        .content
-        .iter()
-        .any(|block| matches!(block, crate::tools::types::ToolResultContent::Image(_)))
-    {
-        let mut feedback = tool.result.clone();
-        feedback.content.clear();
-        let feedback = feedback.model_facing_projection();
-        let mut remaining =
-            crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES.saturating_sub(feedback.byte_len());
-        for block in &tool.result.content {
-            if let crate::tools::types::ToolResultContent::Image(image) = block {
-                content.push(image_block(image, images)?);
-            } else {
-                let mut segment = tool.result.clone();
-                segment.content = vec![block.clone()];
-                segment.status = crate::tools::types::ToolExecutionStatus::Success;
-                segment.managed_output = None;
-                let mut text = segment.model_facing_projection().as_text();
-                let mut end = remaining.min(text.len());
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                text.truncate(end);
-                remaining -= end;
-                if !text.is_empty() {
-                    content.push(serde_json::json!({"type": "text", "text": text}));
-                }
+        .image_projection()
+        .map_err(unsupported)?
+        .into_iter()
+        .map(|part| match part {
+            crate::tools::types::ModelToolResultPart::Text(text) => {
+                Ok(serde_json::json!({"type":"text", "text":text}))
             }
-        }
-        content.extend(
-            feedback
-                .parts()
-                .iter()
-                .filter(|text| !text.is_empty())
-                .map(|text| serde_json::json!({"type": "text", "text": text})),
-        );
-    } else {
-        content.extend(
-            projection
-                .parts()
-                .iter()
-                .map(|text| serde_json::json!({"type": "text", "text": text})),
-        );
-    }
+            crate::tools::types::ModelToolResultPart::Image(image) => image_block(&image, images),
+        })
+        .collect::<Result<Vec<_>, ModelError>>()?;
     Ok(serde_json::json!({
         "type": "tool_result",
         "tool_use_id": tool.tool_call_id,

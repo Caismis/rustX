@@ -6861,3 +6861,11 @@ the existing root interaction owner. See [the protocol](app-server-protocol.md#r
 See [the image and Bash contract](image-reading.md) for effective capability
 intersection, Attempt-frozen publication, managed image ownership, provider
 transport, text-only history projection, and presentation-only Bash descriptions.
+
+Effective Image covers canonical User and ToolResult input together. All three
+protocol adapters implement that contract: Anthropic image blocks, Responses
+`input_image` function-call output parts, and extended OpenAI-compatible/vLLM
+Chat multimodal Tool messages. Request projection, bounded artifact resolution
+and image context cost are shared; adapters own only encoding and placement.
+Model declarations remain explicit. Endpoint incompatibility is a provider error,
+without placement capability splits, provider-name checks or synthetic User fallback.

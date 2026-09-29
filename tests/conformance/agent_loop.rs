@@ -338,6 +338,19 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             }),
         );
     }
+    if setup.images {
+        for (id, protocol) in [
+            ("chat-image", "openai_chat_completions"),
+            ("responses-image", "openai_responses"),
+        ] {
+            models.insert(format!("emulator/{id}"), serde_json::json!({
+                "provider":"emulator", "id":id, "protocol":protocol,
+                "compat": if protocol == "openai_chat_completions" { serde_json::json!({"chat_reasoning_replay":"omit"}) } else { serde_json::json!({}) },
+                "context_window":window, "max_output_tokens":1024,
+                "capabilities":{"input_modalities":["text","image"],"output_modalities":["text"],"tool_calls":true,"reasoning":true}
+            }));
+        }
+    }
     toml::to_string_pretty(&serde_json::json!({
         "providers": {
             "emulator": { "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
@@ -1762,6 +1775,35 @@ async fn image_tool_round_trip_and_text_model_switch() {
 
 #[tokio::test]
 async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
+    image_budget_continuation(
+        "image_budget_continuation",
+        &format!("emulator-anthropic/{ANTHROPIC_MODEL}"),
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn chat_parallel_images_switch_and_reconstruct() {
+    image_budget_continuation(
+        "image_budget_chat",
+        "emulator/chat-image",
+        Some("emulator/chat-model"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn responses_parallel_images_switch_and_reconstruct() {
+    image_budget_continuation(
+        "image_budget_responses",
+        "emulator/responses-image",
+        Some("emulator/responses-model"),
+    )
+    .await;
+}
+
+async fn image_budget_continuation(scenario: &str, image_model: &str, text_model: Option<&str>) {
     use base64::Engine;
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
@@ -1773,15 +1815,25 @@ async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
         .write_image_data(&[128])
         .unwrap();
     std::fs::write(workspace.join("sample.png"), &bytes).unwrap();
-    let Some(emulator) =
-        ProviderEmulator::start_with_workspace("image_budget_continuation", Some(&workspace)).await
+    let Some(emulator) = ProviderEmulator::start_with_workspace(scenario, Some(&workspace)).await
     else {
         return;
     };
-    let mut setup = Setup::new(&format!("emulator-anthropic/{ANTHROPIC_MODEL}"));
+    let mut setup = Setup::new(image_model);
     setup.images = true;
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("Read the same PNG seventeen times in parallel.");
+    emulator.await_gate("image-budget-admitted").await;
+    if let Some(text_model) = text_model {
+        assert!(
+            driver
+                .host()
+                .model_set(SessionModelConfig::of(ModelRef::parse(text_model).unwrap()))
+                .is_err(),
+            "active Attempt catalog is frozen"
+        );
+    }
+    emulator.release_gate("image-budget-admitted").await;
     let (_, outcome) = driver.settle().await;
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
@@ -1793,6 +1845,55 @@ async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
     assert_eq!(body.matches(&encoded).count(), 16);
     assert!(body.contains("Image artifact"));
+    if let Some(text_model) = text_model {
+        let body = &requests[1]["body"];
+        let (items, tool_tag, id_key) = if text_model.contains("responses") {
+            (
+                body["input"].as_array().unwrap(),
+                "function_call_output",
+                "call_id",
+            )
+        } else {
+            (body["messages"].as_array().unwrap(), "tool", "tool_call_id")
+        };
+        // Stored Responses sends only the tail after its continuation boundary.
+        // Chat retains the initial User plus request-only runtime context.
+        let expected_users = if body.get("previous_response_id").is_some() {
+            0
+        } else {
+            requests[0]["body"]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["role"] == "user")
+                .count()
+        };
+        assert_eq!(
+            items.iter().filter(|item| item["role"] == "user").count(),
+            expected_users,
+            "image results add no synthetic User turn"
+        );
+        assert!(
+            items
+                .iter()
+                .filter(|item| item["role"] == "user")
+                .all(|item| !item.to_string().contains(&encoded)),
+            "Tool images never move to User content"
+        );
+        for i in 0..17 {
+            let tool = items
+                .iter()
+                .find(|item| {
+                    item[id_key] == format!("parallel-image-{i}")
+                        && (item["role"] == tool_tag || item["type"] == tool_tag)
+                })
+                .expect("each real native result retains its call identity");
+            assert!(
+                tool.to_string().contains(&encoded) || tool.to_string().contains("Image artifact")
+            );
+        }
+    }
+
     let snapshot = driver.host().snapshot().unwrap().0;
     let mut ids = std::collections::BTreeSet::new();
     for message in &snapshot.messages {
@@ -1809,7 +1910,43 @@ async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
         17,
         "request projection never edits successful canonical results"
     );
-    await_history_len(&driver, 2).await;
+    // Remove the original filesystem source before either later model request.
+    std::fs::write(workspace.join("sample.png"), b"changed").unwrap();
+    std::fs::remove_file(workspace.join("sample.png")).unwrap();
+    if let Some(text_model) = text_model {
+        driver
+            .host()
+            .model_set(SessionModelConfig::of(ModelRef::parse(text_model).unwrap()))
+            .unwrap();
+        driver.submit("continue as text");
+        let outcome = driver.settle().await.1;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+        driver
+            .host()
+            .model_set(SessionModelConfig::of(
+                ModelRef::parse(image_model).unwrap(),
+            ))
+            .unwrap();
+        driver.submit("restore images");
+        let outcome = driver.settle().await.1;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+        let requests = emulator.requests().await;
+        assert_eq!(requests.len(), 4);
+        assert!(!body_text(&requests[2]).contains(&encoded));
+        assert_eq!(body_text(&requests[3]).matches(&encoded).count(), 16);
+        // Original successful canonical Tool results remain immutable.
+        let after = driver.host().snapshot().unwrap().0;
+        for message in &snapshot.messages {
+            assert!(after.messages.contains(message));
+        }
+    }
+    await_history_len(&driver, if text_model.is_some() { 4 } else { 2 }).await;
     driver.host().shutdown().await.unwrap();
     let reopened = rustx::durable::SqliteConversationStore::open_existing(
         driver.runtime.runtime().conversation_id().clone(),
@@ -1825,7 +1962,7 @@ async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
     let snapshots = crate::common::request_snapshots(&history);
-    let reconstructed = history
+    let mut reconstructed = history
         .reconstruct(&snapshots.last().unwrap().identity)
         .unwrap();
     let reconstructed_json = serde_json::to_string(&reconstructed.messages).unwrap();
@@ -1834,6 +1971,59 @@ async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
     assert!(
         reconstructed.images.is_empty(),
         "durable request evidence stores references only"
+    );
+    reconstructed.images = rustx::model::images::resolve(&reconstructed.messages, |id| {
+        driver
+            .runtime
+            .tool_runtime()
+            .artifacts()
+            .read_bounded(id)
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let protocol = reconstructed.protocol();
+    let server = crate::common::FixtureServer::start(move |_, _| match protocol {
+        rustx::model::ModelProtocol::OpenAiChatCompletions => {
+            crate::common::sse_fixture("openai_chat", "plain_text.sse")
+        }
+        rustx::model::ModelProtocol::OpenAiResponses => {
+            crate::common::sse_fixture("openai_responses", "plain_text.sse")
+        }
+        rustx::model::ModelProtocol::AnthropicMessages => {
+            crate::common::sse_fixture("anthropic", "text.sse")
+        }
+    })
+    .await;
+    let adapter: Box<dyn rustx::model::ModelAdapter> = match protocol {
+        rustx::model::ModelProtocol::OpenAiChatCompletions => {
+            Box::new(rustx::model::OpenAiChatCompletionsAdapter::new(
+                rustx::model::OpenAiAdapterConfig::new("k", server.url("/v1")),
+            ))
+        }
+        rustx::model::ModelProtocol::OpenAiResponses => {
+            Box::new(rustx::model::OpenAiResponsesAdapter::new(
+                rustx::model::OpenAiAdapterConfig::new("k", server.url("/v1")),
+            ))
+        }
+        rustx::model::ModelProtocol::AnthropicMessages => {
+            Box::new(rustx::model::AnthropicMessagesAdapter::new(
+                rustx::model::AnthropicAdapterConfig::new("k", server.url("")),
+            ))
+        }
+    };
+    let events = crate::common::collect_events(adapter.as_ref(), reconstructed).await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(rustx::model::ModelEvent::Completed { .. })
+        ),
+        "{events:?}"
+    );
+    let replay: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
+    assert_eq!(
+        replay,
+        emulator.requests().await.last().unwrap()["body"],
+        "SQLite reconstruction must produce the same provider request"
     );
     drop(driver);
     emulator.finish().await;

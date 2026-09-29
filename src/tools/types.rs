@@ -413,6 +413,75 @@ impl ToolResultProjection {
     }
 }
 
+/// Bounded model-facing content, retaining the canonical image/text ordering.
+#[derive(Debug, Clone)]
+pub(crate) enum ModelToolResultPart {
+    Text(String),
+    Image(crate::message::content::ImageReference),
+}
+
+impl ToolExecutionResult {
+    /// Project supported input content without encoding provider wire structures.
+    /// Status/continuation text keeps its reserved budget; images retain position.
+    pub(crate) fn image_projection(&self) -> Result<Vec<ModelToolResultPart>, &'static str> {
+        if self
+            .content
+            .iter()
+            .any(|block| matches!(block, ToolResultContent::File(_)))
+        {
+            return Err("file tool results are unsupported");
+        }
+        if !self
+            .content
+            .iter()
+            .any(|block| matches!(block, ToolResultContent::Image(_)))
+        {
+            return Ok(self
+                .model_facing_projection()
+                .parts()
+                .iter()
+                .cloned()
+                .map(ModelToolResultPart::Text)
+                .collect());
+        }
+        let mut feedback = self.clone();
+        feedback.content.clear();
+        let feedback = feedback.model_facing_projection();
+        let mut remaining =
+            crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES.saturating_sub(feedback.byte_len());
+        let mut parts = Vec::new();
+        for block in &self.content {
+            if let ToolResultContent::Image(image) = block {
+                parts.push(ModelToolResultPart::Image(image.clone()));
+            } else {
+                let mut segment = self.clone();
+                segment.content = vec![block.clone()];
+                segment.status = ToolExecutionStatus::Success;
+                segment.managed_output = None;
+                let mut text = segment.model_facing_projection().as_text();
+                let mut end = remaining.min(text.len());
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+                remaining -= end;
+                if !text.is_empty() {
+                    parts.push(ModelToolResultPart::Text(text));
+                }
+            }
+        }
+        parts.extend(
+            feedback
+                .parts()
+                .iter()
+                .filter(|text| !text.is_empty())
+                .cloned()
+                .map(ModelToolResultPart::Text),
+        );
+        Ok(parts)
+    }
+}
+
 impl ToolExecutionResult {
     /// Produces the one canonical model-facing projection of this result.
     ///

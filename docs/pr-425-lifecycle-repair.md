@@ -103,10 +103,11 @@ artifacts through the supported Fork and Branch controls, plus reconnect/replay.
 Web has no Clone command; Clone is covered natively. Existing browser acceptance
 also exercises live image presentation and Bash command disclosure.
 
-Anthropic remains the only image wire adapter, with static PNG User/Tool-result
-placement. OpenAI Chat and Responses remain text projections. Unsupported
+The subsequent provider expansion supports static PNG User/ToolResult images on
+Anthropic, Responses and extended multimodal Chat. Text-only model declarations
+still receive request-only text projections on every protocol. Unsupported
 placements, invalid/unresolved bytes and over-budget raw requests fail before
-HTTP. No formats, protocols, attachment stores or image conversion were added.
+HTTP. No formats, attachment stores or image conversion were added.
 Bash description remains optional, nonblank, at most 160 Unicode scalar values,
 and presentation-only: command/arguments retain execution and approval authority.
 The prior deterministic Bash repair and unchanged production TERM grace remain.

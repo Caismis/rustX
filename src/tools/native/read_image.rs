@@ -269,14 +269,22 @@ mod tests {
             ModelProtocol::OpenAiResponses,
         ] {
             let caps = effective_capabilities(&declared, protocol);
-            assert_eq!(
+            assert!(
                 fixture
                     .registry
                     .for_model(&caps)
                     .definitions()
                     .iter()
-                    .any(|tool| tool.name == "read_image"),
-                protocol == ModelProtocol::AnthropicMessages
+                    .any(|tool| tool.name == "read_image")
+            );
+            let text = effective_capabilities(&ModelCapabilities::text_only(true, true), protocol);
+            assert!(
+                !fixture
+                    .registry
+                    .for_model(&text)
+                    .definitions()
+                    .iter()
+                    .any(|tool| tool.name == "read_image")
             );
         }
         let text = ModelCapabilities::text_only(true, true);

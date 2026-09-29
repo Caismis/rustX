@@ -28,7 +28,7 @@
 | Filesystem validation | Native tool uses ordinary cwd/absolute-path semantics and bounded static-PNG decoding |
 | Durable image result | Conversation `ArtifactStore` reserves/writes the validated snapshot; canonical `ImageReference` carries only its ID |
 | Request materialization | Provider-neutral ephemeral byte map is resolved through the runtime artifact boundary and excluded from serialization |
-| Provider transport | Anthropic adapter encodes PNG into actual User/image and ToolResult/image blocks; call/result identity and order remain canonical |
+| Provider transport | All three adapters encode PNG into native User and ToolResult image content; call/result identity and order remain canonical |
 | Historical requests | Frozen text-only projection replaces images with artifact-reference text; canonical Ledger and artifacts remain unchanged |
 | Summary/children | Summary input remains a text transcript with artifact IDs; child Attempts apply their own frozen invocation gate |
 | Clients | Native capability/Attempt facts, canonical Tool arguments/results, background Bash metadata, and bounded Trace source/arguments feed both clients |
@@ -46,15 +46,21 @@ historical requests or the active Attempt.
 
 ## Supported image contract
 
+Image covers User and ToolResult input together; there is no placement capability
+split. Chat intentionally uses the extended OpenAI-compatible/vLLM multimodal Tool
+contract. Endpoint rejection is a provider error, never a text/User fallback.
+All adapters share request projection, managed snapshot ownership and context cost.
+
+
 | Adapter/protocol | Effective Image input | Placement | Format |
 | --- | --- | --- | --- |
 | Anthropic Messages | When declared | User and ToolResult image blocks | Static PNG |
-| OpenAI Chat Completions | No | Text projection only | None |
-| OpenAI Responses | No | Text projection only | None |
+| OpenAI Chat Completions | When declared | User and extended multimodal Tool messages | Static PNG |
+| OpenAI Responses | When declared | User input and function-call output images | Static PNG |
 
 The encoded limit is 256 KiB, dimensions 4096 per side, total pixels 4,194,304,
 output decode allocation 16 MiB, and the decoder's internal budget 32 MiB.
-Requests resolve at most 16 distinct images. PNG extension/signature/content,
+Request projection selects the newest 16 image occurrences, resolving their distinct artifacts. PNG extension/signature/content,
 CRC/end, dimensions, decode allocation and animation checks precede success.
 APNG, JPEG, GIF, WebP, File input and Assistant image output are unsupported.
 Missing, invalid or unsupported image transport fails before HTTP. No format
@@ -183,3 +189,14 @@ No known functional acceptance gap remains within the documented support matrix.
 The final full-browser timeout/isolated-pass discrepancy remains a validation
 caveat for review. The PR is intended for review only: no merge, auto-merge or
 post-creation CI monitoring is part of this task.
+
+## All-protocol image transport follow-up
+
+The current support matrix above supersedes the initial Anthropic-only transport.
+Chat uses the typed extended multimodal Tool message contract; Responses uses
+native multimodal function-call outputs. Both preserve call identity and ordered
+parts. Empty stored Responses continuation markers no longer prevent a fresh
+history request after model switching. All five lifecycle review repairs remain
+in place. [Transport repair evidence and current validation](pr-425-image-protocols.md)
+records 4,058 passing Rust tests, 1,156 Web unit tests, 894 TUI tests and 143 browser
+checks, along with development failures and their corrections.
