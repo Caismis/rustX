@@ -235,10 +235,11 @@ export class AppServerClient {
   }
   async admitAttachment(id: string, current: () => boolean = () => true): Promise<boolean> {
     const generation = this.state.generation;
-    const valid = () => current() && this.current(generation);
+    const admission = this.attachmentAdmission;
+    const valid = () => current() && this.current(generation) && admission === this.attachmentAdmission;
     if (!valid()) return false;
-    if (!this.attachmentAdmission) throw new Error('No Web attachment admission owner.');
-    const allowed = await this.attachmentAdmission(id, valid);
+    if (!admission) throw new Error('No Web attachment admission owner.');
+    const allowed = await admission(id, valid);
     return allowed && valid();
   }
   restoreViews(ids: readonly string[]) {

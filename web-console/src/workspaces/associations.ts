@@ -142,7 +142,9 @@ export class WorkspaceAssociations {
         || catalog.workspaces.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string')
         || !catalog.picker || !['configured', 'unavailable'].includes(catalog.picker.kind)
         || (catalog.picker.kind === 'configured' && !Array.isArray(catalog.picker.locations))) throw new Error('Invalid Workspace catalog');
-      if (this.catalog && this.catalog.authorityId !== catalog.authorityId) this.entries.clear();
+      if (this.catalog && this.catalog.authorityId !== catalog.authorityId) {
+        this.client.navigation.invalidate(); this.entries.clear();
+      }
       if (!sameEndpoint(catalog.endpoint, this.client.getSnapshot().endpoint)) {
         this.invalidate(); this.entries.clear(); this.catalog = undefined; this.catalogStatus = 'unavailable'; this.publish(); return;
       }
@@ -200,6 +202,7 @@ export class WorkspaceAssociations {
     })().catch(cause => {
       if (!current()) return;
       if (cause instanceof WorkspaceHostError && cause.kind === 'authority_replaced') {
+        this.client.navigation.invalidate();
         this.invalidate(); ++this.catalogRequest; this.catalogQueued = false;
         for (const pending of this.catalogs.values()) pending.abort();
         this.entries.clear(); this.catalog = undefined; this.catalogStatus = 'unavailable';
