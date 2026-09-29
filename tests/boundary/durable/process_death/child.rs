@@ -32,7 +32,9 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelProtocol;
 use crate::runtime::ApprovalDecision;
 use crate::runtime::conversation_runtime::ConversationRuntime;
-use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
+use crate::runtime::identity::{
+    AgentId, ConversationId, MessageId, SubagentId, ToolCallId, ToolId,
+};
 use crate::runtime::interaction::InteractionResponse;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::process_death;
@@ -294,6 +296,139 @@ fn terminal_count(seen: &[Seen]) -> usize {
             ))
         })
         .count()
+}
+
+/// Waits for the exact outcome of one `subagent` creation call and returns
+/// the Agent and first-activation identity it accepted.
+///
+/// An attempt terminal is no evidence of creation: a rejected call is a
+/// failed Tool result that the scripted parent answers with its final turn,
+/// so the attempt still completes. This waits for the first decisive fact —
+/// the call's own terminal Tool fact, or an attempt terminal proving the call
+/// never finished — so a rejected creation fails here with its real outcome
+/// instead of hanging or surfacing later as an empty registry. Acceptance
+/// counts only when the durable ownership fact of this same call names the
+/// same identities the Tool result returned; that fact commits before the
+/// Tool result exists, so it is already journaled here.
+async fn accepted_creation(
+    log: &Log,
+    runtime: &ConversationRuntime,
+    call: &ToolCallId,
+) -> (AgentId, SubagentId) {
+    let finished = |seen: &[Seen]| {
+        seen.iter().any(|entry| {
+            matches!(entry, Seen::Event(event) if matches!(
+                &**event,
+                RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                    | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. }
+                    if tool_call_id == call
+            ))
+        })
+    };
+    log.wait_for(|seen| finished(seen) || terminal_count(seen) >= 1)
+        .await;
+    let seen = log.snapshot();
+    let events: Vec<&RuntimeEvent> = seen
+        .iter()
+        .filter_map(|entry| match entry {
+            Seen::Event(event) => Some(&**event),
+            Seen::InteractionPending => None,
+        })
+        .collect();
+    let facts = || {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    RuntimeEvent::ToolExecutionStarted { .. }
+                        | RuntimeEvent::ToolExecutionDeadlineFired { .. }
+                        | RuntimeEvent::ToolExecutionCancellationRequested { .. }
+                        | RuntimeEvent::ToolExecutionSettlementObserved { .. }
+                        | RuntimeEvent::ToolExecutionCompleted { .. }
+                        | RuntimeEvent::ToolExecutionFailed { .. }
+                        | RuntimeEvent::AttemptCompleted { .. }
+                        | RuntimeEvent::AttemptCancelled { .. }
+                        | RuntimeEvent::AttemptFailed { .. }
+                        | RuntimeEvent::AttemptTimedOut { .. }
+                        | RuntimeEvent::AttemptLimitExceeded { .. }
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let Some(result) = events.iter().find_map(|event| match event {
+        RuntimeEvent::ToolExecutionCompleted {
+            tool_call_id,
+            result,
+            ..
+        } if tool_call_id == call => Some(result),
+        _ => None,
+    }) else {
+        panic!(
+            "creation call {} produced no Tool result; facts: {:#?}",
+            call.as_str(),
+            facts()
+        );
+    };
+    assert!(
+        result.status == crate::tools::types::ToolExecutionStatus::Success,
+        "creation call {} was not accepted: {:?} {:?}; facts: {:#?}",
+        call.as_str(),
+        result.status,
+        result.content,
+        facts()
+    );
+    let accepted = result
+        .content
+        .iter()
+        .find_map(|content| match content {
+            crate::tools::types::ToolResultContent::Json { value } => Some(value),
+            _ => None,
+        })
+        .expect("an accepted creation result is structured");
+    let agent_id = AgentId::new(accepted["agent_id"].as_str().expect("accepted agent_id"));
+    let activation_id = SubagentId::new(
+        accepted["activation_id"]
+            .as_str()
+            .expect("accepted activation_id"),
+    );
+    let store = runtime.tool_runtime().durable_store();
+    let mut cursor = None;
+    let mut owned = Vec::new();
+    loop {
+        let page = store.read_events(cursor, 64).expect("Event Journal page");
+        if page.events.is_empty() {
+            break;
+        }
+        owned.extend(
+            page.events
+                .into_iter()
+                .map(|envelope| envelope.event)
+                .filter(|event| {
+                    matches!(
+                        event,
+                        RuntimeEvent::SubagentOwnershipCommitted { origin, .. }
+                            if origin.tool_call_id() == Some(call)
+                    )
+                }),
+        );
+        cursor = page.next_sequence;
+    }
+    assert!(
+        matches!(
+            owned.as_slice(),
+            [RuntimeEvent::SubagentOwnershipCommitted {
+                child_agent_id,
+                subagent_id,
+                admitted_authority: Some(authority),
+                ..
+            }] if *child_agent_id == agent_id
+                && *subagent_id == activation_id
+                && *authority == agent_id
+        ),
+        "the accepted creation has exactly one matching ownership fact: {owned:#?}"
+    );
+    (agent_id, activation_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,14 +1848,27 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
         ]
     };
     let child = Child::require(root, scripts, false, true).await;
-    if !reopening {
-        child.submit("delegate a real physical child");
-        child.log.wait_settled(1).await;
-    }
     let registry = child.runtime().subagent_registry().expect("Agent registry");
-    let listing = registry.list_agents(1);
-    assert_eq!(listing.matched, 1, "one exact durable Agent");
-    let agent_id = listing.agents[0].0.agent_id.clone();
+    let agent_id = if reopening {
+        let listing = registry.list_agents(1);
+        assert_eq!(listing.matched, 1, "one exact recovered durable Agent");
+        listing.agents[0].0.agent_id.clone()
+    } else {
+        child.submit("delegate a real physical child");
+        let (agent_id, activation_id) =
+            accepted_creation(&child.log, child.runtime(), &ToolCallId::new(call.id)).await;
+        let listing = registry.list_agents(2);
+        assert_eq!(listing.matched, 1, "one exact durable Agent");
+        let (agent, activation) = &listing.agents[0];
+        assert_eq!(agent.agent_id, agent_id, "the created Agent is registered");
+        assert_eq!(agent.latest_activation, activation_id);
+        assert_eq!(activation.subagent_id, activation_id);
+        assert_eq!(
+            activation.origin.tool_call_id(),
+            Some(&ToolCallId::new(call.id))
+        );
+        agent_id
+    };
     if publication_failure {
         answer_gate.wait_entered().await;
         assert_eq!(

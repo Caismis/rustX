@@ -123,11 +123,10 @@ jobs:
       # tools/). The in-crate boundary conformance suites are selected OUT by
       # their `boundary_suites::` prefix; they run in the boundary jobs.
       #
-      # `--bins`/`--examples` execute zero tests today: none of the three
-      # binaries and none of the three examples defines a `#[test]`, and
-      # dropping both selectors was measured at ~41s of saved link time. They
-      # are kept regardless. Cargo already owns test-target discovery, so a
-      # test added to a bin or an example in future is picked up here
+      # `--examples` runs the `session_list_benchmark` workload-checker tests;
+      # `--bins` executes zero tests today, since no binary defines a
+      # `#[test]`. Both selectors are kept: Cargo already owns test-target
+      # discovery, so a test added to a bin or an example is picked up here
       # automatically — which is simpler than a second repository policy
       # saying those targets must stay test-free forever.
       - name: Run unit tests and the in-crate contract suites

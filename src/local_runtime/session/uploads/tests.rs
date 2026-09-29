@@ -1243,8 +1243,12 @@ async fn ready_registry_commit_failure_never_issues_a_receipt() {
     assert!(controller.uploaded_content(&id, &[receipt]).await.is_err());
 }
 
-/// Bytes written through retained descriptors stay with the moved object; the
-/// declared-path identity check refuses to publish the substituted tree.
+/// A declared component is substituted at the `directory sync` checkpoint:
+/// after every file was written and synced through retained descriptors,
+/// before the directory sync barriers and the readiness re-open. The synced
+/// bytes stay with the moved object, and the re-open's identity check refuses
+/// to publish the substituted tree. This proves nothing about a substitution
+/// before or between the file writes.
 #[tokio::test]
 async fn declared_path_substitution_during_materialization_never_commits_ready() {
     for component in ["workspace", ".agents", "uploads", "session", "batch"] {
