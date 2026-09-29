@@ -90,7 +90,9 @@ http = "1"
 # in-flight HTTP request, and that trait's stream signatures name these
 # types directly. This is rmcp's own SSE crate, unified to one version.
 sse-stream = "0.2.5"
-rmcp = { version = "3.2.0", default-features = false, features = [
+# Observe queued SSE tools/list responses before publishing them (SEP-2243).
+# See docs/pr-425-mcp-drain-repair.md and the dependency regression at this revision.
+rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0", default-features = false, features = [
     "client",
     "transport-async-rw",
     "transport-streamable-http-client-reqwest",
