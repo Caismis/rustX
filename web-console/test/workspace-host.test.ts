@@ -77,7 +77,11 @@ it('unavailable roots fail fresh admission, unregister preserves it, and symlink
   rmSync(a, { recursive: true }); symlinkSync(b, a);
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
   await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
+  rmSync(a); mkdirSync(a);
   const replacement = new LocalWorkspaceHost({ ...config, roots: config.roots.filter(root => root.cwd !== a) });
+  expect(await replacement.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
+  const revoked = new WorkspaceSessionNavigation(replacement, client, new NavigationEpoch());
+  await expect(revoked.admit('native-session', () => true)).rejects.toThrow('not authorized');
   expect((await replacement.listWorkspaces()).authorityId).not.toBe((await host.listWorkspaces()).authorityId);
   await expect(replacement.classifyLocations([b], endpoint, (await host.listWorkspaces()).authorityId)).rejects.toThrow('replaced');
 });
