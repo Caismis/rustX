@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { NavigationEpoch } from '../src/client/navigation';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
 import type { AppServerClient, ClientView } from '../src/client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces, type SessionLocation, type WorkspaceCatalog } from '../src/workspaces/host';
@@ -23,7 +24,8 @@ async function fixture() {
     }),
     adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
   };
-  const client = { subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
+  const navigation = new NavigationEpoch();
+  const client = { navigation, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
   const owner = new WorkspaceAssociations(client, host);
   const stop = owner.start();
   const publish = (patch: Partial<ClientView>) => { state = { ...state, ...patch }; listeners.forEach(listener => listener()); };
@@ -33,7 +35,7 @@ async function fixture() {
     await vi.waitFor(() => expect(owner.getSnapshot().entries.get(read.cwds[0].slice(1))?.status).toBe('ready'));
   };
   await observed(1);
-  return { owner, host, reads, stop, publish, observed, accept, listeners, remove: (id: string) => { publish({ sessions: state.sessions.filter(row => row.id !== id), views: {} }); deletions.forEach(listener => listener(id)); }, state: () => state };
+  return { owner, navigation, host, reads, stop, publish, observed, accept, listeners, remove: (id: string) => { publish({ sessions: state.sessions.filter(row => row.id !== id), views: {} }); deletions.forEach(listener => listener(id)); }, state: () => state };
 }
 it('retains confirmed evidence during cloned, title-only, reordered and disconnected observations without extra reads', async () => {
   const f = await fixture(); await f.accept(0);
@@ -117,12 +119,14 @@ it.each(['success', 'failure'])('Host replacement clears old groups before an ob
   const f = await fixture(); await f.accept(0);
   const old = deferred<WorkspaceCatalog>(), fresh = deferred<WorkspaceCatalog>();
   vi.mocked(f.host.listWorkspaces).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+  const oldOperation = f.navigation.capture();
   f.owner.refresh(); f.owner.refresh(); fresh.resolve(catalog('host-2'));
   await f.observed(2);
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toBeUndefined();
   if (outcome === 'success') old.resolve(catalog('host-1')); else old.reject(new Error('obsolete catalog'));
   await old.promise.catch(() => {});
-  expect(f.owner.getSnapshot().catalog?.authorityId).toBe('host-2'); f.stop();
+  expect(f.owner.getSnapshot().catalog?.authorityId).toBe('host-2');
+  expect(oldOperation()).toBe(false); f.stop();
 });
 it.each([{ invalid: [] }, { invalid: [{ authorized: true, workspaceId: 'missing' }] }, { invalid: [{ authorized: 'yes' }] }])('rejects an invalid complete batch atomically: %j', async ({ invalid }) => {
   const f = await fixture(); await f.accept(0); f.owner.refresh(); const read = await f.observed(2);
