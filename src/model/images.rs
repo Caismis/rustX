@@ -10,6 +10,27 @@ pub type ResolvedImages = BTreeMap<ArtifactId, Vec<u8>>;
 /// # Errors
 /// Rejects unsupported, corrupt, animated, or oversized images.
 pub fn validate_png(bytes: &[u8]) -> Result<(), String> {
+    measure_png(bytes).map(|_| ())
+}
+
+/// Immutable provider-neutral measurement of a validated static PNG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageMeasurement {
+    pub width: u32,
+    pub height: u32,
+}
+impl ImageMeasurement {
+    /// Conservative runtime fit charge, not provider billing.
+    #[must_use]
+    pub fn input_tokens(self) -> u64 {
+        1024 + (u64::from(self.width) * u64::from(self.height)).div_ceil(256)
+    }
+}
+
+/// Validate before deriving immutable dimensions.
+/// # Errors
+/// Rejects the same unsupported/corrupt/oversized inputs as `validate_png`.
+pub fn measure_png(bytes: &[u8]) -> Result<ImageMeasurement, String> {
     const MAX_DECODE: usize = 16 * 1024 * 1024;
     const MAX_DECODER_INTERNAL: usize = 32 * 1024 * 1024;
     if bytes.len() > 256 * 1024 {
@@ -36,6 +57,10 @@ pub fn validate_png(bytes: &[u8]) -> Result<(), String> {
     {
         return Err("image exceeds dimension or pixel limits".into());
     }
+    let measurement = ImageMeasurement {
+        width: header.width,
+        height: header.height,
+    };
     let mut reader = decoder
         .read_info()
         .map_err(|_| "invalid or truncated PNG metadata")?;
@@ -53,20 +78,28 @@ pub fn validate_png(bytes: &[u8]) -> Result<(), String> {
     reader
         .finish()
         .map_err(|_| "invalid or truncated PNG end")?;
-    Ok(())
+    Ok(measurement)
 }
 
 /// Project image-bearing history for a text-only request without changing its Ledger.
 pub fn omit_images(messages: &mut [crate::model::input::ModelInputMessage]) {
+    project(messages, false);
+}
+
+/// Newest 16 User/Tool image occurrences retain image transport. Older ones
+/// become request-only textual artifact references. Canonical history is never changed.
+/// Repeated references count as occurrences because each is a provider-visible block.
+pub fn project(messages: &mut [crate::model::input::ModelInputMessage], image_input: bool) {
     use crate::message::{
         content::TextBlock,
         types::{AssistantContentBlock, MessageBlock, UserContentBlock},
     };
     use crate::tools::types::ToolResultContent;
     let text = |id: &ArtifactId| TextBlock {
-        text: format!("[Image artifact {id}; image input unavailable for this invocation]"),
+        text: format!("[Image artifact {id}; image omitted from this request]"),
     };
-    for message in messages {
+    let mut remaining = if image_input { 16 } else { 0 };
+    for message in messages.iter_mut().rev() {
         let Some(message) = (match message {
             crate::model::input::ModelInputMessage::Canonical(message) => Some(message),
             crate::model::input::ModelInputMessage::RequestOnly(_) => None,
@@ -75,28 +108,61 @@ pub fn omit_images(messages: &mut [crate::model::input::ModelInputMessage]) {
         };
         match message {
             MessageBlock::Tool(tool) => {
-                for block in &mut tool.result.content {
+                for block in tool.result.content.iter_mut().rev() {
                     if let ToolResultContent::Image(image) = block {
-                        *block = ToolResultContent::Text(text(&image.artifact_id));
+                        if remaining > 0 {
+                            remaining -= 1;
+                        } else {
+                            *block = ToolResultContent::Text(text(&image.artifact_id));
+                        }
                     }
                 }
             }
             MessageBlock::User(user) => {
-                for block in &mut user.content {
+                for block in user.content.iter_mut().rev() {
                     if let UserContentBlock::Image(image) = block {
-                        *block = UserContentBlock::Text(text(&image.artifact_id));
+                        if remaining > 0 {
+                            remaining -= 1;
+                        } else {
+                            *block = UserContentBlock::Text(text(&image.artifact_id));
+                        }
                     }
                 }
             }
             MessageBlock::Assistant(assistant) => {
                 for block in &mut assistant.content {
-                    if let AssistantContentBlock::Image(image) = block {
+                    if let AssistantContentBlock::Image(image) = block
+                        && !image_input
+                    {
                         *block = AssistantContentBlock::Text(text(&image.artifact_id));
                     }
                 }
             }
         }
     }
+}
+
+/// Number of provider-visible User/Tool image blocks, including repeated identities.
+pub(crate) fn image_count(messages: &[crate::model::input::ModelInputMessage]) -> usize {
+    use crate::message::types::{MessageBlock, UserContentBlock};
+    use crate::tools::types::ToolResultContent;
+    messages
+        .iter()
+        .map(|message| match message.as_canonical() {
+            Some(MessageBlock::User(user)) => user
+                .content
+                .iter()
+                .filter(|block| matches!(block, UserContentBlock::Image(_)))
+                .count(),
+            Some(MessageBlock::Tool(tool)) => tool
+                .result
+                .content
+                .iter()
+                .filter(|block| matches!(block, ToolResultContent::Image(_)))
+                .count(),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// Resolve only the finite referenced image set through a runtime-owned boundary.
@@ -108,6 +174,9 @@ pub fn resolve(
 ) -> Result<ResolvedImages, String> {
     use crate::message::types::{MessageBlock, UserContentBlock};
     use crate::tools::types::ToolResultContent;
+    if image_count(messages) > 16 {
+        return Err("request exceeds the 16-image limit".into());
+    }
     let mut images = ResolvedImages::new();
     for message in messages {
         let Some(message) = message.as_canonical() else {

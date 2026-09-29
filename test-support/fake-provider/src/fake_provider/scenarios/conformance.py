@@ -657,7 +657,18 @@ def image_tool_round_trip() -> Scenario:
     )
 
 
+def image_budget_continuation() -> Scenario:
+    return Scenario(
+        "image_budget_continuation",
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",)),
+             Stream(*(ToolCall(f"parallel-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(17)), Finish("tool_calls"))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("image/png", "Image artifact")),
+             Stream(Text("seventeen successful images continue"), Finish("stop"))),
+    )
+
+
 SCENARIOS = {
+    "image_budget_continuation": image_budget_continuation,
     "image_tool_round_trip": image_tool_round_trip,
     "app_server_user_a": lambda: app_server_user("a"),
     "app_server_user_b": lambda: app_server_user("b"),

@@ -7438,7 +7438,11 @@ Conversation managers, and manager clones converge on that key. The existing
 manager disposal lock still owns the multi-step retained-disposal transaction;
 the repository gate owns only each physical Git metadata command through its
 supervised settlement. Overlay preparation and unrelated repositories proceed
-independently. Queued cancellation exits before spawning the mutation.
+independently. Queued cancellation exits before spawning the mutation. The owned gate transfers
+into the physical supervision task before spawn; dropping or aborting the caller
+cannot release it before child settlement and output drainage. A real Git
+reference-transaction hook regression proves caller-abort exclusion and independent
+repository progress with FIFO synchronization.
 
 This is local runtime coordination, not an exclusion guarantee against arbitrary
 external Git processes. Git's own ref checks and native ownership re-proofs remain

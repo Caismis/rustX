@@ -1152,6 +1152,15 @@ impl<'a> AgentExecution<'a> {
                 },
             ));
         }
+        context_runtime.engine.set_image_projection(
+            tool_runtime.artifacts().clone(),
+            request
+                .model
+                .primary()
+                .capabilities()
+                .input_modalities
+                .contains(&crate::model::catalog::Modality::Image),
+        );
         let snapshot = capability.snapshot();
         let lifecycle = context_runtime
             .native_composition
@@ -2681,6 +2690,14 @@ impl<'a> AgentExecution<'a> {
             .project_uploads(&mut request_messages)
             .map_err(|error| Self::context_failure_terminal(&error))?;
         let mut request = self.model_request_from_projection(&projection, request_messages);
+        crate::model::images::project(
+            &mut request.messages,
+            request
+                .invocation
+                .capabilities
+                .input_modalities
+                .contains(&crate::model::catalog::Modality::Image),
+        );
         if request
             .invocation
             .capabilities
@@ -2699,8 +2716,6 @@ impl<'a> AgentExecution<'a> {
                     error,
                 ))
             })?;
-        } else {
-            crate::model::images::omit_images(&mut request.messages);
         }
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(

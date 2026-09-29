@@ -377,6 +377,7 @@ impl EstimateCorrection {
 /// The deterministic context engine.
 #[derive(Clone)]
 pub struct ContextEngine {
+    image_input: Option<bool>,
     uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     config: ContextConfig,
     estimator: Arc<dyn TokenEstimator>,
@@ -388,6 +389,7 @@ impl core::fmt::Debug for ContextEngine {
             .debug_struct("ContextEngine")
             .field("config", &self.config)
             .field("uploads", &self.uploads)
+            .field("image_input", &self.image_input)
             .field("estimator", &"<opaque token estimator>")
             .finish()
     }
@@ -418,7 +420,21 @@ impl ContextEngine {
             config,
             estimator,
             uploads: None,
+            image_input: None,
         })
+    }
+
+    pub(crate) fn set_image_projection(
+        &mut self,
+        artifacts: crate::tools::artifacts::ArtifactStore,
+        enabled: bool,
+    ) {
+        self.estimator = Arc::new(super::images::ImageEstimator {
+            inner: self.estimator.clone(),
+            artifacts,
+            enabled,
+        });
+        self.image_input = Some(enabled);
     }
 
     pub(crate) fn set_upload_resolver(
@@ -989,20 +1005,37 @@ impl ContextEngine {
         projection: &ContextProjection,
         tool_definitions: &[ModelToolDefinition],
     ) -> Option<TokenMeasurement> {
-        if observed.fingerprint == projection.fingerprint() {
+        let mut rendered = canonical_input(&projection.messages);
+        self.project_uploads(&mut rendered).ok()?;
+        if let Some(enabled) = self.image_input {
+            crate::model::images::project(&mut rendered, enabled);
+        }
+        let mut projected = projection.clone();
+        projected.messages = rendered
+            .iter()
+            .filter_map(|m| m.as_canonical().cloned())
+            .collect();
+        if observed.fingerprint == projected.fingerprint()
+            || observed.fingerprint
+                == crate::context::tokens::model_input_fingerprint(
+                    projection.surface_revision,
+                    &rendered,
+                    &projection.effective_system_prompt,
+                )
+        {
             return Some(TokenMeasurement {
                 input_tokens: observed.input_tokens,
                 source: TokenMeasurementSource::ProviderReported,
             });
         }
-        let covered = observed.anchor.as_ref()?.covered_prefix(
-            &projection.messages,
+        let covered = observed.anchor.as_ref()?.covered_prefix_model_input(
+            &rendered,
             &projection.effective_system_prompt,
             tool_definitions,
         )?;
         let appended = self
             .estimator
-            .estimate_conversation_input(&projection.messages[covered..]);
+            .estimate_conversation_input(&projected.messages[covered..]);
         Some(TokenMeasurement {
             input_tokens: observed.input_tokens.saturating_add(appended),
             source: TokenMeasurementSource::ProviderAnchored,

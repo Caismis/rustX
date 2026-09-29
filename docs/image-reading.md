@@ -37,7 +37,7 @@ signature and complete decoding are checked; an extension cannot grant support.
 - Decoder internal allocation budget: 32 MiB using `png::Limits` (the decoder
   documents this as best effort, excluding caller-owned output buffers).
 - Animated PNG is rejected. JPEG, WebP, GIF and every other format are rejected.
-- A model request retains at most 16 distinct managed images.
+- A model request retains at most 16 image occurrences (including repeated references).
 
 The decoder validates CRCs and completes the PNG stream, including the end
 marker. Validation and artifact creation consume the same encoded byte vector.
@@ -48,6 +48,48 @@ a failed allocation never publishes a successful ToolResult. Cancellation
 observed after storage also publishes no successful reference; its reserved
 artifact stays under the same conversation retention owner. A successful result
 is independent of subsequent modification or deletion of the original path.
+
+## Lineage ownership and request budgets
+
+The Conversation carrying a canonical reference owns its immutable bytes. Clone,
+Fork and Branch materialize every managed Image/File reference in the exact
+prepared canonical cut, including retired canonical content, into the new
+Conversation's existing ArtifactStore. The lineage layer allocates destination
+identities and remaps only artifact references before SQLite seeding and catalog
+publication. It copies each distinct artifact once, through settled-writer
+admission, with a 256-artifact / 64 MiB aggregate preparation bound. Failed
+preparation removes its private allocation through Session preparation cleanup;
+failed publication uses the existing discard owner. Independent destinations
+survive source Session deletion. A same-Session Branch owns its own bytes but
+naturally shares its Session's deletion lifetime. Archive reads the resulting
+Conversation-owned references; no source path or cross-Conversation lookup is
+retained. Child Agents start independent canonical input rather than inheriting
+the parent's image references.
+
+Request projection retains the newest 16 User/Tool image occurrences in message
+and content order. Every older occurrence becomes an opaque textual artifact
+reference for that request. This bounds actual transport blocks, even when one
+artifact is referenced repeatedly. Canonical history remains unchanged. Parallel
+successful reads cannot oversubscribe this budget: projection happens over the
+settled canonical batch, rather than through Tool-time count admission. Initial
+requests, continuations and durable reconstruction apply the same policy from
+the frozen invocation. Retrying retains the same projected input; a new cut can
+select an older artifact again. Text-only requests project every image to text.
+
+Context accounting uses that same request projection. Each retained image adds
+`1024 + ceil(width * height / 256)` input tokens to the normal neutral text and
+structure estimate, per occurrence. Dimensions are derived from complete bounded
+validation of the immutable managed PNG, so SQLite replay derives the same fact
+without storing base64 or a provider-specific token table. This deliberately
+conservative fit estimate is not provider billing. Text projections incur only
+their text cost. Soft-limit, post-compaction fit and recent-history estimates use
+the same estimator. Observed provider prefixes include projected content identity,
+so evicting an older image or switching modalities invalidates an incompatible
+measurement; unchanged prefixes retain the normal provider usage anchor.
+
+Web Tools & Permissions and named-Agent editors include `read_image` in their
+built-in selection inventory. Its fixed policy is not configurable in the policy
+list. Native generated configuration remains authoritative.
 
 ## Provider support
 

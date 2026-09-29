@@ -266,7 +266,8 @@ fn deletion_cleanup_owns_frozen_plan_without_root_guard_and_identity_is_absorbin
                 preview.session_id.clone(),
                 node_id.clone(),
                 conversation_id.clone(),
-                &LineageSeed::history(vec![])
+                &LineageSeed::history(vec![]),
+                None,
             )
             .is_err()
     );

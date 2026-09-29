@@ -227,6 +227,23 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     expect((await fixture.control('requests')).requests).toHaveLength(38);
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
+    // Every native lineage control preserves independently readable managed images.
+    const copiedImage = async () => {
+      const process = canonical.locator('[data-turn-process]').last();
+      if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+      const disclosure = canonical.locator('[data-tool-call-id]').last().getByRole('button', { expanded: false });
+      if (await disclosure.count()) await disclosure.click();
+      await expect(load).toHaveCount(1);
+      await decode();
+    };
+    await page.getByRole('button', { name: 'Fork to new Session', exact: true }).last().click();
+    await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
+    await expect(page.getByRole('dialog', { name: '/fork', exact: true })).toHaveCount(0);
+    await copiedImage();
+    await page.getByRole('button', { name: 'Branch in this Session', exact: true }).last().click();
+    await page.getByRole('dialog', { name: '/branch', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
+    await expect(page.getByRole('dialog', { name: '/branch', exact: true })).toHaveCount(0);
+    await copiedImage();
     expect(errors).toEqual([]); passed = true;
   } catch (error) {
     await showInspector(page);

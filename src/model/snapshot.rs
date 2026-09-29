@@ -243,14 +243,13 @@ impl RequestSnapshot {
         canonical: &[crate::message::types::MessageBlock],
     ) -> Result<ModelRequest, RequestReconstructionError> {
         let mut messages = canonical_input(canonical);
-        if !self
-            .invocation
-            .capabilities
-            .input_modalities
-            .contains(&crate::model::catalog::Modality::Image)
-        {
-            crate::model::images::omit_images(&mut messages);
-        }
+        crate::model::images::project(
+            &mut messages,
+            self.invocation
+                .capabilities
+                .input_modalities
+                .contains(&crate::model::catalog::Modality::Image),
+        );
         self.upload_projection
             .apply(&mut messages)
             .map_err(RequestReconstructionError::Conversation)?;

@@ -69,7 +69,7 @@ pub fn validate_request(
     // could reach the network: content the invocation cannot represent is
     // rejected here, not by the provider.
     validate_content_modalities(&request.messages, &request.invocation.capabilities)?;
-    if request.images.len() > 16 {
+    if request.images.len() > 16 || crate::model::images::image_count(&request.messages) > 16 {
         return Err(invalid_request(
             "request exceeds the 16-image limit".to_owned(),
         ));

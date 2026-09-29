@@ -3361,12 +3361,24 @@ async fn startup_never_manufactures_a_projection_for_an_unrenderable_root_subjec
         &access.database_path,
     )
     .unwrap();
+    let artifacts = crate::tools::ArtifactStore::new(
+        session.active_conversation_id.clone(),
+        access.database_path.parent().unwrap(),
+    )
+    .unwrap();
+    let mut png = Vec::new();
+    png::Encoder::new(&mut png, 1, 1)
+        .write_header()
+        .unwrap()
+        .write_image_data(&[0])
+        .unwrap();
+    let artifact_id = artifacts.put_bounded(&png).unwrap();
     store
         .append_canonical(&user(
             "unrenderable-first",
             vec![UserContentBlock::Image(
                 crate::message::content::ImageReference {
-                    artifact_id: crate::runtime::identity::ArtifactId::new("artifact-1"),
+                    artifact_id,
                     alt: None,
                 },
             )],

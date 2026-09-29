@@ -1759,3 +1759,82 @@ async fn image_tool_round_trip_and_text_model_switch() {
     }
     emulator.finish().await;
 }
+
+#[tokio::test]
+async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
+    use base64::Engine;
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut bytes = Vec::new();
+    png::Encoder::new(&mut bytes, 1, 1)
+        .write_header()
+        .unwrap()
+        .write_image_data(&[128])
+        .unwrap();
+    std::fs::write(workspace.join("sample.png"), &bytes).unwrap();
+    let Some(emulator) =
+        ProviderEmulator::start_with_workspace("image_budget_continuation", Some(&workspace)).await
+    else {
+        return;
+    };
+    let mut setup = Setup::new(&format!("emulator-anthropic/{ANTHROPIC_MODEL}"));
+    setup.images = true;
+    let driver = Driver::start_in(root, &emulator, &setup).await;
+    driver.submit("Read the same PNG seventeen times in parallel.");
+    let (_, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 2);
+    let body = body_text(&requests[1]);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    assert_eq!(body.matches(&encoded).count(), 16);
+    assert!(body.contains("Image artifact"));
+    let snapshot = driver.host().snapshot().unwrap().0;
+    let mut ids = std::collections::BTreeSet::new();
+    for message in &snapshot.messages {
+        if let rustx::message::types::MessageBlock::Tool(tool) = message {
+            for block in &tool.result.content {
+                if let rustx::tools::types::ToolResultContent::Image(image) = block {
+                    ids.insert(image.artifact_id.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        ids.len(),
+        17,
+        "request projection never edits successful canonical results"
+    );
+    await_history_len(&driver, 2).await;
+    driver.host().shutdown().await.unwrap();
+    let reopened = rustx::durable::SqliteConversationStore::open_existing(
+        driver.runtime.runtime().conversation_id().clone(),
+        &driver
+            .runtime
+            .tool_runtime()
+            .tool_output()
+            .root()
+            .parent()
+            .unwrap()
+            .join("conversation.sqlite"),
+    )
+    .unwrap();
+    let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
+    let snapshots = crate::common::request_snapshots(&history);
+    let reconstructed = history
+        .reconstruct(&snapshots.last().unwrap().identity)
+        .unwrap();
+    let reconstructed_json = serde_json::to_string(&reconstructed.messages).unwrap();
+    assert_eq!(reconstructed_json.matches("\"type\":\"image\"").count(), 16);
+    assert!(reconstructed_json.contains("Image artifact"));
+    assert!(
+        reconstructed.images.is_empty(),
+        "durable request evidence stores references only"
+    );
+    drop(driver);
+    emulator.finish().await;
+}

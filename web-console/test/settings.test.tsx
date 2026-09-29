@@ -211,9 +211,9 @@ it('edits an independent named-Agent whole resource with inherited model and ext
   expect((screen.getByLabelText('todo') as HTMLInputElement).checked).toBe(false);
   fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Research a topic' } });
   fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Read and report findings.' } });
-  fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByLabelText('todo'));
+  fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByLabelText('read_image')); fireEvent.click(screen.getByLabelText('todo'));
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent researcher' }));
-  await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read'] }, plugins: { todo: { enabled: true } } } } } }));
+  await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read', 'read_image'] }, plugins: { todo: { enabled: true } } } } } }));
 });
 
 it('keeps shadowed User resources visible using native shadowing facts', async () => {
@@ -581,4 +581,29 @@ it('keeps a confirmed Workspace save when the post-write authoritative reread fa
   // pending Save and no review conflict against a stale base.
   expect((screen.getByRole('button', { name: 'Save Native Tools' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull();
+});
+
+it('authors read_image through the native selection, rereads it, and excludes fixed policy editing', async () => {
+  const subject = cfg3Client(async (operation, source) => {
+    if (operation.method === 'configuration/sourceWrite' && operation.params.mutation.kind === 'config') {
+      const mutation = operation.params.mutation.mutation;
+      if (mutation.unit === 'native_tools') source.workspace!.authored = { agent: { tools: { builtin: mutation.authored } } };
+    }
+  });
+  subject.source.workspace!.authored = { agent: { tools: { builtin: [] } } };
+  await open(subject, 'Tools & Permissions');
+  const selected = () => (screen.getByLabelText('read_image') as HTMLInputElement).checked;
+  expect(selected()).toBe(false);
+  expect(screen.queryByRole('form', { name: 'read_image policy' })).toBeNull();
+  fireEvent.click(screen.getByLabelText('read_image'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read_image'] } } } }));
+  await waitFor(() => expect(subject.source.workspace!.revision).toBe('saved-2'));
+  fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
+  await waitFor(() => expect(selected()).toBe(true));
+  fireEvent.click(screen.getByLabelText('read_image'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').at(-1)?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: [] } } } }));
+  fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
+  await waitFor(() => expect(selected()).toBe(false));
 });
