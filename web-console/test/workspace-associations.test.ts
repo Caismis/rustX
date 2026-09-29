@@ -186,5 +186,8 @@ it('a definitive Host replacement refusal retires evidence even if the replaceme
   vi.mocked(f.host.listWorkspaces).mockRejectedValueOnce(new Error('replacement unavailable'));
   read.gate.reject(new WorkspaceHostError('replaced', 'authority_replaced'));
   await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('unavailable'));
+  expect(f.owner.getSnapshot().entries.size).toBe(0);
+  f.owner.refresh();
+  await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('unavailable'));
   expect(f.owner.getSnapshot().entries.size).toBe(0); expect(f.owner.getSnapshot().catalog).toBeUndefined(); f.stop();
 });

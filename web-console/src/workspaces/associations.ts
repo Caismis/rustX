@@ -200,7 +200,10 @@ export class WorkspaceAssociations {
     })().catch(cause => {
       if (!current()) return;
       if (cause instanceof WorkspaceHostError && cause.kind === 'authority_replaced') {
-        this.entries.clear(); this.catalog = undefined; this.refresh(); return;
+        this.invalidate(); ++this.catalogRequest; this.catalogQueued = false;
+        for (const pending of this.catalogs.values()) pending.abort();
+        this.entries.clear(); this.catalog = undefined; this.catalogStatus = 'unavailable';
+        this.publish(); return;
       }
       for (const row of rows) {
         const old = this.entries.get(row.id);

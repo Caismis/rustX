@@ -172,7 +172,8 @@ identity changes, including at the same URL. Endpoint identity is the existing
 Product Host generates its own per-instance `WorkspaceCatalog.authorityId`; display
 classification submits that identity and a replacement Host refuses it with the
 HTTP-preserved `authority_replaced` kind. That definitive observation immediately
-retires display evidence, even if the replacement catalog read fails. Host-object
+retires display evidence, even if the next explicit catalog read fails. The refusal
+does not start an automatic retry loop. Host-object
 replacement also constructs a new projection. None of these identifiers grant access.
 
 Native `session/list` summaries own the visible page's IDs/cwds; selected off-page
