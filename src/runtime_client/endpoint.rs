@@ -1,12 +1,15 @@
-//! Single-composition local stdio endpoint used by the existing TUI until #290.
+//! The typed request endpoint of one native Runtime Client host.
 //!
-//! This is not the App Server client boundary. New clients use
+//! This is not a client protocol boundary: clients use
 //! [`crate::app_server::connection::AppServerConnection`], which multiplexes
 //! Sessions and directly reuses native attachment/projection operations.
+//! In production the endpoint is served read-only over the child-owned live
+//! inspection socket; in-process callers drive a host's typed requests
+//! through it.
 //!
-//! [`RuntimeClientEndpoint`] is the boundary the local stdio adapter wraps. It
-//! accepts *every* Runtime Client request — including `initialize` — and returns the
-//! correlated response, so protocol semantics live here and nowhere else.
+//! [`RuntimeClientEndpoint`] accepts *every* Runtime Client request —
+//! including `initialize` — and returns the correlated response, so protocol
+//! semantics live here and nowhere else.
 //!
 //! # What a transport is
 //!
@@ -56,9 +59,9 @@
 //!
 //! No transport, framing, or I/O lives here: this module is semantic
 //! dispatch over the host. Ordinary requests are synchronous; `shutdown` and
-//! native Session control use the async entry point because their responses
-//! may mean runtime quiescence or active-lineage replacement rather than
-//! cancellation-request acceptance.
+//! the other awaiting requests use the async entry point because their
+//! responses may mean runtime quiescence rather than cancellation-request
+//! acceptance.
 
 use std::sync::{Arc, Mutex, Weak};
 
@@ -70,7 +73,7 @@ use super::types::{RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeC
 /// connection.
 ///
 /// Ordinary requests are handled synchronously and serialized against each
-/// other. `shutdown` and native Session control are handled through
+/// other. `shutdown` and the other awaiting requests are handled through
 /// [`Self::handle_request_async`] so their responses can await semantic
 /// quiescence without holding the attachment lock.
 pub struct RuntimeClientEndpoint {

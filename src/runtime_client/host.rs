@@ -44,8 +44,8 @@
 //! - `ConversationToolRuntime` / `CapabilityCoordinator` semantic ownership;
 //! - child interaction waiters, pending state, audit, cancellation,
 //!   settlement, or execution authority;
-//! - SessionCatalog/SessionGraph ownership (the optional native Session
-//!   control seam forwards to `LocalSessionAttachment`);
+//! - SessionCatalog/SessionGraph ownership (`SessionController` owns it and
+//!   App Server addresses it directly, never through this host);
 //! - cancellation terminal settlement (`AgentExecution` remains the attempt
 //!   execution/terminal authority);
 //! - background/subagent lifecycle.
@@ -119,8 +119,6 @@
 //! canonical conversation state, and capability state are untouched.
 
 use std::collections::BTreeMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -131,7 +129,7 @@ use super::snapshot::{
 };
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
-    RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
+    RuntimeClientProtocolEvent, RuntimeClientResult,
 };
 use crate::durable::{ConversationStore, TRANSCRIPT_PAGE_LIMIT_MAX};
 use crate::model::catalog::ModelCatalogView;
@@ -210,40 +208,6 @@ impl core::fmt::Display for HostConstructionError {
 }
 
 impl std::error::Error for HostConstructionError {}
-
-/// The typed native Session control seam installed by the local product
-/// composition. Runtime Client owns only protocol adaptation; the
-/// implementation remains in `LocalSessionAttachment`.
-pub type SessionControlFuture =
-    Pin<Box<dyn Future<Output = Result<RuntimeClientResult, RuntimeClientError>> + Send>>;
-
-pub trait RuntimeClientSessionControl: Send + Sync {
-    /// Handles one native Session intent. The returned future owns any
-    /// quiescence await; no host lock is held across it.
-    fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture;
-
-    /// Persists a live model candidate for the active local Session before
-    /// the `ConversationRuntime` replaces its authoritative configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed Runtime Client error when the product metadata cannot
-    /// be durably updated.
-    fn persist_model(&self, config: SessionModelConfig) -> Result<(), RuntimeClientError>;
-
-    /// Fences conversation/runtime operations after the native Session owner
-    /// has reached its terminal replacement-required state. Read-only native
-    /// Session metadata requests are handled through `handle` and may remain
-    /// available; ordinary runtime operations must not use the stale runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::SessionRestartRequired`] when this
-    /// attachment can no longer use its conversation runtime.
-    fn ensure_live(&self) -> Result<(), RuntimeClientError> {
-        Ok(())
-    }
-}
 
 /// The host-owned attachment state.
 pub(crate) struct AttachmentState {
@@ -356,10 +320,6 @@ pub(crate) struct ClientInner {
     /// The bounded replay setting used when a durable inspection projection is
     /// rebuilt from authoritative state.
     replay_limit: usize,
-    /// Optional native product Session owner. Low-level conversation hosts
-    /// intentionally leave this absent; the local product installs exactly
-    /// one supervisor here.
-    session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
     /// The one projection synchronization boundary.
     state: Arc<Mutex<ClientState>>,
     /// The observation queue shared with the conversation runtime (the
@@ -710,7 +670,6 @@ impl ClientInner {
         subscribe: bool,
     ) -> Result<super::attachment::AttachedSnapshot, RuntimeClientError> {
         let read_only_attachment = self.read_only || read_only_attachment;
-        self.ensure_session_runtime_live()?;
         self.ensure_worker();
         if self.read_only {
             self.refresh_durable_projection()?;
@@ -1075,7 +1034,6 @@ impl ClientInner {
                 message: "Trace refresh limit is 512".into(),
             });
         }
-        self.ensure_session_runtime_live()?;
         if self.read_only {
             self.refresh_durable_projection()?;
         }
@@ -1142,7 +1100,6 @@ impl ClientInner {
         limit: usize,
         records: Vec<super::trace::TraceCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         if limit == 0 || limit > super::trace::TRACE_PAGE_LIMIT {
             return Err(RuntimeClientError::InvalidRequest {
                 message: "Trace limit must be 1..=32".into(),
@@ -1194,7 +1151,6 @@ impl ClientInner {
         &self,
         record_id: String,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         if record_id.len() > 256 {
             return Err(RuntimeClientError::InvalidRequest {
                 message: "Trace record identity is too long".into(),
@@ -1232,7 +1188,6 @@ impl ClientInner {
         limit: usize,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         validate_transcript_page_limit(limit)?;
-        self.ensure_session_runtime_live()?;
         let page = read_transcript_page(self.store.as_ref(), before, limit, || {
             let through = self.lock_state().projection.snapshot_cut()?.2;
             Ok(through)
@@ -1248,7 +1203,6 @@ impl ClientInner {
         limit: usize,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         validate_transcript_page_limit(limit)?;
-        self.ensure_session_runtime_live()?;
         let runtime = self
             .runtime
             .as_ref()
@@ -1295,7 +1249,6 @@ impl ClientInner {
         ),
         RuntimeClientError,
     > {
-        self.ensure_session_runtime_live()?;
         if limit == 0 || limit > TRANSCRIPT_PAGE_LIMIT_MAX {
             return Err(RuntimeClientError::InvalidRequest {
                 message: format!(
@@ -1374,7 +1327,6 @@ impl ClientInner {
         attachment_id: &AttachmentId,
         after_cursor: RuntimeClientCursor,
     ) -> Result<(EventSubscription, RuntimeClientResult), RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         self.ensure_worker();
         let mut state = self.lock_state();
         let previous_subscriber = if state
@@ -1458,7 +1410,6 @@ impl ClientInner {
         crate::local_runtime::configuration::settings::EffectiveConfiguration,
         RuntimeClientError,
     > {
-        self.ensure_session_runtime_live()?;
         self.runtime
             .as_ref()
             .and_then(super::super::runtime::conversation_runtime::ConversationRuntime::configuration_view)
@@ -1469,7 +1420,6 @@ impl ClientInner {
 
     /// Read the native capability projection.
     pub(crate) fn capability(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         let snapshot = state.projection.snapshot_ref_checked()?;
         Ok(RuntimeClientResult::Capability {
@@ -1488,7 +1438,6 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::ProjectionExhausted`] when the
     /// observation stream is over.
     pub(crate) fn model_catalog(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
@@ -1505,7 +1454,6 @@ impl ClientInner {
         id: &crate::runtime::identity::ArtifactId,
     ) -> Result<String, RuntimeClientError> {
         use base64::Engine;
-        self.ensure_session_runtime_live()?;
         let runtime = self
             .runtime
             .as_ref()
@@ -1530,7 +1478,6 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::ProjectionExhausted`] when the
     /// observation stream is over.
     pub(crate) fn model_get(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         let state = self.lock_state();
         let snapshot = state.projection.snapshot_ref_checked()?;
         Ok(RuntimeClientResult::Model {
@@ -1572,24 +1519,11 @@ impl ClientInner {
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
-        let control = self.session_control.as_ref().map(Arc::clone);
         let view = self
             .runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .model_set_with_persistence(config, |config| {
-                if let Some(control) = control {
-                    control.persist_model(config).map_err(|error| match error {
-                        RuntimeClientError::SessionRestartRequired { message } => {
-                            ModelUpdateError::SessionRestartRequired { message }
-                        }
-                        error => ModelUpdateError::PersistenceFailed {
-                            message: format!("cannot persist active Session model: {error:?}"),
-                        },
-                    })?;
-                }
-                Ok(())
-            })
+            .model_set(config)
             .map_err(|error| match error {
                 ModelUpdateError::ConfigurationAdoption { rejection } => {
                     RuntimeClientError::ConfigurationAdoption { rejection }
@@ -1603,12 +1537,6 @@ impl ClientInner {
                 ModelUpdateError::DurabilityFailed { message } => {
                     RuntimeClientError::InvalidState { message }
                 }
-                ModelUpdateError::PersistenceFailed { message } => {
-                    RuntimeClientError::SessionFailure { message }
-                }
-                ModelUpdateError::SessionRestartRequired { message } => {
-                    RuntimeClientError::SessionRestartRequired { message }
-                }
             })?;
         Ok(RuntimeClientResult::ModelSet {
             model: Box::new(view),
@@ -1619,7 +1547,6 @@ impl ClientInner {
         &self,
         id: &ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         let snapshot = self
             .runtime
             .as_ref()
@@ -1632,15 +1559,14 @@ impl ClientInner {
         })
     }
 
-    pub(crate) fn job_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+    pub(crate) fn job_list(&self) -> RuntimeClientResult {
         use crate::tools::background::MAX_JOB_LIST_LIMIT;
-        self.ensure_session_runtime_live()?;
         let listing = self.runtime.as_ref().map(|runtime| {
             runtime
                 .background_registry()
                 .listing(false, MAX_JOB_LIST_LIMIT)
         });
-        Ok(RuntimeClientResult::Jobs {
+        RuntimeClientResult::Jobs {
             jobs: listing
                 .as_ref()
                 .map(|listing| listing.snapshots.iter().map(background_view).collect())
@@ -1649,7 +1575,7 @@ impl ClientInner {
             matched: listing.as_ref().map_or(0, |listing| listing.matched),
             limit: MAX_JOB_LIST_LIMIT,
             truncated: listing.as_ref().is_some_and(|listing| listing.truncated),
-        })
+        }
     }
 
     pub(crate) async fn job_wait(
@@ -1659,8 +1585,6 @@ impl ClientInner {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         if cancel {
             self.ensure_writable_runtime()?;
-        } else {
-            self.ensure_session_runtime_live()?;
         }
         let runtime = self.runtime.as_ref().ok_or_else(|| {
             RuntimeClientError::UnknownBackgroundExecution {
@@ -1692,7 +1616,6 @@ impl ClientInner {
     fn agent_registry(
         &self,
     ) -> Result<&crate::runtime::subagent::SubagentRegistry, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
         self.runtime
             .as_ref()
             .and_then(|r| r.subagent_registry())
@@ -1894,27 +1817,6 @@ impl ClientInner {
         Ok(RuntimeClientResult::ShutdownCompleted)
     }
 
-    /// Forwards native Session control to the product owner. This adapter
-    /// owns no catalog, graph, or selection state itself.
-    pub(crate) async fn session_request(
-        &self,
-        request: RuntimeClientSessionRequest,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let Some(control) = self.session_control.as_ref() else {
-            return Err(RuntimeClientError::InvalidState {
-                message: "this Runtime Client host is not attached to a local Session product"
-                    .to_owned(),
-            });
-        };
-        control.handle(request).await
-    }
-
-    fn ensure_session_runtime_live(&self) -> Result<(), RuntimeClientError> {
-        self.session_control
-            .as_ref()
-            .map_or(Ok(()), |control| control.ensure_live())
-    }
-
     /// Fences every semantic mutation from a durable inspection host. The
     /// read-only host owns no coordinator, mailbox, registry, or lifecycle
     /// handle, so an inspection client cannot accidentally become an
@@ -1925,7 +1827,6 @@ impl ClientInner {
                 message: "conversation inspection is read-only".to_owned(),
             });
         }
-        self.ensure_session_runtime_live()?;
         if self.runtime.is_none() {
             return Err(RuntimeClientError::InvalidState {
                 message: "the conversation runtime is unavailable".to_owned(),
@@ -2098,14 +1999,14 @@ impl RuntimeClientHost {
     /// headless observation bridge already exists over the runtime, or
     /// [`HostConstructionError::Durable`] when native durable bootstrap fails.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
-        Self::construct(config, None)
+        Self::construct(config)
     }
 
     /// Creates a read-only Runtime Client host over a known conversation's
     /// durable store.
     ///
-    /// This is the generic conversation-attachment primitive used by child
-    /// inspection. It does not construct a [`ConversationRuntime`], install
+    /// This is the generic read-only conversation-attachment primitive over
+    /// durable authorities. It does not construct a [`ConversationRuntime`], install
     /// an observation bridge, claim a mailbox, or acquire an execution
     /// lifecycle. The store supplies the current Surface/transcript and the
     /// Event Journal is folded into the same ordinary Runtime Client
@@ -2142,7 +2043,6 @@ impl RuntimeClientHost {
             store,
             read_only: true,
             replay_limit,
-            session_control: None,
             state: Arc::new(Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
@@ -2166,32 +2066,7 @@ impl RuntimeClientHost {
         Ok(Self { inner })
     }
 
-    /// Creates a host over one runtime and installs the native Session
-    /// control seam used by the local product composition.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`HostConstructionError`] when the runtime is already bound,
-    /// activated, or cannot provide a coherent observation bootstrap.
-    pub fn new_with_session_control(
-        config: RuntimeClientHostConfig,
-        session_control: Arc<dyn RuntimeClientSessionControl>,
-    ) -> Result<Self, HostConstructionError> {
-        Self::construct(config, Some(session_control))
-    }
-
-    /// Local composition supplies immutable resolver facts and its bounded disk writer.
-    pub(crate) fn new_with_control(
-        config: RuntimeClientHostConfig,
-        session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
-    ) -> Result<Self, HostConstructionError> {
-        Self::construct(config, session_control)
-    }
-
-    fn construct(
-        config: RuntimeClientHostConfig,
-        session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
-    ) -> Result<Self, HostConstructionError> {
+    fn construct(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
         // ---- Ownership commit: the one-time binding claim. ----
         //
         // The claim is the linearization point that gates every later
@@ -2281,7 +2156,6 @@ impl RuntimeClientHost {
             store,
             read_only: false,
             replay_limit,
-            session_control,
             state: Arc::new(Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
@@ -2349,9 +2223,9 @@ impl RuntimeClientHost {
 
     /// Creates the transport-neutral semantic endpoint of this runtime.
     ///
-    /// This endpoint serves the temporary pre-#290 local Runtime Client
-    /// binding (Issue #38 stdio/JSONL). Issue #36's stdio and WebSocket
-    /// bindings instead wrap `AppServerConnection`. This endpoint accepts every
+    /// This is an in-process typed request surface; no process serves it as a
+    /// client protocol (App Server's stdio and WebSocket transports wrap
+    /// `AppServerConnection`). This endpoint accepts every
     /// [`RuntimeClientRequest`](super::types::RuntimeClientRequest),
     /// including `initialize`, and returns the correlated
     /// [`RuntimeClientResponse`](super::types::RuntimeClientResponse). A
@@ -2912,14 +2786,13 @@ mod tests {
         AgentStatusClock, AgentStatusConfig, AgentStatusEngine, DefaultTokenEstimator,
         TokenEstimator,
     };
-    use crate::conversation::SurfaceRevision;
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+    use crate::local_runtime::SessionCatalog;
     use crate::local_runtime::session::SessionPersistentState;
-    use crate::local_runtime::{CurrentRuntimeConfig, LocalSessionAttachment, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
         ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::adapter::{ModelAdapter, ModelStream};
@@ -2937,7 +2810,6 @@ mod tests {
     };
     use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::RuntimeClock;
-    use crate::runtime_client::endpoint::RuntimeClientEndpoint;
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::HostConstructionError;
     use crate::runtime_client::snapshot::RuntimeClientAttemptPhase;
@@ -4653,97 +4525,6 @@ mod tests {
         .await
         .expect("provider invocation must settle")
         .expect("provider request-count signal must stay open");
-    }
-
-    /// Seeds one real settled user turn and returns the exact retained
-    /// Surface revision selected for a fork/tree transition. The loop waits
-    /// on the runtime's durable head, not on a scheduling delay.
-    async fn await_text_boundary(
-        runtime: &ConversationRuntime,
-        adapter: &GatedAdapter,
-        text: &str,
-    ) -> (SurfaceRevision, MessageId, Vec<MessageBlock>) {
-        let message_id = runtime
-            .submit_inbound(submit_content(text))
-            .expect("boundary turn accepted")
-            .message_id;
-        await_adapter_request_count(adapter, 1).await;
-        tokio::time::timeout(std::time::Duration::from_mins(2), async {
-            loop {
-                let (revision, messages) = runtime
-                    .historical_head_snapshot()
-                    .expect("historical head snapshot");
-                let found_user = messages.iter().any(
-                    |message| matches!(message, MessageBlock::User(user) if user.id == message_id),
-                );
-                let found_assistant = messages
-                    .iter()
-                    .any(|message| matches!(message, MessageBlock::Assistant(_)));
-                if found_user && found_assistant {
-                    return (revision, message_id.clone(), messages);
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("settled boundary must become durable")
-    }
-
-    fn catalog_conversation(
-        catalog_root: &std::path::Path,
-        session_id: &str,
-        conversation_id: &crate::runtime::identity::ConversationId,
-    ) -> Vec<MessageBlock> {
-        let path = catalog_root
-            .join("sessions")
-            .join(session_id)
-            .join("conversations")
-            .join(conversation_id.as_str())
-            .join("conversation.sqlite");
-        SqliteConversationStore::open(conversation_id.clone(), &path)
-            .expect("destination conversation store")
-            .load_canonical()
-            .expect("destination canonical history")
-    }
-
-    /// Accepts one durable Pending Inbound prompt into the catalog-owned
-    /// conversation store of the active Session — the exact durable boundary
-    /// that makes a Session used and resume-visible. The fixture runtime
-    /// owns a *separate* store file for the same `ConversationId`, so a
-    /// runtime-side `submit_inbound` never reaches the catalog's
-    /// classification authority; Session-lifecycle assertions must write
-    /// through the catalog's own store.
-    fn source_session_id(root: impl AsRef<std::path::Path>) -> crate::local_runtime::SessionId {
-        // The fixture's first Session is chosen by catalog ordinal, not UUID order.
-        let catalog = SessionCatalog::open_existing(root.as_ref())
-            .unwrap()
-            .unwrap();
-        catalog.persisted_session_ids().into_iter().next().unwrap()
-    }
-
-    fn accept_catalog_pending_inbound(catalog_root: &std::path::Path, text: &str) {
-        let catalog = SessionCatalog::open_existing(catalog_root)
-            .expect("open catalog")
-            .expect("catalog exists");
-        let (session_id, node, _) = catalog
-            .lineage(&source_session_id(catalog_root), None)
-            .map(|(node, state)| (source_session_id(catalog_root), node, state))
-            .expect("active lineage");
-        let store = SqliteConversationStore::open(
-            node.conversation_id.clone(),
-            &catalog.database_path(&session_id, &node.conversation_id),
-        )
-        .expect("catalog conversation store");
-        store
-            .accept_inbound(crate::durable::InboundDraft {
-                message_id: None,
-                source: UserSource::Human,
-                kind: InboundKind::Message,
-                content: submit_content(text),
-                timestamp: chrono::Utc::now(),
-                correlation: None,
-            })
-            .expect("accept catalog pending inbound");
     }
 
     /// Submitting while an attempt is running queues the message in the
@@ -6909,7 +6690,7 @@ mod tests {
             matched,
             limit,
             truncated,
-        } = fixture.host.inner.job_list().unwrap()
+        } = fixture.host.inner.job_list()
         else {
             panic!("jobs")
         };
@@ -7956,7 +7737,6 @@ mod tests {
     /// Client host, so a test controls host construction itself (the
     /// Issue #61 bootstrap regressions).
     struct RuntimeOnlyFixture {
-        host_owner: Option<RuntimeClientHost>,
         _dir: tempfile::TempDir,
         runtime: ConversationRuntime,
     }
@@ -7968,24 +7748,7 @@ mod tests {
         tools: ToolRegistry,
         probe: Option<CoordinatorProbe>,
     ) -> (Arc<GatedAdapter>, RuntimeOnlyFixture) {
-        runtime_only_fixture_with_conversation_id(
-            scripts,
-            tools,
-            probe,
-            ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"),
-        )
-        .await
-    }
-
-    /// Builds the same runtime-only fixture with an explicit conversation
-    /// identity. Session-aware tests use the catalog's deterministic initial
-    /// identity instead of coupling the runtime to the old fixture label.
-    async fn runtime_only_fixture_with_conversation_id(
-        scripts: Vec<Vec<GatedStep>>,
-        tools: ToolRegistry,
-        probe: Option<CoordinatorProbe>,
-        conversation_id: ConversationId,
-    ) -> (Arc<GatedAdapter>, RuntimeOnlyFixture) {
+        let conversation_id = ConversationId::new("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b");
         let adapter = Arc::new(GatedAdapter::new(scripts));
         let dir = tempfile::tempdir().expect("temp dir");
         let workspace = dir.path().join("workspace");
@@ -8073,485 +7836,22 @@ mod tests {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
             None => ConversationRuntime::new(config).expect("runtime"),
         };
-        (
-            adapter,
-            RuntimeOnlyFixture {
-                host_owner: None,
-                _dir: dir,
-                runtime,
-            },
-        )
+        (adapter, RuntimeOnlyFixture { _dir: dir, runtime })
     }
 
-    /// Builds the real Runtime Client/session-owner boundary over a scripted
-    /// runtime. The catalog is deliberately separate from the fixture's
-    /// private conversation store: this test exercises the ownership seam,
-    /// while the supervisor still gets the same `ConversationId` identity.
-    async fn local_session_endpoint(
-        scripts: Vec<Vec<GatedStep>>,
-        probe: Option<CoordinatorProbe>,
-    ) -> (
-        Arc<GatedAdapter>,
-        RuntimeOnlyFixture,
-        RuntimeClientEndpoint,
-        Arc<LocalSessionAttachment>,
-        tempfile::TempDir,
-        CurrentRuntimeConfig,
-    ) {
-        let catalog_root = tempfile::tempdir().expect("catalog root");
-        let config = CurrentRuntimeConfig::from_toml_slice(
-            br#"agent_id = "agent-a"
-
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
-
-[agent]
-[agent.model]
-model = "scripted/scripted"
-"#,
-        )
-        .expect("current runtime config");
-        let catalog = SessionCatalog::create(
-            catalog_root.path(),
-            &SessionPersistentState {
-                model: Some(config.initial_model().clone().clone()),
-                ..SessionPersistentState::from_input(
-                    &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
-                )
-            },
-        )
-        .expect("catalog");
-        let (adapter, mut fixture) = runtime_only_fixture_with_conversation_id(
-            scripts,
-            ToolRegistry::new(),
-            probe,
-            catalog
-                .lineage(&source_session_id(&catalog_root), None)
-                .unwrap()
-                .0
-                .conversation_id,
-        )
-        .await;
-        let supervisor = Arc::new(LocalSessionAttachment::new(
-            catalog,
-            source_session_id(&catalog_root),
-            SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
-                catalog_root.path().to_path_buf(),
-            )),
-            0,
-        ));
-        let host = RuntimeClientHost::new_with_session_control(
-            RuntimeClientHostConfig {
-                runtime: fixture.runtime.clone(),
-                replay_limit: None,
-            },
-            supervisor.clone(),
-        )
-        .expect("session-aware host");
-        fixture.runtime.activate();
-        supervisor
-            .install_runtime(fixture.runtime.clone())
-            .await
-            .expect("install runtime");
-        let endpoint = RuntimeClientEndpoint::new(&host);
-        fixture.host_owner = Some(host);
-        (adapter, fixture, endpoint, supervisor, catalog_root, config)
-    }
-
-    fn initialize_endpoint(endpoint: &RuntimeClientEndpoint) {
-        let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
-            id: crate::runtime_client::RequestId::new(1),
-            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        });
-        assert!(response.error.is_none(), "initialize failed: {response:?}");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn catalog_publication_outcomes_leave_other_session_attachment_live() {
-        for post in [false, true] {
-            let (_, _composition, endpoint, supervisor, root, _) =
-                local_session_endpoint(Vec::new(), None).await;
-            initialize_endpoint(&endpoint);
-            if post {
-                supervisor.arm_catalog_write_fault_after_rename().await;
-            } else {
-                supervisor.arm_catalog_write_fault_before_rename().await;
-            }
-            let response = endpoint
-                .handle_request_async(RuntimeClientRequest::SessionNew {
-                    id: crate::runtime_client::RequestId::new(2),
-                })
-                .await;
-            if post {
-                assert!(matches!(
-                    response.result,
-                    Some(RuntimeClientResult::SessionCommittedRestartRequired { .. })
-                ));
-            } else {
-                assert!(matches!(
-                    response.error,
-                    Some(RuntimeClientError::SessionFailure { .. })
-                ));
-            }
-            assert!(
-                endpoint
-                    .handle_request(RuntimeClientRequest::SnapshotGet {
-                        id: crate::runtime_client::RequestId::new(3)
-                    })
-                    .error
-                    .is_none(),
-                "catalog failures do not quiesce the attached runtime"
-            );
-            let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
-            assert_eq!(
-                catalog.persisted_session_ids().len(),
-                if post { 2 } else { 1 }
-            );
-            assert_eq!(
-                supervisor.current().await.unwrap().id,
-                source_session_id(root.path())
-            );
-            assert!(supervisor.new_session().await.is_ok());
-        }
-    }
-
-    /// `/new` asks for an empty Session, and an untouched empty active
-    /// Session already is one. The command is then a semantic no-op — same
-    /// Session, same node, same conversation, byte-identical catalog, live
-    /// runtime — while the same command over a used Session remains a real
-    /// switch.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn session_new_always_creates_an_independent_identity() {
-        let (_, _composition, endpoint, supervisor, root, _) =
-            local_session_endpoint(Vec::new(), None).await;
-        initialize_endpoint(&endpoint);
-        let initial = supervisor.current().await.unwrap();
-        let a = supervisor.new_session().await.unwrap();
-        let b = supervisor.new_session().await.unwrap();
-        assert_ne!(a.session.id, initial.id);
-        assert_ne!(b.session.id, a.session.id);
-        assert_eq!(supervisor.current().await.unwrap(), initial);
-        let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
-        assert_eq!(catalog.list_page(None, 0, 32).unwrap().sessions.len(), 3);
-        assert!(
-            endpoint
-                .handle_request(RuntimeClientRequest::SnapshotGet {
-                    id: crate::runtime_client::RequestId::new(4)
-                })
-                .error
-                .is_none()
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn fork_pre_rename_failure_is_terminal_without_committed_draft() {
-        let prompt = "fork-draft-exact-pre-7f3b";
-        let (adapter, fixture, endpoint, supervisor, catalog_root, _config) =
-            local_session_endpoint(vec![one_turn_stop()], None).await;
-        initialize_endpoint(&endpoint);
-        let (revision, message_id, source_messages) =
-            await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        // The runtime-side turn lives in the fixture store; the catalog's
-        // own store is the classification authority, so the source Session
-        // owns durable user work there too.
-        accept_catalog_pending_inbound(catalog_root.path(), "source work");
-        let source = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open source catalog")
-            .expect("source catalog")
-            .snapshot(&source_session_id(&catalog_root))
-            .expect("source snapshot");
-
-        supervisor.arm_catalog_write_fault_before_rename().await;
-        let response = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionFork {
-                id: crate::runtime_client::RequestId::new(20),
-                surface_revision: revision,
-                message_id,
-            })
-            .await;
-        assert!(matches!(
-            response.error,
-            Some(RuntimeClientError::SessionFailure { .. })
-        ));
-        assert!(
-            response.result.is_none(),
-            "pre-commit failure has no transition result"
-        );
-
-        let reopened = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open source")
-            .expect("reopen source");
-        assert_eq!(
-            reopened
-                .snapshot(&source_session_id(&catalog_root))
-                .expect("active source after failure")
-                .id,
-            source.id
-        );
-        assert_eq!(
-            reopened
-                .list_page(None, 0, crate::local_runtime::SESSION_LIST_PAGE_LIMIT)
-                .expect("source page")
-                .sessions
-                .len(),
-            1,
-            "the prepared destination is not catalog-visible before rename"
-        );
-        assert_eq!(
-            fixture
-                .runtime
-                .historical_head_snapshot()
-                .expect("source history after failed fork")
-                .1,
-            source_messages,
-            "source lineage remains unchanged"
-        );
-
-        let duplicate = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionFork {
-                id: crate::runtime_client::RequestId::new(21),
-                surface_revision: revision,
-                message_id: MessageId::new(prompt),
-            })
-            .await;
-        assert!(matches!(
-            duplicate.error,
-            Some(RuntimeClientError::SessionFailure { .. })
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn fork_post_rename_failure_carries_exact_uncommitted_editor_payload() {
-        let prompt = "fork-draft-exact-7f3b";
-        let (adapter, fixture, endpoint, supervisor, catalog_root, _config) =
-            local_session_endpoint(vec![one_turn_stop()], None).await;
-        initialize_endpoint(&endpoint);
-        let (revision, message_id, source_messages) =
-            await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        // The runtime-side turn lives in the fixture store; the catalog's
-        // own store is the classification authority, so the source Session
-        // owns durable user work there too.
-        accept_catalog_pending_inbound(catalog_root.path(), "source work");
-        let source = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open source catalog")
-            .expect("source catalog")
-            .snapshot(&source_session_id(&catalog_root))
-            .expect("source snapshot");
-
-        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
-        let release = gate.arm_scoped();
-        supervisor.install_copy_publication_gate(gate.clone());
-        let (response, ()) = tokio::join!(
-            endpoint.handle_request_async(RuntimeClientRequest::SessionFork {
-                id: crate::runtime_client::RequestId::new(30),
-                surface_revision: revision,
-                message_id,
-            }),
-            async {
-                tokio::task::spawn_blocking(move || gate.wait_entered())
-                    .await
-                    .unwrap();
-                supervisor.arm_catalog_write_fault_after_rename().await;
-                drop(release);
-            }
-        );
-        let Some(RuntimeClientResult::SessionCommittedRestartRequired {
-            session,
-            editor_content,
-            diagnostic,
-        }) = response.result
-        else {
-            panic!("post-commit fork must carry a typed transition result: {response:?}");
-        };
-        assert!(response.error.is_none());
-        assert!(diagnostic.contains("durability is uncertain"));
-        assert_eq!(
-            editor_content,
-            Some(vec![
-                crate::local_runtime::session::uploads::UserInputBlock::Text(
-                    crate::message::content::TextBlock {
-                        text: prompt.into()
-                    }
-                )
-            ])
-        );
-
-        let reopened = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open fork")
-            .expect("reopen fork");
-        let authoritative = reopened.snapshot(&session.id).expect("authoritative fork");
-        assert_eq!(authoritative.id, session.id);
-        assert_ne!(
-            authoritative.active_conversation_id,
-            source.active_conversation_id
-        );
-        assert_eq!(
-            reopened
-                .list_page(None, 0, crate::local_runtime::SESSION_LIST_PAGE_LIMIT)
-                .expect("fork page")
-                .sessions
-                .len(),
-            2
-        );
-
-        let destination = catalog_conversation(
-            catalog_root.path(),
-            session.id.as_str(),
-            &session.active_conversation_id,
-        );
-        assert!(!destination.iter().any(|message| {
-            matches!(message, MessageBlock::User(user) if user.content.iter().any(|content| {
-                matches!(content, UserContentBlock::Text(text) if text.text == prompt)
-            }))
-        }));
-        assert_eq!(
-            fixture
-                .runtime
-                .historical_head_snapshot()
-                .expect("source history after committed fork")
-                .1,
-            source_messages,
-            "source lineage remains unchanged"
-        );
-
-        let duplicate = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionNew {
-                id: crate::runtime_client::RequestId::new(31),
-            })
-            .await;
-        assert!(
-            duplicate.error.is_none(),
-            "a committed fork does not fence other Sessions"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn tree_post_rename_failure_carries_exact_uncommitted_editor_payload() {
-        let prompt = "tree-draft-exact-7f3b";
-        let (adapter, fixture, endpoint, supervisor, catalog_root, _config) =
-            local_session_endpoint(vec![one_turn_stop()], None).await;
-        initialize_endpoint(&endpoint);
-        let (revision, message_id, source_messages) =
-            await_text_boundary(&fixture.runtime, &adapter, prompt).await;
-        let source = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open source catalog")
-            .expect("source catalog")
-            .snapshot(&source_session_id(&catalog_root))
-            .expect("source snapshot");
-
-        supervisor.arm_catalog_write_fault_after_rename().await;
-        let response = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionTreeBranch {
-                id: crate::runtime_client::RequestId::new(40),
-                surface_revision: revision,
-                message_id,
-            })
-            .await;
-        let Some(RuntimeClientResult::SessionCommittedRestartRequired {
-            session,
-            editor_content,
-            diagnostic,
-        }) = response.result
-        else {
-            panic!("post-commit tree branch must carry a typed transition result: {response:?}");
-        };
-        assert!(response.error.is_none());
-        assert!(diagnostic.contains("durability is uncertain"));
-        assert_eq!(
-            editor_content,
-            Some(vec![
-                crate::local_runtime::session::uploads::UserInputBlock::Text(
-                    crate::message::content::TextBlock {
-                        text: prompt.into()
-                    }
-                )
-            ])
-        );
-        assert_eq!(session.id, source.id);
-        assert_ne!(session.active_node, source.active_node);
-
-        let reopened = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open tree")
-            .expect("reopen tree");
-        let authoritative = reopened
-            .snapshot(&source_session_id(&catalog_root))
-            .expect("authoritative tree node");
-        assert_eq!(authoritative.id, source.id);
-        assert_eq!(authoritative.active_node, session.active_node);
-        assert_eq!(authoritative.node_count, 2);
-        let destination = catalog_conversation(
-            catalog_root.path(),
-            session.id.as_str(),
-            &session.active_conversation_id,
-        );
-        assert!(!destination.iter().any(|message| {
-            matches!(message, MessageBlock::User(user) if user.content.iter().any(|content| {
-                matches!(content, UserContentBlock::Text(text) if text.text == prompt)
-            }))
-        }));
-        assert_eq!(
-            fixture
-                .runtime
-                .historical_head_snapshot()
-                .expect("source history after committed tree branch")
-                .1,
-            source_messages,
-            "source node remains unchanged"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn model_catalog_visibility_uncertainty_fences_the_live_runtime_typed() {
-        let (_adapter, fixture, endpoint, supervisor, catalog_root, _config) =
-            local_session_endpoint(Vec::new(), None).await;
-        initialize_endpoint(&endpoint);
-        let before = fixture.runtime.model_config();
-        let candidate = marked_model_config(&fixture.runtime, "post-rename");
-        supervisor.arm_catalog_write_fault_after_rename().await;
-
-        let response = endpoint.handle_request(RuntimeClientRequest::ModelSet {
-            id: crate::runtime_client::RequestId::new(2),
-            config: Box::new(candidate.clone()),
-        });
-        assert!(matches!(
-            response.error,
-            Some(RuntimeClientError::SessionRestartRequired { .. })
-        ));
-        assert_eq!(
-            fixture.runtime.model_config(),
-            before,
-            "the live runtime candidate is not installed after catalog publication uncertainty"
-        );
-
-        let reopened = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open catalog")
-            .expect("reopen catalog");
-        let (_, _, reopened_config) = reopened
-            .lineage(&source_session_id(&catalog_root), None)
-            .map(|(node, state)| (source_session_id(&catalog_root), node, state))
-            .expect("active lineage");
-        assert_eq!(
-            reopened_config.model,
-            Some(candidate),
-            "the catalog crossed visibility even though its durability barrier was uncertain"
-        );
-        let stale = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
-            id: crate::runtime_client::RequestId::new(3),
-        });
-        assert!(matches!(
-            stale.error,
-            Some(RuntimeClientError::SessionRestartRequired { .. })
-        ));
-    }
-
+    /// Durable Session creation is independent of execution: while another
+    /// Session's runtime holds an in-flight provider request, the native
+    /// catalog owner still publishes a new Session without touching that
+    /// runtime or issuing a model request.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn session_create_publishes_while_another_session_provider_is_blocked() {
         let (release_tx, release_rx) = model_release();
-        let (adapter, fixture, _, supervisor, root, _) = local_session_endpoint(
+        let catalog_root = tempfile::tempdir().expect("catalog root");
+        let template = SessionPersistentState::from_input(
+            &crate::local_runtime::SessionConfigInput::new(catalog_root.path().to_path_buf()),
+        );
+        let catalog = SessionCatalog::create(catalog_root.path(), &template).expect("catalog");
+        let (adapter, fixture) = runtime_only_fixture(
             vec![vec![
                 GatedStep::Emit(ModelEvent::Started),
                 GatedStep::ParkUntilReleased(release_rx),
@@ -8560,20 +7860,22 @@ model = "scripted/scripted"
                     usage: None,
                 }),
             ]],
+            ToolRegistry::new(),
             None,
         )
         .await;
+        let controller = crate::local_runtime::session_controller::SessionController::new(catalog);
+        fixture.runtime.activate();
         fixture
             .runtime
             .submit_inbound(submit_content("unsettled turn"))
             .unwrap();
         await_adapter_request_count(&adapter, 1).await;
-        let before = supervisor.current().await.unwrap();
-        let created = supervisor.new_session().await.unwrap();
-        assert_ne!(created.session.id, before.id);
-        assert_eq!(supervisor.current().await.unwrap(), before);
+        let before = controller.list_sessions(None, 0, 8).await.unwrap().sessions;
+        let created = controller.create_session(template).await.unwrap();
+        assert!(before.iter().all(|row| row.id != created.session.id));
         assert_eq!(
-            SessionCatalog::open_existing(root.path())
+            SessionCatalog::open_existing(catalog_root.path())
                 .unwrap()
                 .unwrap()
                 .persisted_session_ids()
@@ -8581,6 +7883,7 @@ model = "scripted/scripted"
             2
         );
         assert_eq!(adapter.requests().len(), 1);
+        assert!(fixture.runtime.has_current_attempt());
         let _ = release_tx.send(true);
         fixture.runtime.shutdown().await.unwrap();
     }

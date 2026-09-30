@@ -71,7 +71,12 @@ pub struct RuntimeAttachment {
 
 impl RuntimeAttachment {
     native_control!(job_status, false, id: &crate::runtime::identity::ToolExecutionId);
-    native_control!(job_list, false);
+    /// Read the finite Job listing through the native owner.
+    /// # Errors
+    /// A closed attachment is explicit.
+    pub fn job_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        Ok(self.access(false)?.job_list())
+    }
     native_control!(agent_status, false, id: &crate::runtime::identity::AgentId);
     native_control!(agent_list, false);
     native_control!(agent_transcript_page, false, id: &crate::runtime::identity::AgentId, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
@@ -303,20 +308,8 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ModelCatalogGet { .. } => inner.model_catalog(),
             RuntimeClientRequest::ModelGet { .. } => inner.model_get(),
             RuntimeClientRequest::ModelSet { config, .. } => inner.model_set(*config),
-            RuntimeClientRequest::SessionDeletePreview { .. }
-            | RuntimeClientRequest::SessionList { .. }
-            | RuntimeClientRequest::SessionGet { .. }
-            | RuntimeClientRequest::SessionTreeGet { .. }
-            | RuntimeClientRequest::SessionName { .. }
-            | RuntimeClientRequest::SessionNew { .. }
-            | RuntimeClientRequest::SessionSelect { .. }
-            | RuntimeClientRequest::SessionClone { .. }
-            | RuntimeClientRequest::SessionFork { .. }
-            | RuntimeClientRequest::SessionTreeBranch { .. } => {
-                unreachable!("native Session requests are handled asynchronously")
-            }
             RuntimeClientRequest::JobStatus { job_id, .. } => inner.job_status(&job_id),
-            RuntimeClientRequest::JobList { .. } => inner.job_list(),
+            RuntimeClientRequest::JobList { .. } => Ok(inner.job_list()),
             RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
             RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
             RuntimeClientRequest::AgentTranscript {
@@ -435,17 +428,6 @@ impl RuntimeAttachment {
             }
             if let RuntimeClientRequest::SubagentWorkspaceDispose { subagent_id, .. } = &request {
                 let result = inner.subagent_workspace_dispose(subagent_id).await;
-                return match result {
-                    Ok(result) => RuntimeClientResponse {
-                        id,
-                        result: Some(result),
-                        error: None,
-                    },
-                    Err(error) => Self::error_response(id, error),
-                };
-            }
-            if let Some(session_request) = request.session_request() {
-                let result = inner.session_request(session_request).await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

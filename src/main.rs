@@ -1,13 +1,13 @@
 //! The rustX process entry point.
 //!
-//! `rustx app-server` composes a multi-Session App Server over stdio or WebSocket.
-//! Ordinary `rustx` retains the local Runtime Client path until the TUI migration.
+//! `rustx app-server --listen stdio|ws://IP:PORT` composes the multi-Session
+//! App Server, the only external product control protocol. The configuration
+//! subcommands (`config`, `doctor`, `workflow`, `init`) are offline native
+//! tools. A bare `rustx` prints help and starts nothing.
 //!
-//! In the normal runtime mode stdout carries Runtime Client protocol
-//! records and nothing else — there is no banner, no progress text, and
-//! no `println!` anywhere in the process. Every diagnostic goes to
-//! stderr, and a startup configuration failure exits non-zero having
-//! written zero bytes to stdout.
+//! Every diagnostic goes to stderr; there is no banner and no `println!`
+//! anywhere in the process. App Server stdout carries protocol records only,
+//! and configuration subcommands own stdout for their bounded reports.
 //!
 //! The internal `rustx --subagent-child` mode (Issue #60) is the one
 //! deliberate exception: there fd 0 is the reliable subagent control IPC

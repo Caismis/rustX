@@ -178,8 +178,9 @@ using barriers before removal and between worktree and branch removal.
 proves the local manager supplies spanning authority when its semantic store has
 no local lifecycle binding; no fake lock capability is implemented by the store.
 
-A live product controlling A can call `LocalSessionAttachment::inspect_deletion`
-for either A or B without switching, detaching or restarting A. Inspection
+A live product controlling A can call `DeletionTargetSnapshot::inspect` (the
+native preflight behind App Server `session/deletePreview`) for either A or B
+without switching, detaching or restarting A. Inspection
 retains no target allocation locks. At final deletion, independent target access
 blocks destructive exclusion; unrelated live children do not.
 

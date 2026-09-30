@@ -3,10 +3,8 @@ use std::{ffi::OsString, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum, builder::NonEmptyStringValueParser};
 
-use super::composition::StartupSession;
 use super::initialization::{InitializationRequest, Template};
 use super::launch::LaunchRequest;
-use super::session::{SessionId, SessionNodeId};
 
 /// Explicit native command intent; no clap types cross this boundary.
 #[derive(Debug)]
@@ -17,7 +15,6 @@ pub enum Command {
         request: LaunchRequest,
         json: bool,
     },
-    Launch(LaunchRequest),
     Help(String),
     Check {
         request: LaunchRequest,
@@ -48,7 +45,7 @@ impl Command {
             | Self::Show { json, .. }
             | Self::Doctor { json, .. }
             | Self::Init { json, .. } => *json,
-            Self::Launch(_) | Self::Help(_) | Self::AppServer(_) => false,
+            Self::Help(_) | Self::AppServer(_) => false,
         }
     }
 }
@@ -56,15 +53,13 @@ impl Command {
 #[derive(Debug, Parser)]
 #[command(
     name = "rustx",
-    about = "Native rustX runtime and offline configuration tools",
-    args_conflicts_with_subcommands = true,
-    after_help = "Omitted selections are resolved by native rustX policy. Static inspection never prepares execution.\nExit: 0 complete/help; 1 probe or output failure; 2 invalid; 3 incomplete or unresolved readiness.\nHelp and lexical errors use stderr; --json applies only to parsed diagnostic commands."
+    about = "The rustX App Server and offline configuration tools",
+    arg_required_else_help = true,
+    after_help = "Clients control rustX only through `rustx app-server`; a bare invocation prints this help.\nOmitted selections are resolved by native rustX policy. Static inspection never prepares execution.\nExit: 0 complete/help; 1 probe or output failure; 2 invalid; 3 incomplete or unresolved readiness.\nHelp and lexical errors use stderr; --json applies only to parsed diagnostic commands."
 )]
 struct Cli {
-    #[command(flatten)]
-    launch: LaunchArgs,
     #[command(subcommand)]
-    command: Option<PublicCommand>,
+    command: PublicCommand,
 }
 
 #[derive(Debug, Subcommand)]
@@ -104,7 +99,7 @@ enum ConfigCommand {
     Show(ShowArgs),
 }
 
-/// Only lexical fields genuinely shared by launch and static inspection.
+/// Lexical selection fields shared by the static inspection commands.
 #[derive(Debug, Default, Args)]
 struct SelectionArgs {
     /// Select explicit model intent without editing authored defaults
@@ -124,60 +119,6 @@ impl SelectionArgs {
             config: self.config,
             workspace: self.workspace,
             ..Default::default()
-        })
-    }
-}
-
-#[derive(Debug, Default, Args)]
-struct LaunchArgs {
-    #[command(flatten)]
-    selection: SelectionArgs,
-    /// Bind runtime storage for this process; native policy requires an absolute path
-    #[arg(long)]
-    runtime_root: Option<PathBuf>,
-    /// Attach the persisted Session by identity
-    #[arg(long, value_parser = NonEmptyStringValueParser::new())]
-    session: Option<String>,
-    /// Select a node in the explicitly attached Session
-    #[arg(long, requires = "session", value_parser = NonEmptyStringValueParser::new())]
-    node: Option<String>,
-    /// Set display metadata on the bound Session
-    #[arg(long, value_parser = NonEmptyStringValueParser::new())]
-    name: Option<String>,
-    /// Inspect a conversation without composing a Session or execution runtime
-    #[arg(long, conflicts_with_all = ["session", "node", "name"], value_parser = NonEmptyStringValueParser::new())]
-    inspect_conversation: Option<String>,
-}
-impl LaunchArgs {
-    fn into_request(self) -> Result<LaunchRequest, ArgumentError> {
-        // Session/node/conversation identities retain historical launch-only
-        // whitespace normalization here, after lexical parsing.
-        let startup_session = if let Some(conversation_id) = self.inspect_conversation {
-            StartupSession::InspectConversation {
-                conversation_id: crate::runtime::identity::ConversationId::parse(
-                    conversation_id.trim(),
-                )
-                .map_err(|_| ArgumentError("invalid conversation identity".into()))?,
-            }
-        } else if let Some(session) = self.session {
-            StartupSession::Select {
-                session: SessionId::parse(session.trim())
-                    .map_err(|_| ArgumentError("invalid Session identity".into()))?,
-                node: self
-                    .node
-                    .as_deref()
-                    .map(|node| SessionNodeId::parse(node.trim()))
-                    .transpose()
-                    .map_err(|_| ArgumentError("invalid node identity".into()))?,
-            }
-        } else {
-            StartupSession::Empty
-        };
-        Ok(LaunchRequest {
-            runtime_root: self.runtime_root,
-            startup_session,
-            session_name: self.name.as_deref().map(launch_text).transpose()?,
-            ..self.selection.into_request()?
         })
     }
 }
@@ -291,7 +232,7 @@ impl InitArgs {
     }
 }
 
-/// A lexical or launch-intent failure, with stream and exit policy left to rustX.
+/// A lexical or selection failure, with stream and exit policy left to rustX.
 #[derive(Debug)]
 pub struct ArgumentError(String);
 impl std::fmt::Display for ArgumentError {
@@ -303,45 +244,51 @@ impl std::error::Error for ArgumentError {}
 
 /// Parse public argv without printing, exiting, or capturing the host.
 /// # Errors
-/// Returns lexical or launch-intent failures; accepted diagnostic intent owns JSON.
+/// Returns lexical or selection failures; accepted diagnostic intent owns JSON.
 pub fn parse_command(
     arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>,
 ) -> Result<Command, ArgumentError> {
-    let parsed = match Cli::try_parse_from(
-        std::iter::once(OsString::from("rustx")).chain(arguments.into_iter().map(Into::into)),
-    ) {
-        Ok(parsed) => parsed,
-        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
-            return Ok(Command::Help(error.to_string()));
-        }
-        Err(error) => return Err(ArgumentError(error.to_string())),
-    };
+    let arguments: Vec<OsString> = arguments.into_iter().map(Into::into).collect();
+    // A bare invocation is a help request, never an implicit service. A
+    // subcommand missing its own subcommand stays a usage error.
+    let bare = arguments.is_empty();
+    let parsed =
+        match Cli::try_parse_from(std::iter::once(OsString::from("rustx")).chain(arguments)) {
+            Ok(parsed) => parsed,
+            Err(error)
+                if error.kind() == clap::error::ErrorKind::DisplayHelp
+                    || (bare && error.kind()
+                        == clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand) =>
+            {
+                return Ok(Command::Help(error.to_string()));
+            }
+            Err(error) => return Err(ArgumentError(error.to_string())),
+        };
     Ok(match parsed.command {
-        None => Command::Launch(parsed.launch.into_request()?),
-        Some(PublicCommand::AppServer(args)) => Command::AppServer(args.into_request()),
-        Some(PublicCommand::Init(args)) => Command::Init {
+        PublicCommand::AppServer(args) => Command::AppServer(args.into_request()),
+        PublicCommand::Init(args) => Command::Init {
             json: args.json,
             request: args.into_request(),
         },
-        Some(PublicCommand::Config {
+        PublicCommand::Config {
             command: ConfigCommand::Check(args),
-        }) => Command::Check {
+        } => Command::Check {
             json: args.json,
             request: args.into_request()?,
         },
-        Some(PublicCommand::Config {
+        PublicCommand::Config {
             command: ConfigCommand::Show(args),
-        }) => Command::Show {
+        } => Command::Show {
             json: args.diagnostic.json,
             agent: args.agent,
             request: args.diagnostic.into_request()?,
         },
-        Some(PublicCommand::Doctor(args)) => Command::Doctor {
+        PublicCommand::Doctor(args) => Command::Doctor {
             json: args.diagnostic.json,
             prepare: args.prepare,
             request: args.diagnostic.into_request()?,
         },
-        Some(PublicCommand::Workflow { command }) => {
+        PublicCommand::Workflow { command } => {
             let explain = matches!(command, WorkflowCommand::Explain(_));
             let (WorkflowCommand::Check(args) | WorkflowCommand::Explain(args)) = command;
             Command::Workflow {
@@ -354,24 +301,12 @@ pub fn parse_command(
     })
 }
 
-/// Parse a launch request through the same public grammar.
-/// # Errors
-/// Rejects non-launch commands as well as invalid launch arguments.
-pub fn parse_arguments(
-    arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>,
-) -> Result<LaunchRequest, ArgumentError> {
-    match parse_command(arguments)? {
-        Command::Launch(request) => Ok(request),
-        _ => Err(ArgumentError("expected launch arguments".into())),
-    }
-}
-
-// Historical launch selection/display policy, applied only when converting
-// exact CLI strings into LaunchRequest. Paths, Init and App Server never use it.
+// Model selection text policy, applied only when converting exact CLI strings
+// into LaunchRequest. Paths, Init and App Server never use it.
 fn launch_text(value: &str) -> Result<String, ArgumentError> {
     let value = value.trim();
     if value.is_empty() {
-        Err(ArgumentError("launch text must not be blank".into()))
+        Err(ArgumentError("model selection must not be blank".into()))
     } else {
         Ok(value.into())
     }

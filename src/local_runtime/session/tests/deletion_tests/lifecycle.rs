@@ -2,7 +2,7 @@ use super::*;
 use crate::local_runtime::session::deletion::*;
 use crate::local_runtime::session::{LineageSeed, SessionNodeId};
 use crate::runtime::local_storage::{ConversationAccess, ProductController, ProductRoot};
-use crate::runtime_client::types::{RequestId, RuntimeClientRequest};
+use crate::runtime_client::types::RuntimeClientRequest;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -426,18 +426,28 @@ fn deletion_process_death_after_commit_and_mid_cleanup_converges_without_discove
 }
 
 #[tokio::test]
-async fn deletion_recursive_worker_releases_supervisor_mutex_and_never_finishes_early() {
+async fn deletion_recursive_worker_releases_controller_catalog_and_never_finishes_early() {
     let (_dir, mut catalog, preview) = fixture();
-    let work = catalog
+    let mut work = catalog
         .commit_delete(&preview.session_id, &preview.target_revision)
         .unwrap()
         .unwrap();
-    crate::local_runtime::supervisor::assert_deletion_cleanup_releases_catalog(
-        catalog,
-        work,
-        state().model.unwrap(),
-    )
-    .await;
+    let gate = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release = gate.arm_scoped();
+    work.cleanup_gate = Some(gate.clone());
+    let controller = crate::local_runtime::session_controller::SessionController::new(catalog);
+    let worker = controller.clone();
+    let task = tokio::spawn(async move { worker.clean_deletion(work).await });
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    assert!(!task.is_finished());
+    assert!(controller.catalog.try_lock().is_ok());
+    drop(release);
+    assert!(matches!(
+        task.await.unwrap(),
+        crate::local_runtime::session::deletion::SessionDeleteResult::Deleted { .. }
+    ));
 }
 
 #[test]
@@ -455,7 +465,11 @@ fn deletion_rust_types_roundtrip_every_shared_protocol_result_and_reject_paths()
         assert_eq!(serde_json::to_value(result).unwrap(), fixture);
     }
     assert_eq!(statuses.len(), 7);
-    for method in ["session_delete", "session_delete_recover"] {
+    for method in [
+        "session_delete",
+        "session_delete_recover",
+        "session_delete_preview",
+    ] {
         let mut request = serde_json::json!({
             "method": method, "id": 1, "session_id": "ses_01900000-0000-7000-8000-000000000001"
         });
@@ -467,22 +481,6 @@ fn deletion_rust_types_roundtrip_every_shared_protocol_result_and_reject_paths()
             "obsolete native mutation must have no dispatch path"
         );
     }
-    let request = RuntimeClientRequest::SessionDeletePreview {
-        id: RequestId::new(1),
-        session_id: crate::local_runtime::SessionId::new(
-            "ses_01900000-0000-7000-8000-000000000001",
-        ),
-    };
-    assert!(request.requires_async());
-    assert!(request.session_request().is_some());
-    assert!(!request.is_mutating());
-    let mut value = serde_json::to_value(&request).unwrap();
-    assert_eq!(
-        serde_json::from_value::<RuntimeClientRequest>(value.clone()).unwrap(),
-        request
-    );
-    value["path"] = serde_json::json!("/untrusted");
-    assert!(serde_json::from_value::<RuntimeClientRequest>(value).is_err());
 }
 
 #[test]
@@ -936,7 +934,7 @@ fn catalog_generation_rejects_stale_metadata_and_planned_publication() {
 
 #[test]
 fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
-    use crate::local_runtime::supervisor::project_session_deletion;
+    use crate::runtime_client::session_deletion::project as project_session_deletion;
     let session_id = SessionId::generate();
     let mut lengths = Vec::new();
     for size in [1, 10, 10_000] {
@@ -1023,9 +1021,8 @@ fn deletion_protocol_counts_real_durable_ownership_without_exporting_it() {
     catalog
         .publish_session(&next, SessionNodeOrigin::New)
         .unwrap();
-    let result = crate::local_runtime::supervisor::project_session_deletion(
-        catalog.delete_preview(&target.id),
-    );
+    let result =
+        crate::runtime_client::session_deletion::project(catalog.delete_preview(&target.id));
     let value = serde_json::to_value(&result).unwrap();
     assert_eq!(value["preview"]["owned_node_count"], 1);
     assert_eq!(value["preview"]["owned_child_count"], 128);
@@ -1078,8 +1075,8 @@ fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
 async fn deletion_stale_control_response_requires_a_new_preview_token() {
     // Deliberate durable-owner test: no live product runtime or mutation API.
     use crate::local_runtime::session_controller::SessionController;
-    use crate::local_runtime::supervisor::project_session_deletion;
     use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Wire;
+    use crate::runtime_client::session_deletion::project as project_session_deletion;
     let (dir, catalog, initial) = fixture();
     let view = catalog.clone();
     let controller = SessionController::new(catalog);

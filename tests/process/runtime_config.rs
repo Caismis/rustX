@@ -74,7 +74,6 @@ fn paths(root: &std::path::Path, config: &std::path::Path) -> LaunchFixture {
     LaunchFixture {
         config: config.to_path_buf(),
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace,
         runtime_root: root.join("runtime"),
     }
@@ -155,26 +154,26 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         product.runtime().model_view().configured.model.to_string(),
         "local/model-a"
     );
-    let endpoint = product.endpoint();
-    let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: RequestId::new(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    assert!(matches!(
-        initialized.result,
-        Some(RuntimeClientResult::Initialized { .. })
-    ));
-    let model_set = endpoint.handle_request(RuntimeClientRequest::ModelSet {
-        id: RequestId::new(2),
-        config: Box::new(model("local/model-b")),
-    });
-    assert!(matches!(
-        model_set.result,
-        Some(RuntimeClientResult::ModelSet { .. })
-    ));
     product.runtime().shutdown().await.unwrap();
-    drop(endpoint);
     drop(product);
+    // The Session-local model selection is durable Session state, written by
+    // its native owner exactly as App Server `session/setModel` does for a
+    // cold Session.
+    let controller =
+        rustx::local_runtime::session_controller::SessionController::open(&startup.runtime_root)
+            .unwrap();
+    let session = rustx::local_runtime::SessionCatalog::open_existing(&startup.runtime_root)
+        .unwrap()
+        .unwrap()
+        .persisted_session_ids()[0]
+        .clone();
+    let (revision, mut settings) = controller.read_settings(&session).await.unwrap();
+    settings.model = Some(model("local/model-b"));
+    controller
+        .replace_settings(&session, revision, settings)
+        .await
+        .unwrap();
+    drop(controller);
 
     std::fs::remove_dir_all(skills_root.join("old-skill")).expect("remove old Skill");
     write_skill(&skills_root, "new-skill", "New current resource");
@@ -324,21 +323,6 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             Some(RuntimeClientResult::InboundAccepted { .. })
         ),
         "unexpected SubmitInbound response: {submitted:?}"
-    );
-    let new_session = resumed_endpoint
-        .handle_request_async(RuntimeClientRequest::SessionNew {
-            id: RequestId::new(4),
-        })
-        .await;
-    assert!(
-        matches!(
-            new_session.result,
-            Some(RuntimeClientResult::SessionChanged {
-                restart_required: true,
-                ..
-            })
-        ),
-        "unexpected SessionNew response: {new_session:?}"
     );
     drop(snapshot);
     resumed.runtime().shutdown().await.unwrap();

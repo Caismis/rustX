@@ -2,10 +2,55 @@
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
 use super::configuration::*;
 use super::launch::*;
-use super::{LocalRuntimeDependencies, LocalSessionClient};
+use super::{LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError};
 use crate::capabilities::{CapabilitySourceState, ToolSourceId};
 use serde_json::json;
 use std::path::Path;
+
+/// Composes an admitted capture exactly as the App Server runtime manager
+/// does once it holds a Session binding: the durable owner creates the
+/// Session and grants its allocation, then the shared native owner composes
+/// over that capture. Source edits after admission cannot reach it.
+async fn compose_admitted(
+    launch: &AdmittedSessionConfig,
+) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+    use super::session::SessionPersistentState;
+    let controller = super::session_controller::SessionController::open(&launch.runtime_root)?;
+    let session = controller
+        .create_session(SessionPersistentState::from_input(&launch.input))
+        .await?
+        .session;
+    let access = controller.acquire_session(&session.id, None).await?;
+    let dependencies = LocalRuntimeDependencies::default();
+    let registry = super::composition::load_model_registry(launch, &dependencies)?;
+    super::LocalConversationCore::compose_with_access(
+        launch,
+        &dependencies,
+        registry,
+        launch.config().clone(),
+        SessionPersistentState::from_input(&launch.input),
+        access.node.conversation_id.clone(),
+        access
+            .database_path
+            .parent()
+            .expect("allocation path")
+            .to_path_buf(),
+        access.allocation,
+    )
+    .await?
+    .into_interactive()
+}
+
+/// Resolves only a request's locations through the production translation
+/// (`LaunchRequest::session_input`) and the configuration owner, with no
+/// configuration read, credential capture, or storage effect.
+fn session_locations(
+    request: &LaunchRequest,
+    host: &HostEnvironment,
+) -> Result<(SessionLocations, String), String> {
+    let (manager, input) = request.session_input(host).map_err(|e| e.to_string())?;
+    manager.resolve_locations(&input)
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -1325,7 +1370,7 @@ impl Fixture {
             .unwrap()
     }
     fn resolve_locations_only(&self) -> SessionLocations {
-        resolve_locations(&self.request, &self.host).unwrap().0
+        session_locations(&self.request, &self.host).unwrap().0
     }
 }
 
@@ -1395,14 +1440,12 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
     )]);
     let launch = f.resolve();
     f.credentials = crate::credentials::CredentialSnapshot::default();
-    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap();
+    let product = compose_admitted(&launch).await.unwrap();
     assert!(!format!("{launch:?}").contains("CFG233_PROVIDER_SENTINEL"));
     product.runtime().shutdown().await.unwrap();
     drop(product); // Release native catalog ownership before the next launch.
     assert!(
-        LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        compose_admitted(&f.resolve())
             .await
             .unwrap_err()
             .to_string()
@@ -1420,9 +1463,7 @@ async fn cfg3_selected_missing_credentials_and_connection_failures_reject_root_a
             "unused":{"command":"must-never-spawn","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
         }));
         f.project(json!({"agent":{"tools":{"sources":{source:"all"}}}}));
-        let error = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
-            .await
-            .unwrap_err();
+        let error = compose_admitted(&f.resolve()).await.unwrap_err();
         assert!(error.to_string().contains("cannot be admitted"));
         assert!(!error.to_string().contains("IGNORED_KEY"));
     }
@@ -1439,10 +1480,7 @@ async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
                 std::fs::create_dir(root.join("unprepared")).unwrap();
             }
         }
-        let product =
-            LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
-                .await
-                .unwrap();
+        let product = compose_admitted(&f.resolve()).await.unwrap();
         assert_eq!(
             product
                 .runtime()
@@ -1482,9 +1520,7 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
     }));
     f.user(json!({ "agent": {"model": {"model":"host/one"}}}));
     let launch = f.resolve();
-    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap();
+    let product = compose_admitted(&launch).await.unwrap();
     assert!(
         !launch
             .environment_store_root()
@@ -1521,9 +1557,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
     f.mcp(true, json!({"authenticated":{"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}));
     f.user(json!({ "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"authenticated":"all"}}}}));
     let launch = f.resolve();
-    let error = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap_err();
+    let error = compose_admitted(&launch).await.unwrap_err();
     peer.await.unwrap();
     assert!(error.to_string().contains("cannot be admitted"));
     assert!(!format!("{error:?} {launch:?}").contains(SENTINEL));
@@ -1685,7 +1719,7 @@ fn workspace_boundaries_subdirectories_non_git_nested_and_explicit() {
     assert_eq!(f.resolve().identity, original.identity);
     assert_eq!(f.resolve().runtime_root, original.runtime_root);
     std::fs::write(sub.join("rustx.toml"), "").unwrap();
-    let (_, nested) = resolve_locations(&f.request, &f.host).unwrap();
+    let (_, nested) = session_locations(&f.request, &f.host).unwrap();
     assert_ne!(nested, original.identity);
 
     f.request.workspace = Some(original.workspace.clone());
@@ -1749,7 +1783,7 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
         ],
     );
     host.launch_directory = worktree.clone();
-    let (locations, identity) = resolve_locations(&f.request, &host).unwrap();
+    let (locations, identity) = session_locations(&f.request, &host).unwrap();
     assert_ne!(identity, original.identity);
     assert_eq!(locations.runtime_root, original.runtime_root);
 
@@ -1781,9 +1815,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     let launch = f.resolve();
     f.user(json!({"agent_id": "edited", "agent": {"model": {"model":"host/two"}}}));
     f.project(json!({"agent": {"model": {"model":"missing/model"}}}));
-    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap();
+    let product = compose_admitted(&launch).await.unwrap();
     assert!(
         product
             .runtime()
@@ -1807,9 +1839,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
 async fn resolution_and_composition_failures_preserve_published_session_selection() {
     let f = Fixture::new();
     let launch = f.resolve();
-    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap();
+    let product = compose_admitted(&launch).await.unwrap();
     product.runtime().shutdown().await.unwrap();
     drop(product);
     let catalog = launch.runtime_root.join("sessions/catalog.json");
@@ -1911,7 +1941,7 @@ fn workspace_identity_has_exact_unix_byte_sha256_format() {
         workspace: Some("/".into()),
         ..Default::default()
     };
-    let (locations, identity) = resolve_locations(&request, &host).unwrap();
+    let (locations, identity) = session_locations(&request, &host).unwrap();
     assert_eq!(locations.workspace, Path::new("/"));
     assert_eq!(identity, vectors[0].1);
 }
@@ -1934,9 +1964,9 @@ fn non_utf8_workspace_identity_is_not_lossy() {
     std::fs::create_dir(&first).unwrap();
     std::fs::create_dir(&second).unwrap();
     f.request.workspace = Some(first);
-    let (_, first_identity) = resolve_locations(&f.request, &f.host).unwrap();
+    let (_, first_identity) = session_locations(&f.request, &f.host).unwrap();
     f.request.workspace = Some(second);
-    let (_, second_identity) = resolve_locations(&f.request, &f.host).unwrap();
+    let (_, second_identity) = session_locations(&f.request, &f.host).unwrap();
     assert_ne!(first_identity, second_identity);
 }
 
@@ -2023,9 +2053,7 @@ async fn selected_workspace_guidance_cannot_escape_its_resource_root() {
     );
     let launch = f.resolve();
     assert_eq!(launch.role_sources.values().next().unwrap().layer, "user");
-    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap();
+    let product = compose_admitted(&launch).await.unwrap();
     assert_eq!(
         product
             .runtime()
@@ -2075,9 +2103,7 @@ async fn cfg3_launch_freezes_two_skill_roots_with_whole_workspace_shadowing() {
         "malformed edit after capture",
     )
     .unwrap();
-    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap();
+    let product = compose_admitted(&launch).await.unwrap();
     let resources = product.runtime().runtime_resources();
     let prompt = resources.skill_catalog().unwrap();
     assert!(prompt.contains("Workspace shared"));
@@ -2177,7 +2203,7 @@ fn cfg270_only_toml_names_are_discovered_and_old_documents_are_inert() {
     let mut host = f.host.clone();
     host.launch_directory = child.clone();
     assert_eq!(
-        resolve_locations(&LaunchRequest::default(), &host)
+        session_locations(&LaunchRequest::default(), &host)
             .unwrap()
             .0
             .workspace,
@@ -2665,9 +2691,7 @@ mod session_resolution {
         assert_eq!(a.project_context_files[0].content, "Captured guidance");
         assert_eq!(b.project_context_files[0].content, "Later guidance");
         let admitted = a.admit(|| f.credentials.clone()).unwrap();
-        let product = LocalSessionClient::compose(&admitted, &LocalRuntimeDependencies::default())
-            .await
-            .unwrap();
+        let product = compose_admitted(&admitted).await.unwrap();
         let resources = product.runtime().runtime_resources();
         assert_eq!(
             resources.project_context_files()[0].content,
@@ -2716,10 +2740,7 @@ mod session_resolution {
         // Removal cannot cause a semantic reread failure at initial composition.
         std::fs::remove_file(&file).unwrap();
         let admitted_a = a.admit(|| f.credentials.clone()).unwrap();
-        let product_a =
-            LocalSessionClient::compose(&admitted_a, &LocalRuntimeDependencies::default())
-                .await
-                .unwrap();
+        let product_a = compose_admitted(&admitted_a).await.unwrap();
         let resources_a = product_a.runtime().runtime_resources();
         assert_eq!(
             resources_a
@@ -2741,10 +2762,7 @@ mod session_resolution {
         drop(product_a);
         let inspection_b = b.inspection.clone();
         let admitted_b = b.admit(|| f.credentials.clone()).unwrap();
-        let product_b =
-            LocalSessionClient::compose(&admitted_b, &LocalRuntimeDependencies::default())
-                .await
-                .unwrap();
+        let product_b = compose_admitted(&admitted_b).await.unwrap();
         let resources_b = product_b.runtime().runtime_resources();
         assert_eq!(
             resources_b
@@ -2809,701 +2827,4 @@ mod session_resolution {
             }
         }
     }
-}
-
-#[tokio::test]
-async fn app286_cold_resume_retains_one_settings_revision_through_resolution() {
-    use super::session::{SessionCatalog, SessionPersistentState};
-    use super::session_controller::SessionController;
-    use crate::model::{ModelRef, session::SessionModelConfig};
-    let f = Fixture::new();
-    f.project(json!({"agent":{"tools":{"builtin":["read"]}}}));
-    let launch = f.resolve();
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    let mut a = SessionPersistentState::from_input(&launch.input);
-    a.model = Some(SessionModelConfig::of(ModelRef::parse("host/two").unwrap()));
-    let session = controller.create_session(a.clone()).await.unwrap().session;
-    let mut b = a.clone();
-    b.model = Some(SessionModelConfig::of(ModelRef::parse("host/one").unwrap()));
-    drop(controller);
-    let gate = super::composition::cold_resume_test_support::arm(&launch.runtime_root);
-    let dependencies = LocalRuntimeDependencies {
-        startup_session: super::StartupSession::Select {
-            session: session.id.clone(),
-            node: None,
-        },
-        ..Default::default()
-    };
-    let worker_launch = launch.clone();
-    let resume =
-        tokio::spawn(
-            async move { LocalSessionClient::compose(&worker_launch, &dependencies).await },
-        );
-    gate.entered().await; // A captured; resolver has not run yet.
-    // The attempted B publisher cannot acquire native ownership. Short catalog
-    // reads remain available while the resolver is parked; no metadata lock spans it.
-    assert!(SessionController::open(&launch.runtime_root).is_err());
-    let observed = SessionCatalog::open_existing(&launch.runtime_root)
-        .unwrap()
-        .unwrap();
-    assert_eq!(observed.lineage(&session.id, None).unwrap().1, a);
-    assert_eq!(observed.settings_revision(&session.id).unwrap(), 0);
-    assert_eq!(observed.snapshot(&session.id).unwrap(), session);
-    gate.release();
-    let product = resume.await.unwrap().unwrap();
-    assert_eq!(product.runtime().model_config(), a.model.clone().unwrap());
-    let resources = product.runtime().runtime_resources();
-    let tool_names: Vec<_> = resources
-        .inspection()
-        .main
-        .as_ref()
-        .unwrap()
-        .tools
-        .iter()
-        .map(|tool| tool.name.as_str())
-        .collect();
-    assert_eq!(tool_names, ["read"]);
-    drop(resources);
-    product.runtime().shutdown().await.unwrap();
-    drop(product);
-    drop(observed);
-    // B becomes admissible only after the A owner exits. Its subsequent cold
-    // load resolves the complete new revision, including the non-model selection.
-    f.project(json!({"agent":{"tools":{"builtin":["glob"]}}}));
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    assert_eq!(
-        controller
-            .replace_settings(&session.id, 0, b.clone())
-            .await
-            .unwrap(),
-        1
-    );
-    drop(controller);
-    let product = LocalSessionClient::compose(
-        &launch,
-        &LocalRuntimeDependencies {
-            startup_session: super::StartupSession::Select {
-                session: session.id.clone(),
-                node: None,
-            },
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(product.runtime().model_config(), b.model.unwrap());
-    let resources = product.runtime().runtime_resources();
-    let tool_names: Vec<_> = resources
-        .inspection()
-        .main
-        .as_ref()
-        .unwrap()
-        .tools
-        .iter()
-        .map(|tool| tool.name.as_str())
-        .collect();
-    assert_eq!(tool_names, ["glob"]);
-    product.runtime().shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn app286_cold_node_routes_do_not_publish_graph_focus() {
-    use super::session::{SessionCatalog, SessionPersistentState};
-    use super::session_controller::SessionController;
-    use crate::durable::ConversationStore;
-    use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
-    use crate::runtime::identity::MessageId;
-    let f = Fixture::new();
-    let launch = f.resolve();
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    let a = controller
-        .create_session(SessionPersistentState::from_input(&launch.input))
-        .await
-        .unwrap()
-        .session;
-    let access = controller.acquire_session(&a.id, None).await.unwrap();
-    let store = crate::durable::SqliteConversationStore::open(
-        a.active_conversation_id.clone(),
-        &access.database_path,
-    )
-    .unwrap();
-    let boundary = MessageId::new("route-boundary");
-    store
-        .append_canonical(&MessageBlock::User(UserMessageBlock {
-            id: boundary.clone(),
-            content: vec![],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        }))
-        .unwrap();
-    let revision = store.load_head().unwrap().revision;
-    let b = controller
-        .branch_session_node(&a.id, &a.active_node, revision, &boundary)
-        .await
-        .unwrap()
-        .session;
-    let default = controller
-        .set_current_node(&a.id, &a.active_node)
-        .await
-        .unwrap();
-    let catalog_path = launch.runtime_root.join("sessions/catalog.json");
-    let bytes = std::fs::read(&catalog_path).unwrap();
-    drop(store);
-    drop(access);
-    drop(controller);
-    // Independent cold clients, including the TUI's explicit-default route.
-    for node in [
-        Some(b.active_node.clone()),
-        Some(a.active_node.clone()),
-        Some(b.active_node.clone()),
-        None,
-    ] {
-        let expected_conversation = if node.as_ref() == Some(&b.active_node) {
-            &b.active_conversation_id
-        } else {
-            &a.active_conversation_id
-        };
-        let product = LocalSessionClient::compose(
-            &launch,
-            &LocalRuntimeDependencies {
-                startup_session: super::StartupSession::Select {
-                    session: a.id.clone(),
-                    node,
-                },
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(product.runtime().conversation_id(), expected_conversation);
-        let response = crate::runtime_client::host::RuntimeClientSessionControl::handle(
-            product.supervisor().as_ref(),
-            crate::runtime_client::types::RuntimeClientSessionRequest::Get,
-        )
-        .await
-        .unwrap();
-        let crate::runtime_client::types::RuntimeClientResult::Session { session: view } = response
-        else {
-            panic!("Session Get projection")
-        };
-        assert_eq!(&view.active_conversation_id, expected_conversation);
-        let durable_default = &default.active_node;
-        assert_eq!(
-            &product.supervisor().current().await.unwrap().active_node,
-            durable_default
-        );
-
-        assert_eq!(product.supervisor().current().await.unwrap(), default);
-        assert_eq!(std::fs::read(&catalog_path).unwrap(), bytes);
-        let catalog = SessionCatalog::open_existing(&launch.runtime_root)
-            .unwrap()
-            .unwrap();
-        assert_eq!(catalog.snapshot(&a.id).unwrap(), default);
-        assert_eq!(
-            catalog.list_page(None, 0, 32).unwrap().sessions[0].active_node,
-            a.active_node
-        );
-        // The two routing projections may differ while both snapshots still
-        // report A as the durable graph default.
-        let route_a = product
-            .supervisor()
-            .select(a.id.clone(), Some(a.active_node.clone()))
-            .await
-            .unwrap();
-        let route_b = product
-            .supervisor()
-            .select(a.id.clone(), Some(b.active_node.clone()))
-            .await
-            .unwrap();
-        assert_eq!(route_a.session, route_b.session);
-        assert_ne!(route_a.node.id, route_b.node.id);
-        product.runtime().shutdown().await.unwrap();
-    }
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    assert_eq!(controller.read_session(&a.id).await.unwrap(), default);
-    let changed = controller
-        .set_current_node(&a.id, &b.active_node)
-        .await
-        .unwrap();
-    assert_eq!(changed.active_node, b.active_node);
-    assert_ne!(std::fs::read(&catalog_path).unwrap(), bytes);
-    drop(controller);
-    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
-        .unwrap()
-        .unwrap();
-    assert_eq!(catalog.snapshot(&a.id).unwrap(), changed);
-}
-
-#[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn app286_session_wire_results_compare_the_installed_route_without_rebinding() {
-    use super::session::SessionPersistentState;
-    use super::session_controller::SessionController;
-    use crate::durable::ConversationStore;
-    use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
-    use crate::runtime::identity::MessageId;
-    use crate::runtime_client::host::RuntimeClientSessionControl;
-    use crate::runtime_client::types::{
-        RuntimeClientResult, RuntimeClientSessionRequest as Request,
-    };
-
-    let f = Fixture::new();
-    let launch = f.resolve();
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    let original = controller
-        .create_session(SessionPersistentState::from_input(&launch.input))
-        .await
-        .unwrap()
-        .session;
-    let access = controller
-        .acquire_session(&original.id, None)
-        .await
-        .unwrap();
-    let store = crate::durable::SqliteConversationStore::open(
-        original.active_conversation_id.clone(),
-        &access.database_path,
-    )
-    .unwrap();
-    let message_id = MessageId::new("reattach-boundary");
-    store
-        .append_canonical(&MessageBlock::User(UserMessageBlock {
-            id: message_id.clone(),
-            content: vec![],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        }))
-        .unwrap();
-    let surface_revision = store.load_head().unwrap().revision;
-    drop(store);
-    drop(access);
-    drop(controller);
-    let product = LocalSessionClient::compose(
-        &launch,
-        &LocalRuntimeDependencies {
-            startup_session: super::StartupSession::Select {
-                session: original.id.clone(),
-                node: None,
-            },
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let attachment = product.supervisor();
-    let runtime = product.runtime();
-    let lifecycle = runtime.lifecycle_state();
-    let history = runtime.historical_head_snapshot().unwrap();
-    let canonical = runtime.historical_canonical_history().unwrap();
-    let model = runtime.model_config();
-    for request in [
-        Request::New,
-        Request::Clone,
-        Request::Fork {
-            surface_revision,
-            message_id: message_id.clone(),
-        },
-        Request::TreeBranch {
-            surface_revision,
-            message_id,
-        },
-    ] {
-        let tree_branch = matches!(request, Request::TreeBranch { .. });
-        let RuntimeClientResult::SessionChanged {
-            session: target,
-            restart_required,
-            ..
-        } = attachment.handle(request).await.unwrap()
-        else {
-            panic!("route-changing result")
-        };
-        assert!(restart_required);
-        assert_ne!(
-            target.active_conversation_id,
-            original.active_conversation_id
-        );
-        assert_eq!(target.id == original.id, tree_branch);
-        // Both another Session and another node in this Session require replacement.
-        let RuntimeClientResult::SessionChanged {
-            restart_required, ..
-        } = attachment
-            .handle(Request::Select {
-                session_id: target.id,
-                node_id: Some(target.active_node),
-            })
-            .await
-            .unwrap()
-        else {
-            panic!("select result")
-        };
-        assert!(restart_required);
-        // Selecting the installed route is still a no-op, even after tree branch
-        // published a different durable graph default.
-        for node_id in [Some(original.active_node.clone()), None] {
-            let RuntimeClientResult::SessionChanged {
-                restart_required, ..
-            } = attachment
-                .handle(Request::Select {
-                    session_id: original.id.clone(),
-                    node_id: node_id.clone(),
-                })
-                .await
-                .unwrap()
-            else {
-                panic!("same Session select result")
-            };
-            assert_eq!(restart_required, tree_branch && node_id.is_none());
-        }
-        for request in [
-            Request::Get,
-            Request::Name("renamed".into()),
-            Request::Tree {
-                node_offset: 0,
-                history_offset: 0,
-                limit: 32,
-            },
-        ] {
-            let view = match attachment.handle(request).await.unwrap() {
-                RuntimeClientResult::Session { session }
-                | RuntimeClientResult::SessionTree { session, .. } => session,
-                RuntimeClientResult::SessionChanged {
-                    session,
-                    restart_required,
-                    ..
-                } => {
-                    assert!(!restart_required);
-                    session
-                }
-                other => panic!("unexpected metadata result: {other:?}"),
-            };
-            assert_eq!(view.id, original.id);
-            assert_eq!(view.active_conversation_id, original.active_conversation_id);
-        }
-        assert_eq!(runtime.conversation_id(), &original.active_conversation_id);
-        assert_eq!(runtime.lifecycle_state(), lifecycle, "no drain or shutdown");
-        assert_eq!(runtime.historical_head_snapshot().unwrap(), history);
-        assert_eq!(runtime.historical_canonical_history().unwrap(), canonical);
-        assert_eq!(runtime.model_config(), model);
-    }
-    runtime.shutdown().await.unwrap();
-}
-
-/// Issue #386: Session display-projection repair is Session-owned and reads the
-/// Session's **root** lineage, whatever node a launch selects. Arming the live
-/// publisher is the only root-runtime-specific half.
-///
-/// The Session below has a renderable root subject, a missing catalog
-/// projection, and a branch whose own first ordinary message is different. A
-/// launch that resumes straight onto that branch must repair the Session to the
-/// *root's* subject, must not arm a publisher, must not touch canonical
-/// history, and must write nothing at all the second time.
-#[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn startup_on_a_branch_repairs_the_projection_from_the_root_without_arming() {
-    use super::session::{SessionCatalog, SessionPersistentState};
-    use super::session_controller::SessionController;
-    use crate::durable::ConversationStore;
-    use crate::message::content::TextBlock;
-    use crate::message::types::{
-        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
-    };
-    use crate::runtime::identity::MessageId;
-
-    fn text_user(id: &str, text: &str) -> MessageBlock {
-        MessageBlock::User(UserMessageBlock {
-            id: MessageId::new(id),
-            content: vec![UserContentBlock::Text(TextBlock { text: text.into() })],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        })
-    }
-    fn store_of(
-        access: &super::session_controller::SessionAccess,
-    ) -> crate::durable::SqliteConversationStore {
-        crate::durable::SqliteConversationStore::open(
-            access.node.conversation_id.clone(),
-            &access.database_path,
-        )
-        .unwrap()
-    }
-
-    let f = Fixture::new();
-    let launch = f.resolve();
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    let session = controller
-        .create_session(SessionPersistentState::from_input(&launch.input))
-        .await
-        .unwrap()
-        .session;
-    let root_node = session.active_node.clone();
-    let root_access = controller
-        .acquire_session(&session.id, Some(&root_node))
-        .await
-        .unwrap();
-    let root_store = store_of(&root_access);
-    let boundary = MessageId::new("root-subject-a");
-    root_store
-        .append_canonical(&text_user("root-subject-a", "root subject A"))
-        .unwrap();
-    let revision = root_store.load_head().unwrap().revision;
-    // The branch is cut *before* the root's first boundary, so it retains no
-    // root message at all and can be given a first message of its own.
-    let branch = controller
-        .branch_session_node(&session.id, &session.active_node, revision, &boundary)
-        .await
-        .unwrap()
-        .session;
-    let branch_node = branch.active_node.clone();
-    let branch_access = controller
-        .acquire_session(&session.id, Some(&branch_node))
-        .await
-        .unwrap();
-    let branch_conversation = branch_access.node.conversation_id.clone();
-    let branch_store = store_of(&branch_access);
-    branch_store
-        .append_canonical(&text_user("branch-subject-z", "branch subject Z"))
-        .unwrap();
-    assert_eq!(
-        controller
-            .read_session_summary(&session.id)
-            .await
-            .unwrap()
-            .preview,
-        None,
-        "the Session starts with a missing projection"
-    );
-    let root_canonical = root_store.load_canonical().unwrap();
-    let branch_canonical = branch_store.load_canonical().unwrap();
-    // The branch must genuinely disagree with the root, or the regression could
-    // pass by reading the wrong lineage.
-    assert_ne!(root_canonical, branch_canonical);
-    drop(branch_store);
-    drop(branch_access);
-    drop(root_store);
-    drop(root_access);
-    drop(controller);
-
-    let catalog_path = launch.runtime_root.join("sessions/catalog.json");
-    let product = LocalSessionClient::compose(
-        &launch,
-        &LocalRuntimeDependencies {
-            startup_session: super::StartupSession::Select {
-                session: session.id.clone(),
-                node: Some(branch_node.clone()),
-            },
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        product.runtime().conversation_id(),
-        &branch_conversation,
-        "the launch really composed the branch"
-    );
-    assert!(
-        super::session_display_projection::display_projection_probe(&session.id).is_none(),
-        "a branch runtime is never the projection subject, so no publisher is armed"
-    );
-    product.runtime().shutdown().await.unwrap();
-    drop(product);
-
-    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        catalog.summary(&session.id).unwrap().preview.as_deref(),
-        Some("root subject A"),
-        "repair derives the Session's root subject, never the composed branch's"
-    );
-    let repaired_generation = catalog.document_generation();
-    let repaired_snapshot = catalog.snapshot(&session.id).unwrap();
-    let repaired_revision = catalog.settings_revision(&session.id).unwrap();
-    let repaired_bytes = std::fs::read(&catalog_path).unwrap();
-    drop(catalog);
-
-    // Canonical history is untouched by display repair, on both lineages.
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    let root_access = controller
-        .acquire_session(&session.id, Some(&root_node))
-        .await
-        .unwrap();
-    assert_eq!(
-        store_of(&root_access).load_canonical().unwrap(),
-        root_canonical
-    );
-    let branch_access = controller
-        .acquire_session(&session.id, Some(&branch_node))
-        .await
-        .unwrap();
-    assert_eq!(
-        store_of(&branch_access).load_canonical().unwrap(),
-        branch_canonical
-    );
-    drop(branch_access);
-    drop(root_access);
-    drop(controller);
-
-    // Write-level idempotence: reopening the same branch repairs nothing, so
-    // the catalog file, its generation, `updated_at` and `settings_revision`
-    // are all byte-for-byte what the first repair left.
-    let product = LocalSessionClient::compose(
-        &launch,
-        &LocalRuntimeDependencies {
-            startup_session: super::StartupSession::Select {
-                session: session.id.clone(),
-                node: Some(branch_node.clone()),
-            },
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    product.runtime().shutdown().await.unwrap();
-    drop(product);
-    assert_eq!(std::fs::read(&catalog_path).unwrap(), repaired_bytes);
-    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
-        .unwrap()
-        .unwrap();
-    assert_eq!(catalog.document_generation(), repaired_generation);
-    assert_eq!(catalog.snapshot(&session.id).unwrap(), repaired_snapshot);
-    assert_eq!(
-        catalog.settings_revision(&session.id).unwrap(),
-        repaired_revision
-    );
-}
-
-/// Issue #386: an unrenderable first root message is a settled `None`. Neither
-/// the branch's own renderable text nor a later root message may manufacture a
-/// replacement projection, on any composition path.
-#[tokio::test]
-async fn startup_never_manufactures_a_projection_for_an_unrenderable_root_subject() {
-    use super::session::{SessionCatalog, SessionPersistentState};
-    use super::session_controller::SessionController;
-    use crate::durable::ConversationStore;
-    use crate::message::content::TextBlock;
-    use crate::message::types::{
-        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
-    };
-    use crate::runtime::identity::MessageId;
-
-    fn user(id: &str, content: Vec<UserContentBlock>) -> MessageBlock {
-        MessageBlock::User(UserMessageBlock {
-            id: MessageId::new(id),
-            content,
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        })
-    }
-
-    let f = Fixture::new();
-    let launch = f.resolve();
-    let controller = SessionController::open(&launch.runtime_root).unwrap();
-    let session = controller
-        .create_session(SessionPersistentState::from_input(&launch.input))
-        .await
-        .unwrap()
-        .session;
-    let access = controller.acquire_session(&session.id, None).await.unwrap();
-    let store = crate::durable::SqliteConversationStore::open(
-        session.active_conversation_id.clone(),
-        &access.database_path,
-    )
-    .unwrap();
-    let artifacts = crate::tools::ArtifactStore::new(
-        session.active_conversation_id.clone(),
-        access.database_path.parent().unwrap(),
-    )
-    .unwrap();
-    let mut png = Vec::new();
-    png::Encoder::new(&mut png, 1, 1)
-        .write_header()
-        .unwrap()
-        .write_image_data(&[0])
-        .unwrap();
-    let artifact_id = artifacts.put_bounded(&png).unwrap();
-    store
-        .append_canonical(&user(
-            "unrenderable-first",
-            vec![UserContentBlock::Image(
-                crate::message::content::ImageReference {
-                    artifact_id,
-                    alt: None,
-                },
-            )],
-        ))
-        .unwrap();
-    // A later root message is renderable, and is still not the subject.
-    let boundary = MessageId::new("later-root-text");
-    store
-        .append_canonical(&user(
-            "later-root-text",
-            vec![UserContentBlock::Text(TextBlock {
-                text: "a later root message is not the subject".into(),
-            })],
-        ))
-        .unwrap();
-    let revision = store.load_head().unwrap().revision;
-    let branch = controller
-        .branch_session_node(&session.id, &session.active_node, revision, &boundary)
-        .await
-        .unwrap()
-        .session;
-    let branch_node = branch.active_node.clone();
-    let branch_access = controller
-        .acquire_session(&session.id, Some(&branch_node))
-        .await
-        .unwrap();
-    crate::durable::SqliteConversationStore::open(
-        branch_access.node.conversation_id.clone(),
-        &branch_access.database_path,
-    )
-    .unwrap()
-    .append_canonical(&user(
-        "branch-text",
-        vec![UserContentBlock::Text(TextBlock {
-            text: "branch text is not the subject".into(),
-        })],
-    ))
-    .unwrap();
-    let _ = &branch;
-    drop(branch_access);
-    drop(store);
-    drop(access);
-    drop(controller);
-
-    let catalog_path = launch.runtime_root.join("sessions/catalog.json");
-    let bytes = std::fs::read(&catalog_path).unwrap();
-    for node in [Some(branch_node.clone()), None] {
-        let product = LocalSessionClient::compose(
-            &launch,
-            &LocalRuntimeDependencies {
-                startup_session: super::StartupSession::Select {
-                    session: session.id.clone(),
-                    node,
-                },
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert!(
-            super::session_display_projection::display_projection_probe(&session.id).is_none(),
-            "a settled None is never re-armed, on the root or on a branch"
-        );
-        product.runtime().shutdown().await.unwrap();
-        drop(product);
-        assert_eq!(
-            std::fs::read(&catalog_path).unwrap(),
-            bytes,
-            "an unrenderable subject writes nothing at all"
-        );
-    }
-    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
-        .unwrap()
-        .unwrap();
-    assert_eq!(catalog.summary(&session.id).unwrap().preview, None);
 }

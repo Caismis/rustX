@@ -12,8 +12,9 @@
 //! - the real child-process handshake: a launched named child consumes the
 //!   frozen definition and policy through the typed spawn path
 //!   ([`process_conformance`]);
-//! - the end-to-end parent/child composition through the real binary over
-//!   the stdio/JSONL transport ([`end_to_end`]).
+//! - the end-to-end parent/child composition through the real binary, whose
+//!   parent is the App Server over stdio ([`end_to_end`]), including the
+//!   running child's internal read-only inspection socket.
 
 #![allow(clippy::too_many_lines)] // deterministic scenario bodies stay linear
 
@@ -25,6 +26,7 @@ mod launch_fixture;
 mod definitions;
 mod end_to_end;
 mod overrides;
+mod parent;
 mod process_conformance;
 
 #[path = "../common/agent_authority.rs"]

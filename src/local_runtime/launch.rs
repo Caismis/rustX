@@ -1,9 +1,8 @@
 //! Local CLI input translation and immutable process bindings. Configuration semantics live
 //! exclusively in `configuration::UserConfigManager`.
-use super::composition::StartupSession;
 use super::configuration::{
-    AdmittedSessionConfig, ProspectiveSessionConfig, SessionConfigInput, SessionLocations,
-    UserConfigManager, UserConfigSources, absolute, canonical_directory, present_on_disk,
+    AdmittedSessionConfig, ProspectiveSessionConfig, SessionConfigInput, UserConfigManager,
+    UserConfigSources, absolute, canonical_directory, present_on_disk,
 };
 use super::diagnostics::LaunchFailure;
 use std::path::{Path, PathBuf};
@@ -14,8 +13,6 @@ pub struct LaunchRequest {
     pub workspace: Option<PathBuf>,
     pub runtime_root: Option<PathBuf>,
     pub model: Option<String>,
-    pub startup_session: StartupSession,
-    pub session_name: Option<String>,
 }
 
 /// Captured once; tests supply isolated snapshots without changing process globals.
@@ -129,19 +126,6 @@ pub fn analyze(
     let (manager, input) = request.session_input(host)?;
     manager.resolve_session(&input)
 }
-/// CLI trust/inspection location input, without configuration reads.
-/// # Errors
-/// Invalid explicit locations are rejected.
-pub fn resolve_locations(
-    request: &LaunchRequest,
-    host: &HostEnvironment,
-) -> Result<(SessionLocations, String), String> {
-    let (mut sources, input) = request.source_inputs(host)?;
-    if let Some(root) = &request.runtime_root {
-        sources.runtime_root = absolute(&host.launch_directory, root);
-    }
-    UserConfigManager::new(sources)?.resolve_locations(&input)
-}
 /// Resolve and admit CLI input through the shared Session configuration owner.
 /// # Errors
 /// Invalid configuration or resource authority prevents credential capture.
@@ -152,18 +136,6 @@ pub fn resolve(
 ) -> Result<AdmittedSessionConfig, String> {
     analyze(request, host)?.admit(crate::credentials::CredentialSnapshot::capture)
 }
-/// Resolve inspection state without loading models or project configuration.
-/// Only the host state-location member is relevant; runtime settings stay inert.
-///
-/// # Errors
-/// Rejects invalid filesystem locations or an unreadable/malformed host state reference.
-pub fn resolve_inspection_locations(
-    request: &LaunchRequest,
-    host: &HostEnvironment,
-) -> Result<SessionLocations, String> {
-    resolve_locations(request, host).map(|(locations, _)| locations)
-}
-
 pub(super) fn discover_workspace(launch: &Path) -> Result<PathBuf, String> {
     for (depth, directory) in launch.ancestors().enumerate() {
         if depth >= 128 {

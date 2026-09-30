@@ -716,8 +716,8 @@ struct PersistedSession {
 }
 
 /// A call-site-local startup destination and a generation-checked publication plan.
-/// The target is never serialized. Composing a new CLI attachment may fail before
-/// publication; its private seed must not create visible catalog membership.
+/// The target is never serialized. A composition may fail before publication;
+/// its private seed must not create visible catalog membership.
 /// Opening any existing node produces an unchanged plan and writes nothing.
 #[derive(Debug, Clone)]
 pub(crate) struct PlannedCatalog {
@@ -728,17 +728,9 @@ pub(crate) struct PlannedCatalog {
     /// Whether the plan differs from the catalog it was planned against.
     /// An unchanged plan commits nothing.
     changed: bool,
-    /// The Session whose display projection this plan folds in, when it folds
-    /// one. Committing the plan is that projection's visibility point, so the
-    /// commit announces the same post-commit summary invalidation the
-    /// standalone publication seam does.
-    display_preview_published: Option<SessionId>,
 }
 
 impl PlannedCatalog {
-    pub(crate) fn settings_revision(&self) -> u64 {
-        self.document.sessions[&self.target].settings_revision
-    }
     /// The explicit destination node of this startup plan, and its Session-local state.
     ///
     /// Read from the planned document, not from the catalog on disk: this is
@@ -747,56 +739,6 @@ impl PlannedCatalog {
         &self,
     ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
         lineage_of(&self.document, &self.target, &self.target_node)
-    }
-
-    /// Names only this plan's explicit Session destination.
-    ///
-    /// Naming is metadata and can only follow the decision about where the
-    /// launch starts, so it applies to the plan rather than to the catalog:
-    /// a launch that fails to compose renames nothing.
-    pub(crate) fn with_name(mut self, name: &str) -> Result<Self, SessionError> {
-        let name = normalize_name(name)?;
-        let active = self.target.clone();
-        let session = self
-            .document
-            .sessions
-            .get_mut(&active)
-            .ok_or(SessionError::UnknownSession { session_id: active })?;
-        session.name = Some(name);
-        session.updated_at = Utc::now();
-        self.changed = true;
-        Ok(self)
-    }
-
-    /// The planned destination Session's current display projection, read
-    /// from the planned document rather than the catalog on disk.
-    pub(crate) fn display_preview(&self) -> Option<&str> {
-        self.document.sessions[&self.target]
-            .display_preview
-            .as_deref()
-    }
-
-    /// Folds a repaired display projection into this plan's explicit Session
-    /// destination, so the backfill rides the one startup catalog transaction
-    /// instead of becoming a second write.
-    ///
-    /// The field is set only when absent, and the plan is marked changed only
-    /// when it actually changed, so an unchanged plan still commits nothing.
-    /// Like [`SessionCatalog::publish_display_preview`], this never touches
-    /// `updated_at` or `settings_revision`.
-    pub(crate) fn with_display_preview(mut self, preview: &str) -> Result<Self, SessionError> {
-        let active = self.target.clone();
-        let session = self.document.sessions.get_mut(&active).ok_or_else(|| {
-            SessionError::UnknownSession {
-                session_id: active.clone(),
-            }
-        })?;
-        if session.display_preview.is_none() {
-            session.display_preview = Some(preview.to_owned());
-            self.changed = true;
-            self.display_preview_published = Some(active);
-        }
-        Ok(self)
     }
 }
 
@@ -2263,7 +2205,6 @@ impl SessionCatalog {
             target_node: self.document.sessions[target].active_node.clone(),
             document: self.document.clone(),
             changed: !self.published,
-            display_preview_published: None,
         }
     }
 
@@ -2280,7 +2221,6 @@ impl SessionCatalog {
             target_node: node.id,
             document: self.document.clone(),
             changed: false,
-            display_preview_published: None,
         })
     }
 
@@ -2296,7 +2236,6 @@ impl SessionCatalog {
             target_node: prepared.node_id.clone(),
             document: self.build_session_document(prepared, origin)?,
             changed: true,
-            display_preview_published: None,
         })
     }
 
@@ -2308,17 +2247,7 @@ impl SessionCatalog {
         if !planned.changed {
             return Ok(());
         }
-        // A startup plan that folded a repaired display projection is the same
-        // Session metadata change the standalone publication seam makes, so it
-        // announces itself the same way — after visibility, never before.
-        let published = planned.display_preview_published.clone();
-        let committed = self.commit(planned.document);
-        if let Some(session_id) = published
-            && (committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed))
-        {
-            self.summary_invalidations.record(&session_id);
-        }
-        committed
+        self.commit(planned.document)
     }
 
     fn build_current_node_document(
@@ -3982,7 +3911,7 @@ model = "provider/model"
         .expect("conversation store")
     }
 
-    /// The source lineage as the supervisor reads it: the Surface at the
+    /// The source lineage as the copy owner reads it: the Surface at the
     /// selected revision *and* the canonical history it was projected from.
     fn lineage_at(
         store: &SqliteConversationStore,
@@ -6984,20 +6913,14 @@ model = "provider/model"
             .expect("attached source survives a different default node");
         assert_eq!(attached_node.conversation_id, source_conversation);
         assert_ne!(attached_node.id, snapshot.active_node);
-        let attachment = super::super::supervisor::LocalSessionAttachment::new(
-            catalog.clone(),
-            source_session.clone(),
-            state(),
-            0,
-        );
-        let selected = attachment
-            .select(source_session.clone(), Some(attached_node.id.clone()))
-            .await
-            .expect("client-local historical node routing");
-        assert_eq!(selected.node.id, attached_node.id);
-        assert_eq!(selected.session.active_node, snapshot.active_node);
+        // Explicit historical node routing reads the graph without moving
+        // the durable default node.
+        let (selected, _) = catalog
+            .lineage(&source_session, Some(&attached_node.id))
+            .expect("explicit historical node routing");
+        assert_eq!(selected.id, attached_node.id);
         assert_eq!(
-            attachment.current().await.unwrap().active_node,
+            catalog.snapshot(&source_session).unwrap().active_node,
             snapshot.active_node
         );
 

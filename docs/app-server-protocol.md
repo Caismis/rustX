@@ -1,9 +1,14 @@
 # App Server protocol v29
 
-App Server v29 / Runtime Client v54 combine main's Harness semantic ledger with
+App Server v29 / Runtime Client v55 combine main's Harness semantic ledger with
 required configured Tool inventory, capability-gated image admission, and Bash
 presentation metadata. Every earlier version is rejected; there is one current
 mandatory vocabulary and no compatibility decoder.
+
+App Server is the only external product control protocol (#428): a bare
+`rustx` prints help, and no process serves the Runtime Client envelopes to a
+client. Runtime Client v55 removed its Session catalog requests, results and
+views; the App Server wire and its v29 schema are unchanged.
 
 App Server v28 / Runtime Client v53 introduced bounded canonical Tool argument
 previews in Trace summaries. Full structured arguments remain in the bounded
@@ -48,18 +53,18 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v29 / Runtime Client v54 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v29 / Runtime Client v55 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. v29/v54 retain these capabilities. A browser product preference can
+its catalog. v29/v55 retain these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
 The historical v21/v47 revision introduced `completed_process` on transcript
 entries, using committed Assistant identities and exact Tool occurrence owners
-to identify a successful Attempt and its final response. v29/v54 replace that
+to identify a successful Attempt and its final response. v29/v55 replace that
 field with `turn_process`, extending the semantic owner across outcomes. SQLite
 schema 44 retains exact completed-process members in lineage provenance,
 remapped by the native copy owner; this selective lineage policy is unchanged.
@@ -866,7 +871,7 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 54 retains it and rejects older peers by strict negotiation. This remains mandatory
+current version 55 retains it and rejects older peers by strict negotiation. This remains mandatory
 App Server protocol v29, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
@@ -937,7 +942,7 @@ other pre-1.0 schema changes, older stores are refused explicitly; no migration
 or compatibility representation is introduced.
 
 Native Runtime Client version 37 introduced the mandatory pending revision and
-`pending_inbound_changed` event. Current version 54 retains both with no
+`pending_inbound_changed` event. Current version 55 retains both with no
 compatibility decoder.
 
 Snapshot/attachment reads also reconcile Pending Inbound directly from durable

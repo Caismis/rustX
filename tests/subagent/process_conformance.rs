@@ -18,13 +18,9 @@
 //! `repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_cancellation`.
 //! Parent history and subagent state prove terminal uniqueness here.
 
-use std::process::Stdio;
 use std::sync::Arc;
 
-use rustx::runtime_client::types::{
-    RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
-};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use crate::parent::{Parent, ParentBindings};
 
 /// The outer subprocess conformance guard. The inherited 300ms response-start
 /// policy completes the scripted run in roughly 16s (2s + 4s + 8s of real
@@ -32,10 +28,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 /// default 30s response-start timeout: if child composition re-defaults the
 /// policy, the first gated request cannot settle before this guard expires.
 const LIVENESS: std::time::Duration = std::time::Duration::from_secs(27);
-
-fn binary() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))
-}
 
 /// A catalog pointing at the local fixture server.
 fn models_json(base_url: &str) -> String {
@@ -100,118 +92,37 @@ model = "fixture/subagent-model"
 builtin = ["read"]
 "#;
 
-/// One spawned `rustx` process wired to its stdio JSONL transport.
-struct Process {
-    child: tokio::process::Child,
-    stdin: tokio::process::ChildStdin,
-    stdout: BufReader<tokio::process::ChildStdout>,
-    next_id: u64,
-}
-
-impl Process {
-    fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
-        let workspace = root.join("workspace");
-        std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::create_dir_all(workspace.join(".agents/agents/conformance"))
-            .expect("subagent resources");
-        std::fs::write(
-            workspace.join(".agents/agents/conformance.toml"),
-            "Execute the delegated conformance task exactly as requested.\n",
-        )
-        .expect("subagent instructions");
-        let skill = workspace.join(".agents/skills/conformance");
-        std::fs::create_dir_all(&skill).expect("skill package");
-        std::fs::write(
-            skill.join("SKILL.md"),
-            "---\nname: conformance\ndescription: Issue 138 conformance skill.\n---\n\nUse the ordinary child runtime.\n",
-        )
-        .expect("skill manifest");
-        let mut document: serde_json::Value =
-            rustx::toml_authoring::parse(session.as_bytes()).unwrap();
-        crate::launch_fixture::write_roles(&workspace, &mut document["subagents"]);
-        std::fs::write(
-            root.join("rustx.toml"),
-            format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
-        )
-        .expect("rustx.toml");
-        let mut command = tokio::process::Command::new(binary());
-        command
-            .arg("--config")
-            .arg(root.join("rustx.toml"))
-            .arg("--workspace")
-            .arg(&workspace)
-            .arg("--runtime-root")
-            .arg(root.join("private"))
-            .env_clear()
-            .env("HOME", root.join("host"))
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("RUSTX_SUBAGENT_TEST_KEY", key)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command.kill_on_drop(true);
-        let mut child = command.spawn().expect("spawn the rustx binary");
-        let stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
-        Self {
-            child,
-            stdin,
-            stdout,
-            next_id: 1,
-        }
-    }
-
-    /// Sends one request and returns its correlated response, skipping any
-    /// notification lines that arrive first.
-    async fn request(
-        &mut self,
-        build: impl FnOnce(u64) -> RuntimeClientRequest,
-    ) -> RuntimeClientResponse {
-        let id = self.next_id;
-        self.next_id += 1;
-        let request = build(id);
-        let line = serde_json::to_string(&request).expect("serialize the request");
-        tokio::time::timeout(LIVENESS, async {
-            self.stdin.write_all(line.as_bytes()).await.expect("write");
-            self.stdin.write_all(b"\n").await.expect("write newline");
-            self.stdin.flush().await.expect("flush");
-            loop {
-                let mut record = String::new();
-                let read = self
-                    .stdout
-                    .read_line(&mut record)
-                    .await
-                    .expect("read a protocol record");
-                assert!(read > 0, "the process closed stdout before responding");
-                if serde_json::from_str::<RuntimeClientProtocolEvent>(record.trim()).is_ok() {
-                    continue;
-                }
-                let response: RuntimeClientResponse = serde_json::from_str(record.trim())
-                    .unwrap_or_else(|error| {
-                        panic!("stdout must carry protocol records only: {record:?} ({error})")
-                    });
-                assert_eq!(response.id.get(), id, "responses correlate by request id");
-                return response;
-            }
-        })
-        .await
-        .expect("the process must answer")
-    }
-
-    /// Closes the transport input and waits for the process to exit.
-    async fn close_and_wait(mut self) -> (std::process::ExitStatus, String) {
-        drop(self.stdin);
-        let status = tokio::time::timeout(LIVENESS, self.child.wait())
-            .await
-            .expect("the process must exit after transport EOF")
-            .expect("wait");
-        let mut stderr = String::new();
-        if let Some(mut handle) = self.child.stderr.take() {
-            use tokio::io::AsyncReadExt;
-            let _ = handle.read_to_string(&mut stderr).await;
-        }
-        (status, stderr)
-    }
+/// Writes the named child definition and Skill, then launches the real App
+/// Server parent over a new Session in `<root>/workspace`.
+async fn spawn_parent(root: &std::path::Path, models: &str, session: &str, key: &str) -> Parent {
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(workspace.join(".agents/agents/conformance"))
+        .expect("subagent resources");
+    std::fs::write(
+        workspace.join(".agents/agents/conformance.toml"),
+        "Execute the delegated conformance task exactly as requested.\n",
+    )
+    .expect("subagent instructions");
+    let skill = workspace.join(".agents/skills/conformance");
+    std::fs::create_dir_all(&skill).expect("skill package");
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: conformance\ndescription: Issue 138 conformance skill.\n---\n\nUse the ordinary child runtime.\n",
+    )
+    .expect("skill manifest");
+    let mut document: serde_json::Value = rustx::toml_authoring::parse(session.as_bytes()).unwrap();
+    crate::launch_fixture::write_roles(&workspace, &mut document["subagents"]);
+    std::fs::write(
+        root.join("rustx.toml"),
+        format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
+    )
+    .expect("rustx.toml");
+    Parent::spawn(
+        &ParentBindings::under(root, &workspace),
+        &[("RUSTX_SUBAGENT_TEST_KEY", key)],
+        None,
+    )
+    .await
 }
 
 /// Routes one provider request by body content. The parent and the child
@@ -262,44 +173,16 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
     })
     .await;
     let root = tempfile::tempdir().expect("temp root");
-    let mut process = Process::spawn(
+    let mut process = spawn_parent(
         root.path(),
         &models_json(&server.url("/v1")),
         SESSION_TOML,
         "subagent-secret",
-    );
+    )
+    .await;
 
-    let response = process
-        .request(|id| RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::Initialized { .. })
-        ),
-        "initialize must succeed: {response:?}"
-    );
-
-    let response = process
-        .request(|id| RuntimeClientRequest::SubmitInbound {
-            id: rustx::runtime_client::RequestId::new(id),
-            content: vec![rustx::message::types::UserContentBlock::Text(
-                rustx::message::content::TextBlock {
-                    text: "please delegate".to_owned(),
-                },
-            )],
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::InboundAccepted { .. })
-        ),
-        "submit_inbound must be accepted: {response:?}"
-    );
+    process.attach().await;
+    process.start_turn("please delegate").await;
 
     // The child request reaching the never-released gate is the
     // deterministic frontier: from here on, only the child's inherited
@@ -312,14 +195,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
     // the parent consumed the notice in an ordinary continuation turn.
     let mut final_snapshot = None;
     for _ in 0..8_000 {
-        let response = process
-            .request(|id| RuntimeClientRequest::SnapshotGet {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-            panic!("snapshot_get must succeed: {response:?}");
-        };
+        let snapshot = process.snapshot().await;
         let failed = snapshot.agents.iter().any(|subagent| {
             subagent.activation_state == rustx::runtime::subagent::SubagentState::Failed
         });
@@ -353,8 +229,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         tokio::task::yield_now().await;
     }
     let Some(snapshot) = final_snapshot else {
-        drop(process.stdin);
-        let _ = process.child.wait().await;
+        let _ = process.shutdown().await;
         panic!("the child timeout/retry chain must settle within the liveness guard");
     };
 
@@ -437,19 +312,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
     // Release the gate so the fixture server's held handlers can finish,
     // then shut the parent down cleanly.
     gate.release();
-    let response = process
-        .request(|id| RuntimeClientRequest::Shutdown {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::ShutdownCompleted)
-        ),
-        "shutdown must complete: {response:?}"
-    );
-    let (status, stderr) = process.close_and_wait().await;
+    let (status, stderr) = process.shutdown().await;
     assert!(
         status.success(),
         "the process must exit cleanly: {status} stderr={stderr}"

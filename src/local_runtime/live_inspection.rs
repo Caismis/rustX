@@ -1,26 +1,31 @@
-//! Local live Runtime Client inspection routing.
+//! The child-owned live read-only inspection endpoint.
 //!
-//! A running child owns its Runtime Client projection in the child process.
-//! This module provides only the bounded local IPC seam needed to attach a
-//! read-only client to that projection. The socket pathname and the locked
-//! liveness sidecar are process routing state, never conversation history and
-//! never a discovery registry.
+//! A running subagent child owns its Runtime Client projection in the child
+//! process. This module binds the bounded local IPC seam through which a
+//! read-only attachment reads that projection: a Unix socket at the
+//! identity-derived path, serving strict Runtime Client JSONL through
+//! [`RuntimeClientEndpoint::new_read_only`], so every mutation is refused
+//! before dispatch and no attachment can activate the child or start a turn.
+//! Closing a connection detaches it without cancelling child work, and child
+//! shutdown stops the accept loop, settles every connection task and removes
+//! the socket. The socket pathname and the locked liveness sidecar are process
+//! routing state, never conversation history and never a discovery registry.
+//! External product access to child history goes through App Server
+//! `agent/transcript`/`agent/status`, never through this socket.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(test)]
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tokio::task::JoinSet;
 
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::RuntimeClientHost;
-use crate::runtime_client::transport::stdio::{
-    StdioSessionEnd, StdioTransportError, serve_stdio_jsonl_with_io,
-};
+use crate::runtime_client::transport::stdio::serve_stdio_jsonl_with_io;
 
 /// Test-only bind fault injection used by the real child-process regression.
 /// It is an environment seam because the child is a separately spawned rustX
@@ -76,8 +81,11 @@ impl LiveConversationInspectionLease {
 }
 
 /// Reports whether the identity-derived liveness lease is currently held.
+/// Only the deletion regressions read the lease; production readers retired
+/// with the standalone inspector process.
 /// `Ok(None)` means that no marker exists; `Ok(Some(false))` means that a
 /// stale marker was found but its lock is no longer held.
+#[cfg(test)]
 pub(crate) fn probe_liveness(path: &Path) -> std::io::Result<Option<bool>> {
     let file = match OpenOptions::new().read(true).open(path) {
         Ok(file) => file,
@@ -176,71 +184,4 @@ async fn run_listener(
     }
     connections.abort_all();
     while connections.join_next().await.is_some() {}
-}
-
-/// Probes the identity-derived live endpoint.
-pub(crate) async fn connect_live(path: &Path) -> std::io::Result<UnixStream> {
-    UnixStream::connect(path).await
-}
-
-/// Proxies a live Runtime Client byte stream to the inspector process's
-/// stdio. The remote Runtime Client transport remains the framing/semantic
-/// owner; this process only forwards bytes and returns cleanly when the live
-/// child endpoint closes.
-pub(crate) async fn serve_live_stdio(
-    stream: UnixStream,
-) -> Result<StdioSessionEnd, StdioTransportError> {
-    serve_live_with_io(stream, tokio::io::stdin(), tokio::io::stdout()).await
-}
-
-/// Proxies a live Runtime Client byte stream over arbitrary async byte
-/// streams. The process-stdio adapter and deterministic in-process routing
-/// tests use this exact byte-for-byte path; JSONL framing remains owned by the
-/// child Runtime Client endpoint.
-pub(crate) async fn serve_live_with_io<R, W>(
-    stream: UnixStream,
-    reader: R,
-    writer: W,
-) -> Result<StdioSessionEnd, StdioTransportError>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let (mut remote_reader, mut remote_writer) = stream.into_split();
-    let mut reader = reader;
-    let mut writer = writer;
-    tokio::select! {
-        result = tokio::io::copy(&mut reader, &mut remote_writer) => {
-            match result {
-                Ok(_) => {
-                    let _ = remote_writer.shutdown().await;
-                    Ok(StdioSessionEnd::InputEof)
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
-                    Ok(StdioSessionEnd::OutputBrokenPipe)
-                }
-                Err(error) => Err(StdioTransportError::InputIo(error)),
-            }
-        }
-        result = tokio::io::copy(&mut remote_reader, &mut writer) => {
-            match result {
-                Ok(_) => Ok(StdioSessionEnd::InputEof),
-                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
-                    Ok(StdioSessionEnd::OutputBrokenPipe)
-                }
-                Err(error) if is_peer_close(&error) => Ok(StdioSessionEnd::InputEof),
-                Err(error) => Err(StdioTransportError::OutputIo(error)),
-            }
-        }
-    }
-}
-
-fn is_peer_close(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        std::io::ErrorKind::ConnectionReset
-            | std::io::ErrorKind::ConnectionAborted
-            | std::io::ErrorKind::NotConnected
-            | std::io::ErrorKind::UnexpectedEof
-    )
 }

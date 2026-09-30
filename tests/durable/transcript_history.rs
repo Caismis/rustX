@@ -583,7 +583,6 @@ fn startup(root: &Path) -> LaunchFixture {
     LaunchFixture {
         config,
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace,
         runtime_root: root.join("private"),
     }

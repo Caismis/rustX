@@ -1328,3 +1328,194 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
     })
     .await;
 }
+
+/// The complete owned-process lifecycle through the one external protocol
+/// (relocated from the retired standalone launch process): `rustx app-server
+/// --listen stdio` binds only host defaults (no path flags, empty `PATH`),
+/// stdout starts with the protocol, the attached Session reports its model,
+/// tools and safe catalog, a real turn reaches the provider with the catalog's
+/// request parameters and credential, a workspace MCP definition the Agent
+/// does not select stays inert, and shutdown is an explicit owner signal.
+#[tokio::test]
+async fn app_server_stdio_serves_a_real_conversation_from_host_defaults() {
+    use rustx::app_server::protocol::*;
+    bounded(async {
+        let server = crate::common::FixtureServer::start(|_attempt, _head| {
+            crate::common::sse_fixture("openai_chat", "plain_text.sse")
+        })
+        .await;
+        let root =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join("rustx")).unwrap();
+        std::fs::write(
+            home.join("rustx/rustx.toml"),
+            format!(
+                r#"agent_id = "agent-process"
+
+[agent]
+[agent.tools]
+builtin = ["read", "write", "bash", "job_status"]
+[agent.model]
+model = "fixture/process-model"
+
+[providers.fixture]
+base_url = "{}"
+api_key = "$RUSTX_PROCESS_TEST_KEY"
+
+[models."fixture/process-model"]
+provider = "fixture"
+id = "process-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+request_params = {{ temperature = 0.11 }}
+
+[models."fixture/process-model".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[models."fixture/process-model".compat]
+chat_reasoning_replay = "omit"
+"#,
+                server.url("/v1")
+            ),
+        )
+        .unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+        let sentinel = root.path().join("mcp-started");
+        std::fs::write(
+            workspace.join(".agents/mcp.toml"),
+            toml::to_string_pretty(&serde_json::json!({"mcp_servers": {"project": {
+                "command": "touch", "args": [sentinel]
+            }}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let session = SessionController::open(&home.join("rustx/runtime"))
+            .unwrap()
+            .create_session(SessionPersistentState::from_input(
+                &SessionConfigInput::new(workspace.clone()),
+            ))
+            .await
+            .unwrap()
+            .session
+            .id;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_rustx"))
+            .current_dir(&workspace)
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "")
+            .env("RUSTX_PROCESS_TEST_KEY", "process-secret")
+            .args(["app-server", "--listen", "stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let target = attach(&client, session, 2).await;
+        let snapshot: rustx::runtime_client::RuntimeClientSnapshot =
+            serde_json::from_value(snapshot(&client, &target).await).unwrap();
+        let model = snapshot.model.as_ref().unwrap();
+        assert_eq!(model.configured.model.to_string(), "fixture/process-model");
+        assert_eq!(model.effective.context_window, 128_000);
+        let names: Vec<_> = snapshot
+            .capabilities
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect();
+        for expected in ["job_status", "read", "write", "bash"] {
+            assert!(names.contains(&expected), "{expected} missing from {names:?}");
+        }
+        let MethodResult::Models { catalog } = result(
+            &client,
+            Method::ModelCatalog {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("model catalog")
+        };
+        assert_eq!(
+            catalog.models[0].credential_source,
+            rustx::model::CredentialSourceView::Environment {
+                variable: "RUSTX_PROCESS_TEST_KEY".to_owned()
+            }
+        );
+        start_turn(&client, &target, "hello").await;
+        let settled: rustx::runtime_client::RuntimeClientSnapshot =
+            serde_json::from_value(settled(&client, &target).await).unwrap();
+        assert!(settled.messages.iter().any(|message| matches!(
+            message,
+            rustx::message::types::MessageBlock::Assistant(assistant)
+                if assistant.content.iter().any(|block| matches!(
+                    block,
+                    rustx::message::types::AssistantContentBlock::Text(text) if !text.text.is_empty()
+                ))
+        )));
+        let body: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
+        assert_eq!(body["model"], "process-model");
+        assert_eq!(body["temperature"], serde_json::json!(0.11));
+        assert!(!sentinel.exists(), "an unselected MCP definition stays inert");
+        client.close().await;
+        terminate(&child);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("process-secret"));
+    })
+    .await;
+}
+
+/// A Session whose persisted model the current catalog no longer offers is
+/// metadata-valid; only runtime composition discovers the problem. That
+/// failed attach changes no catalog byte, and every other Session still
+/// attaches (relocated from the retired launch client's failed-startup
+/// regressions onto App Server's composition path).
+#[tokio::test]
+async fn app_server_failed_attach_composition_leaves_the_catalog_untouched() {
+    use rustx::app_server::protocol::*;
+    bounded(async {
+        let f = Fixture::new().await;
+        let catalog_path = f.root.path().join("runtime/sessions/catalog.json");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&catalog_path).unwrap()).unwrap();
+        document["sessions"][f.sessions[0].as_str()]["state"]["model"] =
+            serde_json::to_value(rustx::model::session::SessionModelConfig::of(
+                rustx::model::catalog::ModelRef::parse("local/retired-model").unwrap(),
+            ))
+            .unwrap();
+        std::fs::write(&catalog_path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+        let before = std::fs::read(&catalog_path).unwrap();
+        let mut child = f.command("stdio").spawn().unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let response = rpc(
+            &client,
+            2,
+            Method::SessionAttach {
+                session_id: f.sessions[0].clone(),
+                node_id: None,
+            },
+        )
+        .await;
+        assert!(matches!(response, Response::Failure(_)), "{response:?}");
+        assert_eq!(
+            std::fs::read(&catalog_path).unwrap(),
+            before,
+            "a failed composition rewrote the catalog"
+        );
+        attach(&client, f.sessions[1].clone(), 3).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}

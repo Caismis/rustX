@@ -69,7 +69,6 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Laun
         LaunchFixture {
             config: session_path,
             startup_session: rustx::local_runtime::StartupSession::Empty,
-            session_name: None,
             workspace,
             runtime_root: canonical.join("private"),
         },
@@ -635,40 +634,47 @@ mod mcp {
     }
 }
 
-/// Sends one request to a spawned `rustx` process and returns its
-/// correlated response, skipping any notification lines that arrive first.
-#[cfg(unix)]
-async fn process_request(
+/// Sends one App Server JSON-RPC request over the owned stdio pipes and
+/// returns its correlated `result`, skipping notifications.
+async fn app_server_call(
     stdin: &mut tokio::process::ChildStdin,
-    stdout: &mut tokio::io::BufReader<tokio::process::ChildStdout>,
-    id: u64,
-    build: impl FnOnce(
-        rustx::runtime_client::RequestId,
-    ) -> rustx::runtime_client::types::RuntimeClientRequest,
-) -> rustx::runtime_client::types::RuntimeClientResponse {
-    use rustx::runtime_client::types::{RuntimeClientProtocolEvent, RuntimeClientResponse};
-    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
-
+    stdout: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    id: i64,
+    call: rustx::app_server::protocol::Method,
+) -> rustx::app_server::protocol::MethodResult {
+    use tokio::io::AsyncWriteExt as _;
     const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
-    let request = build(rustx::runtime_client::RequestId::new(id));
-    let line = serde_json::to_string(&request).expect("serialize the request");
+    let method = format!("{call:?}");
+    let request = serde_json::to_string(&rustx::app_server::protocol::Request {
+        jsonrpc: rustx::app_server::protocol::JsonRpcVersion::V2,
+        id: rustx::app_server::protocol::RequestId::Integer(id),
+        call,
+    })
+    .unwrap();
     tokio::time::timeout(LIVENESS, async {
-        stdin.write_all(line.as_bytes()).await.expect("write");
-        stdin.write_all(b"\n").await.expect("write newline");
-        stdin.flush().await.expect("flush");
+        stdin
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .expect("write");
         loop {
-            let mut record = String::new();
-            let read = stdout.read_line(&mut record).await.expect("read");
-            assert!(read > 0, "the process closed stdout before responding");
-            if serde_json::from_str::<RuntimeClientProtocolEvent>(record.trim()).is_ok() {
+            let record = stdout
+                .next_line()
+                .await
+                .expect("read")
+                .expect("the process closed stdout before responding");
+            let value: serde_json::Value = serde_json::from_str(&record).unwrap_or_else(|error| {
+                panic!("stdout carries protocol only: {record:?} ({error})")
+            });
+            if value.get("id").is_none() {
                 continue;
             }
-            let response: RuntimeClientResponse = serde_json::from_str(record.trim())
-                .unwrap_or_else(|error| {
-                    panic!("stdout must carry protocol records only: {record:?} ({error})")
-                });
-            assert_eq!(response.id.get(), id, "responses correlate by request id");
-            return response;
+            assert_eq!(value["id"], id, "responses correlate by request id");
+            match serde_json::from_str(&record).expect("a typed App Server response") {
+                rustx::app_server::protocol::Response::Success(success) => return success.result,
+                rustx::app_server::protocol::Response::Failure(failure) => {
+                    panic!("{method} failed: {failure:?}")
+                }
+            }
         }
     })
     .await
@@ -677,18 +683,17 @@ async fn process_request(
 
 /// The original user-facing symptom (Issue #81): the TUI saw the runtime
 /// close its transport output stream. This drives the **real `rustx`
-/// process** with both a broken Python package and an unreachable MCP
-/// server: the process must stay alive, Runtime Client `initialize` must
-/// succeed, the initial snapshot must carry usable native capabilities and
-/// the typed unavailable state, and the process must keep serving.
+/// App Server process** with both a broken Python package and an
+/// unreachable MCP server selected: attaching the Session must compose, its
+/// initial snapshot must carry usable native capabilities and the typed
+/// unavailable state, and the process must keep serving until its owner
+/// ends it explicitly.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one complete process-level regression
 async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     use std::process::Stdio;
-
-    use rustx::runtime_client::types::{RuntimeClientRequest, RuntimeClientResult};
-    use tokio::io::BufReader;
+    use tokio::io::{AsyncBufReadExt as _, BufReader};
 
     const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
@@ -712,14 +717,25 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             toml::to_string_pretty(&session).unwrap()
         ),
     );
+    let session_id = rustx::local_runtime::session_controller::SessionController::open(
+        &root.path().join("private"),
+    )
+    .unwrap()
+    .create_session(
+        rustx::local_runtime::session::SessionPersistentState::from_input(
+            &rustx::local_runtime::configuration::SessionConfigInput::new(workspace.clone()),
+        ),
+    )
+    .await
+    .unwrap()
+    .session
+    .id;
+    let home = root.path().join("host");
+    std::fs::create_dir_all(&home).unwrap();
 
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
-    let home = super::runtime_process::fixture_home(root.path());
-    command
-        .arg("--config")
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"))
+        .args(["app-server", "--listen", "stdio", "--config"])
         .arg(root.path().join("rustx.toml"))
-        .arg("--workspace")
-        .arg(&workspace)
         .arg("--runtime-root")
         .arg(root.path().join("private"))
         .env_clear()
@@ -728,21 +744,49 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         .env("RUSTX_ISSUE81_KEY", "issue81-secret")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("spawn the rustx binary");
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn the rustx binary");
     let mut stdin = child.stdin.take().expect("stdin is piped");
-    let mut stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout is piped")).lines();
 
-    // The exact operation the TUI failed on: initialize over the transport.
-    let response = process_request(&mut stdin, &mut stdout, 1, |id| {
-        RuntimeClientRequest::Initialize {
-            id,
-            protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-        }
-    })
+    app_server_call(
+        &mut stdin,
+        &mut stdout,
+        1,
+        rustx::app_server::protocol::Method::Initialize(
+            rustx::app_server::protocol::InitializeParams {
+                protocol_version: rustx::app_server::protocol::APP_SERVER_PROTOCOL_VERSION,
+                client: rustx::app_server::protocol::ClientIdentity {
+                    name: "issue-81".into(),
+                    version: "1".into(),
+                },
+                presentation: rustx::app_server::protocol::PresentationCapabilities {
+                    images: false,
+                    questionnaires: false,
+                    reviews: false,
+                },
+            },
+        ),
+    )
     .await;
-    let Some(RuntimeClientResult::Initialized { snapshot, .. }) = response.result else {
-        panic!("initialize must succeed despite the optional failures: {response:?}");
+    // The exact operation the TUI failed on: composing the Session runtime.
+    let attached = app_server_call(
+        &mut stdin,
+        &mut stdout,
+        2,
+        rustx::app_server::protocol::Method::SessionAttach {
+            session_id,
+            node_id: None,
+        },
+    )
+    .await;
+    let rustx::app_server::protocol::MethodResult::Attached {
+        target, snapshot, ..
+    } = attached
+    else {
+        panic!("session/attach must compose the Session: {attached:?}");
     };
     let names = tool_names(&snapshot);
     for expected in ["read", "write", "bash"] {
@@ -760,22 +804,29 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     };
     assert_eq!(source_state(&snapshot, &exa), None);
     // The process keeps serving after the isolated failures.
-    let response = process_request(&mut stdin, &mut stdout, 2, |id| {
-        RuntimeClientRequest::ModelCatalogGet { id }
-    })
+    let models = app_server_call(
+        &mut stdin,
+        &mut stdout,
+        3,
+        rustx::app_server::protocol::Method::ModelCatalog { target },
+    )
     .await;
     assert!(
         matches!(
-            response.result,
-            Some(RuntimeClientResult::ModelCatalog { .. })
+            models,
+            rustx::app_server::protocol::MethodResult::Models { .. }
         ),
-        "the runtime keeps serving: {response:?}"
+        "the runtime keeps serving: {models:?}"
     );
 
-    drop(stdin);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
     let status = tokio::time::timeout(LIVENESS, child.wait())
         .await
-        .expect("the process must exit after transport EOF")
+        .expect("the owned process ends on its explicit shutdown signal")
         .expect("wait");
     assert!(status.success(), "clean shutdown, not a crash: {status}");
 }

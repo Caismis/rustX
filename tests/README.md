@@ -147,7 +147,9 @@ invariant is a real process boundary.
   session summary model).
 - `runtime_client/` — host/endpoint/protocol/transport contracts, including
   the transport-independent conformance matrix run through the direct
-  endpoint and the stdio/JSONL framing over in-memory pipes.
+  endpoint and the internal JSONL framing over in-memory pipes. That framing's
+  one production consumer is a running child's read-only live inspection
+  socket; no process serves the Runtime Client envelopes to a client.
 - `capability/` — capability snapshots, quiescent commits, environment
   materialization, and the executable-identity no-op contracts: a changed
   MCP executable binding (a managed Python package whose source edit moved
@@ -233,7 +235,9 @@ re-proven there.
   draining consumer, and a stalled one), a stalled parent projection
   coalesces superseded activity and converges on the newest revision,
   foreground live tool progress projects while the tool runs and is never
-  durable, a retry's next request projects retry ordinal zero, activity
+  durable (and is readable only through the child-owned read-only inspection
+  socket, which refuses mutation, survives observer reconnects, and settles
+  held connections and its socket at child shutdown), a retry's next request projects retry ordinal zero, activity
   frames commit no parent journal facts and never enter parent model
   context or the result channel, the frozen execution profile is the only
   projected configuration, and snapshot repair serves the latest
@@ -265,8 +269,8 @@ meaningful domain/boundary/dependency topology:
 | `provider` | one adapter over the in-process `FixtureServer` | request serialization, protocol translation, stream parsing, normalized error mapping, ToolCall acceptance and malformed-tool-proposal classification, capability/context translation at the adapter, opaque request params, opt-in live smoke |
 | `conformance` | the external provider-emulator process | composed Agent Loop / lifecycle / Workflow conformance through the real runtime and a real provider boundary |
 | `durable` | file-backed SQLite | recovery classification, pending-inbound inbox, publication store contract, interaction audit store, transcript history |
-| `process` | the real `rustx` binary / local composition | stdio/JSONL transport over a spawned process, composition identity, capability startup isolation, sessions, runtime config, committed-example resource composition |
-| `subagent` | the child-process boundary | named definition admission/resolution, frozen-policy handshake through a real launched child, end-to-end parent/child composition |
+| `process` | the real `rustx` binary / local composition | the public CLI contract (bare help, retired launch grammar rejected without effects), App Server over real stdio and WebSocket processes, composition identity, capability startup isolation, runtime config, committed-example resource composition |
+| `subagent` | the child-process boundary | named definition admission/resolution, frozen-policy handshake through a real launched child, end-to-end parent/child composition under a real App Server parent, the running child's internal read-only inspection socket |
 | `tools` | OS/tooling boundary | Bash supervision, Read/Write/Edit/Grep/Glob, Skills, MCP config/runtime, uv backend, managed `FastMCP` materialization |
 | `cfg3_catalog` | real configuration source files | CFG3 source resolution, shadowing and replacement, native writers' commit races and stale-write refusal, frozen model/provider invocation identity |
 | `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |

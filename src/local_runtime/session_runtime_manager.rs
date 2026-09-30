@@ -1599,7 +1599,7 @@ impl SessionRuntimeManager {
         {
             core.runtime().install_activation_gate(gate);
         }
-        let composition = core.into_bound_with_control(None).map_err(error)?;
+        let composition = core.into_bound().map_err(error)?;
         // The App Server display-projection seam (Issue #386). Two different
         // conditions live here and must not be confused:
         //

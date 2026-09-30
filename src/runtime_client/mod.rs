@@ -1,6 +1,7 @@
 //! Runtime Client projection/control owners reused by the App Server boundary.
-//! The public multi-Session protocol is [`crate::app_server`]. The local TUI
-//! stdio envelope remains scoped to its current application until #290.
+//! The only external product control protocol is [`crate::app_server`]. The
+//! Runtime Client envelopes are internal: a host's typed request surface and
+//! the read-only child live inspection socket.
 //!
 //! # Architecture
 //!
@@ -36,9 +37,10 @@
 //! [`RuntimeClientEvent`](event::RuntimeClientEvent) and
 //! [`RuntimeClientSnapshot`](snapshot::RuntimeClientSnapshot) are
 //! explicit runtime-owned projection types with their own versioning,
-//! lifecycle semantics, and cursor domain. Issue #38's local stdio contract
-//! remains until #290; Issue #36 binds stdio JSONL and WebSocket to the App
-//! Server endpoint that reuses these projection owners. An AG-UI adapter consumes this projection as its
+//! lifecycle semantics, and cursor domain. Issue #36 binds stdio JSONL and
+//! WebSocket to the App Server endpoint that reuses these projection owners;
+//! Issue #38's JSONL framing serves only the child's read-only inspection
+//! socket. An AG-UI adapter consumes this projection as its
 //! only source — there is no second AG-UI interpretation path directly
 //! from internal runtime events.
 //!
@@ -88,9 +90,10 @@
 //! # Transports
 //!
 //! [`transport`] holds the byte-stream adapters beneath the semantic
-//! layer — [`transport::stdio`] is the strict stdio/JSONL transport of
-//! Issue #38. A transport frames; it never re-implements semantics, and
-//! transport loss detaches without cancelling or settling anything.
+//! layer — [`transport::stdio`] is the strict JSONL framing of Issue #38,
+//! served over the child live inspection socket. A transport frames; it never
+//! re-implements semantics, and transport loss detaches without cancelling or
+//! settling anything.
 
 pub mod attachment;
 pub mod endpoint;

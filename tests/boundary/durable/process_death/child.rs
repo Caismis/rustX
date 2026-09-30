@@ -44,7 +44,7 @@ use rustx::local_runtime::composition::{
 };
 use rustx::local_runtime::config::CurrentRuntimeConfig;
 use rustx::local_runtime::session::{SessionCatalog, SessionPersistentState};
-use rustx::local_runtime::supervisor::LocalSessionAttachment;
+use rustx::local_runtime::session_controller::SessionController;
 
 use super::ROOT_ENV;
 use super::harness::{CONVERSATION, MODEL};
@@ -440,7 +440,6 @@ fn lab_paths(root: &Path) -> LaunchFixture {
     LaunchFixture {
         config: root.join("rustx.toml"),
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace: root.join("workspace"),
         runtime_root: root.join("private"),
     }
@@ -493,7 +492,11 @@ impl Child {
         scripts: Vec<Vec<FakeStep>>,
         approve: bool,
         client: bool,
-        lineage: Option<(ConversationId, PathBuf)>,
+        lineage: Option<(
+            ConversationId,
+            PathBuf,
+            Arc<crate::runtime::local_storage::ConversationAccess>,
+        )>,
         before_activation: Option<BeforeActivation>,
     ) -> Result<Self, String> {
         let paths = lab_paths(root);
@@ -544,32 +547,44 @@ impl Child {
                 &ScriptedAdapterFactory::new(adapter),
             )
         };
-        let controller = Arc::new(
-            crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
-                .unwrap(),
-        );
-        let (conversation_id, artifacts_root) = lineage.unwrap_or_else(|| {
-            (
-                ConversationId::new(CONVERSATION),
-                controller.root().join("sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001"),
+        let state = SessionPersistentState {
+            model: Some(runtime_config.initial_model().clone().clone()),
+            ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+                std::path::PathBuf::from("/"),
+            ))
+        };
+        let core = if let Some((conversation_id, artifacts_root, access)) = lineage {
+            // A Session lineage composes over the allocation its durable
+            // owner granted, exactly as the App Server runtime manager does.
+            LocalConversationCore::compose_with_access(
+                &launch,
+                &dependencies,
+                registry,
+                runtime_config.clone(),
+                state,
+                conversation_id,
+                artifacts_root,
+                access,
             )
-        });
-        let core = LocalConversationCore::compose_from_config(
-            &launch,
-            &dependencies,
-            registry,
-            runtime_config.clone(),
-            SessionPersistentState {
-                model: Some(runtime_config.initial_model().clone().clone()),
-                ..SessionPersistentState::from_input(
-                    &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
-                )
-            },
-            conversation_id,
-            artifacts_root,
-            controller,
-        )
-        .await
+            .await
+        } else {
+            let controller = Arc::new(
+                crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+                    .unwrap(),
+            );
+            let artifacts_root = controller.root().join("sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001");
+            LocalConversationCore::compose_from_config(
+                &launch,
+                &dependencies,
+                registry,
+                runtime_config.clone(),
+                state,
+                ConversationId::new(CONVERSATION),
+                artifacts_root,
+                controller,
+            )
+            .await
+        }
         .map_err(|error| format!("{error:?}"))?;
 
         let log = Log::new();
@@ -712,15 +727,15 @@ fn spawn_observer(
 /// provider) and the Runtime Client host (this child answers no protocol
 /// input): the real `SessionCatalog` on the lab's runtime-private root, the
 /// real conversation runtime of whatever node the catalog says is active, and
-/// the real `LocalSessionAttachment` with that runtime installed. `/fork` and
-/// `/branch` are then the production supervisor operations, not a harness
-/// re-implementation of them.
+/// the real `SessionController` over that catalog. Fork and branch are then
+/// the production App Server `session/fork` / `session/branch` owner
+/// operations, not a harness re-implementation of them.
 async fn compose_session_child(
     root: &Path,
     session_ordinal: usize,
     scripts: Vec<Vec<FakeStep>>,
     arm_projection: bool,
-) -> (Child, Arc<LocalSessionAttachment>) {
+) -> (Child, SessionLineage) {
     let paths = lab_paths(root);
     let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
     let runtime_config =
@@ -731,35 +746,41 @@ async fn compose_session_child(
             std::path::PathBuf::from("/"),
         ))
     };
-    let catalog = match SessionCatalog::open_existing(&paths.runtime_root)
-        .expect("open the native Session catalog")
+    // The lab's first Session is pre-existing product state, published
+    // before (and outside) any instrumented publication boundary.
+    if SessionCatalog::open_existing(&paths.runtime_root)
+        .expect("read the native Session catalog")
+        .is_none()
     {
-        Some(catalog) => catalog,
-        None => SessionCatalog::create(&paths.runtime_root, &template)
-            .expect("publish the first native Session"),
-    };
-    let session_id = catalog.persisted_session_ids()[session_ordinal].clone();
-    let (session_id, node, session_state) = catalog
-        .lineage(&session_id, None)
-        .map(|(node, state)| (session_id, node, state))
+        SessionCatalog::create(&paths.runtime_root, &template)
+            .expect("publish the first native Session");
+    }
+    let session_id = SessionCatalog::open_existing(&paths.runtime_root)
+        .expect("read the native Session catalog")
+        .expect("a native Session catalog")
+        .persisted_session_ids()[session_ordinal]
+        .clone();
+    // The one native product owner, exactly as the App Server composes it:
+    // it owns the product root and grants the allocation authority this
+    // child's runtime composes over.
+    let controller =
+        SessionController::open(&paths.runtime_root).expect("open the native Session owner");
+    let access = controller
+        .acquire_session(&session_id, None)
+        .await
         .expect("an active Session lineage");
-    let database_path = catalog.database_path(&session_id, &node.conversation_id);
-    let artifacts_root = database_path
+    let node = access.node.clone();
+    let artifacts_root = access
+        .database_path
         .parent()
         .expect("the active conversation database has a parent")
         .to_path_buf();
     let projection_session = arm_projection.then(|| session_id.clone());
-    let supervisor = Arc::new(LocalSessionAttachment::new(
-        catalog,
-        session_id,
-        session_state,
-        0,
-    ));
     // Arm exactly the way production composition does (Issue #386): the
-    // catalog held weakly through the supervisor's controller, the
-    // subscription taken while the runtime is still inert.
+    // catalog held weakly through the controller, the subscription taken
+    // while the runtime is still inert.
     let before_activation = projection_session.map(|session_id| {
-        let catalog = supervisor.controller().downgrade_catalog();
+        let catalog = controller.downgrade_catalog();
         Box::new(move |runtime: &ConversationRuntime| {
             crate::local_runtime::session_display_projection::arm_display_projection(
                 catalog, session_id, runtime,
@@ -771,16 +792,30 @@ async fn compose_session_child(
         scripts,
         false,
         true,
-        Some((node.conversation_id.clone(), artifacts_root)),
+        Some((
+            node.conversation_id.clone(),
+            artifacts_root,
+            access.allocation.clone(),
+        )),
         before_activation,
     )
     .await
     .unwrap_or_else(|error| panic!("the FND-06 session child could not compose: {error}"));
-    supervisor
-        .install_runtime(child.runtime().clone())
-        .await
-        .expect("install the active runtime into its supervisor");
-    (child, supervisor)
+    (
+        child,
+        SessionLineage {
+            controller,
+            session_id,
+            node_id: node.id,
+        },
+    )
+}
+
+/// The durable Session owner and the exact lineage a session child composed.
+struct SessionLineage {
+    controller: SessionController,
+    session_id: rustx::local_runtime::SessionId,
+    node_id: rustx::local_runtime::SessionNodeId,
 }
 
 /// The `MessageId` of the `nth` (1-based) ordinary human message of the
@@ -1593,9 +1628,25 @@ async fn scenario_body(root: &Path, scenario: &str) {
 
             let (revision, boundary) = human_boundary(&child, 3);
             let outcome = if scenario == SESSION_FORK {
-                supervisor.fork_attached(revision, boundary).await
+                supervisor
+                    .controller
+                    .fork_session(
+                        &supervisor.session_id,
+                        Some(&supervisor.node_id),
+                        revision,
+                        Some(&boundary),
+                    )
+                    .await
             } else {
-                supervisor.tree_branch(revision, boundary).await
+                supervisor
+                    .controller
+                    .branch_session_node(
+                        &supervisor.session_id,
+                        &supervisor.node_id,
+                        revision,
+                        &boundary,
+                    )
+                    .await
             };
             note(&format!("cut:{}", describe(&outcome)));
             // Only reached when no publication boundary was armed. The process

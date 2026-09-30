@@ -449,7 +449,6 @@ describe("startup and context", () => {
     const child = footer(state, "connected", 160, undefined, {
       conversationId: "conv_15cf935a-5ce7-72bc-89a4-dbf96abf5352",
       parentConversationId: "conv_da2992b1-4e15-7f04-87b8-c93e66c2450d",
-      readOnly: true,
     });
     assert.doesNotMatch(parent, /conversation-parent|parent /);
     assert.match(child, /read-only · Esc parent/);

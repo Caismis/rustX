@@ -126,7 +126,6 @@ async fn checked_in_local_runtime_example_composes_its_real_resources() {
             // Keep this test independent of the developer's home directory
             // while exercising the actual checked-in project Skill root.
             startup_session: StartupSession::Empty,
-            session_name: None,
             workspace,
             runtime_root: root.path().join("runtime-root"),
         })

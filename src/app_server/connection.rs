@@ -1027,7 +1027,7 @@ async fn dispatch_runtime(
         } => native_result(authority.transcript_page(before, limit)),
         Method::Goal { target: _, control } => native_result(authority.goal_control(control)),
         Method::JobStatus { job_id, .. } => native_result(authority.job_status(&job_id)),
-        Method::JobList { .. } => native_result(authority.job_list()),
+        Method::JobList { .. } => native_result(Ok(authority.job_list())),
         Method::JobWait { job_id, .. } => native_result(authority.job_wait(&job_id, false).await),
         Method::JobCancel { job_id, .. } => native_result(authority.job_wait(&job_id, true).await),
         Method::AgentStatus { agent_id, .. } => native_result(authority.agent_status(&agent_id)),
@@ -1148,7 +1148,7 @@ fn transition(
 }
 fn deletion(result: crate::local_runtime::session::deletion::SessionDeleteResult) -> MethodResult {
     MethodResult::Deletion {
-        result: crate::local_runtime::supervisor::project_session_deletion(result),
+        result: crate::runtime_client::session_deletion::project(result),
     }
 }
 fn native_result(

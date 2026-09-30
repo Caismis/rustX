@@ -675,15 +675,6 @@ impl ProspectiveSessionConfig {
 }
 
 impl AdmittedSessionConfig {
-    pub(crate) fn with_model(&self, model: crate::model::session::SessionModelConfig) -> Self {
-        let mut retained = self.clone();
-        retained.prospective.input.model = Some(model);
-        retained.binding_revision = retained
-            .binding_revision
-            .checked_add(1)
-            .expect("Session binding revision exhausted");
-        retained
-    }
     pub(crate) fn with_execution_policy(&self, desired: &IndependentPolicy) -> Self {
         let mut retained = self.clone();
         retained.prospective.compose_execution_policy(desired);

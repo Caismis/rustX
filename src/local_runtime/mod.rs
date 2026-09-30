@@ -1,33 +1,27 @@
 //! Shared local configuration, durable Session, and runtime owners.
 //!
-//! Ordinary `rustx` serves the local Runtime Client path described below.
-//! `rustx app-server` composes these shared owners through [`crate::app_server`].
-//!
-//! This module owns everything between explicit startup configuration and
-//! the Runtime Client endpoint a transport wraps:
+//! `rustx app-server` composes these owners through [`crate::app_server`],
+//! the only external product control protocol:
 //!
 //! - [`config`] — the bounded explicit current runtime/project configuration;
 //! - [`composition`] — the one Rust-side composition owner;
-//! - [`cli`] — the bounded startup argument contract;
-//! - [`serve`] — the process lifecycle over the Issue #38 stdio/JSONL
-//!   transport.
+//! - [`session_controller`] / [`session_runtime_manager`] — durable Session
+//!   authority and process-local runtime residency;
+//! - [`cli`] — the bounded public argument contract;
+//! - [`process`] — the single process entry and its stream ownership.
 //!
 //! # Process output contract
 //!
-//! Normal runtime mode:
+//! Help and argument diagnostics go to stderr before any effect; a bare
+//! `rustx` prints help. App Server stdout is protocol-only. Configuration
+//! subcommands own stdout for their bounded human/JSON results and never
+//! create a runtime.
 //!
-//! ```text
-//! before serving : stdout is empty; every diagnostic goes to stderr
-//! while serving  : stdout is Runtime Client JSONL only
-//! on failure     : stderr diagnostic, non-zero exit, zero bytes on stdout
-//! ```
-//!
-//! The internal `rustx --subagent-child` mode ([`subagent_child`]) is the
-//! an independent transport: fd 0 is the reliable subagent control IPC and
+//! The internal `rustx --subagent-child` mode ([`subagent_child`]) is an
+//! independent transport: fd 0 is the reliable subagent control IPC and
 //! fd 1/stdout is the protocol-owned framed Activity observation IPC
-//! (Issue #178), not human-readable output. Diagnostics stay on stderr in
-//! runtime transport modes. Configuration subcommands instead own stdout for
-//! their bounded human/JSON results and never create a runtime transport.
+//! (Issue #178), not human-readable output. Its read-only live inspection
+//! endpoint (`live_inspection`) is child-local routing state.
 //!
 //! `println!` is never used for diagnostics anywhere in the process.
 
@@ -49,9 +43,9 @@ pub mod mcp_resources;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
 mod probes;
+pub mod process;
 mod resource_directory;
 pub mod schemas;
-pub mod serve;
 pub mod session;
 pub mod session_controller;
 pub(crate) mod session_display_projection;
@@ -60,22 +54,20 @@ pub mod settings;
 #[cfg(test)]
 pub(crate) mod static_effects;
 pub mod subagent_child;
-pub mod supervisor;
 mod workflow_inspection;
 pub(crate) mod workflow_resources;
 
-pub use cli::{ArgumentError, parse_arguments};
+pub use cli::ArgumentError;
 pub use composition::{
-    HeadlessConversationRuntime, LocalConversationCore, LocalConversationInspection,
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalSessionClient,
-    StartupSession,
+    HeadlessConversationRuntime, LocalConversationCore, LocalConversationRuntime,
+    LocalRuntimeDependencies, LocalRuntimeError, StartupSession,
 };
 pub use config::{
     AgentWorktreeDocument, CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig,
     CurrentRuntimeConfigError, McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument,
 };
 pub use launch::{HostEnvironment, LaunchRequest, resolve};
-pub use serve::{ProcessOutcome, run_process, serve};
+pub use process::run_process;
 pub use session::{
     CatalogCommitError, HistoricalConversationSnapshot, SESSION_CATALOG_SCHEMA_VERSION,
     SESSION_LIST_PAGE_LIMIT, SESSION_NAME_LIMIT, SESSION_TREE_PAGE_LIMIT, SessionCatalog,
@@ -83,9 +75,7 @@ pub use session::{
     SessionNodePage, SessionSnapshot, SessionSummary, SessionUserMessageBoundary,
     SessionUserMessageBoundaryPage,
 };
-pub use supervisor::{
-    LocalSessionAttachment, SessionAttachmentError, SessionTransitionResult, SessionTreeResult,
-};
+pub use session_controller::SessionTransitionResult;
 
 #[cfg(test)]
 mod settings_e2e;

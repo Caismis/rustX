@@ -1263,6 +1263,170 @@ async fn second_node(f: &Fixture) -> SessionSnapshot {
     branch
 }
 
+/// An explicit cold node route composes exactly that node's lineage and never
+/// publishes graph focus: the durable default node survives every routed load,
+/// and after the one-time display-projection repair no routed load writes the
+/// catalog at all. (Relocated from the retired launch client's `--node` route.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_node_routes_compose_the_routed_lineage_without_publishing_focus() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let branch = second_node(&f).await;
+        let a = f.sessions[0].clone();
+        assert_eq!(branch.id, a.id);
+        assert_ne!(branch.active_node, a.active_node);
+        let catalog = f.archive_root.join("sessions/catalog.json");
+        let default = f.manager.sessions.read_session(&a.id).await.unwrap();
+        assert_eq!(default.active_node, a.active_node);
+        let mut settled_bytes = None;
+        for (node, expected) in [
+            (Some(&branch.active_node), &branch.active_conversation_id),
+            (Some(&a.active_node), &a.active_conversation_id),
+            (Some(&branch.active_node), &branch.active_conversation_id),
+            (None, &a.active_conversation_id),
+        ] {
+            let loaded = f.manager.load(&a.id, node).await.unwrap();
+            assert_eq!(loaded.conversation_id(), expected);
+            f.manager.unload(loaded.conversation_id()).await.unwrap();
+            assert_eq!(
+                f.manager
+                    .sessions
+                    .read_session(&a.id)
+                    .await
+                    .unwrap()
+                    .active_node,
+                default.active_node,
+                "a routed load never moves the durable default node"
+            );
+            let bytes = std::fs::read(&catalog).unwrap();
+            if let Some(settled) = &settled_bytes {
+                assert_eq!(&bytes, settled, "a routed load wrote the catalog");
+            }
+            settled_bytes = Some(bytes);
+        }
+        f.close().await;
+    })
+    .await;
+}
+
+/// Issue #386: an unrenderable first root message is a settled `None`. Neither
+/// the branch's own renderable text nor a later root message may manufacture a
+/// replacement projection when the manager cold-loads the root or a branch,
+/// and no such load arms a publisher or writes the catalog. (Relocated from
+/// the retired launch client's startup path onto the surviving composition.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_loads_never_manufacture_a_projection_for_an_unrenderable_root_subject() {
+    bounded(async {
+        use crate::durable::ConversationStore as _;
+        use crate::message::types::{
+            InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        };
+        let user = |id: &str, content: Vec<UserContentBlock>| {
+            MessageBlock::User(UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new(id),
+                content,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            })
+        };
+        let f = Fixture::new().await;
+        let sessions = &f.manager.sessions;
+        let session = f.sessions[0].clone();
+        let later = crate::runtime::identity::MessageId::new("later-root-text");
+        let revision = {
+            let access = sessions.acquire_session(&session.id, None).await.unwrap();
+            let store = crate::durable::SqliteConversationStore::open(
+                session.active_conversation_id.clone(),
+                &access.database_path,
+            )
+            .unwrap();
+            let artifacts = crate::tools::ArtifactStore::new(
+                session.active_conversation_id.clone(),
+                access.database_path.parent().unwrap(),
+            )
+            .unwrap();
+            let mut png = Vec::new();
+            png::Encoder::new(&mut png, 1, 1)
+                .write_header()
+                .unwrap()
+                .write_image_data(&[0])
+                .unwrap();
+            let artifact_id = artifacts.put_bounded(&png).unwrap();
+            store
+                .append_canonical(&user(
+                    "unrenderable-first",
+                    vec![UserContentBlock::Image(
+                        crate::message::content::ImageReference {
+                            artifact_id,
+                            alt: None,
+                        },
+                    )],
+                ))
+                .unwrap();
+            // A later root message is renderable, and is still not the subject.
+            store
+                .append_canonical(&user("later-root-text", input("a later root message")))
+                .unwrap();
+            store.load_head().unwrap().revision
+        };
+        let branch_node = sessions
+            .branch_session_node(&session.id, &session.active_node, revision, &later)
+            .await
+            .unwrap()
+            .session
+            .active_node;
+        {
+            let access = sessions
+                .acquire_session(&session.id, Some(&branch_node))
+                .await
+                .unwrap();
+            crate::durable::SqliteConversationStore::open(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .unwrap()
+            .append_canonical(&user(
+                "branch-text",
+                input("branch text is not the subject"),
+            ))
+            .unwrap();
+        }
+        sessions
+            .set_current_node(&session.id, &session.active_node)
+            .await
+            .unwrap();
+        let catalog = f.archive_root.join("sessions/catalog.json");
+        let bytes = std::fs::read(&catalog).unwrap();
+        for node in [Some(&branch_node), None] {
+            let loaded = f.manager.load(&session.id, node).await.unwrap();
+            assert!(
+                crate::local_runtime::session_display_projection::display_projection_probe(
+                    &session.id
+                )
+                .is_none(),
+                "a settled None is never re-armed, on the root or on a branch"
+            );
+            f.manager.unload(loaded.conversation_id()).await.unwrap();
+            assert_eq!(
+                std::fs::read(&catalog).unwrap(),
+                bytes,
+                "an unrenderable subject writes nothing at all"
+            );
+        }
+        assert_eq!(
+            sessions
+                .read_session_summary(&session.id)
+                .await
+                .unwrap()
+                .preview,
+            None
+        );
+        f.close().await;
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_claim_excludes_other_nodes_through_loading_loaded_and_unloading() {
     bounded(async {

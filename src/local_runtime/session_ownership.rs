@@ -1,7 +1,7 @@
 //! Native Session/Conversation ownership facts shared by inspection and deletion.
 //! One global identity map, derived only under the product ownership freeze.
 use std::collections::{BTreeMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::session::{SessionCatalog, SessionId, SessionNode};
 use crate::durable::{ConversationStore, SqliteConversationStore};
@@ -156,9 +156,11 @@ impl SessionOwnership {
     }
 }
 
-/// Resolve inspection through the same global ownership facts, never orphan files.
+/// Resolve a Conversation's owning Session through the same global ownership
+/// facts, never orphan files. Only the deletion regressions read it.
+#[cfg(test)]
 pub(crate) fn conversation_owner(
-    root: &Path,
+    root: &std::path::Path,
     target: &ConversationId,
 ) -> std::io::Result<SessionId> {
     let root = ProductRoot::existing(root)?;

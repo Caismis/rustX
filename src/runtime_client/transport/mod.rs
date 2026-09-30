@@ -15,10 +15,10 @@
 //!       v
 //! transport adapters                (framing only; this module)
 //!       |
-//!       +-- stdio / strict JSONL    (Issue #38)
+//!       +-- strict JSONL framing    (Issue #38)
 //!       |
 //!       v
-//! clients
+//! child live inspection socket (read-only)
 //! ```
 //!
 //! Everything under this namespace is framing, I/O ordering, bounded
@@ -45,13 +45,14 @@
 //! backlog, and a stalled transport consumer costs one cursor rather than a
 //! growing queue.
 //!
-//! This is the temporary pre-#290 local Runtime Client binding. Issue #36
-//! binds both stdio JSONL and WebSocket to `AppServerConnection`, not this
-//! endpoint. Its shared parity scenario is `tests/support/app_server_conformance.rs`.
+//! This binding is internal: its one production consumer is the child-owned,
+//! read-only live inspection socket. External clients use App Server, whose
+//! stdio JSONL and WebSocket transports bind `AppServerConnection`, not this
+//! endpoint (shared parity scenario: `tests/support/app_server_conformance.rs`).
 
 pub mod stdio;
 
 pub use stdio::{
     STDIO_JSONL_MAX_RECORD_BYTES, STDIO_JSONL_READ_CHUNK_BYTES, StdioFramingError, StdioSessionEnd,
-    StdioTransportError, serve_stdio_jsonl, serve_stdio_jsonl_with_io,
+    StdioTransportError, serve_stdio_jsonl_with_io,
 };

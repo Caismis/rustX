@@ -9,9 +9,10 @@
 //!   in-memory byte pipes, and decoded back.
 //!
 //! A transport is correct exactly when the two are indistinguishable here.
-//! These are the temporary pre-#290 Runtime Client expectations. Issue #36
-//! instead runs `tests/support/app_server_conformance.rs` through both App
-//! Server stdio and WebSocket drivers without duplicating semantic expectations.
+//! These are the internal Runtime Client binding's expectations; no process
+//! serves this binding to a client. App Server conformance instead runs
+//! `tests/support/app_server_conformance.rs` through both App Server stdio and
+//! WebSocket drivers without duplicating semantic expectations.
 //!
 //! Byte-level framing, record limits, stdout purity, EOF/broken-pipe
 //! lifecycle, and backpressure are transport-specific and live in

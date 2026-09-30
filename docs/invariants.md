@@ -5971,8 +5971,9 @@ endpoint. It frames; it never becomes a second authority.
   stream is protocol only.** Exactly one code path serializes, delimits,
   writes, and flushes, so two protocol records' bytes never interleave
   and the completion order of that path is the stream's serialization
-  point. Successful stdio output bytes are Runtime Client JSONL records
-  and nothing else — no human or operator logging shares the sink.
+  point. Successful output bytes are Runtime Client JSONL records and
+  nothing else — no human or operator logging shares the sink. The one
+  production sink is a child's read-only live inspection socket.
 - **A transport retains no event backlog.** The projection's bounded
   replay ring remains the one retained Runtime Client event backlog. A
   transport holds at most the one outbound record it is writing, so a
@@ -6666,13 +6667,14 @@ contracts and provider protocols. These invariants are frozen by M2:
   the context summary output cap flows through the runtime-owned protected
   max-output field.
 
-## Local runtime process (Issue #42)
+## Local runtime process (Issue #42, #428)
 
-- One local runtime process owns one conversation session, and that session
-  owns one authoritative mutable session-model configuration, one
-  `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one
-  context policy/Surface domain, and one `ConversationRuntime` (Issue
-  #61), with one `RuntimeClientHost` projection/control adapter over it.
+- App Server is the only external product control protocol. Each resident
+  Session runtime owns one authoritative mutable session-model
+  configuration, one `ConversationToolRuntime` identity, one
+  `CapabilityCoordinator`, one context policy/Surface domain, and one
+  `ConversationRuntime` (Issue #61), with one `RuntimeClientHost`
+  projection/control adapter over it.
   Runtime Client attachments come and go without replacing those semantic
   owners, and the conversation executes identically with zero attachments.
 
@@ -6680,21 +6682,23 @@ contracts and provider protocols. These invariants are frozen by M2:
   engines, tool registries, capability coordinators, or summary models. It
   owns the child-process lifecycle and nothing else.
 
-- The initial capability candidate is prepared and committed before any
-  protocol input is served. A capability startup failure never leaves a
-  partially initialized protocol server.
+- The initial capability candidate is prepared and committed before the
+  runtime activates. A capability startup failure never leaves a partially
+  composed runtime attached to any client.
 
-- Before serving, stdout is exactly empty. While serving, stdout carries
-  Runtime Client JSONL records and nothing else. Every diagnostic goes to
-  stderr, and `println!` is never used for diagnostics. A startup
-  configuration failure writes a bounded stderr diagnostic, exits non-zero,
-  and leaves zero bytes on stdout.
+- A bare `rustx`, `--help`, and every retired launch invocation (top-level
+  `--session`, `--node`, `--name`, `--inspect-conversation`, `--model`,
+  `--config`, `--workspace`, `--runtime-root`) are decided by argument parsing
+  before host capture, configuration reads, storage, or composition: help exits
+  0 and a rejected invocation exits 2 with a bounded usage diagnostic, both on
+  stderr with zero bytes on stdout, and neither ever redirects to App Server.
 
-- Clean input EOF at a record boundary or a peer broken pipe terminates the
-  one-active-lineage process successfully; malformed framing or another transport
-  error exits non-zero. Semantic `shutdown` waits for runtime quiescence but
-  does not close the transport. Transport EOF remains a detach, never an
-  Agent Loop cancellation primitive.
+- `rustx app-server` stdout carries App Server protocol records and nothing
+  else. Every diagnostic goes to stderr, and `println!` is never used for
+  diagnostics. A startup failure writes a bounded stderr diagnostic, exits
+  non-zero, and leaves zero bytes on stdout. Stdio EOF is a detach, never a
+  shutdown or an Agent Loop cancellation; the owning process ends the server
+  with an explicit signal, whose drain proves or refuses runtime settlement.
 
 ## TypeScript reference terminal client (Issue #39)
 

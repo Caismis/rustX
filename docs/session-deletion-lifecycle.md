@@ -122,10 +122,8 @@ source of truth and grant no identity. Projects, workspaces, environments, cache
 configuration and credentials are outside cleanup. Retained worktrees require
 explicit disposal and continue to block deletion.
 
-`LocalSessionClient::compose` recovers pending records after controller admission
-and before ordinary live-store recovery or runtime composition.
-`session/recoverDeletion` is the explicit asynchronous retry boundary. Neither
-recovery path activates a deleted Conversation, processes Pending Inbound, restores
+`session/recoverDeletion` is the explicit asynchronous recovery and retry
+boundary. It never activates a deleted Conversation, processes Pending Inbound, restores
 agents, calls a model, or initializes semantic services. Cancellation can leave a
 worker running or an unfinalized record; both converge at the next recovery
 boundary. No queue, timer, distributed worker, or retention policy is introduced.

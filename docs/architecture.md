@@ -4517,15 +4517,19 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v29, and
-`src/runtime_client` is an internal projection foundation the App Server reuses.
-App Server clients never negotiate or nest it. Its local version is
-`RUNTIME_CLIENT_PROTOCOL_VERSION`.
+The following version history describes the Runtime Client envelope contract.
+Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
+console speak App Server v29, the only external product control protocol, and
+`src/runtime_client` is the internal projection foundation App Server reuses.
+The envelopes remain the typed request surface of one native host and the wire
+of a running child's read-only live inspection socket. App Server clients never
+negotiate or nest it. Its version is `RUNTIME_CLIENT_PROTOCOL_VERSION`.
 
 Runtime Client protocol 34 removed the obsolete global `SessionSummaryView.active`
-field. Current version 51 rejects all older peers; Session route changes report
-reattachment requirements against the installed single-runtime attachment.
+field. Version 55 removed every Session catalog request, result and view and the
+Session failure/restart errors: their only implementer was the retired
+standalone launch client, and App Server owns Session control through
+`SessionController`. Current version 55 rejects all older peers.
 
 Version 24 added the typed question
 vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
@@ -5509,10 +5513,11 @@ transport adapters                framing only; src/runtime_client/transport
 clients
 ```
 
-Issue #38 added `src/runtime_client/transport/stdio.rs` for this temporary local
-Runtime Client contract. #36 instead binds the App Server endpoint to first-class
-stdio JSONL and WebSocket transports; #290 replaces the TUI's old wire semantics,
-not stdio as a transport choice. The following describes the current #38 adapter.
+Issue #38 added `src/runtime_client/transport/stdio.rs` for the Runtime Client
+JSONL framing. #36 binds the App Server endpoint to first-class stdio JSONL and
+WebSocket transports; since #428 the only production consumer of this framing is
+a running child's read-only live inspection socket. The following describes the
+current #38 adapter.
 
 - **The endpoint remains the semantic owner.** A transport calls
   `RuntimeClientEndpoint::handle_request` and forwards
@@ -5523,8 +5528,8 @@ not stdio as a transport choice. The following describes the current #38 adapter
   framed request may cross into `handle_request`.
 - **One session owns framing and I/O.** `serve_stdio_jsonl_with_io` is
   one async loop owning the endpoint, the bounded reader, the writer, and
-  the framing state; `serve_stdio_jsonl` is the process-stdio composition
-  of it over `tokio::io::stdin()`/`stdout()`. There are no transport
+  the framing state over any async byte stream (the child inspection socket
+  serves each accepted Unix stream through it). There are no transport
   tasks, no channels, and no ownership cycle back into the host. Dropping
   the endpoint on return is the RAII detach.
 - **Record limit.** `STDIO_JSONL_MAX_RECORD_BYTES` is 8 MiB and applies
@@ -6745,14 +6750,14 @@ Provider replacement never inherits a lower credential. See [configuration](conf
 
 ### Crash-safe Session deletion control
 
-Protocol 28 routes finite deletion preview, revision-bound execution and explicit
-recovery through LocalSessionAttachment. Catalog schema 7 owns both live membership
+Protocol 28 introduced finite deletion preview, revision-bound execution and explicit
+recovery; App Server routes them through `SessionController` and the runtime manager. Catalog schema 7 owns both live membership
 and pending frozen deletion records in one generation-checked atomic publication.
 Completed cleanup records are durably removed; native high-water marks prevent
-identity reuse independently. Runtime Client owns bounded deletion DTOs mapped
-explicitly by the supervisor. Confirmed parent-directory
-durability precedes blocking cleanup outside the catalog mutex; startup reconciles
-pending work before composing any live Conversation. ConversationAccess consults
+identity reuse independently. `runtime_client::session_deletion` owns the bounded
+deletion DTOs and their explicit native projection. Confirmed parent-directory
+durability precedes blocking cleanup outside the catalog mutex; explicit
+`session/recoverDeletion` reconciles pending work. ConversationAccess consults
 this same authority, so residual private files cannot revive deleted identities.
 See [Session deletion lifecycle](session-deletion-lifecycle.md) for the state machine,
 visibility/durability distinction and deterministic crash/concurrency evidence.
