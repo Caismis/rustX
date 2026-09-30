@@ -224,8 +224,8 @@ operation is dispatched are not retroactive cancellation of that operation.
 `session/settings` read instead of rereading native settings. Native
 `SessionPersistentState.cwd` is fixed at `session/create`/`session/fork` on every App
 Server path: the protocol has no settings-replacement method, and the only production
-settings writers (model publication and configuration adoption) copy the lineage
-settings and replace `model` alone. A future wire method that can change a Session's
+settings writer (configuration adoption in `SessionRuntimeManager`) copies the lineage
+settings and replaces `model` alone. A future wire method that can change a Session's
 cwd must extend this admission proof.
 
 **Capacity.** A validation holds one of the eight ordinary RPC slots, so the final
