@@ -43,11 +43,12 @@ counted as such:
   rewrites a committed corpus; the `generate_schemas` and
   `generate_app_server_protocol` examples regenerate checked-in artifacts
   (the latter is the App Server protocol lane's drift check).
-- **Fixture child entry point** — a `#[test]` that a boundary test
+- **Fixture child entry point** — a `#[test]` that a parent test
   re-executes as its child process (for example `child_process_entry`,
-  `staged_rollback_wire_child`, `deletion_process_child`). Without its mode
-  variable it returns at once, so its ordinary "pass" proves nothing; the
-  parent boundary test is the coverage.
+  `staged_rollback_wire_child`, `deletion_process_child`, and the lane
+  checker's `real_cargo_discovery_child`). Without its mode variable it
+  returns at once, so its ordinary "pass" proves nothing; the parent test is
+  the coverage.
 - **Lexical source convention** — a test that checks the spelling of
   production source text. Rust cannot restrict imports between modules of
   one crate, so these name a dependency-direction or vocabulary convention
@@ -364,8 +365,22 @@ Cargo's and libtest's own semantics. It fails for:
 
 Discovery is always native: the macOS job checks macOS, and `--job` refuses
 a job of another platform. Run it without `--job` to check every target of
-the host platform (it compiles what is missing). Its deterministic tests
-run with `--examples` in rust-contracts.
+the host platform (it compiles what is missing).
+
+Discovery owns the output it parses: each internal `cargo test ... --list`
+passes Cargo's own `--color never` (before `--`), so an inherited
+`CARGO_TERM_COLOR=always` — which the hosted Rust toolchain action exports —
+cannot hide a harness's `Running` line. A harness it cannot recognize is an
+error, never an empty inventory; a recognized bin or example harness may
+list no test.
+
+Its deterministic tests run with `--examples` in rust-contracts. Besides
+the selection rules over a stand-in inventory,
+`real_cargo_discovery_is_independent_of_inherited_color` runs the
+production discovery with real Cargo over a small fixture package (its own
+temporary directory and target directory), once with
+`CARGO_TERM_COLOR=always` and once with `never`, each set only in a
+re-executed child's environment.
 
 ## Prerequisites
 

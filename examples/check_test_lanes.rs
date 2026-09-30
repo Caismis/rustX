@@ -69,7 +69,7 @@ fn main() {
         }
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let cargo = cargo_program();
     let host = match std::env::consts::OS {
         "linux" => Platform::Linux,
         "macos" => Platform::Macos,
@@ -92,6 +92,11 @@ fn main() {
         fail(&report.findings);
     }
     println!("test lane coverage holds on {host}");
+}
+
+/// The Cargo that runs this process, so discovery uses the same toolchain.
+fn cargo_program() -> String {
+    std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())
 }
 
 fn fail(findings: &[String]) -> ! {
@@ -503,9 +508,12 @@ impl Discovery for CargoDiscovery<'_> {
         if let Some(listed) = self.cache.borrow().get(&key) {
             return Ok(listed.clone());
         }
+        // The adapter owns the format it parses: Cargo's own `--color` (before
+        // `--`) keeps its status lines plain whatever color mode the caller
+        // inherited, e.g. `CARGO_TERM_COLOR=always` on hosted runners.
         let mut command = Command::new(&self.cargo);
         command
-            .args(["test", "--locked"])
+            .args(["test", "--locked", "--color", "never"])
             .args(features)
             .args(target.selector())
             .arg("--")
@@ -530,9 +538,10 @@ impl Discovery for CargoDiscovery<'_> {
     }
 }
 
-/// Parses `--list --format terse` output of exactly one harness. Anything
-/// else — a failed build, a second harness, an unknown line — is an error,
-/// never an empty inventory.
+/// Parses `--list --format terse` output of exactly one harness, as
+/// [`CargoDiscovery`] produces it: uncolored. Anything else — a failed build,
+/// no or a second harness, an unknown line — is an error, never an empty
+/// inventory.
 fn parse_list(success: bool, stdout: &str, stderr: &str) -> Result<BTreeSet<String>, String> {
     if !success {
         return Err(format!("discovery failed:\n{stderr}"));
@@ -1153,6 +1162,8 @@ jobs:
         assert!(parse_list(true, "", running).unwrap().is_empty());
         assert!(parse_list(false, "", "error[E0425]").is_err());
         assert!(parse_list(true, "a::b: test\n", "").is_err());
+        // An unrecognized harness is not an empty one.
+        assert!(parse_list(true, "", "").is_err());
         assert!(parse_list(true, "", &running.repeat(2)).is_err());
         assert!(parse_list(true, "2 tests, 0 benchmarks\n", running).is_err());
     }
@@ -1179,5 +1190,228 @@ jobs:
             {"name": "m", "kind": ["proc-macro"]}
         ]}]});
         assert!(parse_metadata(&proc_macro).is_err());
+    }
+
+    /// Selects [`real_cargo_discovery_child`] and names the fixture package
+    /// it discovers.
+    const FIXTURE_ENV: &str = "RUSTX_LANE_CHECK_FIXTURE";
+
+    /// A dependency-free package with one ordinary lib test pair, one ignored
+    /// test, one integration test and deliberately empty bin and example
+    /// harnesses. Every test body leaves an `executed` marker.
+    const FIXTURE: &[(&str, &str)] = &[
+        (
+            "Cargo.toml",
+            r#"[package]
+name = "lane_fixture"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+"#,
+        ),
+        (
+            "src/lib.rs",
+            r#"#[cfg(test)]
+mod tests {
+    fn executed() {
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/executed"), "").unwrap();
+    }
+
+    #[test]
+    fn alpha_runs() {
+        executed();
+    }
+
+    #[test]
+    fn beta_runs() {
+        executed();
+    }
+
+    #[test]
+    #[ignore]
+    fn alpha_measured() {
+        executed();
+    }
+}
+"#,
+        ),
+        (
+            "tests/flow.rs",
+            r#"#[test]
+fn flow_runs() {
+    std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/executed"), "").unwrap();
+}
+"#,
+        ),
+        ("src/main.rs", "fn main() {}\n"),
+        ("examples/empty.rs", "fn main() {}\n"),
+    ];
+
+    type Probes = BTreeMap<String, Result<BTreeSet<String>, String>>;
+
+    /// Fixture child entry point of
+    /// [`real_cargo_discovery_is_independent_of_inherited_color`]. Without
+    /// [`FIXTURE_ENV`] it returns at once and proves nothing. Re-executed with
+    /// it, it runs the production [`CargoDiscovery`] over the fixture under
+    /// the environment its parent chose, and writes what it discovered to
+    /// `probes.json` there. It never launches itself.
+    #[test]
+    fn real_cargo_discovery_child() {
+        let Some(root) = std::env::var_os(FIXTURE_ENV) else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let discovery = CargoDiscovery {
+            cargo: cargo_program(),
+            root: &root,
+            cache: std::cell::RefCell::default(),
+        };
+        let features = ["--all-features".to_owned()];
+        let lib = Target::new(Kind::Lib, "lane_fixture");
+        let list = |target: &Target, libtest: &[&str], ignored: bool| {
+            let libtest: Vec<String> = libtest.iter().map(|&a| a.to_owned()).collect();
+            discovery.list(&features, target, &libtest, ignored)
+        };
+        let runnable = |target: &Target, libtest: &[&str]| {
+            let libtest: Vec<String> = libtest.iter().map(|&a| a.to_owned()).collect();
+            discovery
+                .runnable(&features, target, &libtest)
+                .map(|(runnable, _)| runnable)
+        };
+        let probes: Probes = [
+            ("lib listed", list(&lib, &[], false)),
+            ("lib ignored", list(&lib, &[], true)),
+            ("lib runnable", runnable(&lib, &[])),
+            ("lib `alpha` runnable", runnable(&lib, &["alpha"])),
+            ("lib `measured` runnable", runnable(&lib, &["measured"])),
+            ("lib `measured` ignored", list(&lib, &["measured"], true)),
+            ("lib --skip `alpha`", runnable(&lib, &["--skip", "alpha"])),
+            (
+                "lib `tests::alpha` --exact",
+                runnable(&lib, &["tests::alpha", "--exact"]),
+            ),
+            (
+                "lib `tests::alpha_runs` --exact",
+                runnable(&lib, &["tests::alpha_runs", "--exact"]),
+            ),
+            (
+                "test flow",
+                list(&Target::new(Kind::Test, "flow"), &[], false),
+            ),
+            (
+                "bin lane_fixture",
+                list(&Target::new(Kind::Bin, "lane_fixture"), &[], false),
+            ),
+            (
+                "example empty",
+                list(&Target::new(Kind::Example, "empty"), &[], false),
+            ),
+        ]
+        .into_iter()
+        .map(|(probe, result)| (probe.to_owned(), result))
+        .collect();
+        std::fs::write(
+            root.join("probes.json"),
+            serde_json::to_string(&probes).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// The hosted toolchain action exports `CARGO_TERM_COLOR=always`; it
+    /// must change neither harness recognition nor any discovered inventory.
+    /// Real Cargo and libtest run over a fixture package with its own target
+    /// directory, and each color mode is set only in a re-executed child's
+    /// environment.
+    #[test]
+    fn real_cargo_discovery_is_independent_of_inherited_color() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        for (path, text) in FIXTURE {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let isolated = |command: &mut Command| {
+            command
+                .current_dir(root)
+                .env("CARGO_TARGET_DIR", root.join("target"))
+                .env("CARGO_NET_OFFLINE", "true");
+        };
+        let mut lock = Command::new(cargo_program());
+        lock.arg("generate-lockfile");
+        isolated(&mut lock);
+        assert!(lock.status().unwrap().success());
+
+        let names = |names: &[&str]| -> Result<BTreeSet<String>, String> {
+            Ok(names.iter().map(|&name| name.to_owned()).collect())
+        };
+        let expected: Probes = [
+            (
+                "lib listed",
+                names(&[
+                    "tests::alpha_measured",
+                    "tests::alpha_runs",
+                    "tests::beta_runs",
+                ]),
+            ),
+            ("lib ignored", names(&["tests::alpha_measured"])),
+            (
+                "lib runnable",
+                names(&["tests::alpha_runs", "tests::beta_runs"]),
+            ),
+            ("lib `alpha` runnable", names(&["tests::alpha_runs"])),
+            ("lib `measured` runnable", names(&[])),
+            ("lib `measured` ignored", names(&["tests::alpha_measured"])),
+            ("lib --skip `alpha`", names(&["tests::beta_runs"])),
+            ("lib `tests::alpha` --exact", names(&[])),
+            (
+                "lib `tests::alpha_runs` --exact",
+                names(&["tests::alpha_runs"]),
+            ),
+            ("test flow", names(&["flow_runs"])),
+            ("bin lane_fixture", names(&[])),
+            ("example empty", names(&[])),
+        ]
+        .into_iter()
+        .map(|(probe, result)| (probe.to_owned(), result))
+        .collect();
+
+        for color in ["always", "never"] {
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args(["tests::real_cargo_discovery_child", "--exact"])
+                .env(FIXTURE_ENV, root)
+                .env("CARGO_TERM_COLOR", color);
+            isolated(&mut child);
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "CARGO_TERM_COLOR={color}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let written = root.join("probes.json");
+            let probes: Probes =
+                serde_json::from_str(&std::fs::read_to_string(&written).unwrap()).unwrap();
+            std::fs::remove_file(written).unwrap();
+            assert_eq!(probes, expected, "CARGO_TERM_COLOR={color}");
+        }
+
+        // Listing ran no test body; running one does leave the marker.
+        let marker = root.join("executed");
+        assert!(!marker.exists());
+        let mut run = Command::new(cargo_program());
+        run.args([
+            "test",
+            "--locked",
+            "--lib",
+            "--",
+            "tests::alpha_runs",
+            "--exact",
+        ]);
+        isolated(&mut run);
+        assert!(run.output().unwrap().status.success());
+        assert!(marker.exists());
     }
 }
