@@ -331,10 +331,11 @@ contracts. The provider-backed product test awaits native settlement.
 The implementation does not add nested child execution to the local child
 composer. The recursive projection consumes native descendant facts if present;
 the test exercises this contract without introducing another executor or graph.
-Actual Session deletion transactions, logical commit, interrupted-delete recovery,
-physical cleanup, Runtime Client deletion protocol, TUI/CLI actions, force-kill,
-automatic workspace disposal, batch deletion, trash and distributed coordination
-are deliberately deferred.
+Session deletion transactions, logical commit, interrupted-delete recovery,
+physical cleanup and App Server/TUI deletion control are specified separately in
+[Session deletion lifecycle](session-deletion-lifecycle.md). Force-kill, automatic
+workspace disposal, batch deletion, trash and distributed coordination are outside
+this ownership contract.
 
 The real-process regression
 `deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores`

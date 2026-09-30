@@ -950,7 +950,7 @@ facts and rejects every other payload. It receives no Ledger, Surface,
 Request Snapshot, publication, or general Journal authority, so an audit seam
 can never become a second way to authorize a side effect.
 
-The Runtime Client/TUI boundary is fail-closed for cursor contradictions:
+The native Runtime Client projection and App Server clients fail closed for cursor contradictions:
 cursor absence is legal only for a hidden Context-kind User message. A visible
 User, Assistant, or Tool message, and every visible inbound, must carry its
 durable `TranscriptCursor`; a hidden Context carrying one is also invalid.
@@ -4511,7 +4511,7 @@ internal `RuntimeEvent` vocabulary is an execution-fact vocabulary, **not**
 the wire contract: `RuntimeClientEvent` and `RuntimeClientSnapshot` are
 explicit runtime-owned projection types. Their public wire contract is versioned
 by `APP_SERVER_PROTOCOL_VERSION`, independently of journal, manifest, crate and
-the existing local TUI protocol version. Snapshot/cursor/attachment authority
+the internal Runtime Client envelope version. Snapshot/cursor/attachment authority
 stays in the host; App Server does not copy its projection database. Both stdio
 JSONL and WebSocket in #36 bind App Server, including its standalone process entry
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
@@ -4723,7 +4723,7 @@ runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                Runtime Client request, `initialize` included
 runtime_client/transport/      byte-stream adapters beneath the semantic
                                layer (Issue #38); `stdio.rs` is the strict
-                               stdio/JSONL transport
+                               JSONL framing for child read-only inspection
 ```
 
 Issue #61 extracted the conversation runtime coordinator from this
@@ -4949,9 +4949,9 @@ or shut down the child. The host's one control attachment remains separate
 from read-only subscribers; a child inspector never takes execution or
 interaction ownership.
 
-The root control-capable Runtime Client is the one human-facing interaction
-surface for the supervised tree. A child still owns every Approval and
-Questionnaire through its own InteractionCoordinator; the root only projects
+App Server exposes the root control-capable Runtime Client projection as the
+human-facing interaction surface for the supervised tree. A child still owns every
+Approval and Questionnaire through its own InteractionCoordinator; the root only projects
 the child's live request, adds Subagent source metadata, and forwards the
 response using InteractionRef. This is a presentation route, not parent
 mediation: no parent interaction, model prompt/result, canonical-history
@@ -5488,36 +5488,29 @@ transcript or execution-history authority.
   quiescence. It is not detach. Detach and transport loss leave semantic
   runtime work running.
 
-#### Runtime Client transports: stdio JSONL (Issue #38)
+#### Internal Runtime Client JSONL framing
 
-The existing local TUI transport lives in its own namespace. This diagram is
-specific to that application pending #290, not the public App Server topology:
+App Server stdio/JSONL and WebSocket are the external product transports.
+The TUI talks to App Server, which directly reuses native Runtime Client
+host/attachment operations for conversation projection and control. Session
+catalog/graph control belongs to `SessionController`; residency, composition,
+and configuration adoption belong to `SessionRuntimeManager`.
+
+Runtime Client envelopes are an internal typed request surface, not a public
+product protocol. No ordinary `rustx` process exposes Runtime Client JSONL over
+its stdio. `runtime_client::transport::stdio::serve_stdio_jsonl_with_io` is
+retained only for the child-owned read-only inspection socket and framing tests:
 
 ```text
-rustX Runtime
-      |
-      v
-Runtime Client projection
-      |
-      v
-Runtime Client protocol          semantic; Issue #37/#131/#130/#136/#140/#144
-      |
-      v
-transport adapters                framing only; src/runtime_client/transport
-      |
-      +-- stdio / strict JSONL    Issue #38
-      |
-      +-- TUI                     pending #290 migration to App Server
-      |
-      v
-clients
+ConversationRuntime -> RuntimeClientHost
+                           |
+                           +--> App Server -> stdio / WebSocket -> TUI / Web / SDK
+                           |
+                           +--> RuntimeClientEndpoint::new_read_only
+                                    -> child inspection Unix socket (JSONL)
 ```
 
-Issue #38 added `src/runtime_client/transport/stdio.rs` for the Runtime Client
-JSONL framing. #36 binds the App Server endpoint to first-class stdio JSONL and
-WebSocket transports; since #428 the only production consumer of this framing is
-a running child's read-only live inspection socket. The following describes the
-current #38 adapter.
+The following describes that internal framing adapter.
 
 - **The endpoint remains the semantic owner.** A transport calls
   `RuntimeClientEndpoint::handle_request` and forwards
@@ -6668,7 +6661,8 @@ The shared native owner is `runtime::workspace`, not a Subagent-specific Git man
 
 SQLite development schema 28 adds a distinct recovery guard to the Workflow
 resource settlement facts introduced in schema 27. Child IPC 18 adds
-borrowed-run association; Runtime Client/TUI 20 mirrors it. Superseded schemas
+borrowed-run association, mirrored by Runtime Client 20 when introduced.
+App Server now adapts the native projection for TUI. Superseded schemas
 are rejected without migration. Resource persistence is not Workflow
 continuation. Providers have no workspace orchestration responsibilities.
 

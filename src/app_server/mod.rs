@@ -3,6 +3,7 @@
 pub mod connection;
 pub mod protocol;
 pub mod schema;
+pub mod session_deletion;
 mod wire;
 
 pub mod process;

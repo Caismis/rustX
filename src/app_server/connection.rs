@@ -1148,7 +1148,7 @@ fn transition(
 }
 fn deletion(result: crate::local_runtime::session::deletion::SessionDeleteResult) -> MethodResult {
     MethodResult::Deletion {
-        result: crate::runtime_client::session_deletion::project(result),
+        result: crate::app_server::session_deletion::project(result),
     }
 }
 fn native_result(

@@ -300,7 +300,7 @@ The generic Event Journal append cannot commit interaction transcript facts:
 the durable transition begins. Only the narrow
 `append_interaction_audit` transition commits those facts, allocates their
 ordering reference in the same transaction, and returns the allocated cursor
-to live publication. At the Runtime Client/TUI boundary, cursor absence is
+to live publication. At the App Server client boundary, cursor absence is
 legal only for hidden Context-kind User messages. Visible User, Assistant,
 Tool, and inbound facts without a durable cursor fail closed; hidden Context
 facts carrying a cursor are rejected and cannot enter ordinary transcript.
@@ -1508,8 +1508,8 @@ identity or argument replacement channel. When multiple questionnaires are
 pending, the overlay focuses the lexicographically-smallest questionnaire
 `InteractionId`; ordinary editor input remains an inbound message, and
 explicit commands can address approval or attempt identities. The TUI renders
-both from authoritative projection state, sends typed responses through the
-Runtime Client, and never suppresses or auto-answers them locally. Subagent
+both from authoritative projection state, sends typed responses through
+App Server, and never suppresses or auto-answers them locally. Subagent
 children project through `AgentUpdated` events and `snapshot.agents`;
 since Issue #178 each entry also carries the child's latest-value live
 activity `observation`, its redacted `execution_profile`, and `started_at`.

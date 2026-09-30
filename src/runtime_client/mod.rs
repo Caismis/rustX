@@ -26,7 +26,7 @@
 //!
 //! Issue #61 extracted the conversation runtime coordinator
 //! ([`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime))
-//! from this boundary: the coordinator owns conversation/session/admission
+//! from this boundary: the coordinator owns conversation execution/admission
 //! authority, and [`RuntimeClientHost`](host::RuntimeClientHost) is the
 //! projection + control + attachment adapter over it. A conversation runs
 //! the exact same admission/execution path with zero Runtime Client
@@ -64,6 +64,9 @@
 //! - The canonical mailbox, background registry, and capability
 //!   coordinator remain authoritative; the projection observes them
 //!   through narrow read-only seams.
+//! - `SessionController` owns durable Session/catalog control; `SessionRuntimeManager`
+//!   owns residency, composition and configuration adoption. App Server addresses
+//!   those owners directly; Runtime Client has no Session control surface.
 //! - Native Approval interactions are another runtime-owned observation:
 //!   `InteractionCoordinator` owns the pending rendezvous and this boundary
 //!   carries only typed request/response/projection facts. A client cannot
@@ -101,7 +104,6 @@ pub mod event;
 pub mod host;
 pub mod projection;
 pub mod response;
-pub mod session_deletion;
 pub mod settings;
 pub mod snapshot;
 pub mod trace;

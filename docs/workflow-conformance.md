@@ -53,7 +53,7 @@ Agent Loop owns model turns and the single canonical outer result. Native Tool
 invocation/process owners own preparation, permissions, execution and physical
 settlement. InteractionCoordinator owns rendezvous. Native workspace infrastructure
 owns the lease, candidate content/version and disposal. Event Journal records facts;
-Runtime Client/TUI read the authoritative Workflow owner. There is no second engine.
+Runtime Client projects the authoritative Workflow owner; TUI reads that projection through App Server. There is no second engine.
 
 * Verification trust is fixed before candidate writer admission: the Workflow
   program is compiled/frozen, including its Tool selector and literal verification

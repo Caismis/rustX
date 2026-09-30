@@ -108,7 +108,7 @@ promise of permanent cross-allocation reservation.
 
 ## Cleanup and recovery
 
-The supervisor releases its catalog mutex, and inspection/exclusion drop root/target guards
+The SessionController releases its catalog mutex, and inspection/exclusion drop root/target guards
 before dispatching `CleanupWork::run` through `spawn_blocking`. Work owns its
 ProductRoot, frozen record and controller lifetime, not a catalog reference. It
 takes exclusive access to one exact frozen private allocation at a time. Missing
@@ -132,15 +132,16 @@ boundary. No queue, timer, distributed worker, or retention policy is introduced
 
 App Server v29 owns the public `session/deletePreview`, `session/delete`
 (`session_id` + `expected_target_revision` only), and `session/recoverDeletion` methods.
-The obsolete native Runtime Client delete/recover mutation requests were removed
-in native protocol 40; only its finite read-only preview remains.
-`runtime_client::session_deletion` owns independent DTOs:
-`RuntimeClientSessionDeletePreview`, `RuntimeClientSessionDeletionBlocker`, and
-`RuntimeClientSessionDeletionResult`. The Session-control owner explicitly maps
-native outcomes in `supervisor::project_session_deletion`.
+Runtime Client v55 has no Session request, result, or error surface, including
+preview. `app_server::session_deletion` owns `SessionDeletePreview`,
+`SessionDeletionBlocker`, and `SessionDeletionResult`, and its `project` function
+adapts native `local_runtime::session::deletion::SessionDeleteResult` to that
+bounded public representation. Schema annotations retain the published v29
+definition names without retaining Runtime Client types or aliases. Native
+Session deletion authority remains in `local_runtime::session::deletion`.
 
 The frozen deletion workset is recovery authority, not public control-plane data.
-Native deletion types and raw supervisor operations are crate-private. Public
+Native deletion types and durable-owner deletion operations are crate-private. Public
 Session deletion control is provided by App Server through `SessionRuntimeManager`.
 The only production caller of the crate-private `SessionController::delete_session`
 primitive is the manager after writer-absence proof. Direct durable-owner tests
@@ -190,7 +191,7 @@ The process-death regression kills/reaps a real subprocess at flushed pipe gates
 immediately after durable commit and after one durable cleanup item. Restart
 recovers the same scopes even with unrelated storage deliberately corrupted.
 Another test holds conflicting root exclusion throughout cleanup; a gated real
-worker test acquires the supervisor mutex with `try_lock` before releasing the
+worker test acquires the SessionController catalog mutex with `try_lock` before releasing the
 worker. No sleeps establish these synchronization facts. Existing #254 blockers,
 stale preview, fork/clone survivors and provider-backed active-A/deleted-B
 conformance remain part of validation.

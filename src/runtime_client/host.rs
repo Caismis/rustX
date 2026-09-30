@@ -16,8 +16,15 @@
 //! RuntimeClientHost (attachment / protocol control adapter)
 //!         |
 //!         v
-//! RuntimeClientEndpoint -> transports (stdio / future WS) -> TUI
+//! +--> App Server native host/attachment operations -> stdio / WebSocket -> clients
+//! |
+//! +--> RuntimeClientEndpoint -> child-owned read-only inspection socket
 //! ```
+//!
+//! `RuntimeClientEndpoint` is the typed internal request endpoint and child
+//! inspection protocol endpoint. The production Runtime Client JSONL consumer
+//! is the child-owned read-only inspection socket. TUI uses App Server.
+//! The host does not forward Session intent.
 //!
 //! The host owns:
 //!
@@ -28,8 +35,7 @@
 //! - the root publication-admission check for child interactions, limited to
 //!   the lifetime of the bound runtime projection, independently of clients;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
-//!   `cancel_current_attempt` forwarding, native Session intent forwarding,
-//!   and inbound publish forwarding;
+//!   `cancel_current_attempt` forwarding and inbound publish forwarding;
 //! - transport-independent client subscriptions.
 //!
 //! The host does **not** own:
@@ -2788,8 +2794,6 @@ mod tests {
     };
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
-    use crate::local_runtime::SessionCatalog;
-    use crate::local_runtime::session::SessionPersistentState;
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
@@ -7837,55 +7841,6 @@ mod tests {
             None => ConversationRuntime::new(config).expect("runtime"),
         };
         (adapter, RuntimeOnlyFixture { _dir: dir, runtime })
-    }
-
-    /// Durable Session creation is independent of execution: while another
-    /// Session's runtime holds an in-flight provider request, the native
-    /// catalog owner still publishes a new Session without touching that
-    /// runtime or issuing a model request.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn session_create_publishes_while_another_session_provider_is_blocked() {
-        let (release_tx, release_rx) = model_release();
-        let catalog_root = tempfile::tempdir().expect("catalog root");
-        let template = SessionPersistentState::from_input(
-            &crate::local_runtime::SessionConfigInput::new(catalog_root.path().to_path_buf()),
-        );
-        let catalog = SessionCatalog::create(catalog_root.path(), &template).expect("catalog");
-        let (adapter, fixture) = runtime_only_fixture(
-            vec![vec![
-                GatedStep::Emit(ModelEvent::Started),
-                GatedStep::ParkUntilReleased(release_rx),
-                GatedStep::Emit(ModelEvent::Completed {
-                    finish_reason: ModelFinishReason::Stop,
-                    usage: None,
-                }),
-            ]],
-            ToolRegistry::new(),
-            None,
-        )
-        .await;
-        let controller = crate::local_runtime::session_controller::SessionController::new(catalog);
-        fixture.runtime.activate();
-        fixture
-            .runtime
-            .submit_inbound(submit_content("unsettled turn"))
-            .unwrap();
-        await_adapter_request_count(&adapter, 1).await;
-        let before = controller.list_sessions(None, 0, 8).await.unwrap().sessions;
-        let created = controller.create_session(template).await.unwrap();
-        assert!(before.iter().all(|row| row.id != created.session.id));
-        assert_eq!(
-            SessionCatalog::open_existing(catalog_root.path())
-                .unwrap()
-                .unwrap()
-                .persisted_session_ids()
-                .len(),
-            2
-        );
-        assert_eq!(adapter.requests().len(), 1);
-        assert!(fixture.runtime.has_current_attempt());
-        let _ = release_tx.send(true);
-        fixture.runtime.shutdown().await.unwrap();
     }
 
     /// A marker-bearing alternate session model configuration.

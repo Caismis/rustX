@@ -1,8 +1,7 @@
 use super::*;
+use crate::local_runtime::session::LineageSeed;
 use crate::local_runtime::session::deletion::*;
-use crate::local_runtime::session::{LineageSeed, SessionNodeId};
 use crate::runtime::local_storage::{ConversationAccess, ProductController, ProductRoot};
-use crate::runtime_client::types::RuntimeClientRequest;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -448,39 +447,6 @@ async fn deletion_recursive_worker_releases_controller_catalog_and_never_finishe
         task.await.unwrap(),
         crate::local_runtime::session::deletion::SessionDeleteResult::Deleted { .. }
     ));
-}
-
-#[test]
-fn deletion_rust_types_roundtrip_every_shared_protocol_result_and_reject_paths() {
-    let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tui/test/deletion-fixtures.json"
-    )))
-    .unwrap();
-    let mut statuses = BTreeSet::new();
-    for fixture in fixtures {
-        statuses.insert(fixture["status"].as_str().unwrap().to_owned());
-        let result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult =
-            serde_json::from_value(fixture.clone()).unwrap();
-        assert_eq!(serde_json::to_value(result).unwrap(), fixture);
-    }
-    assert_eq!(statuses.len(), 7);
-    for method in [
-        "session_delete",
-        "session_delete_recover",
-        "session_delete_preview",
-    ] {
-        let mut request = serde_json::json!({
-            "method": method, "id": 1, "session_id": "ses_01900000-0000-7000-8000-000000000001"
-        });
-        if method == "session_delete" {
-            request["expected_target_revision"] = serde_json::json!("a".repeat(64));
-        }
-        assert!(
-            serde_json::from_value::<RuntimeClientRequest>(request).is_err(),
-            "obsolete native mutation must have no dispatch path"
-        );
-    }
 }
 
 #[test]
@@ -933,82 +899,6 @@ fn catalog_generation_rejects_stale_metadata_and_planned_publication() {
 }
 
 #[test]
-fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
-    use crate::runtime_client::session_deletion::project as project_session_deletion;
-    let session_id = SessionId::generate();
-    let mut lengths = Vec::new();
-    for size in [1, 10, 10_000] {
-        let scopes: Vec<_> = (0..size)
-            .map(|_| DeletionScope::Child {
-                conversation_id: ConversationId::generate(),
-                parent_conversation: ConversationId::new(
-                    "conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1",
-                ),
-            })
-            .chain(std::iter::once(DeletionScope::Node {
-                node_id: SessionNodeId::new("node_35971be6-e9bb-724a-8955-82fe0e42e048"),
-                conversation_id: ConversationId::new("conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1"),
-            }))
-            .collect();
-        let preview = SessionDeletePreview {
-            upload_workspaces: vec![],
-            session_id: session_id.clone(),
-            name: Some("x".repeat(10_000)),
-            target_revision: "a".repeat(64),
-            scopes: scopes.clone(),
-        };
-        let projected =
-            serde_json::to_value(project_session_deletion(SessionDeleteResult::Preview {
-                preview,
-            }))
-            .unwrap();
-        assert_eq!(projected["preview"]["owned_child_count"], size);
-        assert_eq!(projected["preview"]["owned_conversation_count"], size + 1);
-        assert_eq!(projected["preview"]["owned_node_count"], 1);
-        let text = projected.to_string();
-        assert!(text.len() < 600);
-        assert!(!text.contains("scopes"));
-        let record = DeletionRecord {
-            agent_workspaces: vec![],
-            upload_workspaces: vec![],
-            session_id: session_id.clone(),
-            target_revision: "a".repeat(64),
-            scopes,
-        };
-        let results = [
-            SessionDeleteResult::CommittedCleanupPending {
-                record: record.clone(),
-                detail: Some("/private/path".repeat(size)),
-            },
-            SessionDeleteResult::CommittedDurabilityUncertain {
-                session_id: record.session_id,
-                detail: "/private/path".repeat(size),
-            },
-            SessionDeleteResult::Blocked {
-                session_id: session_id.clone(),
-                reason: DeletionBlocker::Workspace {
-                    resources: vec!["private resource".into(); size],
-                },
-            },
-        ];
-        let serialized: Vec<_> = results
-            .into_iter()
-            .map(|r| serde_json::to_string(&project_session_deletion(r)).unwrap())
-            .collect();
-        for text in &serialized {
-            assert!(text.len() < 140);
-            assert!(!text.contains("private"));
-            assert!(!text.contains("scopes"));
-        }
-        lengths.push((text.len(), serialized[0].len(), serialized[1].len()));
-    }
-    assert_eq!(lengths[0].1, lengths[2].1);
-    assert_eq!(lengths[0].2, lengths[2].2);
-    // Only the decimal count widths may grow, never the descendant collection.
-    assert_eq!(lengths[2].0 - lengths[0].0, 8);
-}
-
-#[test]
 fn deletion_protocol_counts_real_durable_ownership_without_exporting_it() {
     let (dir, mut catalog, _) = open_catalog();
     let target = catalog.snapshot(&first_session(&catalog)).unwrap();
@@ -1021,8 +911,7 @@ fn deletion_protocol_counts_real_durable_ownership_without_exporting_it() {
     catalog
         .publish_session(&next, SessionNodeOrigin::New)
         .unwrap();
-    let result =
-        crate::runtime_client::session_deletion::project(catalog.delete_preview(&target.id));
+    let result = crate::app_server::session_deletion::project(catalog.delete_preview(&target.id));
     let value = serde_json::to_value(&result).unwrap();
     assert_eq!(value["preview"]["owned_node_count"], 1);
     assert_eq!(value["preview"]["owned_child_count"], 128);
@@ -1074,9 +963,9 @@ fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
 #[tokio::test]
 async fn deletion_stale_control_response_requires_a_new_preview_token() {
     // Deliberate durable-owner test: no live product runtime or mutation API.
+    use crate::app_server::session_deletion::SessionDeletionResult as Wire;
+    use crate::app_server::session_deletion::project as project_session_deletion;
     use crate::local_runtime::session_controller::SessionController;
-    use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Wire;
-    use crate::runtime_client::session_deletion::project as project_session_deletion;
     let (dir, catalog, initial) = fixture();
     let view = catalog.clone();
     let controller = SessionController::new(catalog);

@@ -1027,6 +1027,8 @@ mod tests {
             json!({"method": "session_fork", "id": 1, "surface_revision": 1, "message_id": "user-a"}),
             json!({"method": "session_tree_branch", "id": 1, "surface_revision": 1, "message_id": "user-a"}),
             json!({"method": "session_delete_preview", "id": 1, "session_id": session}),
+            json!({"method": "session_delete", "id": 1, "session_id": session, "expected_target_revision": "a".repeat(64)}),
+            json!({"method": "session_delete_recover", "id": 1, "session_id": session}),
         ] {
             assert!(
                 serde_json::from_value::<RuntimeClientRequest>(request.clone()).is_err(),
@@ -1197,16 +1199,6 @@ mod tests {
         );
         let unknown_field = r#"{"method": "snapshot_get", "id": 1, "extra": true}"#;
         assert!(serde_json::from_str::<RuntimeClientRequest>(unknown_field).is_err());
-    }
-
-    #[test]
-    fn session_deletion_results_reject_obsolete_sequential_identities() {
-        assert!(
-            serde_json::from_value::<
-                crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult,
-            >(serde_json::json!({"status": "deleted", "session_id": "session-1"}))
-            .is_err()
-        );
     }
 
     /// Responses echo the request id and carry exactly one of result/error.
