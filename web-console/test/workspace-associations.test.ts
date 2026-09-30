@@ -303,13 +303,16 @@ it('selecting off-page demand after a satisfied 32-row page reads only that cwd 
   expect(f.host.listWorkspaces).toHaveBeenCalledTimes(lists); expect(f.reads).toHaveLength(3); f.stop();
 });
 
-/** Catalog reads answered by the test, in call order. */
+/** Catalog reads answered by the test, in call order; `started(n)` resolves when read n begins. */
 function heldCatalogs() {
   const lists: ReturnType<typeof deferred<WorkspaceCatalog>>[] = [];
-  return { lists, list: () => { const read = deferred<WorkspaceCatalog>(); lists.push(read); return read.promise; } };
+  const waiters = new Map<number, () => void>();
+  return { lists,
+    list: () => { const read = deferred<WorkspaceCatalog>(); lists.push(read); waiters.get(lists.length)?.(); return read.promise; },
+    started: (count: number) => lists.length >= count ? Promise.resolve() : new Promise<void>(resolve => waiters.set(count, resolve)) };
 }
-const settle = () => new Promise(resolve => setTimeout(resolve));
-it.each(['display', 'admission'] as const)('an initial %s observation of a retired Host cannot replace the first accepted Host', async stale => {
+const retired = { 'another Host': catalog('host-A'), 'the same Host at another endpoint': { ...catalog('host-B'), endpoint: 'ws://localhost:9000/' } };
+it.each((['display', 'admission'] as const).flatMap(stale => Object.keys(retired).map(kind => [stale, kind] as [typeof stale, keyof typeof retired])))('an initial %s observation of %s cannot replace the first accepted Host', async (stale, kind) => {
   const held = heldCatalogs(); const f = await fixture(held.list, false);
   // Both reads start before any authority is accepted: the stale one is display
   // (a superseded catalog read) or an admission observation of the same Product Host.
@@ -319,18 +322,32 @@ it.each(['display', 'admission'] as const)('an initial %s observation of a retir
   const [old, fresh] = stale === 'display' ? [first, second] : [second, first];
   fresh.resolve(catalog('host-B'));
   await f.observed(1); await f.accept(0);
-  const ready = f.owner.getSnapshot();
-  expect(ready.catalog?.authorityId).toBe('host-B');
-  old.resolve(catalog('host-A'));
-  if (admission) await expect(admission).rejects.toMatchObject({ kind: 'authority_replaced' });
-  await settle();
+  expect(f.owner.getSnapshot().catalog?.authorityId).toBe('host-B');
+  let completed: Promise<void>;
+  if (admission) completed = expect(admission).rejects.toMatchObject({ kind: 'authority_replaced' });
+  else {
+    // Explicit completion handle for the stale display read: with both catalog
+    // slots busy, a queued refresh starts only from that read's own settlement.
+    f.owner.refresh(); await held.started(3);
+    f.owner.refresh();
+    completed = held.started(4);
+  }
+  old.resolve(retired[kind]);
+  await completed;
+  expect(f.authority.getCatalog()).toMatchObject({ authorityId: 'host-B', endpoint });
+  expect(f.owner.getSnapshot().catalog).toMatchObject({ authorityId: 'host-B', endpoint });
+  expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({ workspaceId: 'A' });
+  expect(f.owner.getSnapshot().entries.get('B')?.confirmed).toEqual({ workspaceId: 'B' });
+  if (stale === 'display') {
+    // The queued refresh confirms the accepted Host; display then settles normally.
+    held.lists[2].resolve(catalog('host-B')); held.lists[3].resolve(catalog('host-B'));
+    const read = await f.observed(2); read.gate.resolve(read.cwds.map(cwd => ({ authorized: true, workspaceId: cwd.slice(1) })));
+  }
+  await vi.waitFor(() => expect(f.owner.getSnapshot()).toMatchObject({ status: 'ready', catalog: { authorityId: 'host-B' } }));
   expect(f.authority.getCatalog()?.authorityId).toBe('host-B');
-  expect(f.owner.getSnapshot()).toMatchObject({ status: 'ready', catalog: { authorityId: 'host-B' } });
-  expect(f.owner.getSnapshot().entries.get('A')).toMatchObject({ confirmed: { workspaceId: 'A' }, status: 'ready' });
-  expect(f.owner.getSnapshot().entries.get('B')).toMatchObject({ confirmed: { workspaceId: 'B' }, status: 'ready' });
-  expect(f.reads).toHaveLength(1); f.stop();
+  expect(f.reads).toHaveLength(stale === 'display' ? 2 : 1); f.stop();
 });
-it('initial same-Host observations both admit, then a later Host replacement is accepted', async () => {
+it.each(Object.keys(retired) as (keyof typeof retired)[])('initial same-Host observations both admit, then %s legitimately replaces it', async kind => {
   const held = heldCatalogs(); const f = await fixture(held.list, false);
   const admission = f.authority.observe();
   held.lists[0].resolve(catalog('host-B'));
@@ -341,12 +358,34 @@ it('initial same-Host observations both admit, then a later Host replacement is 
   expect(f.owner.getSnapshot().entries.get('A')).toMatchObject({ confirmed: { workspaceId: 'A' }, status: 'ready' });
   expect(f.reads).toHaveLength(1);
   // A read started after B was accepted legitimately replaces it.
-  f.owner.refresh(); held.lists[2].resolve(catalog('host-C'));
-  const read = await f.observed(2);
+  const replacement = kind === 'another Host' ? catalog('host-C') : retired[kind];
+  const accepted = new Promise<void>(resolve => { const stop = f.authority.subscribe(() => { stop(); resolve(); }); });
+  f.owner.refresh(); held.lists[2].resolve(replacement);
+  await accepted;
   expect(observation.current()).toBe(false);
-  expect(f.authority.getCatalog()?.authorityId).toBe('host-C');
+  expect(f.authority.getCatalog()).toEqual(replacement);
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toBeUndefined();
-  read.gate.resolve(read.cwds.map(cwd => ({ authorized: true, workspaceId: cwd.slice(1) })));
-  await vi.waitFor(() => expect(f.owner.getSnapshot()).toMatchObject({ status: 'ready', catalog: { authorityId: 'host-C' } }));
+  if (kind === 'another Host') {
+    const read = await f.observed(2);
+    read.gate.resolve(read.cwds.map(cwd => ({ authorized: true, workspaceId: cwd.slice(1) })));
+    await vi.waitFor(() => expect(f.owner.getSnapshot()).toMatchObject({ status: 'ready', catalog: { authorityId: 'host-C' } }));
+  } else {
+    // A Host bound to another endpoint is never display authority for this native endpoint.
+    await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('unavailable'));
+    expect(f.owner.getSnapshot().catalog).toBeUndefined(); expect(f.reads).toHaveLength(1);
+  }
+  f.stop();
+});
+it('normalized-equal endpoints confirm one Host scope; a different port replaces it', async () => {
+  const held = heldCatalogs(); const f = await fixture(held.list, false);
+  const accepted = vi.fn(); f.authority.subscribe(accepted);
+  // Each observation completes before the next starts; the display read stays unanswered.
+  const at = (target: string) => { const read = f.authority.observe(); held.lists.at(-1)!.resolve({ ...catalog('host-1'), endpoint: target }); return read; };
+  const first = await at('ws://LOCALHOST:80');
+  expect(accepted).toHaveBeenCalledTimes(1);
+  expect((await at('ws://localhost/')).current()).toBe(true);
+  expect(first.current()).toBe(true); expect(accepted).toHaveBeenCalledTimes(1);
+  await at('ws://localhost:81/');
+  expect(first.current()).toBe(false); expect(accepted).toHaveBeenCalledTimes(2);
   f.stop();
 });

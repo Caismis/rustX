@@ -120,9 +120,13 @@ or browser recovery journal is introduced.
 Product Host authority is a separate Workspace-domain identity owned by
 `WorkspaceAuthority`, not by `WorkspaceAssociations` or by the HTTP adapter object's
 identity. Fresh admission captures its epoch, reads native settings and classifies
-that exact cwd under the captured Host ID. Before attach/fork dispatch, after waiting
-for RPC capacity, it independently re-observes the Host. The transport checks that
-proof plus native generation, navigation and injected callback identity before send.
+that exact cwd under the captured Host ID. Before attach/fork dispatch, holding a
+reserved RPC slot, it re-observes the Host and freshly classifies the same exact cwd
+under that observation and the captured normalized endpoint; process identity alone
+never re-admits. The transport checks that proof plus native generation, navigation
+and injected callback identity before send. At most two such validations hold RPC
+slots at once, so a stalled Product Host read never blocks `turn/cancel` or other
+native control. Host authority scope is `authorityId` plus normalized endpoint.
 Old successful classification cannot authorize a replacement Host, even with the same
 adapter and no display projection running. Display listens to authority retirement
 only to clear incompatible evidence; a cached association never authorizes an
