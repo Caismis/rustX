@@ -2804,7 +2804,8 @@ pub(crate) mod tests {
                 None,
             )
             .await;
-            // Keep only the fixture transport alive for the late parent frame.
+            // Keep only the fixture transport alive until the parent has
+            // sent both FIFO frames and observed the terminal result.
             // Dropping the sender on assertion failure also releases cleanup.
             let _ = shutdown_rx.await;
             dispatcher.shutdown().await;
@@ -2840,11 +2841,13 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        let result = read_result(&mut parent).await;
-        assert_eq!(result.status, ChildResultStatus::Cancelled);
+        // Queue the stale grant behind Cancel on the same FIFO lane before
+        // observing the result. The transport gate has no semantic role.
         write_parent_frame(&mut parent, &ParentFrame::SealGranted)
             .await
             .unwrap();
+        let result = read_result(&mut parent).await;
+        assert_eq!(result.status, ChildResultStatus::Cancelled);
         shutdown_tx
             .send(())
             .expect("fixture retains its dispatcher");

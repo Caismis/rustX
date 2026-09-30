@@ -135,7 +135,7 @@ mod tests {
     fn deletion_wire_roundtrips_every_shared_protocol_result() {
         let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tui/test/deletion-fixtures.json"
+            "/protocol/app-server/deletion-fixtures.json"
         )))
         .unwrap();
         let mut statuses = std::collections::BTreeSet::new();

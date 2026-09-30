@@ -23,15 +23,23 @@ use rustx::tools::types::{
 };
 
 fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
-    use rustx::tools::native::bash_supervisor::diagnostics::{FixtureControl, fixture_executor};
+    fixture_with_control(
+        &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl {
+            trace: Some(trace.to_path_buf()),
+            before_term_socket: None,
+        },
+    )
+}
+
+fn fixture_with_control(
+    control: &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl,
+) -> crate::common::NativeFixture {
+    use rustx::tools::native::bash_supervisor::diagnostics::fixture_executor;
     let mut fixture = native_fixture();
     let mut registry = rustx::tools::executor::ToolRegistry::new();
     for definition in fixture.registry.definitions() {
         let executor = if definition.name == "bash" {
-            fixture_executor(FixtureControl {
-                trace: Some(trace.to_path_buf()),
-                before_term_socket: None,
-            })
+            fixture_executor(control.clone())
         } else {
             fixture.registry.executor(&definition.id)
         };
@@ -187,47 +195,108 @@ async fn bash_foreground_timeout_is_timed_out() {
 
 #[tokio::test]
 async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
-    let fixture = native_fixture();
-    let workspace = fixture.runtime.workspace().root().to_path_buf();
-    let ready = workspace.join("trap-ready.marker");
-    let marker = workspace.join("term-received.marker");
-    // Deterministic readiness handshake: the shell installs the TERM trap
-    // before it writes the ready marker, so observing the marker
-    // deterministically means the trap is in place before cancellation.
-    let command = format!(
-        "trap 'touch {}' TERM; touch {}; sleep 30",
-        marker.display(),
-        ready.display()
-    );
-    let cancellation = CancellationSignal::new();
-    let cancelling = cancellation.clone();
-    let controller = tokio::spawn(async move {
-        // Polling queries the readiness marker's existence (the state
-        // itself) with a strict deadlock guard.
-        for _ in 0..200 {
-            if ready.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(ready.exists(), "the trap readiness marker never appeared");
-        cancelling.cancel();
+    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Keep the socket path within Darwin's native path bound.
+    let dir = tempfile::Builder::new()
+        .prefix("rx-term-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let trace = dir.path().join("trace");
+    let socket = dir.path().join("gate");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let fixture = fixture_with_control(&FixtureControl {
+        trace: Some(trace.clone()),
+        before_term_socket: Some(socket),
     });
-    let result = run_tool_with_cancellation(
-        &fixture,
-        "bash",
-        serde_json::json!({"command": command}),
-        cancellation,
-    )
-    .await;
-    controller.await.expect("controller");
+    let ready_path = fixture.runtime.workspace().root().join("ready");
+    let ready = SignalPipe::new(&ready_path);
+    let cancellation = CancellationSignal::new();
+    let command = format!("printf R > {}; while :; do :; done", ready_path.display());
+
+    // The FIFO byte proves the real shell is running. The native gate then
+    // parks after MSG_TERMINATE is parsed, before the group signal syscall.
+    let result = tokio::time::timeout(Duration::from_secs(15), async {
+        let execution = run_tool_with_cancellation(
+            &fixture,
+            "bash",
+            serde_json::json!({"command": command}),
+            cancellation.clone(),
+        );
+        let controller = async {
+            ready.read().await;
+            cancellation.cancel();
+            let (mut gate, _) = listener.accept().await.unwrap();
+            gate.read_exact(&mut [0]).await.unwrap();
+            let before = std::fs::read_to_string(&trace).unwrap();
+            let entries: Vec<Entry> = before
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| matches!(e.event, Event::TerminateReceived)),
+                "{before}"
+            );
+            assert!(
+                !entries
+                    .iter()
+                    .any(|e| matches!(e.event, Event::Signal { .. })),
+                "{before}"
+            );
+            gate.write_all(b"go").await.unwrap();
+        };
+        let (result, ()) = tokio::join!(execution, controller);
+        result
+    })
+    .await
+    .expect("foreground cancellation must settle");
     assert!(matches!(
         result.status,
         ToolExecutionStatus::Cancelled { .. }
     ));
-    // TERM was delivered before the grace period expired and the KILL
-    // landed, so the trap marker provably exists once the tool returns.
-    assert!(marker.exists(), "TERM reached the owned process group");
+
+    let evidence = std::fs::read_to_string(&trace).unwrap();
+    let entries: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let index = |predicate: fn(&Event) -> bool| {
+        entries
+            .iter()
+            .position(|e| predicate(&e.event))
+            .unwrap_or_else(|| panic!("missing event: {evidence}"))
+    };
+    let owned = index(|e| matches!(e, Event::ShellGroup { pid, pgid } if *pid > 0 && *pgid > 0));
+    let received = index(|e| matches!(e, Event::TerminateReceived));
+    let term = index(|e| {
+        matches!(
+            e,
+            Event::Signal {
+                signal: libc::SIGTERM,
+                result: Some(0),
+                ..
+            }
+        )
+    });
+    let observed = index(|e| matches!(e, Event::TerminalObserved));
+    let reaped = index(|e| matches!(e, Event::DirectChildReaped));
+    assert!(
+        owned < received && received < term && term < observed && observed < reaped,
+        "{evidence}"
+    );
+    let Event::ShellGroup {
+        pgid: owned_pgid, ..
+    } = entries[owned].event
+    else {
+        unreachable!()
+    };
+    let Event::Signal { pgid, .. } = entries[term].event else {
+        unreachable!()
+    };
+    assert_eq!(pgid, owned_pgid, "{evidence}");
 }
 
 #[tokio::test]
