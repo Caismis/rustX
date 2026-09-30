@@ -78,10 +78,11 @@ export class CommandSession {
     const params = { side: response && action !== 'retry' ? 'after' as const : 'before' as const, session_id: this.sessionId, node_id: selection.nodeId, surface_revision: selection.boundary.surface_revision, boundary };
     // Fork copies native settings: authorize the source before creating a child,
     // even when its existing attachment needs no new admission.
-    if (action === 'fork' && !await this.client.admitAttachment(this.sessionId, this.current)) return;
+    const admitted = action === 'fork' ? await this.client.admitAttachment(this.sessionId, this.current) : this.current;
+    if (!admitted || !(typeof admitted === 'function' ? admitted() : admitted.current())) return;
     this.requireCurrent();
     // Never substitute a newer revision, retry on refusal, or copy browser history.
-    const result = await this.client.request(action === 'fork' ? { method: 'session/fork', params } : { method: 'session/branch', params }, 'session_transition');
+    const result = await this.client.request(action === 'fork' ? { method: 'session/fork', params } : { method: 'session/branch', params }, 'session_transition', undefined, admitted);
     if (!this.current()) return;
     if (result.durability_diagnostic) throw new Error(`Lineage committed with durability uncertainty: ${result.durability_diagnostic}. Inspect Sessions/tree; do not repeat the mutation.`);
     const session = result.session;

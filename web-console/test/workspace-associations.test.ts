@@ -1,3 +1,4 @@
+import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { expect, it, vi } from 'vitest';
 import { NavigationEpoch } from '../src/client/navigation';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
@@ -16,20 +17,21 @@ async function fixture() {
   let state: ClientView = { connection: 'connected', authorityId: 'native-1', authorityRevision: 0, endpoint, generation: 1, sessions: [row('A'), row('B')], views: {}, uncertain: [], interactionOperations: {} };
   const listeners = new Set<() => void>();
   const deletions = new Set<(id: string) => void>();
+  const readWaiters = new Map<number, () => void>();
   const reads: { cwds: readonly string[]; gate: ReturnType<typeof deferred<SessionLocation[]>>; signal?: AbortSignal }[] = [];
   const host: ProductHostWorkspaces = {
     listWorkspaces: vi.fn(async () => catalog()),
     classifyLocations: vi.fn((cwds, _endpoint, _authority, signal) => {
-      const gate = deferred<SessionLocation[]>(); reads.push({ cwds: [...cwds], gate, signal }); return gate.promise;
+      const gate = deferred<SessionLocation[]>(); reads.push({ cwds: [...cwds], gate, signal }); readWaiters.get(reads.length)?.(); return gate.promise;
     }),
     adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
   };
   const navigation = new NavigationEpoch();
   const client = { navigation, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
-  const owner = new WorkspaceAssociations(client, host);
+  const owner = new WorkspaceAssociations(client, new WorkspaceAuthority(host));
   const stop = owner.start();
   const publish = (patch: Partial<ClientView>) => { state = { ...state, ...patch }; listeners.forEach(listener => listener()); };
-  const observed = async (count: number) => { await vi.waitFor(() => expect(reads).toHaveLength(count)); return reads[count - 1]; };
+  const observed = async (count: number) => { if (reads.length < count) await new Promise<void>(resolve => readWaiters.set(count, resolve)); expect(reads).toHaveLength(count); return reads[count - 1]; };
   const accept = async (index: number, locations?: SessionLocation[]) => {
     const read = reads[index]; read.gate.resolve(locations ?? read.cwds.map(cwd => ({ authorized: true, workspaceId: cwd.slice(1) })));
     await vi.waitFor(() => expect(owner.getSnapshot().entries.get(read.cwds[0].slice(1))?.status).toBe('ready'));
@@ -127,7 +129,7 @@ it.each(['success', 'failure'])('Host replacement clears old groups before an ob
   if (outcome === 'success') old.resolve(catalog('host-1')); else old.reject(new Error('obsolete catalog'));
   await old.promise.catch(() => {});
   expect(f.owner.getSnapshot().catalog?.authorityId).toBe('host-2');
-  expect(oldOperation()).toBe(false); f.stop();
+  expect(oldOperation()).toBe(true); f.stop();
 });
 it.each([{ invalid: [] }, { invalid: [{ authorized: true, workspaceId: 'missing' }] }, { invalid: [{ authorized: 'yes' }] }])('rejects an invalid complete batch atomically: %j', async ({ invalid }) => {
   const f = await fixture(); await f.accept(0); f.owner.refresh(); const read = await f.observed(2);
@@ -148,6 +150,7 @@ it('bounds retained identities and in-flight work while coalescing repeated dema
 it('splits a full page plus selected off-page demand into at most 32 per batch and publishes atomically', async () => {
   const f = await fixture(); await f.accept(0);
   f.publish({ views: { outside: { id: 'outside', attachment: 'detached', attachmentIntent: 'released', summary: row('outside', '/B') } } });
+  f.owner.refresh();
   f.owner.select('outside');
   f.publish({ sessions: Array.from({ length: 32 }, (_, i) => row(`page-${i}`, '/A')) });
   const batch = await f.observed(2); expect(batch.cwds).toHaveLength(32);
@@ -249,7 +252,8 @@ it('queued current demand remains pending while both classification slots are oc
   const f = await fixture();
   f.owner.refresh(); await f.observed(2);
   f.publish({ sessions: [row('X', '/B')] }); f.owner.refresh();
-  await vi.waitFor(() => expect(f.host.listWorkspaces).toHaveBeenCalledTimes(3));
+  await new Promise<void>(resolve => { const stop = f.owner.subscribe(() => { if (f.owner.getSnapshot().status === 'pending') { stop(); resolve(); } }); });
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(3);
   expect(f.reads).toHaveLength(2);
   expect(f.owner.getSnapshot().status).toBe('pending');
   f.reads[0].gate.reject(new Error('obsolete slot'));
@@ -258,4 +262,42 @@ it('queued current demand remains pending while both classification slots are oc
   fresh.gate.resolve([{ authorized: true, workspaceId: 'B' }]);
   await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('ready'));
   f.stop();
+});
+
+function settled(owner: WorkspaceAssociations) {
+  if (owner.getSnapshot().status === 'ready') return Promise.resolve();
+  return new Promise<void>(resolve => {
+    const stop = owner.subscribe(() => { if (owner.getSnapshot().status === 'ready') { stop(); resolve(); } });
+  });
+}
+it('selecting A/B/A within a satisfied page performs zero catalog or classification reads', async () => {
+  const f = await fixture();
+  f.reads[0].gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
+  await settled(f.owner);
+  const lists = vi.mocked(f.host.listWorkspaces).mock.calls.length;
+  for (const id of ['A', 'B', 'A']) {
+    f.owner.select(id);
+    expect(f.owner.getSnapshot().entries.get(id)?.confirmed).toEqual({ workspaceId: id });
+    expect(f.owner.getSnapshot().status).toBe('ready');
+  }
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(lists);
+  expect(f.host.classifyLocations).toHaveBeenCalledTimes(1);
+  f.stop();
+});
+it('selecting off-page demand after a satisfied 32-row page reads only that cwd and keeps the page ready', async () => {
+  const f = await fixture();
+  f.reads[0].gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]); await settled(f.owner);
+  f.publish({ sessions: Array.from({ length: 32 }, (_, i) => row(`page-${i}`, '/A')) });
+  const page = await f.observed(2); expect(page.cwds).toHaveLength(32);
+  page.gate.resolve(page.cwds.map(() => ({ authorized: true, workspaceId: 'A' }))); await settled(f.owner);
+  const lists = vi.mocked(f.host.listWorkspaces).mock.calls.length;
+  f.publish({ views: { outside: { id: 'outside', attachment: 'detached', attachmentIntent: 'released', summary: row('outside', '/B') } } });
+  f.owner.select('outside');
+  const selected = await f.observed(3); expect(selected.cwds).toEqual(['/B']);
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(lists);
+  expect(f.owner.getSnapshot().status).toBe('pending');
+  for (let i = 0; i < 32; i++) expect(f.owner.getSnapshot().entries.get(`page-${i}`)).toMatchObject({ status: 'ready', confirmed: { workspaceId: 'A' } });
+  f.reads[2].gate.resolve([{ authorized: true, workspaceId: 'B' }]); await settled(f.owner);
+  expect(f.owner.getSnapshot().entries.get('outside')?.confirmed).toEqual({ workspaceId: 'B' });
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(lists); expect(f.reads).toHaveLength(3); f.stop();
 });

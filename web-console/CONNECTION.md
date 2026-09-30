@@ -117,6 +117,17 @@ identity: a replacement may use the same store or a different one. Neither endpo
 cwd, Session ID nor title establishes durable identity. No durable identity protocol
 or browser recovery journal is introduced.
 
+Product Host authority is a separate Workspace-domain identity owned by
+`WorkspaceAuthority`, not by `WorkspaceAssociations` or by the HTTP adapter object's
+identity. Fresh admission captures its epoch, reads native settings and classifies
+that exact cwd under the captured Host ID. Before attach/fork dispatch, after waiting
+for RPC capacity, it independently re-observes the Host. The transport checks that
+proof plus native generation, navigation and injected callback identity before send.
+Old successful classification cannot authorize a replacement Host, even with the same
+adapter and no display projection running. Display listens to authority retirement
+only to clear incompatible evidence; a cached association never authorizes an
+operation and is never required for its correctness.
+
 ConnectionController explicitly chooses same-authority reconnect or authority
 replacement. Same-authority reconnect retains wanted views/node intent and repairs
 them from native facts. Replacement fences the old generation synchronously,

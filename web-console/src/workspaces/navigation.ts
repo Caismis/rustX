@@ -1,28 +1,30 @@
-import type { AppServerClient } from '../client/app-server';
-import { validateLocations, type ProductHostWorkspaces } from './host';
-/** The Web admission/navigation owner. No trust decisions or durable membership. */
+import type { AppServerClient, OperationAdmission } from '../client/app-server';
+import { sameEndpoint } from './endpoint';
+import { WorkspaceAuthority } from './authority';
+/** Fresh operation admission. Display evidence is neither input nor prerequisite. */
 export class WorkspaceSessionNavigation {
-  constructor(private readonly host: ProductHostWorkspaces, private readonly client: AppServerClient, private readonly navigation: import('../client/navigation').NavigationEpoch) {}
-  private fence(current: () => boolean) {
+  constructor(private readonly authority: WorkspaceAuthority, private readonly client: AppServerClient, private readonly navigation: import('../client/navigation').NavigationEpoch) {}
+  admit = async (id: string, current: () => boolean): Promise<false | OperationAdmission> => {
     const generation = this.client.getSnapshot().generation;
     const navigationCurrent = this.navigation.capture();
-    return () => current() && navigationCurrent() && generation === this.client.getSnapshot().generation;
-  }
-  async classifySession(id: string, current: () => boolean) {
-    const valid = this.fence(current);
+    const valid = () => current() && navigationCurrent() && generation === this.client.getSnapshot().generation;
+    const observation = await this.authority.observe();
+    if (!valid()) return false;
     const settings = await this.client.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
-    if (!valid()) return;
+    if (!valid() || !observation.current()) return false;
     const endpoint = this.client.getSnapshot().endpoint;
-    if (!endpoint) throw new Error('No connected rustX endpoint.');
-    const locations = await this.host.classifyLocations([settings.settings.cwd], endpoint);
-    if (!valid()) return;
-    validateLocations(locations, 1);
-    return locations[0];
-  }
-  admit = async (id: string, current: () => boolean) => {
-    const location = await this.classifySession(id, current);
-    if (!location) return false;
+    if (!endpoint || !sameEndpoint(observation.catalog.endpoint, endpoint)) throw new Error('No matching rustX endpoint.');
+    const [location] = await this.authority.classify([settings.settings.cwd], endpoint, observation);
+    if (!valid() || !observation.current()) return false;
+    const admitted = () => valid() && observation.current();
+    if (!admitted()) return false;
     if (!location.authorized) throw new Error('Session cwd is not authorized by this Product Host. The durable Session is unchanged.');
-    return true;
+    return { current: admitted, validate: async () => {
+      // Called only after a native dispatch slot is reserved. A delayed success
+      // from a retired Host cannot authorize even when display never runs.
+      if (!admitted()) return false;
+      await this.authority.observe();
+      return admitted();
+    } };
   };
 }

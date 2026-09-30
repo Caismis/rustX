@@ -104,8 +104,15 @@ export interface Socket {
   close(): void;
 }
 export type SocketFactory = (url: string, protocols: string[]) => Socket;
+/** An operation-owned proof, re-observed after transport backpressure and checked
+ * synchronously again before send. The transport never interprets Host policy. */
+export interface OperationAdmission {
+  current: () => boolean;
+  validate: () => Promise<boolean>;
+}
 interface Pending {
-  dispatchCurrent?: () => boolean;
+  dispatchCurrent?: (() => boolean) | OperationAdmission;
+  validating?: boolean;
   acknowledged?: (result: MethodResult) => void;
   request: Request;
   context: WireContext;
@@ -231,19 +238,19 @@ export class AppServerClient {
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
   // Fail closed when there is no admission owner (including after its disposal).
-  private attachmentAdmission?: (id: string, current: () => boolean) => Promise<boolean>;
-  setAttachmentAdmission(admit: (id: string, current: () => boolean) => Promise<boolean>) {
+  private attachmentAdmission?: (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
+  setAttachmentAdmission(admit: (id: string, current: () => boolean) => Promise<false | OperationAdmission>) {
     this.attachmentAdmission = admit;
     return () => { if (this.attachmentAdmission === admit) this.attachmentAdmission = undefined; };
   }
-  async admitAttachment(id: string, current: () => boolean = () => true): Promise<boolean> {
+  async admitAttachment(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
     const generation = this.state.generation;
     const admission = this.attachmentAdmission;
     const valid = () => current() && this.current(generation) && admission === this.attachmentAdmission;
     if (!valid()) return false;
     if (!admission) throw new Error('No Web attachment admission owner.');
     const allowed = await admission(id, valid);
-    return allowed && valid();
+    return allowed && valid() && { current: () => valid() && allowed.current(), validate: allowed.validate };
   }
   restoreViews(ids: readonly string[]) {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
@@ -418,7 +425,7 @@ export class AppServerClient {
     }
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
-  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: () => boolean): Promise<Extract<MethodResult, { type: T }>> {
+  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
     if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
@@ -449,24 +456,41 @@ export class AppServerClient {
     return result as Extract<MethodResult, { type: T }>;
   }
   private pump() {
-    let sent = [...this.pending.values()].filter(p => p.sent && requestLane(p.request.method) === 'rpc').length;
+    let occupied = [...this.pending.values()].filter(p => (p.sent || p.validating) && requestLane(p.request.method) === 'rpc').length;
     for (const pending of this.pending.values()) {
       if (!this.socket) break;
       const lane = requestLane(pending.request.method);
-      if (pending.sent || (lane === 'rpc' && sent >= 8)) continue;
-      if (pending.dispatchCurrent && !pending.dispatchCurrent()) {
+      if (pending.sent || pending.validating || (lane === 'rpc' && occupied >= 8)) continue;
+      const proof = pending.dispatchCurrent;
+      const current = () => !proof || (typeof proof === 'function' ? proof() : proof.current());
+      const refuse = (cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) => {
         this.pending.delete(String(pending.request.id));
-        pending.reject(new Error('Authority changed before dispatch. No operation was sent.'));
+        pending.reject(cause instanceof Error ? cause : new Error(String(cause)));
         if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
-        continue;
-      }
-      const raw = JSON.stringify(pending.request);
-      const generation = this.state.generation;
-      pending.sent = true; if (lane === 'rpc') sent++;
-      this.log.observe('out', generation, raw, pending.context);
-      if (lane === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
-      try { this.socket.send(raw); } catch { this.lose(generation); break; }
+      };
+      if (!current()) { refuse(); continue; }
+      if (lane === 'rpc') occupied++;
+      if (proof && typeof proof !== 'function') {
+        // Reserve the same bounded RPC slot while the operation owner revalidates.
+        // No request is sent, timed out, or marked uncertain during this read.
+        pending.validating = true;
+        void proof.validate().then(allowed => {
+          if (this.pending.get(String(pending.request.id)) !== pending) return;
+          if (!allowed || !current()) refuse();
+          else this.sendPending(pending);
+        }).catch(cause => {
+          if (this.pending.get(String(pending.request.id)) === pending) refuse(cause);
+        }).finally(() => { pending.validating = false; this.pump(); });
+      } else this.sendPending(pending);
     }
+  }
+  private sendPending(pending: Pending) {
+    const raw = JSON.stringify(pending.request);
+    const generation = this.state.generation;
+    pending.sent = true;
+    this.log.observe('out', generation, raw, pending.context);
+    if (requestLane(pending.request.method) === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
+    try { this.socket!.send(raw); } catch { this.lose(generation); }
   }
   private receive(data: unknown, generation: number) {
     if (typeof data !== 'string') { this.lose(generation); return; }
@@ -854,8 +878,9 @@ export class AppServerClient {
     const admissionCurrent = () => current() && navigationCurrent();
     let target: AttachmentTarget | undefined;
     try {
-      if (!await this.admitAttachment(id, admissionCurrent) || !admissionCurrent()) return;
-      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, admissionCurrent);
+      const admitted = await this.admitAttachment(id, admissionCurrent);
+      if (!admitted || !admitted.current()) return;
+      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, admitted);
       if (!current()) return;
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
