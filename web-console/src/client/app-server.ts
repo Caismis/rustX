@@ -23,6 +23,8 @@ export interface SessionView {
   deleting?: boolean;
   deletionRecovery?: "committed_cleanup_pending" | "committed_durability_uncertain";
   recoveringDeletion?: boolean;
+  /** Historical committed fact; unlike recovery admission, survives a lost recovery reply. */
+  deletionCommitted?: SessionView['deletionRecovery'];
   id: string;
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
@@ -89,8 +91,9 @@ export interface ClientView {
 /** Read-only historical evidence. Never consulted by attachment/control admission. */
 export interface DetachedEvidence {
   authority: string;
+  authorityId?: string;
   operations: readonly UncertainOperation[];
-  sessions: readonly Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'>[];
+  sessions: readonly (Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'> & { deletion?: 'uncertain' | SessionView['deletionRecovery'] })[];
 }
 export interface Socket {
   onopen: ((event: Event) => unknown) | null;
@@ -246,14 +249,16 @@ export class AppServerClient {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
   }
   private retireAuthority() {
+    this.navigation.invalidate();
     this.firstSubmissions.retireAuthority();
-    const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
-      .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
+    const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
+      .map(({ id, error, modelMutation, cancellation, deleting, deletionCommitted }) => ({ id, error, modelMutation, cancellation,
+        ...(deleting ? { deletion: deletionCommitted ?? 'uncertain' as const } : {}) }));
     // Admission reserved capacity for close-time evidence before synchronous fencing.
     // Generation-guarded continuations cannot create new Session diagnostics;
     // model/cancellation continuations only update already-reserved Session rows.
     const detached = [...(this.state.detached ?? [])];
-    if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
+    if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
     this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
     this.listEpoch++; this.listOffset = 0; this.listQuery = '';
     this.log.clear();
@@ -353,9 +358,8 @@ export class AppServerClient {
    */
   private admitAuthorityReplacement() {
     const views = Object.values(this.state.views);
-    if (views.some(view => view.deleting)) throw new Error('Resolve pending Session deletion verification/recovery on the current App Server before replacing its authority.');
     if ((this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
-    const sessions = new Set(views.filter(view => view.error || view.modelMutation || view.cancellation).map(view => view.id));
+    const sessions = new Set(views.filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => view.id));
     for (const pending of this.pending.values()) if (pending.context.sessionId) sessions.add(pending.context.sessionId);
     if (sessions.size > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
   }
@@ -366,6 +370,14 @@ export class AppServerClient {
   private closedSockets = new WeakSet<Socket>();
   disconnect() { ++this.connectionAttempt; this.endConnection('disconnected'); return this.closing; }
   acknowledgeDetached(index: number) { this.publish({ detached: this.state.detached?.filter((_, at) => at !== index) }); }
+  /** Browser evidence only. No native settlement, deletion notification or RPC. */
+  acknowledgeSessionDiagnostic(id: string) {
+    if (this.socket || this.pending.size) throw new Error('Disconnect before acknowledging current Session evidence.');
+    const view = this.state.views[id];
+    if (!view || !(view.deleting || view.error || view.modelMutation || view.cancellation)) return;
+    const views = { ...this.state.views }; delete views[id];
+    this.publish({ views });
+  }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }
@@ -786,13 +798,13 @@ export class AppServerClient {
       this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
       if (committed) {
         // Retain only a recovery obligation; this is not a resumable conversation.
-        this.setSession(id, { deleting: true, deletionRecovery: result.status,
+        this.setSession(id, { deleting: true, deletionRecovery: result.status, deletionCommitted: result.status,
           recoveringDeletion: false, attachmentIntent: 'released', attachment: 'detached', target: undefined, snapshot: undefined, error: undefined });
       } else {
         const views = { ...this.state.views }; delete views[id]; this.publish({ views });
       }
     } else {
-      this.setSession(id, { deleting: false, deletionRecovery: undefined, recoveringDeletion: false, error: undefined });
+      this.setSession(id, { deleting: false, deletionRecovery: undefined, deletionCommitted: undefined, recoveringDeletion: false, error: undefined });
     }
   }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */

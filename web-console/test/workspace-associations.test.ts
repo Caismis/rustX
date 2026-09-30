@@ -98,12 +98,13 @@ it('unknown, confirmed ungrouped and revoked observations are distinct', async (
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
   expect(f.owner.getSnapshot().entries.get('B')).toMatchObject({ status: 'revoked' }); f.stop();
 });
-it('unregister invalidates a gated reply even when its independent catalog reread fails', async () => {
+it.each(['success', 'failure'])('unregister fences late %s even when its independent catalog reread fails', async outcome => {
   const f = await fixture(); await f.accept(0); f.owner.refresh(); const old = await f.observed(2);
   vi.mocked(f.host.listWorkspaces).mockRejectedValueOnce(new Error('reread failed'));
   f.owner.refresh('A');
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
-  old.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
+  if (outcome === 'success') old.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
+  else old.gate.reject(new Error('pre-unregister failure'));
   await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('unavailable'));
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
   expect(f.owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['B']); f.stop();
@@ -194,4 +195,67 @@ it('a definitive Host replacement refusal retires evidence even if the replaceme
   f.owner.refresh();
   await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('unavailable'));
   expect(f.owner.getSnapshot().entries.size).toBe(0); expect(f.owner.getSnapshot().catalog).toBeUndefined(); f.stop();
+});
+
+it.each([false, true])('registration replacement classifies on the first refresh (explicit unregister: %s)', async explicit => {
+  const f = await fixture(); await f.accept(0);
+  const next = catalog(); next.workspaces[0] = { ...next.workspaces[0], id: 'new-A' };
+  vi.mocked(f.host.listWorkspaces).mockResolvedValue(next);
+  f.owner.refresh(explicit ? 'A' : undefined);
+  const read = await f.observed(2);
+  expect(read.cwds).toEqual(['/A', '/B']);
+  expect(f.owner.getSnapshot().entries.get('A')?.confirmed?.workspaceId).toBeUndefined();
+  expect(f.owner.getSnapshot().entries.get('A')?.status).not.toBe('ready');
+  read.gate.resolve([{ authorized: true, workspaceId: 'new-A' }, { authorized: true, workspaceId: 'B' }]);
+  await vi.waitFor(() => expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({ workspaceId: 'new-A' }));
+  expect(f.reads).toHaveLength(2); f.stop();
+});
+it.each(['success', 'failure'])('current demand settles independently of obsolete off-page %s', async outcome => {
+  const f = await fixture(); const old = f.reads[0];
+  f.publish({ sessions: [row('X', '/B')] }); f.owner.refresh();
+  const fresh = await f.observed(2);
+  fresh.gate.resolve([{ authorized: true, workspaceId: 'B' }]);
+  await vi.waitFor(() => expect(f.owner.getSnapshot().entries.get('X')?.status).toBe('ready'));
+  expect(f.owner.getSnapshot().status).toBe('ready');
+  if (outcome === 'success') old.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
+  else old.gate.reject(new Error('obsolete'));
+  await old.gate.promise.catch(() => {});
+  expect(f.owner.getSnapshot().status).toBe('ready');
+  expect(f.owner.getSnapshot().entries.has('A')).toBe(true); f.stop();
+});
+it('selected off-page demand participates in status, including unavailable and queued reads', async () => {
+  const f = await fixture(); await f.accept(0);
+  f.publish({ views: { outside: { id: 'outside', attachment: 'detached', attachmentIntent: 'released', summary: row('outside', '/A') } } });
+  f.owner.select('outside'); const read = await f.observed(2);
+  expect(['pending', 'refreshing']).toContain(f.owner.getSnapshot().status);
+  read.gate.resolve(read.cwds.map(cwd => cwd === '/B' ? { authorized: true, workspaceId: 'B' } : { authorized: false, reason: 'unavailable' }));
+  await vi.waitFor(() => expect(f.owner.getSnapshot().entries.get('outside')?.status).toBe('unavailable'));
+  expect(f.owner.getSnapshot().status).toBe('unavailable'); f.stop();
+});
+
+it('inactive unavailable evidence is retained without affecting a healthy page, then reused on return', async () => {
+  const f = await fixture(); await f.accept(0);
+  f.publish({ sessions: [row('X', '/A')] }); const read = await f.observed(2);
+  read.gate.reject(new Error('X unavailable'));
+  await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('unavailable'));
+  f.publish({ sessions: [row('B')] });
+  expect(f.owner.getSnapshot().status).toBe('ready');
+  expect(f.owner.getSnapshot().entries.get('X')?.status).toBe('unavailable');
+  expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({ workspaceId: 'A' });
+  f.publish({ sessions: [row('A')] });
+  expect(f.owner.getSnapshot().status).toBe('ready'); expect(f.reads).toHaveLength(2); f.stop();
+});
+it('queued current demand remains pending while both classification slots are occupied', async () => {
+  const f = await fixture();
+  f.owner.refresh(); await f.observed(2);
+  f.publish({ sessions: [row('X', '/B')] }); f.owner.refresh();
+  await vi.waitFor(() => expect(f.host.listWorkspaces).toHaveBeenCalledTimes(3));
+  expect(f.reads).toHaveLength(2);
+  expect(f.owner.getSnapshot().status).toBe('pending');
+  f.reads[0].gate.reject(new Error('obsolete slot'));
+  const fresh = await f.observed(3);
+  expect(fresh.cwds).toEqual(['/B']);
+  fresh.gate.resolve([{ authorized: true, workspaceId: 'B' }]);
+  await vi.waitFor(() => expect(f.owner.getSnapshot().status).toBe('ready'));
+  f.stop();
 });

@@ -1,3 +1,4 @@
+import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -12,7 +13,7 @@ let server: Server;
 beforeEach(() => {
   server = new Server(); localStorage.clear();
 });
-afterEach(() => { cleanup(); server.client.disconnect(); });
+afterEach(() => { cleanup(); server.client.disconnect(); localeController.setLocale('en'); });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 function hostFixture(picker = true) {
   let rows = ['A', 'B'].map(id => ({ id: `w${id}`, displayName: `Workspace ${id}`, location: `root-${id}`, displayPath: `/workspace/${id}` }));
@@ -545,4 +546,58 @@ it('UX-04 replacement of the Product Host admission owner fences an older succes
   old.resolve(true);
   expect(await pending).toBe(false);
   expect(methods()).not.toContain('session/attach');
+});
+
+it.each(['success', 'failure', 'unavailable'] as const)('current page notice ignores historical off-page %s', async outcome => {
+  const host = hostFixture();
+  let reject!: (error: Error) => void, resolve!: (value: Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>) => void;
+  const old = new Promise<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>((yes, no) => { resolve = yes; reject = no; });
+  vi.mocked(host.classifyLocations).mockReturnValueOnce(old);
+  await mount(host);
+  if (outcome === 'unavailable') await act(async () => reject(new Error('old page unavailable')));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
+  await act(async () => server.client.listSessions());
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
+  expect(screen.getByRole('button', { name: 'Open Session B' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group')).toBe('wB');
+  if (outcome === 'success') await act(async () => resolve([{ authorized: true, workspaceId: 'wA' }, { authorized: true, workspaceId: 'wB' }]));
+  if (outcome === 'failure') await act(async () => reject(new Error('obsolete error')));
+  expect(screen.queryByText(translator('en')('workspace:association.refreshing'))).toBeNull();
+  expect(screen.queryByText(translator('en')('workspace:association.unavailable'))).toBeNull();
+});
+
+it('one refresh moves sidebar and selected Session together to the replacement registration', async () => {
+  const host = await mount();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  const catalog = await host.listWorkspaces();
+  catalog.workspaces = catalog.workspaces.map(row => row.id === 'wA' ? { ...row, id: 'replacement-A', displayName: 'Replacement A' } : row);
+  vi.mocked(host.listWorkspaces).mockResolvedValue(catalog);
+  const gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
+  vi.mocked(host.classifyLocations).mockReturnValueOnce(gate.promise);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
+  const group = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group');
+  expect(group()).toBeUndefined();
+  expect(screen.getByRole('button', { name: 'Select Workspace Replacement A' }).getAttribute('aria-current')).not.toBe('page');
+  await act(async () => gate.resolve([{ authorized: true, workspaceId: 'replacement-A' }, { authorized: true, workspaceId: 'wB' }]));
+  expect(group()).toBe('replacement-A');
+  expect(screen.getByRole('button', { name: 'Select Workspace Replacement A' }).getAttribute('aria-current')).toBe('page');
+});
+
+it.each(['en', 'zh'] as const)('selected off-page pending and unavailable demand remains visible in %s', async locale => {
+  const host = await mount();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
+  await act(async () => server.client.listSessions());
+  const gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
+  vi.mocked(host.classifyLocations).mockReturnValueOnce(gate.promise);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
+  act(() => localeController.setLocale(locale)); const tx = translator(locale);
+  expect(screen.getByText(tx('workspace:association.refreshing'))).toBeTruthy();
+  expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['B']);
+  expect(vi.mocked(host.classifyLocations).mock.calls.at(-1)?.[0]).toEqual(['/workspace/A', '/workspace/B']);
+  await act(async () => gate.resolve([{ authorized: false, reason: 'unavailable' }, { authorized: true, workspaceId: 'wB' }]));
+  expect(screen.getByText(tx('workspace:association.unavailable'))).toBeTruthy();
+  expect(screen.queryByText(tx('workspace:association.refreshing'))).toBeNull();
 });

@@ -31,8 +31,18 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
     {!!transport.detached?.length && <details><summary>{tx('settings:connection-settings.detached-authority-diagnostics')}</summary>
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
       {transport.detached.map((evidence, index) => <section key={index}><h3>{evidence.authority}</h3>
+        {evidence.sessions.filter(row => row.deletion).map(row => <p key={row.id}>{row.id}: {tx(row.deletion === 'uncertain' ? 'settings:connection-settings.deletion-uncertain' : row.deletion === 'committed_cleanup_pending' ? 'settings:connection-settings.deletion-cleanup' : 'settings:connection-settings.deletion-durability')}</p>)}
         <pre>{JSON.stringify(evidence, null, 2)}</pre>
         <Button onClick={() => client.acknowledgeDetached(index)}>{tx('settings:connection-settings.i-have-reviewed-this-historical-evidence')}</Button>
+      </section>)}
+    </details>}
+    {['disconnected', 'stale', 'error'].includes(transport.connection) && Object.values(transport.views).some(view => view.deleting || view.error || view.modelMutation || view.cancellation) && <details><summary>{tx('settings:connection-settings.current-evidence')}</summary>
+      <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
+      {Object.values(transport.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => <section key={view.id}>
+        <p>{transport.endpoint} · {transport.authorityId} · {view.id}</p>
+        <pre>{JSON.stringify({ id: view.id, error: view.error, modelMutation: view.modelMutation, cancellation: view.cancellation,
+          deletion: view.deleting ? view.deletionCommitted ?? 'uncertain' : undefined }, null, 2)}</pre>
+        <Button onClick={() => client.acknowledgeSessionDiagnostic(view.id)}>{tx('settings:connection-settings.i-have-reviewed-this-historical-evidence')}</Button>
       </section>)}
     </details>}
     {!!transport.uncertain.filter(item => !item.interactionKey).length && <details><summary>{tx('settings:connection-settings.review-uncertain-operations')}</summary>
