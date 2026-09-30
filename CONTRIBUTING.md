@@ -100,7 +100,8 @@ cargo test --all-targets --all-features
 ### Full pre-PR and CI validation
 
 The baseline commands are only the Rust starting point. The full CI workflow
-also requires the provider emulator checks and the TUI checks. Run the
+also requires the lane coverage check, the provider emulator checks, and the
+TUI, App Server protocol, development launcher and Web checks. Run the
 following from the repository root with Python 3.12, `uv`, and the Node LTS
 line available:
 
@@ -109,10 +110,14 @@ line available:
 (cd test-support/fake-provider && uv sync --frozen)
 (cd test-support/fake-provider && uv run --frozen pytest)
 
-# Rust validation with provider-emulator tests required rather than skipped.
+# Rust validation with uv-dependent tests required rather than skipped.
 # One command covers every target, conformance included; tests/README.md
-# documents the domain targets for focused runs.
+# documents the CI lanes' own selectors for focused runs.
+cargo build --bins --all-features
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
+
+# The CI lanes' selectors against Cargo discovery on this platform.
+cargo run --example check_test_lanes
 
 # TUI's locked pnpm workflow.
 nvm install --lts
@@ -122,7 +127,16 @@ corepack enable
 (cd tui && pnpm install --frozen-lockfile)
 (cd tui && pnpm typecheck)
 cargo build --bin rustx
-(cd tui && pnpm test)
+(cd tui && RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test)
+
+# Generated App Server protocol, development launchers and Web.
+(cd protocol/app-server && pnpm install --frozen-lockfile && pnpm check && pnpm typecheck)
+(cd dev && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test)
+(cd web-console && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test)
+(cd web-console && pnpm check:i18n && pnpm check:provenance)
+# One production build, then browser acceptance in the pinned container
+# (Docker or Podman via CONTAINER_ENGINE); needs `cargo build --bins`.
+(cd web-console && pnpm test:e2e)
 
 git diff --check
 ```

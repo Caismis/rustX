@@ -602,3 +602,92 @@ fn cfg275_disabled_workflow_metadata_never_becomes_an_ordinary_agent_tool() {
         )]
     ));
 }
+
+/// Workflow Tool-node selection is the capability plane's exact selection
+/// and needs no Subagent feature: with an empty Agent catalog, admission
+/// freezes exactly the definition `resolve_selector` selects and reports
+/// exactly its typed refusal for an absent Tool or an unavailable source.
+#[test]
+fn tool_node_admission_is_capability_plane_selection_without_agents() {
+    use crate::capabilities::selection::{ExactToolSelector, ToolSelectionError, resolve_selector};
+    let github = crate::runtime::identity::McpServerId::new("github");
+    let source = crate::capabilities::ToolSourceId::Mcp(github.clone());
+    let mut tool = definition();
+    tool.name = "check".into();
+    tool.id = crate::runtime::identity::ToolId::new("github-check");
+    tool.origin = ToolOrigin::Mcp { server_id: github };
+    let available = crate::capabilities::AvailableToolCatalog::new(vec![
+        crate::tools::executor::ToolRegistration::plain(
+            tool.clone(),
+            Probe::new(ToolExecutionStatus::Success),
+        ),
+    ]);
+    let program = |name: &str| {
+        WorkflowProgram::compile(WorkflowId::parse("verify").unwrap(), serde_json::from_value(json!({
+            "description":"Source verification", "block": {
+                "input":schema(json!({}), &[]), "output":schema(json!({}), &[]), "entry":"check",
+                "nodes":{
+                    "check":{"type":"tool","selector":{"origin":"source","source_id":"github","name":name},
+                        "arguments":{"type":"literal","value":{}},
+                        "result":{"type":"json","part":0,"schema":{"type":"object"}}},
+                    "done":{"type":"return","output":{"type":"literal","value":{}}}
+                },
+                "edges":[{"from":"check","to":"done"}]
+            }
+        })).unwrap()).unwrap()
+    };
+    let ready: crate::capabilities::CapabilityAvailability = [(
+        source.clone(),
+        crate::capabilities::CapabilitySourceState::Ready,
+    )]
+    .into();
+    let offline: crate::capabilities::CapabilityAvailability = [(
+        source.clone(),
+        crate::capabilities::CapabilitySourceState::Unavailable {
+            reason: "offline".into(),
+        },
+    )]
+    .into();
+    let skills = SkillSnapshot::new(Vec::new());
+    let admit = |name: &str, availability| {
+        let catalog = cfg274_admit_child(
+            program(name),
+            &crate::runtime::subagent::AgentCatalog::empty(),
+            &available,
+            availability,
+            &skills,
+        );
+        let selector = ExactToolSelector::Source {
+            source_id: source.clone(),
+            name: name.into(),
+        };
+        let selected = resolve_selector(&selector, &available, availability).cloned();
+        (catalog, selector, selected)
+    };
+
+    let (catalog, selector, selected) = admit("check", &ready);
+    let WorkflowAdmission::Enabled(admitted) =
+        &catalog.entries().values().next().unwrap().admission
+    else {
+        panic!("a ready exact source Tool admits the Workflow");
+    };
+    assert_eq!(selected.as_ref(), Ok(&tool));
+    assert_eq!(admitted.frozen_tools, BTreeMap::from([(selector, tool)]));
+
+    for (name, availability) in [("missing", &ready), ("check", &offline)] {
+        let (catalog, _, selected) = admit(name, availability);
+        let refusal = selected.expect_err("the capability plane refuses this selector");
+        assert!(matches!(
+            (name, &refusal),
+            ("missing", ToolSelectionError::ExactToolAbsent { .. })
+                | ("check", ToolSelectionError::SourceUnavailable { .. })
+        ));
+        assert_eq!(
+            cfg274_reasons(&catalog),
+            [WorkflowAdmissionDiagnostic {
+                path: "block.nodes.check.selector".into(),
+                reason: WorkflowDependencyFailure::Tool(refusal),
+            }]
+        );
+    }
+}

@@ -351,8 +351,7 @@ pub fn all_driver_factories() -> Vec<Box<dyn DriverFactory>> {
 /// shared with the Issue #37 semantic tests, so a scenario and its #37
 /// counterpart always exercise an identically built runtime.
 pub use crate::scripted_suites::support::runtime_client_fixture::{
-    RuntimeClientFixture as ConformanceFixture, skill_location, uv_available, write_python_package,
-    write_skill,
+    RuntimeClientFixture as ConformanceFixture, skill_location, write_python_package, write_skill,
 };
 
 /// Connects one client session of the given transport to a fixture.
@@ -1794,11 +1793,14 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
 /// transport-independent, so `direct` and `stdio-jsonl` must return
 /// byte-identical capability views.
 ///
-/// Opt-in by `uv` availability, mirroring the existing Issue #37 capability
-/// fixture: a missing `uv` skips the environment step entirely.
+/// Requires `uv` through the shared prerequisite: a local checkout without it
+/// skips, a lane that makes the toolchain mandatory fails instead.
 pub async fn capability_projection_covers_python_origins() {
-    if !uv_available() {
-        eprintln!("uv unavailable; the Python capability origin is not exercised");
+    if crate::scripted_suites::common::provider_emulator::required_uv(
+        "the Python capability origin projection",
+    )
+    .is_none()
+    {
         return;
     }
     let fixture = ConformanceFixture::builder("conv_546b1efb-60d2-7124-9e5e-f4c0a6807ff6")

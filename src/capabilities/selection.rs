@@ -556,12 +556,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn workflow_selection_has_no_subagent_feature_dependency() {
-        let workflow = include_str!("../runtime/workflow/tool.rs");
-        assert!(!workflow.contains("subagent::resolver"));
-        assert!(!include_str!("../tools/executor.rs").contains("fn foreground_policy(&self)"));
-    }
     fn source_definition(source: &ToolSourceId, name: &str) -> ToolDefinition {
         let origin = match source {
             ToolSourceId::Mcp(id) => ToolOrigin::Mcp {

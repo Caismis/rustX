@@ -111,3 +111,36 @@ pub fn attempt_model_with_window(
     )
     .snapshot()
 }
+
+/// Without uv, the shared prerequisite skips a boundary only where the
+/// toolchain is optional; a present uv is returned in either mode.
+#[test]
+fn uv_prerequisite_skips_only_an_optional_toolchain() {
+    use super::common::provider_emulator::uv_prerequisite;
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::env::join_paths([directory.path()]).unwrap();
+    assert_eq!(uv_prerequisite(None, false, "fixture boundary"), None);
+    assert_eq!(
+        uv_prerequisite(Some(&path), false, "fixture boundary"),
+        None
+    );
+    std::fs::write(directory.path().join("uv"), "").unwrap();
+    for required in [false, true] {
+        assert_eq!(
+            uv_prerequisite(Some(&path), required, "fixture boundary"),
+            Some(directory.path().join("uv"))
+        );
+    }
+}
+
+/// Where the toolchain is mandatory, a missing uv fails the boundary instead
+/// of letting it pass unexercised.
+#[test]
+#[should_panic(
+    expected = "RUSTX_REQUIRE_PROVIDER_EMULATOR is set but uv is not on PATH; fixture boundary cannot run"
+)]
+fn uv_prerequisite_fails_closed_when_required() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::env::join_paths([directory.path()]).unwrap();
+    super::common::provider_emulator::uv_prerequisite(Some(&path), true, "fixture boundary");
+}

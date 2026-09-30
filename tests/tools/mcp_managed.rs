@@ -51,8 +51,10 @@
 //!   new fingerprint-keyed state, and a committed activation serves the new
 //!   implementation even when the FastMCP-derived schema is unchanged.
 //!
-//! Every test follows the uv-availability skip convention of `uv.rs`: with
-//! no uv on PATH the real-materialization acceptance is not exercised.
+//! Every test requires uv through the shared prerequisite
+//! (`common::provider_emulator::required_uv`): a local checkout without uv
+//! skips the real-materialization acceptance; a lane that sets
+//! `RUSTX_REQUIRE_PROVIDER_EMULATOR` fails instead.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -75,23 +77,17 @@ use rustx::tools::{Workspace, executor::ToolExecutionContext, executor::ToolExec
 /// failure, never a verdict.
 const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
-/// The uv binary on PATH, following the skip convention of `uv.rs`.
+/// The uv binary through the shared prerequisite: skipped locally without
+/// uv, a hard failure where the toolchain is mandatory.
 fn uv_binary() -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("uv"))
-            .find(|path| path.is_file())
-    })
+    crate::common::provider_emulator::required_uv("the managed FastMCP boundary")
 }
 
 macro_rules! require_uv {
     () => {
         match uv_binary() {
             Some(uv) => uv,
-            None => {
-                eprintln!("uv unavailable; managed FastMCP boundary not exercised");
-                return;
-            }
+            None => return,
         }
     };
 }

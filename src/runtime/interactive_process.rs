@@ -1248,11 +1248,18 @@ mod interactive_tests {
         snapshot
     }
 
+    /// The escape regressions issue their syscall from `python3` on the
+    /// fixed supervised PATH. A missing interpreter fails the regression: it
+    /// is a prerequisite of the Linux platform these tests run on, never a
+    /// reason to report the containment boundary as passed.
     #[cfg(target_os = "linux")]
-    fn python_available() -> bool {
-        ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
-            .iter()
-            .any(|path| Path::new(path).is_file())
+    fn require_python() {
+        assert!(
+            ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
+                .iter()
+                .any(|path| Path::new(path).is_file()),
+            "python3 on the fixed supervised PATH is required by the Linux escape regressions"
+        );
     }
 
     #[tokio::test]
@@ -1403,10 +1410,7 @@ mod interactive_tests {
     #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn setsid_escape_attempt_fails_deterministically() {
-        if !python_available() {
-            eprintln!("python3 unavailable; setsid escape regression not exercised");
-            return;
-        }
+        require_python();
         assert_escape_is_denied("setsid()").await;
     }
 
@@ -1414,10 +1418,7 @@ mod interactive_tests {
     #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn setpgid_escape_attempt_fails_deterministically() {
-        if !python_available() {
-            eprintln!("python3 unavailable; setpgid escape regression not exercised");
-            return;
-        }
+        require_python();
         assert_escape_is_denied("setpgid(0, 0)").await;
     }
 

@@ -27,9 +27,46 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 /// The environment variable that turns "uv is missing, skip" into a hard
-/// failure. CI sets it, so a broken toolchain in the pipeline can never be
-/// reported as a green conformance run.
+/// failure for every uv-dependent boundary: the provider emulator and the
+/// managed Python (`FastMCP`) children share the one uv + Python 3.12
+/// toolchain. Every CI step that runs such a boundary sets it, so a broken
+/// toolchain in the pipeline can never be reported as a green boundary run.
 pub const REQUIRE_VARIABLE: &str = "RUSTX_REQUIRE_PROVIDER_EMULATOR";
+
+/// The `uv` executable a uv-dependent boundary test needs.
+///
+/// `None` means the calling test must return without exercising its
+/// boundary, which only a local checkout without the toolchain may do: with
+/// [`REQUIRE_VARIABLE`] set, absence panics instead.
+pub fn required_uv(boundary: &str) -> Option<PathBuf> {
+    uv_prerequisite(
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os(REQUIRE_VARIABLE).is_some(),
+        boundary,
+    )
+}
+
+/// [`required_uv`] over explicit inputs, so the mandatory path is testable
+/// without mutating the process environment.
+pub fn uv_prerequisite(
+    path: Option<&std::ffi::OsStr>,
+    required: bool,
+    boundary: &str,
+) -> Option<PathBuf> {
+    let uv = path.and_then(|path| {
+        std::env::split_paths(path)
+            .map(|dir| dir.join("uv"))
+            .find(|candidate| candidate.is_file())
+    });
+    if uv.is_none() {
+        assert!(
+            !required,
+            "{REQUIRE_VARIABLE} is set but uv is not on PATH; {boundary} cannot run"
+        );
+        eprintln!("uv unavailable; {boundary} was NOT exercised (skipped)");
+    }
+    uv
+}
 
 /// The upper bound on a control-plane barrier wait. Deadlock protection
 /// only: ordering is always established by the observation itself.
@@ -68,19 +105,7 @@ impl ProviderEmulator {
         scenario: &str,
         workspace: Option<&std::path::Path>,
     ) -> Option<Self> {
-        let required = std::env::var_os(REQUIRE_VARIABLE).is_some();
-        if which("uv").is_none() {
-            assert!(
-                !required,
-                "{REQUIRE_VARIABLE} is set but uv is not on PATH; the provider \
-                 emulator cannot run"
-            );
-            eprintln!(
-                "uv unavailable; the issue 47 provider-emulator conformance scenario \
-                 {scenario} was not exercised"
-            );
-            return None;
-        }
+        required_uv(&format!("the provider-emulator scenario {scenario}"))?;
 
         let project = project_root();
         let mut command = Command::new("uv");
@@ -316,13 +341,4 @@ impl Drop for ProviderEmulator {
 /// The uv project root of the emulator.
 fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-support/fake-provider")
-}
-
-/// The first `name` on `PATH`.
-fn which(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(name))
-            .find(|candidate| candidate.is_file())
-    })
 }

@@ -792,8 +792,13 @@ async fn host_admission_commit_accounts_for_requests_connections_and_attachments
     .await;
 }
 
+/// Source convention, not a dependency proof: the residency owner's source
+/// never spells the `crate::app_server` path, recording the documented
+/// direction `AppServerHost` -> `SessionRuntimeManager` (docs/app-server-protocol.md).
+/// Rust cannot restrict imports between modules of one crate, so an aliased
+/// or re-exported path escapes this deliberately limited lexical check.
 #[test]
-fn residency_owner_does_not_depend_on_app_server() {
+fn residency_owner_source_spells_no_app_server_path() {
     let source = include_str!("../../../src/local_runtime/session_runtime_manager.rs");
     assert!(!source.contains("crate::app_server"));
 }
