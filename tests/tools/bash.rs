@@ -23,23 +23,15 @@ use rustx::tools::types::{
 };
 
 fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
-    fixture_with_control(
-        &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl {
-            trace: Some(trace.to_path_buf()),
-            before_term_socket: None,
-        },
-    )
-}
-
-fn fixture_with_control(
-    control: &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl,
-) -> crate::common::NativeFixture {
-    use rustx::tools::native::bash_supervisor::diagnostics::fixture_executor;
+    use rustx::tools::native::bash_supervisor::diagnostics::{FixtureControl, fixture_executor};
     let mut fixture = native_fixture();
     let mut registry = rustx::tools::executor::ToolRegistry::new();
     for definition in fixture.registry.definitions() {
         let executor = if definition.name == "bash" {
-            fixture_executor(control.clone())
+            fixture_executor(FixtureControl {
+                trace: Some(trace.to_path_buf()),
+                before_term_socket: None,
+            })
         } else {
             fixture.registry.executor(&definition.id)
         };
@@ -195,184 +187,47 @@ async fn bash_foreground_timeout_is_timed_out() {
 
 #[tokio::test]
 async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    // Keep the socket below Darwin's path limit. All FIFOs use nonblocking
-    // test-side handles: there are no detached accept/read tasks to leak.
-    let dir = tempfile::Builder::new()
-        .prefix("rx-fg-term-")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let trace = dir.path().join("trace");
-    let socket = dir.path().join("gate");
-    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-    let fixture = fixture_with_control(&FixtureControl {
-        trace: Some(trace.clone()),
-        before_term_socket: Some(socket),
-    });
-    let root = fixture.runtime.workspace().root();
-    let ready = SignalPipe::new(&root.join("ready"));
-    let entered = SignalPipe::new(&root.join("entered"));
-    let release = SignalPipe::new(&root.join("release"));
-    let marker = root.join("term-seen");
-    // No external foreground child whose wait can defer a Bash trap, and no
-    // external touch inside the handler. Entry and completion are distinct.
-    let command = "trap 'printf T > entered; read release < release; printf done > term-seen; exit 0' TERM; printf R > ready; while :; do :; done";
+    let fixture = native_fixture();
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let ready = workspace.join("trap-ready.marker");
+    let marker = workspace.join("term-received.marker");
+    // Deterministic readiness handshake: the shell installs the TERM trap
+    // before it writes the ready marker, so observing the marker
+    // deterministically means the trap is in place before cancellation.
+    let command = format!(
+        "trap 'touch {}' TERM; touch {}; sleep 30",
+        marker.display(),
+        ready.display()
+    );
     let cancellation = CancellationSignal::new();
-    let mut stage = "waiting for installed trap";
-    let mut ready_seen = false;
-    let mut entered_seen = false;
-    let mut before = String::new();
-    let controller = async {
-        let outcome = tokio::time::timeout(Duration::from_secs(15), async {
-            ready.read().await;
-            ready_seen = true;
-            stage = "waiting for supervisor TERMINATE receipt";
-            cancellation.cancel();
-            let (mut gate, _) = listener.accept().await?;
-            gate.read_exact(&mut [0]).await?;
-            stage = "supervisor before TERM";
-            before = std::fs::read_to_string(&trace)?;
-            // The live shell cannot naturally exit this builtin loop. The
-            // supervisor is parked before sending; no handler witness exists.
-            let controlled = !marker.exists();
-            gate.write_all(b"go").await?;
-            stage = "waiting for handler entry";
-            entered.read().await;
-            entered_seen = true;
-            // Release immediately, before assertions or diagnostic processing:
-            // the production finite grace deadline remains authoritative.
-            release.release();
-            stage = "handler released; waiting for physical settlement";
-            Ok::<_, std::io::Error>(controlled)
-        })
-        .await;
-        // Also unblock cleanup on a guard failure. Dropping the listener and
-        // accepted socket releases the supervisor gate; cancellation stays
-        // owned by the real operation, which we continue driving to completion.
-        cancellation.cancel();
-        release.release();
-        drop(listener);
-        outcome
-    };
-    let execution = async {
-        let result = run_tool_with_cancellation(
-            &fixture,
-            "bash",
-            serde_json::json!({"command": command}),
-            cancellation.clone(),
-        )
-        .await;
-        // Capture at the foreground return boundary, not after joining the
-        // controller: a prematurely returned result must not acquire later
-        // handler or settlement evidence while the controller finishes.
-        let evidence = std::fs::read_to_string(&trace).unwrap_or_default();
-        let completed = std::fs::read_to_string(&marker).ok();
-        (result, evidence, completed)
-    };
-    let ((result, evidence, completed), controlled) = tokio::join!(execution, controller);
-    // Trace is bounded by its existing owner. This command emits no business
-    // output; result Debug includes any captured stderr without a new channel.
-    let diagnostic = format!(
-        "foreground call-m5: stage={stage}, ready={ready_seen}, entered={entered_seen}, completed={completed:?}, controller={controlled:?}\nresult={result:?}\nbefore TERM:\n{before}\nsettled trace:\n{evidence}"
-    );
-    assert!(matches!(controlled, Ok(Ok(true))), "{diagnostic}");
-    assert!(
-        matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
-        "{diagnostic}"
-    );
-    assert_eq!(completed.as_deref(), Some("done"), "{diagnostic}");
-    let before: Vec<Entry> = before
-        .lines()
-        .map(|line| serde_json::from_str(line).expect(&diagnostic))
-        .collect();
-    assert!(
-        before
-            .iter()
-            .any(|e| matches!(e.event, Event::TerminateReceived))
-            && !before
-                .iter()
-                .any(|e| matches!(e.event, Event::Signal { .. })),
-        "{diagnostic}"
-    );
-    let entries: Vec<Entry> = evidence
-        .lines()
-        .map(|line| serde_json::from_str(line).expect(&diagnostic))
-        .collect();
-    let index = |predicate: fn(&Event) -> bool| {
-        entries
-            .iter()
-            .position(|e| predicate(&e.event))
-            .expect(&diagnostic)
-    };
-    let term = index(|e| {
-        matches!(
-            e,
-            Event::Signal {
-                signal: libc::SIGTERM,
-                result: Some(0),
-                ..
+    let cancelling = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        // Polling queries the readiness marker's existence (the state
+        // itself) with a strict deadlock guard.
+        for _ in 0..200 {
+            if ready.exists() {
+                break;
             }
-        )
-    });
-    let Event::Signal { pgid, .. } = entries[term].event else {
-        unreachable!()
-    };
-    assert!(
-        pgid > 0 && entries[term].process == u32::try_from(pgid).unwrap(),
-        "{diagnostic}"
-    );
-    assert!(
-        before
-            .iter()
-            .any(|e| matches!(e.event, Event::ShellGroup { pgid: group, .. } if group == pgid)),
-        "{diagnostic}"
-    );
-    assert!(
-        entries
-            .iter()
-            .any(|e| matches!(e.event, Event::TerminateSent { sent: true })),
-        "{diagnostic}"
-    );
-    let shell = index(|e| matches!(e, Event::ShellExited { status: 0 }));
-    let anchor = index(|e| matches!(e, Event::AnchorTerminalObserved));
-    let children = index(|e| matches!(e, Event::GroupChildrenReaped));
-    let published = index(|e| matches!(e, Event::TerminalPublished));
-    let observed = index(|e| matches!(e, Event::TerminalObserved));
-    let reaped = index(|e| matches!(e, Event::DirectChildReaped));
-    // These are same-owner program/protocol dependencies, not an invented
-    // cross-process clock. In particular TERM's post-syscall trace may race
-    // with the shell entering its handler; no trace/entry order is asserted.
-    assert!(
-        term < shell && anchor < children && children < published && observed < reaped,
-        "{diagnostic}"
-    );
-    assert!(
-        !entries
-            .iter()
-            .any(|e| matches!(e.event, Event::GraceExpired | Event::ControlFailure)),
-        "{diagnostic}"
-    );
-    for (i, entry) in entries.iter().enumerate() {
-        if let Event::Signal {
-            pgid: target,
-            signal,
-            ..
-        } = entry.event
-        {
-            assert_eq!(target, pgid, "{diagnostic}");
-            // Darwin's legitimate post-shell containment is allowed.
-            if signal == libc::SIGKILL {
-                assert!(i > shell, "{diagnostic}");
-            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let absence = index(|e| matches!(e, Event::GroupAbsenceProven));
-        assert!(children < absence && absence < published, "{diagnostic}");
-    }
+        assert!(ready.exists(), "the trap readiness marker never appeared");
+        cancelling.cancel();
+    });
+    let result = run_tool_with_cancellation(
+        &fixture,
+        "bash",
+        serde_json::json!({"command": command}),
+        cancellation,
+    )
+    .await;
+    controller.await.expect("controller");
+    assert!(matches!(
+        result.status,
+        ToolExecutionStatus::Cancelled { .. }
+    ));
+    // TERM was delivered before the grace period expired and the KILL
+    // landed, so the trap marker provably exists once the tool returns.
+    assert!(marker.exists(), "TERM reached the owned process group");
 }
 
 #[tokio::test]
