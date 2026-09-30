@@ -2752,9 +2752,10 @@ pub(crate) mod tests {
     }
 
     /// The child has completed one turn and is waiting for `SealGranted`.
-    /// Parent FIFO input admits guidance, then Cancel, then the stale grant.
-    /// Cancel must finish this activation immediately; no second Cancel or
-    /// `AdmissionReopened` response is sent by the fixture.
+    /// Parent FIFO input admits guidance, then Cancel. Cancellation must publish
+    /// its terminal before the stale grant, without a second Cancel or reopen.
+    /// The fixture retains the transport until that late frame is written;
+    /// successful cancellation may otherwise close it before the parent writes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn cancel_during_close_admission_is_absorbing_and_preserves_guidance() {
         use crate::durable::ConversationStore;
@@ -2790,6 +2791,7 @@ pub(crate) mod tests {
         runtime.gate_child_turns();
         runtime.activate();
         let serving_runtime = runtime.clone();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let serve = tokio::spawn(async move {
             let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
             let handle = dispatcher.handle();
@@ -2802,6 +2804,9 @@ pub(crate) mod tests {
                 None,
             )
             .await;
+            // Keep only the fixture transport alive for the late parent frame.
+            // Dropping the sender on assertion failure also releases cleanup.
+            let _ = shutdown_rx.await;
             dispatcher.shutdown().await;
             result
         });
@@ -2835,11 +2840,14 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+        let result = read_result(&mut parent).await;
+        assert_eq!(result.status, ChildResultStatus::Cancelled);
         write_parent_frame(&mut parent, &ParentFrame::SealGranted)
             .await
             .unwrap();
-        let result = read_result(&mut parent).await;
-        assert_eq!(result.status, ChildResultStatus::Cancelled);
+        shutdown_tx
+            .send(())
+            .expect("fixture retains its dispatcher");
         assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
         serve.await.unwrap().unwrap();
         assert_eq!(model.requests().len(), 1);
