@@ -68,13 +68,13 @@ it('unavailable roots fail fresh admission, unregister preserves it, and symlink
   const { NavigationEpoch } = await import('../src/client/navigation');
   const client = { getSnapshot: () => ({ generation: 1, endpoint }), request: async () => ({ settings: { cwd: a } }) } as unknown as import('../src/client/app-server').AppServerClient;
   const admission = new WorkspaceSessionNavigation(new WorkspaceAuthority(host), client, new NavigationEpoch());
-  expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate()).toBe(true);
+  expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate(new AbortController().signal)).toBe(true);
   rmSync(a, { recursive: true });
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'unavailable' }]);
   await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
   mkdirSync(a); await host.removeWorkspace(workspace.id);
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: true }]);
-  expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate()).toBe(true);
+  expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate(new AbortController().signal)).toBe(true);
   rmSync(a, { recursive: true }); symlinkSync(b, a);
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
   await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');

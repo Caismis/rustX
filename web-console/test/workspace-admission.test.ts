@@ -3,6 +3,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { HttpWorkspaceHost } from '../src/workspaces/http-host';
 import { WorkspaceSessionNavigation } from '../src/workspaces/navigation';
 import type { SessionLocation, WorkspaceCatalog } from '../src/workspaces/host';
+import type { OperationAdmission } from '../src/client/app-server';
 import { Server, endpoint } from './fixture';
 
 function deferred<T>() {
@@ -120,5 +121,102 @@ it.each(['host', 'callback', 'native', 'unavailable'] as const)('final in-flight
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
     if (replacement === 'host') expect(authority.getCatalog()?.authorityId).toBe('replacement-host');
+  } finally { server.client.disconnect(); }
+});
+
+/** Eight final Host observations hold every native RPC slot while a control request waits. */
+async function stalledFinalValidations(retirement: 'navigation' | 'timeout' | 'host') {
+  const server = new Server(); await server.attached('B');
+  let hostId = 'host', stall = false;
+  const stalled: { signal: AbortSignal; release: () => void }[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+    if (!new URL(url).pathname.endsWith('/list')) return Response.json([{ authorized: true }]);
+    // The Host never answers until released. Only a real replacement exercises
+    // fetch cancellation; otherwise the stalled read ignores it.
+    const captured = hostId;
+    if (stall) {
+      const release = deferred<void>(); stalled.push({ signal: init.signal!, release: () => release.resolve() });
+      if (retirement === 'host') init.signal!.addEventListener('abort', () => release.resolve());
+      await release.promise; init.signal!.throwIfAborted();
+    }
+    return Response.json({ authorityId: captured, endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } } satisfies WorkspaceCatalog);
+  }));
+  const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
+  server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit);
+  const admitted = await server.client.admitAttachment('A');
+  if (!admitted) throw new Error('fixture admission refused');
+  const validations: Promise<boolean>[] = [];
+  const proof: OperationAdmission = { current: admitted.current, validate: signal => { const work = admitted.validate(signal); validations.push(work); return work; } };
+  stall = true;
+  if (retirement === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const baseline = server.requests.length;
+  const sent = (method: string) => server.requests.slice(baseline).filter(row => row.request.method === method);
+  const operations = Array.from({ length: 8 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary', undefined, proof));
+  const refused = Promise.allSettled(operations);
+  const cancel = server.client.request({ method: 'turn/cancel', params: { target: server.client.target('B') } }, 'cancellation_accepted');
+  expect(stalled).toHaveLength(8);
+  await Promise.resolve();
+  expect(sent('turn/cancel')).toHaveLength(0);
+  return { server, authority, stalled, validations, refused, cancel, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
+}
+/** Exactly eight native RPC slots remain: a ninth read waits for one to settle. */
+async function expectRpcCapacity(server: Server) {
+  const before = server.requests.filter(row => row.request.method === 'session/summary').length;
+  server.held.add('session/summary');
+  const reads = Array.from({ length: 9 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await server.waitFor('session/summary', before + 8);
+  const held = server.requests.filter(row => row.request.method === 'session/summary').slice(before);
+  expect(held).toHaveLength(8);
+  server.held.delete('session/summary');
+  for (const row of held) server.reply(row.request);
+  await Promise.all(reads);
+  expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(before + 9);
+}
+
+it.each(['navigation', 'host', 'timeout'] as const)('%s retirement releases eight stalled final validations; late Host answers send nothing', async retirement => {
+  const f = await stalledFinalValidations(retirement);
+  try {
+    if (retirement === 'navigation') f.server.client.navigation.invalidate();
+    else if (retirement === 'host') { f.unstall(); f.replace('replacement-host'); await f.authority.observe(); }
+    else {
+      // The deadline starts at reservation, not at socket send; nothing else frees these slots.
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(f.sent('turn/cancel')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+    }
+    await expect(f.cancel).resolves.toMatchObject({ type: 'cancellation_accepted' });
+    for (const result of await f.refused) {
+      expect(result.status).toBe('rejected');
+      expect(String((result as PromiseRejectedResult).reason)).toContain(retirement === 'timeout' ? 'timed out' : 'Authority changed before dispatch');
+    }
+    expect(f.stalled.every(row => row.signal.aborted)).toBe(true);
+    // Late Host answers (still authorizing after a timeout) cannot send or release again.
+    f.unstall(); f.stalled.forEach(row => row.release());
+    await Promise.allSettled(f.validations);
+    expect(f.sent('session/summary')).toHaveLength(0);
+    expect(f.server.client.getSnapshot().uncertain).toEqual([]);
+    await expectRpcCapacity(f.server);
+    // Fresh admission is unaffected and still dispatches through final validation.
+    await f.server.client.attach('A');
+    expect(f.sent('session/attach')).toHaveLength(1);
+  } finally { vi.useRealTimers(); f.server.client.disconnect(); }
+});
+
+it('a cancelled final validation settles once; its late authorizing answer sends nothing', async () => {
+  const server = new Server(); await server.connect();
+  let live = true;
+  const late = deferred<boolean>();
+  const proof: OperationAdmission = { current: () => live, validate: () => late.promise };
+  const settled = vi.fn();
+  try {
+    const operation = server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary', undefined, proof);
+    void operation.then(settled, settled);
+    live = false; server.client.navigation.invalidate();
+    await expect(operation).rejects.toThrow('Authority changed before dispatch');
+    live = true; late.resolve(true); await late.promise; await Promise.resolve();
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(0);
+    await expectRpcCapacity(server);
   } finally { server.client.disconnect(); }
 });
