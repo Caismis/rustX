@@ -125,7 +125,7 @@ it.each(['host', 'callback', 'native', 'unavailable'] as const)('final in-flight
 });
 
 /** Eight operations whose final Host observation never answers until released. */
-async function stalledFinalValidations(retirement: 'navigation' | 'timeout' | 'host') {
+async function stalledFinalValidations(retirement: 'navigation' | 'callback' | 'cleanup' | 'timeout' | 'host') {
   const server = new Server(); await server.attached('B');
   let hostId = 'host', stall = false;
   const stalled: { signal: AbortSignal; release: () => void }[] = [];
@@ -142,7 +142,7 @@ async function stalledFinalValidations(retirement: 'navigation' | 'timeout' | 'h
     return Response.json({ authorityId: captured, endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } } satisfies WorkspaceCatalog);
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
-  server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit);
+  const owner = server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit);
   const admitted = await server.client.admitAttachment('A');
   if (!admitted) throw new Error('fixture admission refused');
   const validations: Promise<boolean>[] = [];
@@ -153,16 +153,18 @@ async function stalledFinalValidations(retirement: 'navigation' | 'timeout' | 'h
   const sent = (method: string) => server.requests.slice(baseline).filter(row => row.request.method === method);
   const operations = Array.from({ length: 8 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary', undefined, proof));
   const refused = Promise.allSettled(operations);
+  const settled = vi.fn();
+  for (const operation of operations) void operation.then(settled, settled);
   const live = () => stalled.filter(row => !row.signal.aborted).length;
   // Validation is bounded to two reservations; six waiting operations hold nothing.
-  expect(stalled).toHaveLength(2);
+  expect(stalled).toHaveLength(2); expect(live()).toBe(2);
   // Cancellation of already-running native work crosses the socket at once,
   // without any Host read settling or any validation deadline elapsing.
   const cancel = server.client.request({ method: 'turn/cancel', params: { target: server.client.target('B') } }, 'cancellation_accepted');
   expect(sent('turn/cancel')).toHaveLength(1);
   await expect(cancel).resolves.toMatchObject({ type: 'cancellation_accepted' });
   expect(sent('session/summary')).toHaveLength(0);
-  return { server, authority, stalled, live, validations, refused, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
+  return { server, authority, owner, stalled, live, validations, refused, settled, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
 }
 /** Exactly eight native RPC slots remain: a ninth read waits for one to settle. */
 async function expectRpcCapacity(server: Server) {
@@ -178,10 +180,14 @@ async function expectRpcCapacity(server: Server) {
   expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(before + 9);
 }
 
-it.each(['navigation', 'host', 'timeout'] as const)('%s retirement of stalled final validations never blocks cancellation; late Host answers send nothing', async retirement => {
+it.each(['navigation', 'callback', 'cleanup', 'host', 'timeout'] as const)('%s retirement of stalled final validations never blocks cancellation; late Host answers send nothing', async retirement => {
   const f = await stalledFinalValidations(retirement);
   try {
     if (retirement === 'navigation') f.server.client.navigation.invalidate();
+    // Owner replacement and disposal retire by themselves: no Host read answers
+    // and no validation deadline elapses before the reservations are released.
+    else if (retirement === 'callback') f.server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(f.authority, f.server.client, f.server.client.navigation).admit);
+    else if (retirement === 'cleanup') f.owner();
     else if (retirement === 'host') { f.unstall(); f.replace('replacement-host'); await f.authority.observe(); }
     else {
       // The deadline starts at reservation, not at socket send. Each expiry
@@ -201,16 +207,51 @@ it.each(['navigation', 'host', 'timeout'] as const)('%s retirement of stalled fi
     // Queued operations whose proof retired were refused without ever reading the Host.
     expect(f.stalled).toHaveLength(retirement === 'timeout' ? 8 : 2);
     expect(f.stalled.every(row => row.signal.aborted)).toBe(true);
-    // Late Host answers (still authorizing after a timeout) cannot send or release again.
-    f.unstall(); f.stalled.forEach(row => row.release());
-    await Promise.allSettled(f.validations);
     expect(f.sent('session/summary')).toHaveLength(0);
+    // Every reservation is free while the retired Host reads still have not answered
+    // (except Host replacement, whose reads were aborted through fetch).
+    f.unstall();
+    await expectRpcCapacity(f.server);
+    // Fresh admission by the current owner validates and dispatches at once;
+    // with no owner installed, fresh admission fails closed.
+    if (retirement === 'cleanup') await expect(f.server.client.attach('A')).rejects.toThrow('No Web attachment admission owner');
+    else await f.server.client.attach('A');
+    expect(f.sent('session/attach')).toHaveLength(retirement === 'cleanup' ? 0 : 1);
+    // Late Host answers (still authorizing after retirement) cannot send, settle or release again.
+    const summaries = f.sent('session/summary').length;
+    f.stalled.forEach(row => row.release());
+    await Promise.allSettled(f.validations);
+    expect(f.sent('session/summary')).toHaveLength(summaries);
+    expect(f.settled).toHaveBeenCalledTimes(8);
     expect(f.server.client.getSnapshot().uncertain).toEqual([]);
     await expectRpcCapacity(f.server);
-    // Fresh admission is unaffected and still dispatches through final validation.
-    await f.server.client.attach('A');
-    expect(f.sent('session/attach')).toHaveLength(1);
   } finally { vi.useRealTimers(); f.server.client.disconnect(); }
+});
+
+it('a stale owner cleanup neither retires nor disturbs the newer owner or its in-flight validation', async () => {
+  const server = new Server(); await server.connect();
+  let lists = 0;
+  const entered = deferred<AbortSignal>(), release = deferred<void>();
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+    if (!new URL(url).pathname.endsWith('/list')) return Response.json([{ authorized: true }]);
+    if (++lists === 2) { entered.resolve(init.signal!); await release.promise; }
+    return Response.json({ authorityId: 'host', endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } } satisfies WorkspaceCatalog);
+  }));
+  const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
+  const owner = () => new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit;
+  const releaseA = server.client.setAttachmentAdmission(owner());
+  server.client.setAttachmentAdmission(owner());
+  try {
+    const attach = server.client.attach('A');
+    const signal = await entered.promise; // B's final validation holds its reservation.
+    releaseA();
+    // A pump re-checks every validating proof; B's must still be current.
+    await server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary');
+    expect(signal.aborted).toBe(false);
+    release.resolve(); await attach;
+    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+    expect(await server.client.admitAttachment('B')).not.toBe(false);
+  } finally { server.client.disconnect(); }
 });
 
 it('stalled validations reserve their RPC slots, so ordinary native reads never burst past capacity', async () => {

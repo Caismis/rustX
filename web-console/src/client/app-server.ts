@@ -251,8 +251,15 @@ export class AppServerClient {
   // Fail closed when there is no admission owner (including after its disposal).
   private attachmentAdmission?: (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
   setAttachmentAdmission(admit: (id: string, current: () => boolean) => Promise<false | OperationAdmission>) {
+    this.replaceAttachmentAdmission(admit);
+    // A stale cleanup never disturbs a newer owner or its proofs.
+    return () => { if (this.attachmentAdmission === admit) this.replaceAttachmentAdmission(undefined); };
+  }
+  private replaceAttachmentAdmission(admit?: (id: string, current: () => boolean) => Promise<false | OperationAdmission>) {
+    if (this.attachmentAdmission === admit) return;
     this.attachmentAdmission = admit;
-    return () => { if (this.attachmentAdmission === admit) this.attachmentAdmission = undefined; };
+    // Owner change retires its proofs; release their reservations outside the caller's stack, as navigation does.
+    queueMicrotask(() => this.pump());
   }
   async admitAttachment(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
     const generation = this.state.generation;
