@@ -105,14 +105,16 @@ export interface Socket {
 }
 export type SocketFactory = (url: string, protocols: string[]) => Socket;
 /** An operation-owned proof, re-observed after transport backpressure and checked
- * synchronously again before send. The transport never interprets Host policy. */
+ * synchronously again before send. The transport never interprets Host policy.
+ * `validate` must stop its reads when `signal` aborts; the transport never waits for it. */
 export interface OperationAdmission {
   current: () => boolean;
-  validate: () => Promise<boolean>;
+  validate: (signal: AbortSignal) => Promise<boolean>;
 }
 interface Pending {
   dispatchCurrent?: (() => boolean) | OperationAdmission;
-  validating?: boolean;
+  /** Final validation holding an RPC slot; `timer` is its deadline until send. */
+  validation?: AbortController;
   acknowledged?: (result: MethodResult) => void;
   request: Request;
   context: WireContext;
@@ -179,6 +181,7 @@ function requestLane(method: Request1['method']): 'wait' | 'admission' | 'contro
 }
 const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2 } as const;
 
+const dispatchCurrent = ({ dispatchCurrent: proof }: Pending) => !proof || (typeof proof === 'function' ? proof() : proof.current());
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
   a.session_id === b.session_id && a.conversation_id === b.conversation_id &&
@@ -225,7 +228,10 @@ export class AppServerClient {
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
-  constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000) {}
+  constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000) {
+    // Navigation retires admission proofs; release their reservations outside the caller's stack.
+    this.navigation.subscribe(() => queueMicrotask(() => this.pump()));
+  }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
   private publish(patch: Partial<ClientView>) {
@@ -394,7 +400,7 @@ export class AppServerClient {
     this.initialized = false;
     const uncertain = [...this.state.uncertain];
     for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timer);
+      clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
       if (pending.sent && pending.mutation) {
         const params = pending.request.params;
         uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId,
@@ -456,33 +462,41 @@ export class AppServerClient {
     return result as Extract<MethodResult, { type: T }>;
   }
   private pump() {
-    let occupied = [...this.pending.values()].filter(p => (p.sent || p.validating) && requestLane(p.request.method) === 'rpc').length;
+    // An obsolete proof releases its reservation now, never after its Host read.
+    for (const pending of this.pending.values()) if (pending.validation && !dispatchCurrent(pending)) this.refuse(pending);
+    let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
     for (const pending of this.pending.values()) {
       if (!this.socket) break;
       const lane = requestLane(pending.request.method);
-      if (pending.sent || pending.validating || (lane === 'rpc' && occupied >= 8)) continue;
-      const proof = pending.dispatchCurrent;
-      const current = () => !proof || (typeof proof === 'function' ? proof() : proof.current());
-      const refuse = (cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) => {
-        this.pending.delete(String(pending.request.id));
-        pending.reject(cause instanceof Error ? cause : new Error(String(cause)));
-        if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
-      };
-      if (!current()) { refuse(); continue; }
+      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= 8)) continue;
+      if (!dispatchCurrent(pending)) { this.refuse(pending); continue; }
       if (lane === 'rpc') occupied++;
+      const proof = pending.dispatchCurrent;
       if (proof && typeof proof !== 'function') {
         // Reserve the same bounded RPC slot while the operation owner revalidates.
-        // No request is sent, timed out, or marked uncertain during this read.
-        pending.validating = true;
-        void proof.validate().then(allowed => {
-          if (this.pending.get(String(pending.request.id)) !== pending) return;
-          if (!allowed || !current()) refuse();
-          else this.sendPending(pending);
-        }).catch(cause => {
-          if (this.pending.get(String(pending.request.id)) === pending) refuse(cause);
-        }).finally(() => { pending.validating = false; this.pump(); });
+        // No request is sent or marked uncertain during this read. The deadline
+        // starts here, not at send; retirement aborts the read without awaiting it.
+        const validation = new AbortController();
+        pending.validation = validation;
+        pending.timer = setTimeout(() => {
+          this.refuse(pending, new Error('Operation admission validation timed out. No operation was sent.')); this.pump();
+        }, this.timeoutMs);
+        // Only the settlement that still owns the reservation may act on it.
+        void proof.validate(validation.signal).then(allowed => {
+          if (pending.validation !== validation) return;
+          if (!allowed || !dispatchCurrent(pending)) this.refuse(pending);
+          else { pending.validation = undefined; clearTimeout(pending.timer); this.sendPending(pending); }
+        }, cause => {
+          if (pending.validation === validation) this.refuse(pending, cause);
+        }).finally(() => this.pump());
       } else this.sendPending(pending);
     }
+  }
+  private refuse(pending: Pending, cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) {
+    clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
+    this.pending.delete(String(pending.request.id));
+    pending.reject(cause instanceof Error ? cause : new Error(String(cause)));
+    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
   }
   private sendPending(pending: Pending) {
     const raw = JSON.stringify(pending.request);
