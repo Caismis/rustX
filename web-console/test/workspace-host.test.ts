@@ -1,3 +1,4 @@
+import { WorkspaceAuthority } from '../src/workspaces/authority';
 // @vitest-environment node
 import { afterEach, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
@@ -66,21 +67,21 @@ it('unavailable roots fail fresh admission, unregister preserves it, and symlink
   const { WorkspaceSessionNavigation } = await import('../src/workspaces/navigation');
   const { NavigationEpoch } = await import('../src/client/navigation');
   const client = { getSnapshot: () => ({ generation: 1, endpoint }), request: async () => ({ settings: { cwd: a } }) } as unknown as import('../src/client/app-server').AppServerClient;
-  const admission = new WorkspaceSessionNavigation(host, client, new NavigationEpoch());
-  expect(await admission.admit('native-session', () => true)).toBe(true);
+  const admission = new WorkspaceSessionNavigation(new WorkspaceAuthority(host), client, new NavigationEpoch());
+  expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate()).toBe(true);
   rmSync(a, { recursive: true });
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'unavailable' }]);
   await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
   mkdirSync(a); await host.removeWorkspace(workspace.id);
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: true }]);
-  expect(await admission.admit('native-session', () => true)).toBe(true);
+  expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate()).toBe(true);
   rmSync(a, { recursive: true }); symlinkSync(b, a);
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
   await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
   rmSync(a); mkdirSync(a);
   const replacement = new LocalWorkspaceHost({ ...config, roots: config.roots.filter(root => root.cwd !== a) });
   expect(await replacement.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
-  const revoked = new WorkspaceSessionNavigation(replacement, client, new NavigationEpoch());
+  const revoked = new WorkspaceSessionNavigation(new WorkspaceAuthority(replacement), client, new NavigationEpoch());
   await expect(revoked.admit('native-session', () => true)).rejects.toThrow('not authorized');
   expect((await replacement.listWorkspaces()).authorityId).not.toBe((await host.listWorkspaces()).authorityId);
   await expect(replacement.classifyLocations([b], endpoint, (await host.listWorkspaces()).authorityId)).rejects.toThrow('replaced');

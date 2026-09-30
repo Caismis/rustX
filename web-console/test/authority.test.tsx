@@ -12,7 +12,7 @@ const remote = 'wss://remote.example/';
 function pair() {
   const a = new Server(), b = new Server();
   const client = new AppServerClient((url, protocols) => (url === endpoint ? a : b).socketFactory(url, protocols));
-  client.setAttachmentAdmission(async () => true);
+  client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true }));
   const owner = new ConnectionController(client, async () => new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } }));
   return { a, b, client, owner };
 }

@@ -85,7 +85,7 @@ export class Server {
     queueMicrotask(() => socket.open()); return socket;
   };
   client = new AppServerClient(this.socketFactory);
-  constructor() { this.client.setAttachmentAdmission(async () => true); } // Protocol-only fixture; App installs real Host admission.
+  constructor() { this.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true })); } // Protocol-only fixture; App installs real Host admission.
   get socket() { return this.sockets[this.sockets.length - 1]; }
   target(id: string, socket = this.socket): AttachmentTarget {
     return this.targets.get(socket)!.get(id)!;

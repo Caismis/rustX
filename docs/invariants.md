@@ -7462,6 +7462,19 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
 
 ## Web authority retirement and Workspace display demand
 
+- `WorkspaceAuthority` owns Product Host catalog identity and invalidation epoch.
+  Fresh Workspace admission observes that identity, reads native Session cwd and
+  classifies the exact root with the captured Host ID. At the dispatch boundary,
+  after RPC backpressure, it re-observes the Host independently of display. Send
+  requires that Host epoch, native generation, navigation and injected admission
+  callback all remain current. A late old-Host success or failed final observation
+  cannot dispatch attach/fork. The callback and Product Host identities are distinct.
+- `WorkspaceAssociations` owns display projection only and consumes authority
+  retirement. It never invalidates operation navigation. Selection changes bounded
+  demand without catalog invalidation; only newly unsatisfied cwd identities need
+  classification. Cached display evidence is neither authorization nor a prerequisite
+  for operation correctness.
+
 - Native process identity does not establish durable-store identity. Replacement
   fences active Session/attachment and continuation authority before reading reused
   IDs. Old uncertain deletion and committed cleanup/durability obligations remain
