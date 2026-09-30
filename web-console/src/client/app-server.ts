@@ -180,6 +180,11 @@ function requestLane(method: Request1['method']): 'wait' | 'admission' | 'contro
   }
 }
 const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2 } as const;
+const RPC_CAPACITY = 8;
+/** Operation-admission validations reserve ordinary RPC slots so the final check
+ * stays adjacent to send, but at most two at once: a stalled Product Host read
+ * can never take the remaining slots needed to cancel or control native work. */
+const VALIDATION_CAPACITY = 2;
 
 const dispatchCurrent = ({ dispatchCurrent: proof }: Pending) => !proof || (typeof proof === 'function' ? proof() : proof.current());
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
@@ -465,14 +470,18 @@ export class AppServerClient {
     // An obsolete proof releases its reservation now, never after its Host read.
     for (const pending of this.pending.values()) if (pending.validation && !dispatchCurrent(pending)) this.refuse(pending);
     let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
+    let validating = [...this.pending.values()].filter(p => p.validation).length;
     for (const pending of this.pending.values()) {
       if (!this.socket) break;
       const lane = requestLane(pending.request.method);
-      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= 8)) continue;
+      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY)) continue;
       if (!dispatchCurrent(pending)) { this.refuse(pending); continue; }
+      const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
+      // A waiting validation holds nothing, so later requests are never blocked behind it.
+      if (proof && validating >= VALIDATION_CAPACITY) continue;
       if (lane === 'rpc') occupied++;
-      const proof = pending.dispatchCurrent;
-      if (proof && typeof proof !== 'function') {
+      if (proof) {
+        validating++;
         // Reserve the same bounded RPC slot while the operation owner revalidates.
         // No request is sent or marked uncertain during this read. The deadline
         // starts here, not at send; retirement aborts the read without awaiting it.

@@ -21,8 +21,9 @@ export type WorkspaceConfigurationResult =
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }
 export interface WorkspaceCatalog {
-  /** Product Host process identity, independent of endpoint and registration metadata. */
+  /** Product Host process identity, independent of registration metadata. */
   authorityId: string;
+  /** With authorityId, the authority scope; compared only by normalized identity. */
   endpoint: string;
   workspaces: ProductHostWorkspace[];
   picker: { kind: 'configured'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };

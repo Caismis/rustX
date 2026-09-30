@@ -179,7 +179,13 @@ mandatory `initialize.authority_id` exposes it, unchanged across connections. Th
 client invokes its existing authority retirement path before resynchronizing if this
 identity changes, including at the same URL. Endpoint identity is the existing
 `URL.href` normalization; a URL alone never establishes process identity. The local
-Product Host generates its own per-instance `WorkspaceCatalog.authorityId`; display
+Product Host generates its own per-instance `WorkspaceCatalog.authorityId`. Product
+Host authority scope is that process identity bound to the catalog's normalized
+endpoint (`sameEndpoint`): a change of either advances the authority epoch, so the
+same Host process reporting another endpoint retires every observation and proof
+taken under the old scope, while equivalent spellings (`ws://LOCALHOST:80`,
+`ws://localhost/`) confirm it. Classification refuses an endpoint outside the
+observation's scope. Display
 classification submits that identity and a replacement Host refuses it with the
 HTTP-preserved `authority_replaced` kind. That definitive observation immediately
 retires display evidence, even if the next explicit catalog read fails. The refusal
@@ -191,19 +197,46 @@ and evidence and establish the replacement catalog baseline. It never invalidate
 new authority and display owners. None of these identifiers alone grant access.
 
 `WorkspaceSessionNavigation` independently observes the Host authority, captures its
-epoch, reads current native `session/settings`, and classifies the exact returned cwd
-with that authority ID. An authorized result returns an operation proof, not a cached
-permission bit. After native RPC backpressure clears, `AppServerClient` reserves a
-bounded dispatch slot and asks that proof to re-observe the Product Host. A delayed
-success from a replaced process cannot pass this final observation. The client then
-checks the captured Host epoch, native generation, navigation continuation and injected
-admission callback identity synchronously before socket send. Replacement or an
-unavailable final observation sends no attach RPC. Callback identity and Host authority
-are separate fences. Fork admission uses the same dispatch proof. There is no display
-owner prerequisite, persistent permission, automatic registration, or second admission
-mode. The final Host observation is the admission linearization read; the synchronous
-send check fences intervening locally observed replacement. Host policy changes after
-an operation is dispatched are not retroactive cancellation of that operation.
+epoch and the native endpoint, reads current native `session/settings`, and classifies
+the exact returned cwd with that authority ID. An authorized result returns an
+operation proof, not a cached permission bit; the initial classification only decides
+whether to queue the operation. When the operation reaches the front of native RPC
+backpressure, `AppServerClient` reserves a bounded dispatch slot and calls the proof's
+`validate`, which observes the current Product Host again and **classifies the captured
+exact cwd again** under that fresh observation and the captured normalized endpoint.
+Only a fresh `authorized: true` passes; `unavailable` (a configured root deleted) and
+`denied` (a root path now resolving to another physical directory) refuse with no RPC
+sent, even when the Host process and its `authorityId` never changed. The client then
+checks the captured Host epoch, native generation and endpoint, navigation
+continuation and injected admission callback identity synchronously before socket
+send. Callback identity and Host authority are separate fences. Fork admission uses the
+same dispatch proof. There is no display owner prerequisite, persistent permission,
+automatic registration, or second admission mode.
+
+**Linearization point.** The operation admission linearization read is the fresh
+Product Host classification of the exact native cwd under the current Product Host
+authority and normalized endpoint scope, performed while holding the bounded native
+dispatch reservation; the synchronous send check fences any locally observed
+replacement between that read and `socket.send`. Host policy changes after an
+operation is dispatched are not retroactive cancellation of that operation.
+
+**Captured cwd.** Final validation reclassifies the cwd captured from the initial
+`session/settings` read instead of rereading native settings. Native
+`SessionPersistentState.cwd` is fixed at `session/create`/`session/fork` on every App
+Server path: the protocol has no settings-replacement method, and the only production
+settings writers (model publication and configuration adoption) copy the lineage
+settings and replace `model` alone. A future wire method that can change a Session's
+cwd must extend this admission proof.
+
+**Capacity.** A validation holds one of the eight ordinary RPC slots, so the final
+classification stays adjacent to send and validation never returns to "validate, then
+queue". At most two validations run at once; waiting validations hold nothing and never
+block requests behind them. Product Host validation therefore remains bounded and
+cannot consume the capacity required for unrelated runtime control or cancellation
+(`turn/cancel` has six ordinary slots Host reads can never take). Each validation has
+the RPC deadline from reservation; retirement (Host replacement, navigation,
+disconnect, callback replacement or timeout) aborts its reads and releases its
+reservation exactly once, and a late Host answer can neither send nor release again.
 
 Native `session/list` summaries own the visible page's IDs/cwds; selected off-page
 summaries/settings come from the existing native view owner. Same-authority disconnect

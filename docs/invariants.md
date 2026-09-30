@@ -7466,13 +7466,24 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
 
 ## Web authority retirement and Workspace display demand
 
-- `WorkspaceAuthority` owns Product Host catalog identity and invalidation epoch.
-  Fresh Workspace admission observes that identity, reads native Session cwd and
-  classifies the exact root with the captured Host ID. At the dispatch boundary,
-  after RPC backpressure, it re-observes the Host independently of display. Send
-  requires that Host epoch, native generation, navigation and injected admission
-  callback all remain current. A late old-Host success or failed final observation
-  cannot dispatch attach/fork. The callback and Product Host identities are distinct.
+- `WorkspaceAuthority` owns Product Host authority scope — the Host process
+  `authorityId` bound to the catalog's normalized endpoint — and its invalidation
+  epoch; a change of either retires every observation and proof. Fresh Workspace
+  admission observes that scope, reads native Session cwd and classifies the exact
+  root with the captured Host ID. The admission linearization read is a fresh Host
+  classification of that exact captured cwd under the current authority and
+  normalized endpoint, made while holding the bounded native dispatch reservation:
+  a root deleted (`unavailable`) or replaced by another physical directory
+  (`denied`) under an unchanged Host process sends nothing. Send then requires that
+  Host epoch, native generation and endpoint, navigation and injected admission
+  callback all remain current. A late old-Host success or failed final validation
+  cannot dispatch attach/fork. The callback and Product Host identities are
+  distinct. Native Session cwd is fixed at creation on every App Server path, so the
+  captured cwd is the operation's cwd.
+- Product Host validation is bounded and cannot starve native control: at most two
+  validations hold ordinary RPC slots at once, waiting ones hold nothing, and each
+  retirement releases its reservation exactly once. Cancellation never waits for a
+  Host read or its deadline.
 - `WorkspaceAssociations` owns display projection only and consumes authority
   retirement. It never invalidates operation navigation. Selection changes bounded
   demand without catalog invalidation; only newly unsatisfied cwd identities need

@@ -124,7 +124,7 @@ it.each(['host', 'callback', 'native', 'unavailable'] as const)('final in-flight
   } finally { server.client.disconnect(); }
 });
 
-/** Eight final Host observations hold every native RPC slot while a control request waits. */
+/** Eight operations whose final Host observation never answers until released. */
 async function stalledFinalValidations(retirement: 'navigation' | 'timeout' | 'host') {
   const server = new Server(); await server.attached('B');
   let hostId = 'host', stall = false;
@@ -153,11 +153,16 @@ async function stalledFinalValidations(retirement: 'navigation' | 'timeout' | 'h
   const sent = (method: string) => server.requests.slice(baseline).filter(row => row.request.method === method);
   const operations = Array.from({ length: 8 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary', undefined, proof));
   const refused = Promise.allSettled(operations);
+  const live = () => stalled.filter(row => !row.signal.aborted).length;
+  // Validation is bounded to two reservations; six waiting operations hold nothing.
+  expect(stalled).toHaveLength(2);
+  // Cancellation of already-running native work crosses the socket at once,
+  // without any Host read settling or any validation deadline elapsing.
   const cancel = server.client.request({ method: 'turn/cancel', params: { target: server.client.target('B') } }, 'cancellation_accepted');
-  expect(stalled).toHaveLength(8);
-  await Promise.resolve();
-  expect(sent('turn/cancel')).toHaveLength(0);
-  return { server, authority, stalled, validations, refused, cancel, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
+  expect(sent('turn/cancel')).toHaveLength(1);
+  await expect(cancel).resolves.toMatchObject({ type: 'cancellation_accepted' });
+  expect(sent('session/summary')).toHaveLength(0);
+  return { server, authority, stalled, live, validations, refused, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
 }
 /** Exactly eight native RPC slots remain: a ninth read waits for one to settle. */
 async function expectRpcCapacity(server: Server) {
@@ -173,23 +178,28 @@ async function expectRpcCapacity(server: Server) {
   expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(before + 9);
 }
 
-it.each(['navigation', 'host', 'timeout'] as const)('%s retirement releases eight stalled final validations; late Host answers send nothing', async retirement => {
+it.each(['navigation', 'host', 'timeout'] as const)('%s retirement of stalled final validations never blocks cancellation; late Host answers send nothing', async retirement => {
   const f = await stalledFinalValidations(retirement);
   try {
     if (retirement === 'navigation') f.server.client.navigation.invalidate();
     else if (retirement === 'host') { f.unstall(); f.replace('replacement-host'); await f.authority.observe(); }
     else {
-      // The deadline starts at reservation, not at socket send; nothing else frees these slots.
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(f.sent('turn/cancel')).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(1);
+      // The deadline starts at reservation, not at socket send. Each expiry
+      // releases its reservation exactly once, admitting exactly one successor.
+      for (let round = 1; round <= 4; round++) {
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(f.stalled).toHaveLength(2 * round); expect(f.live()).toBe(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(f.stalled).toHaveLength(Math.min(8, 2 * round + 2)); expect(f.live()).toBe(round < 4 ? 2 : 0);
+      }
       vi.useRealTimers();
     }
-    await expect(f.cancel).resolves.toMatchObject({ type: 'cancellation_accepted' });
     for (const result of await f.refused) {
       expect(result.status).toBe('rejected');
       expect(String((result as PromiseRejectedResult).reason)).toContain(retirement === 'timeout' ? 'timed out' : 'Authority changed before dispatch');
     }
+    // Queued operations whose proof retired were refused without ever reading the Host.
+    expect(f.stalled).toHaveLength(retirement === 'timeout' ? 8 : 2);
     expect(f.stalled.every(row => row.signal.aborted)).toBe(true);
     // Late Host answers (still authorizing after a timeout) cannot send or release again.
     f.unstall(); f.stalled.forEach(row => row.release());
@@ -201,6 +211,28 @@ it.each(['navigation', 'host', 'timeout'] as const)('%s retirement releases eigh
     await f.server.client.attach('A');
     expect(f.sent('session/attach')).toHaveLength(1);
   } finally { vi.useRealTimers(); f.server.client.disconnect(); }
+});
+
+it('stalled validations reserve their RPC slots, so ordinary native reads never burst past capacity', async () => {
+  const f = await stalledFinalValidations('navigation');
+  try {
+    f.server.held.add('session/summary');
+    const before = f.server.requests.filter(row => row.request.method === 'session/summary').length;
+    const reads = Array.from({ length: 7 }, () => f.server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+    // Two validation reservations + six native reads = the eight-slot bound.
+    expect(f.sent('session/summary')).toHaveLength(6);
+    f.server.held.delete('session/summary');
+    f.server.reply(f.sent('session/summary')[0].request);
+    await f.server.waitFor('session/summary', before + 7);
+    expect(f.sent('session/summary')).toHaveLength(7);
+    expect(f.live()).toBe(2);
+    f.server.client.navigation.invalidate();
+    for (const row of f.sent('session/summary').slice(1)) f.server.reply(row.request);
+    await Promise.all(reads);
+    for (const result of await f.refused) expect(result.status).toBe('rejected');
+    expect(f.server.client.getSnapshot().uncertain).toEqual([]);
+    await expectRpcCapacity(f.server);
+  } finally { f.server.client.disconnect(); }
 });
 
 it('a cancelled final validation settles once; its late authorizing answer sends nothing', async () => {
@@ -218,5 +250,38 @@ it('a cancelled final validation settles once; its late authorizing answer sends
     expect(settled).toHaveBeenCalledTimes(1);
     expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(0);
     await expectRpcCapacity(server);
+  } finally { server.client.disconnect(); }
+});
+
+it.each([['another endpoint', 'ws://127.0.0.1:9090/', false], ['a normalized-equal endpoint', 'ws://127.0.0.1:8080', true]] as const)('the same Host process reporting %s at final validation', async (_, reported, dispatches) => {
+  const server = new Server(); await server.connect();
+  let catalogEndpoint: string = endpoint, lists = 0;
+  const entered = deferred<void>(), release = deferred<void>();
+  const classified: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+    if (new URL(url).pathname.endsWith('/list')) {
+      if (++lists === 2) { entered.resolve(); await release.promise; }
+      return Response.json({ authorityId: 'host', endpoint: catalogEndpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } } satisfies WorkspaceCatalog);
+    }
+    classified.push(JSON.parse(init.body as string).endpoint);
+    return Response.json([{ authorized: true }]);
+  }));
+  const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
+  server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit);
+  try {
+    const attach = server.client.attach('A');
+    await entered.promise;
+    const proof = authority.capture()!;
+    catalogEndpoint = reported;
+    release.resolve();
+    if (dispatches) await attach;
+    else await expect(attach).rejects.toThrow('Authority changed before dispatch');
+    // Same authorityId either way; only the normalized endpoint decides the scope.
+    expect(proof.current()).toBe(dispatches);
+    expect(authority.getCatalog()).toMatchObject({ authorityId: 'host', endpoint: reported });
+    // A foreign scope is never asked to classify native endpoint A.
+    expect(classified).toEqual(dispatches ? [endpoint, endpoint] : [endpoint]);
+    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(dispatches ? 1 : 0);
+    expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally { server.client.disconnect(); }
 });
