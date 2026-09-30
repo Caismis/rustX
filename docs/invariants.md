@@ -7463,3 +7463,20 @@ extended OpenAI-compatible/vLLM multimodal Tool message contract; endpoint
 incompatibility is a provider error, never a capability downgrade or synthetic
 User fallback. All adapters consume the same newest-16 request projection and
 Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md).
+
+## Web authority retirement and Workspace display demand
+
+- Native process identity does not establish durable-store identity. Replacement
+  fences active Session/attachment and continuation authority before reading reused
+  IDs. Old uncertain deletion and committed cleanup/durability obligations remain
+  attributable in bounded detached browser evidence, never replacement admission.
+- Browser acknowledgement removes evidence only; it is neither native settlement
+  nor a replay. Same-authority reconnect retains fresh deletion verification.
+- Workspace registration invalidation does not complete Session classification.
+  Explicit unregister cannot be undone by a stale success or failure; only a complete
+  current Host classification establishes the new classification observation.
+- The single bounded Workspace display owner projects current page, selected
+  off-page Session and catalog/connection status separately from inactive cached
+  evidence. Retained evidence grants no operation authority. See
+  [Workspace ownership](../web-console/WORKSPACES.md) and
+  [connection ownership](../web-console/CONNECTION.md) for bounds and precedence.

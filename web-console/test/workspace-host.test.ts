@@ -94,3 +94,15 @@ it('the HTTP carrier preserves definitive Host replacement observations', async 
     expect((await response.json()).kind).toBe('authority_replaced');
   } finally { await service.stop(); }
 });
+
+it('unregister and re-adopt changes registration identity under the same Host authority', async () => {
+  const { host, a, endpoint } = fixture();
+  const before = await host.listWorkspaces(), old = before.workspaces[0];
+  await host.removeWorkspace(old.id);
+  expect(await host.classifyLocations([a], endpoint, before.authorityId)).toEqual([{ authorized: true }]);
+  await host.adoptWorkspace('a');
+  const after = await host.listWorkspaces(), replacement = after.workspaces.find(row => row.location === 'a')!;
+  expect(after.authorityId).toBe(before.authorityId);
+  expect(replacement.id).not.toBe(old.id);
+  expect(await host.classifyLocations([a], endpoint, before.authorityId)).toEqual([{ authorized: true, workspaceId: replacement.id }]);
+});

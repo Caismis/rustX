@@ -64,9 +64,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
     const entry = associationState.entries.get(session.id);
     return { session, group: entry?.cwd === session.cwd ? entry.confirmed?.workspaceId : undefined };
   });
-  const status = associationState.status === 'ready'
-    ? [...associationState.entries.values()].find(entry => ['unavailable', 'refreshing', 'pending'].includes(entry.status))?.status
-    : associationState.status;
+  const status = associationState.status;
 
   const toNode = (session: typeof state.sessions[number]): SessionNode => {
     return { id: session.id, title: sessionDisplayTitle(tx, session), viewOpen: openViews.includes(session.id),

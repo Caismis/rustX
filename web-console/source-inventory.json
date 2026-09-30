@@ -2435,7 +2435,7 @@
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged.",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
         "../bindings/projection",
@@ -2487,7 +2487,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "847496b7aed32d5335dd6551f49f553c29aa16f6998ed867a930f2bf6c0b0278"
+      "local_sha256": "ee6b0a7c18fa6c83dfabaed96b562515b80d1057476c75f4e322fbeedeaec9ea"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -3256,7 +3256,7 @@
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "c2b370dae452142ff1c3e00777ffd90562447998006e50c7976c1137da3f512f",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #433 review repair: English and Chinese browser-evidence acknowledgement and historical deletion outcome copy; no additional upstream reuse.",
       "destination": "web-console/src/locale/dictionaries/settings.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3280,7 +3280,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "580e5d95e027a1503cea5c38ff05c344d4191d9d6128d8d2e9977b2a03978692"
+      "local_sha256": "dccedf9366fbd9be67d9651a735b6b3f72fe6a44fd23c814cfe96fec3bc8a823"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
