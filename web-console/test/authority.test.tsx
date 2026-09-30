@@ -1,5 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { localeController } from '../src/locale/controller';
+import { translator } from '../src/locale/translation';
 import { AppServerClient } from '../src/client/app-server';
 import { ConnectionController } from '../src/connection/controller';
 import { App } from '../src/app/App';
@@ -14,7 +16,7 @@ function pair() {
   const owner = new ConnectionController(client, async () => new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } }));
   return { a, b, client, owner };
 }
-afterEach(() => { cleanup(); localStorage.clear(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); localStorage.clear(); localeController.setLocale('en'); vi.useRealTimers(); });
 it('two authorities containing Session A never inherit wanted attachment intent in either direction; same authority restores it', async () => {
   const { a, b, client, owner } = pair();
   await owner.start(); await client.attach('A');
@@ -62,27 +64,42 @@ it('old mutation uncertainty stays inspectable and inert despite the same Sessio
   expect(screen.getByRole('heading', { name: endpoint })).toBeTruthy();
   await act(async () => owner.disconnect());
 });
-it.each(['committed_cleanup_pending', 'committed_durability_uncertain'] as const)('Remote %s refuses Local before disconnect and remains recoverable', async status => {
-  const { a, b, client, owner } = pair(); await owner.select('remote'); await owner.connectRemote(remote, TOKEN); await client.attach('A');
+it.each(['committed_cleanup_pending', 'committed_durability_uncertain'] as const)('Remote %s is retained outside Local active views', async status => {
+  const { a, b, client, owner } = pair(); await owner.select('remote'); await owner.connectRemote(remote, TOKEN);
   b.handlers.set('session/delete', () => ({ type: 'deletion', result: { status, session_id: 'A' } }));
-  await client.deleteSession('A', 'revision');
-  const before = client.getSnapshot(), close = vi.spyOn(b.socket, 'close');
-  await owner.select('local');
-  expect(owner.getSnapshot().error).toContain('Resolve pending Session deletion');
-  expect(owner.getSnapshot().mode).toBe('remote');
-  expect(close).not.toHaveBeenCalled(); expect(client.getSnapshot()).toBe(before);
-  expect(client.getSnapshot().views.A.deletionRecovery).toBe(status);
-  expect(a.sockets).toHaveLength(0); expect(client.getSnapshot().endpoint).toBe(remote);
-  await client.listSessions();
-  b.handlers.set('session/recoverDeletion', () => ({ type: 'deletion', result: { status: 'deleted', session_id: 'A' } }));
-  await client.recoverSessionDeletion('A');
-  expect(b.requests.some(row => row.request.method === 'session/recoverDeletion')).toBe(true);
-  await owner.select('local');
-  expect(close).toHaveBeenCalledTimes(1); expect(a.sockets).toHaveLength(1);
-  expect(owner.getSnapshot().mode).toBe('local');
-  // Explicit return uses the retained endpoint/token, without entering either again.
-  await owner.select('remote');
-  expect(b.sockets).toHaveLength(2); expect(owner.getSnapshot().mode).toBe('remote');
+  await client.deleteSession('A', 'revision'); await owner.select('local');
+  expect(client.getSnapshot().connection).toBe('connected');
+  expect(client.getSnapshot().views).toEqual({});
+  expect(client.getSnapshot().detached?.[0].sessions).toEqual([expect.objectContaining({ id: 'A', deletion: status })]);
+  expect(a.requests.map(row => row.request.method)).toEqual(['initialize', 'session/list']);
+  await owner.disconnect();
+});
+it.each(['uncertain', 'committed_cleanup_pending', 'committed_durability_uncertain'] as const)('same endpoint replacement retains %s deletion without replay', async status => {
+  const { a, client, owner } = pair(); await owner.start(); await client.attach('A');
+  const oldSocket = a.socket;
+  a.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'committed_cleanup_pending', session_id: 'A' } }));
+  if (status === 'uncertain') a.held.add('session/delete');
+  else a.handlers.set('session/delete', () => ({ type: 'deletion', result: { status, session_id: 'A' } }));
+  const deleting = client.deleteSession('A', 'old-revision').catch(error => error);
+  const request = await a.waitFor('session/delete', 1);
+  if (status !== 'uncertain') await deleting;
+  await owner.disconnect(); await deleting;
+  a.authorityId = 'replacement-native';
+  await owner.reconnect();
+  expect(client.getSnapshot().connection).toBe('connected');
+  expect(client.getSnapshot().authorityId).toBe('replacement-native');
+  expect(client.getSnapshot().sessions.some(row => row.id === 'A')).toBe(true);
+  expect(client.getSnapshot().views).toEqual({});
+  const evidence = client.getSnapshot().detached;
+  expect(evidence?.[0]).toMatchObject({ authority: endpoint, authorityId: 'fixture-app-server-authority', sessions: [{ id: 'A', deletion: status }] });
+  expect(a.socket.requests.map(row => row.method)).toEqual(['initialize', 'session/list']);
+  oldSocket.success(request, { type: 'deletion', result: { status: 'deleted', session_id: 'A' } });
+  oldSocket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'late failure' } });
+  expect(client.getSnapshot().detached).toBe(evidence);
+  expect(client.getSnapshot().views).toEqual({});
+  expect(client.getSnapshot().sessions.some(row => row.id === 'A')).toBe(true);
+  expect(a.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
+  expect(a.requests.filter(row => ['session/deletePreview', 'session/recoverDeletion'].includes(row.request.method))).toHaveLength(0);
   await owner.disconnect();
 });
 it('authority replacement clears open/focused browser Session A before B can reuse its ID', async () => {
@@ -214,4 +231,92 @@ it('failed Local transport after ownership commit has no Remote fallback but per
   await owner.select('remote');
   expect(b.sockets).toHaveLength(2); expect(client.getSnapshot().connection).toBe('connected');
   await owner.disconnect();
+});
+
+it.each(['en', 'zh'] as const)('replacement deletion evidence is reachable and acknowledged without native settlement in %s', async locale => {
+  const { a, client, owner } = pair(); await owner.start();
+  a.held.add('session/delete');
+  const pending = client.deleteSession('A', 'old-revision').catch(error => error);
+  await a.waitFor('session/delete', 1); await owner.disconnect(); await pending;
+  a.authorityId = 'replacement'; await owner.reconnect();
+  a.held.delete('session/delete');
+  for (const status of ['committed_cleanup_pending', 'committed_durability_uncertain'] as const) {
+    a.handlers.set('session/delete', () => ({ type: 'deletion', result: { status, session_id: 'A' } }));
+    await client.deleteSession('A', 'fresh-revision'); await owner.disconnect();
+    a.authorityId = status; await owner.reconnect();
+  }
+  await act(async () => { render(<App client={client} connection={owner} workspaceHost={a.workspaceHost} />); });
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+  act(() => localeController.setLocale(locale)); const tx = translator(locale);
+  fireEvent.click(screen.getByText(tx('settings:connection-settings.detached-authority-diagnostics')));
+  for (const key of ['settings:connection-settings.deletion-uncertain', 'settings:connection-settings.deletion-cleanup', 'settings:connection-settings.deletion-durability'] as const) {
+    expect(screen.getByText(`A: ${tx(key)}`)).toBeTruthy();
+  }
+  expect(screen.getByText(tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and'))).toBeTruthy();
+  const before = a.requests.length;
+  for (let count = 0; count < 3; count++) {
+    await act(async () => fireEvent.click(screen.getAllByRole('button', { name: tx('settings:connection-settings.i-have-reviewed-this-historical-evidence') })[0]));
+  }
+  expect(client.getSnapshot().detached).toEqual([]);
+  expect(a.requests).toHaveLength(before);
+  expect(client.getSnapshot().sessions.some(row => row.id === 'A')).toBe(true);
+  await act(async () => owner.disconnect()); act(() => localeController.setLocale('en'));
+});
+it('same-endpoint diagnostic capacity refusal has a disconnected UI acknowledgement path', async () => {
+  const { a, client, owner } = pair(); await owner.start(); a.held.add('session/delete');
+  for (let index = 0; index < 8; index++) {
+    const pending = client.deleteSession('A', 'old').catch(error => error);
+    await a.waitFor('session/delete', index + 1); await owner.disconnect(); await pending;
+    a.authorityId = `replacement-${index}`; await owner.reconnect();
+  }
+  expect(client.getSnapshot().detached).toHaveLength(8);
+  await owner.disconnect(); a.authorityId = 'capacity-replacement'; await owner.reconnect();
+  expect(client.getSnapshot().connection).toBe('error');
+  expect(a.socket.requests.map(row => row.method)).toEqual(['initialize']);
+  render(<ConnectionSettings connection={owner} client={client} />);
+  fireEvent.click(screen.getByText('Detached authority diagnostics'));
+  const count = a.requests.length;
+  fireEvent.click(screen.getAllByRole('button', { name: 'I have reviewed this historical evidence' })[0]);
+  expect(a.requests).toHaveLength(count);
+  await act(async () => owner.reconnect());
+  expect(client.getSnapshot().connection).toBe('connected');
+  expect(a.socket.requests.map(row => row.method)).toEqual(['initialize', 'session/list']);
+  await act(async () => owner.disconnect());
+});
+it('lost recovery preserves the earlier committed fact when the native authority is replaced', async () => {
+  const { a, client, owner } = pair(); await owner.start();
+  a.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'committed_durability_uncertain', session_id: 'A' } }));
+  await client.deleteSession('A', 'old'); a.held.add('session/recoverDeletion');
+  const recovery = client.recoverSessionDeletion('A').catch(error => error);
+  await a.waitFor('session/recoverDeletion', 1); await owner.disconnect(); await recovery;
+  expect(client.getSnapshot().views.A.deletionRecovery).toBeUndefined();
+  a.authorityId = 'replacement'; await owner.reconnect();
+  expect(client.getSnapshot().detached?.[0].sessions[0].deletion).toBe('committed_durability_uncertain');
+  expect(a.socket.requests.map(row => row.method)).toEqual(['initialize', 'session/list']);
+  await owner.disconnect();
+});
+
+it.each(['en', 'zh'] as const)('disconnected current diagnostic acknowledgement frees capacity without settling a deletion in %s', async locale => {
+  const { a, client, owner } = pair(); await owner.start();
+  a.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'committed_cleanup_pending', session_id: 'A' } }));
+  await client.deleteSession('A', 'old');
+  client.setAttachmentAdmission(async () => { throw new Error('diagnostic'); });
+  for (let index = 0; index < 64; index++) await client.attach(`diagnostic-${index}`).catch(() => {});
+  await owner.disconnect(); a.authorityId = 'replacement'; await owner.reconnect();
+  expect(client.getSnapshot().connection).toBe('error');
+  expect(client.getSnapshot().views.A.deletionCommitted).toBe('committed_cleanup_pending');
+  render(<ConnectionSettings connection={owner} client={client} />);
+  act(() => localeController.setLocale(locale)); const tx = translator(locale);
+  fireEvent.click(screen.getByText(tx('settings:connection-settings.current-evidence')));
+  const count = a.requests.length, deleted = vi.fn(); client.subscribeSessionDeletion(deleted);
+  fireEvent.click(screen.getAllByRole('button', { name: tx('settings:connection-settings.i-have-reviewed-this-historical-evidence') })[0]);
+  expect(a.requests).toHaveLength(count); expect(deleted).not.toHaveBeenCalled();
+  expect(client.getSnapshot().views.A).toBeUndefined();
+  await act(async () => owner.reconnect());
+  expect(client.getSnapshot().connection).toBe('connected');
+  expect(client.getSnapshot().detached?.[0].sessions).toHaveLength(64);
+  expect(a.socket.requests.map(row => row.method)).toEqual(['initialize', 'session/list']);
+  await act(async () => owner.disconnect());
 });

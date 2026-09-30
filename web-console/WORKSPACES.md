@@ -154,8 +154,9 @@ opens the existing native preview and revision-checked confirmation.
 Current authoritative pending interactions (approval/review/question) outrank the
 running marker. Queued inbound input alone is not a pending interaction. Detached,
 unloaded or stale snapshots cannot claim current activity. A Host classification
-result is paired with the exact Session summary array it classified and is thrown
-away on replacement. Collapse and search selection remain disposable; there is no
+result is correlated through captured Session ID/cwd pairs and fenced by request,
+generation, catalog revision and authority identity. Cloned or reordered summary
+arrays do not invalidate compatible evidence. Collapse and search selection remain disposable; there is no
 persisted Session-to-Workspace membership map. Unregister changes Host metadata
 only, retaining authorized unclassified Sessions and committed native operations.
 
@@ -202,6 +203,11 @@ reconnect, and committed registration changes reread the catalog. Both catalog s
 and failure are fenced before publication. A committed unregister first removes the
 registration association and invalidates all older reads; a failed subsequent reread
 cannot resurrect it. Complete successful catalogs also remove missing registrations.
+Neither missing-registration invalidation nor explicit unregister completes a new
+classification. Missing catalog membership removes the old confirmation immediately;
+explicit unregister may retain confirmed ungrouped presentation. Both leave the
+current classification revision unsatisfied. Only a complete current Host response
+can establish fresh classification, including authorized-but-unregistered or denied.
 There is no Host push feed: changes made outside this browser become known at those
 read boundaries. Native Session metadata invalidations still use their existing owner.
 
@@ -213,6 +219,21 @@ observations. Superseded successes **and failures** are ignored. HTTP decoding a
 fresh attachment admission validate the same result shape. Classification never
 fetches or activates every Session, changes cwd, writes configuration, registers a
 root, trusts a project, creates a Session, or calls a model.
+
+The snapshot status projects only the current bounded page, selected off-page
+Session, and connection/catalog observation. Disconnected status takes precedence,
+then unavailable catalog, then pending/refreshing catalog. With a ready catalog,
+current unavailable demand outranks pending, then refreshing, then ready; definitive
+denial is settled, not a pending read. Revision mismatch represents unsatisfied
+work even when queued behind the two-read bound. Inactive cached pending/unavailable
+entries cannot report current activity or failure. They remain retained, and returning
+to an unchanged classified identity can reuse its valid evidence.
+
+Native process identity is not durable-store identity: a new UUID proves neither a
+new store nor the same store. Endpoint/cwd/Session ID/title coincidence proves neither.
+Old deletion obligations move into the client's existing bounded detached evidence,
+never the replacement's active views or operation preconditions. See
+[connection ownership](CONNECTION.md) for explicit browser-only handling.
 
 Bounds: 128 recently demanded Session identities (one entry per ID/current cwd), no
 cached pages, one current 32-summary page plus one off-page selected Session, Host

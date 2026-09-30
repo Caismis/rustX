@@ -1096,3 +1096,8 @@ pinned-container browser acceptance passed without screenshot baseline changes.
 PR #425 integrates image/Bash presentation into those same native abstractions.
 The current import closure and local source hashes use App Server v29; upstream
 revisions, licenses, and semantic ledger ownership remain unchanged.
+
+The #433 review repair updates the local WorkspaceNavigation hash for consuming
+current-demand status from the existing display owner, and the Settings dictionary
+hash for English/Chinese evidence acknowledgement and deletion outcome copy. The upstream source, license
+and import closure are unchanged; no additional upstream code or dependency is used.

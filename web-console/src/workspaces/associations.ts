@@ -117,7 +117,7 @@ export class WorkspaceAssociations {
     if (removed) {
       if (this.catalog) this.catalog = { ...this.catalog, workspaces: this.catalog.workspaces.filter(row => row.id !== removed) };
       for (const [id, entry] of this.entries) if (entry.confirmed?.workspaceId === removed) {
-        this.entries.set(id, { ...entry, confirmed: {}, status: 'ready', revision: this.revision });
+        this.entries.set(id, { ...entry, confirmed: {}, status: 'refreshing', revision: -1 });
       }
     }
     this.catalogStatus = this.catalog ? 'refreshing' : 'pending';
@@ -151,7 +151,7 @@ export class WorkspaceAssociations {
       this.catalog = catalog; this.catalogStatus = 'ready';
       const ids = new Set(catalog.workspaces.map(row => row.id));
       for (const [id, entry] of this.entries) if (entry.confirmed?.workspaceId && !ids.has(entry.confirmed.workspaceId)) {
-        this.entries.set(id, { ...entry, confirmed: {}, revision: this.revision, status: 'ready' });
+        this.entries.set(id, { ...entry, confirmed: undefined, revision: -1, status: 'pending' });
       }
       this.publish(); this.schedule();
     }).catch(() => {
@@ -220,7 +220,22 @@ export class WorkspaceAssociations {
     for (const [id, entry] of this.entries) entries.set(id, { cwd: entry.cwd, confirmed: entry.confirmed,
       status: !this.connected ? 'disconnected' : this.catalogStatus === 'unavailable' ? 'unavailable'
         : this.catalogStatus !== 'ready' && entry.confirmed ? 'refreshing' : entry.status });
-    this.snapshot = { catalog: this.catalog, entries, status: !this.connected ? 'disconnected' : this.catalogStatus };
+    // Historical entries retain evidence but cannot report current read demand.
+    // Connection/catalog observation outranks demand. Within demand, unavailable
+    // outranks unsatisfied work, then pending, refreshing, and settled (including
+    // a definitive denial). Revision, not promise count, detects queued work.
+    let status = !this.connected ? 'disconnected' as const : this.catalogStatus;
+    if (status === 'ready') {
+      const statuses = this.demand.map(row => {
+        const entry = this.entries.get(row.id);
+        if (!entry || entry.cwd !== row.cwd) return 'pending';
+        if (entry.revision !== this.revision) return entry.confirmed ? 'refreshing' : 'pending';
+        return entry.status;
+      });
+      status = statuses.includes('unavailable') ? 'unavailable' : statuses.includes('pending') ? 'pending'
+        : statuses.includes('refreshing') ? 'refreshing' : 'ready';
+    }
+    this.snapshot = { catalog: this.catalog, entries, status };
     this.listeners.forEach(listener => listener());
   }
 }
