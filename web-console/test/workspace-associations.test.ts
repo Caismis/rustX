@@ -13,14 +13,14 @@ function deferred<T>() {
 const endpoint = 'ws://localhost:8080/';
 const row = (id: string, cwd = `/${id}`) => ({ id, cwd, updated_at: '0', active_node: `node-${id}` });
 const catalog = (authorityId = 'host-1'): WorkspaceCatalog => ({ authorityId, endpoint, workspaces: ['A', 'B'].map(id => ({ id, location: id, displayName: id, displayPath: `/${id}` })), picker: { kind: 'unavailable', reason: 'test' } });
-async function fixture() {
+async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] = async () => catalog(), ready = true) {
   let state: ClientView = { connection: 'connected', authorityId: 'native-1', authorityRevision: 0, endpoint, generation: 1, sessions: [row('A'), row('B')], views: {}, uncertain: [], interactionOperations: {} };
   const listeners = new Set<() => void>();
   const deletions = new Set<(id: string) => void>();
   const readWaiters = new Map<number, () => void>();
   const reads: { cwds: readonly string[]; gate: ReturnType<typeof deferred<SessionLocation[]>>; signal?: AbortSignal }[] = [];
   const host: ProductHostWorkspaces = {
-    listWorkspaces: vi.fn(async () => catalog()),
+    listWorkspaces: vi.fn(listWorkspaces),
     classifyLocations: vi.fn((cwds, _endpoint, _authority, signal) => {
       const gate = deferred<SessionLocation[]>(); reads.push({ cwds: [...cwds], gate, signal }); readWaiters.get(reads.length)?.(); return gate.promise;
     }),
@@ -28,7 +28,8 @@ async function fixture() {
   };
   const navigation = new NavigationEpoch();
   const client = { navigation, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
-  const owner = new WorkspaceAssociations(client, new WorkspaceAuthority(host));
+  const authority = new WorkspaceAuthority(host);
+  const owner = new WorkspaceAssociations(client, authority);
   const stop = owner.start();
   const publish = (patch: Partial<ClientView>) => { state = { ...state, ...patch }; listeners.forEach(listener => listener()); };
   const observed = async (count: number) => { if (reads.length < count) await new Promise<void>(resolve => readWaiters.set(count, resolve)); expect(reads).toHaveLength(count); return reads[count - 1]; };
@@ -36,8 +37,8 @@ async function fixture() {
     const read = reads[index]; read.gate.resolve(locations ?? read.cwds.map(cwd => ({ authorized: true, workspaceId: cwd.slice(1) })));
     await vi.waitFor(() => expect(owner.getSnapshot().entries.get(read.cwds[0].slice(1))?.status).toBe('ready'));
   };
-  await observed(1);
-  return { owner, navigation, host, reads, stop, publish, observed, accept, listeners, remove: (id: string) => { publish({ sessions: state.sessions.filter(row => row.id !== id), views: {} }); deletions.forEach(listener => listener(id)); }, state: () => state };
+  if (ready) await observed(1);
+  return { owner, authority, navigation, host, reads, stop, publish, observed, accept, listeners, remove: (id: string) => { publish({ sessions: state.sessions.filter(row => row.id !== id), views: {} }); deletions.forEach(listener => listener(id)); }, state: () => state };
 }
 it('retains confirmed evidence during cloned, title-only, reordered and disconnected observations without extra reads', async () => {
   const f = await fixture(); await f.accept(0);
@@ -300,4 +301,52 @@ it('selecting off-page demand after a satisfied 32-row page reads only that cwd 
   f.reads[2].gate.resolve([{ authorized: true, workspaceId: 'B' }]); await settled(f.owner);
   expect(f.owner.getSnapshot().entries.get('outside')?.confirmed).toEqual({ workspaceId: 'B' });
   expect(f.host.listWorkspaces).toHaveBeenCalledTimes(lists); expect(f.reads).toHaveLength(3); f.stop();
+});
+
+/** Catalog reads answered by the test, in call order. */
+function heldCatalogs() {
+  const lists: ReturnType<typeof deferred<WorkspaceCatalog>>[] = [];
+  return { lists, list: () => { const read = deferred<WorkspaceCatalog>(); lists.push(read); return read.promise; } };
+}
+const settle = () => new Promise(resolve => setTimeout(resolve));
+it.each(['display', 'admission'] as const)('an initial %s observation of a retired Host cannot replace the first accepted Host', async stale => {
+  const held = heldCatalogs(); const f = await fixture(held.list, false);
+  // Both reads start before any authority is accepted: the stale one is display
+  // (a superseded catalog read) or an admission observation of the same Product Host.
+  let admission: Promise<unknown> | undefined;
+  if (stale === 'display') f.owner.refresh(); else admission = f.authority.observe();
+  const [first, second] = held.lists;
+  const [old, fresh] = stale === 'display' ? [first, second] : [second, first];
+  fresh.resolve(catalog('host-B'));
+  await f.observed(1); await f.accept(0);
+  const ready = f.owner.getSnapshot();
+  expect(ready.catalog?.authorityId).toBe('host-B');
+  old.resolve(catalog('host-A'));
+  if (admission) await expect(admission).rejects.toMatchObject({ kind: 'authority_replaced' });
+  await settle();
+  expect(f.authority.getCatalog()?.authorityId).toBe('host-B');
+  expect(f.owner.getSnapshot()).toMatchObject({ status: 'ready', catalog: { authorityId: 'host-B' } });
+  expect(f.owner.getSnapshot().entries.get('A')).toMatchObject({ confirmed: { workspaceId: 'A' }, status: 'ready' });
+  expect(f.owner.getSnapshot().entries.get('B')).toMatchObject({ confirmed: { workspaceId: 'B' }, status: 'ready' });
+  expect(f.reads).toHaveLength(1); f.stop();
+});
+it('initial same-Host observations both admit, then a later Host replacement is accepted', async () => {
+  const held = heldCatalogs(); const f = await fixture(held.list, false);
+  const admission = f.authority.observe();
+  held.lists[0].resolve(catalog('host-B'));
+  await f.observed(1); await f.accept(0);
+  held.lists[1].resolve(catalog('host-B'));
+  const observation = await admission;
+  expect(observation.current()).toBe(true);
+  expect(f.owner.getSnapshot().entries.get('A')).toMatchObject({ confirmed: { workspaceId: 'A' }, status: 'ready' });
+  expect(f.reads).toHaveLength(1);
+  // A read started after B was accepted legitimately replaces it.
+  f.owner.refresh(); held.lists[2].resolve(catalog('host-C'));
+  const read = await f.observed(2);
+  expect(observation.current()).toBe(false);
+  expect(f.authority.getCatalog()?.authorityId).toBe('host-C');
+  expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toBeUndefined();
+  read.gate.resolve(read.cwds.map(cwd => ({ authorized: true, workspaceId: cwd.slice(1) })));
+  await vi.waitFor(() => expect(f.owner.getSnapshot()).toMatchObject({ status: 'ready', catalog: { authorityId: 'host-C' } }));
+  f.stop();
 });

@@ -5,7 +5,8 @@ export interface WorkspaceAuthorityObservation {
   readonly current: () => boolean;
 }
 /** App-lifetime Product Host authority, independent of all display consumers.
- * Every observation is fenced against replacement while its read is pending. */
+ * Every acceptance of a different identity, including the first, advances the
+ * fence. A read started before it may confirm the accepted Host, never replace it. */
 export class WorkspaceAuthority {
   private epoch = 0;
   private catalog?: WorkspaceCatalog;
@@ -17,13 +18,13 @@ export class WorkspaceAuthority {
   async observe(signal?: AbortSignal): Promise<WorkspaceAuthorityObservation> {
     const epoch = this.epoch;
     const catalog = await this.host.listWorkspaces(signal);
-    if (epoch !== this.epoch) throw new WorkspaceHostError('Obsolete Workspace authority observation', 'authority_replaced');
     if (!catalog || typeof catalog.authorityId !== 'string' || !catalog.authorityId || !Array.isArray(catalog.workspaces)
       || new Set(catalog.workspaces.map(row => row.id)).size !== catalog.workspaces.length
       || catalog.workspaces.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string')
       || !catalog.picker || !['configured', 'unavailable'].includes(catalog.picker.kind)
       || (catalog.picker.kind === 'configured' && !Array.isArray(catalog.picker.locations))) throw new Error('Invalid Workspace catalog');
-    const replaced = (this.catalog !== undefined || this.epoch > 0) && this.catalog?.authorityId !== catalog.authorityId;
+    const replaced = this.catalog?.authorityId !== catalog.authorityId;
+    if (replaced && epoch !== this.epoch) throw new WorkspaceHostError('Obsolete Workspace authority observation', 'authority_replaced');
     this.catalog = catalog;
     if (replaced) this.replaced();
     const captured = this.epoch;

@@ -19,11 +19,16 @@ export class WorkspaceSessionNavigation {
     const admitted = () => valid() && observation.current();
     if (!admitted()) return false;
     if (!location.authorized) throw new Error('Session cwd is not authorized by this Product Host. The durable Session is unchanged.');
-    return { current: admitted, validate: async () => {
+    return { current: admitted, validate: async signal => {
       // Called only after a native dispatch slot is reserved. A delayed success
       // from a retired Host cannot authorize even when display never runs.
+      // Host replacement retires this proof at once, so its read is aborted too.
       if (!admitted()) return false;
-      await this.authority.observe();
+      const retired = new AbortController();
+      const release = this.authority.subscribe(() => retired.abort());
+      try { await this.authority.observe(AbortSignal.any([signal, retired.signal])); }
+      catch (cause) { if (!admitted()) return false; throw cause; }
+      finally { release(); }
       return admitted();
     } };
   };
