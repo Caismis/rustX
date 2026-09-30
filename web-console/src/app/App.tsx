@@ -10,6 +10,7 @@ import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
 import type { ProductHostWorkspaces } from '../workspaces/host';
 import { HttpWorkspaceHost } from '../workspaces/http-host';
+import { WorkspaceAuthority } from '../workspaces/authority';
 import { WorkspaceAssociations } from '../workspaces/associations';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { WorkspaceSessionNavigation } from '../workspaces/navigation';
@@ -51,7 +52,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const tx = useTranslation();
   const state = useClientSelector(client, selectShell, sameValue);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
-  const associations = useMemo(() => new WorkspaceAssociations(client, workspaceHost), [client, workspaceHost]);
+  const workspaceAuthority = useMemo(() => new WorkspaceAuthority(workspaceHost), [workspaceHost]);
+  const associations = useMemo(() => new WorkspaceAssociations(client, workspaceAuthority), [client, workspaceAuthority]);
   useEffect(() => associations.start(), [associations]);
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   type CenterRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string };
@@ -88,7 +90,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
-  const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceHost, client, navigation), [workspaceHost, client, navigation]);
+  const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceAuthority, client, navigation), [workspaceAuthority, client, navigation]);
   useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
   // Existing navigation hints may restore wanted views, never a released claim.
   // Released views are not restored. Sidebar rows remain catalog-owned.

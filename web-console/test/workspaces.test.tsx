@@ -31,7 +31,7 @@ function holdAdmission(host: ProductHostWorkspaces, promise: ReturnType<ProductH
   const classify = host.classifyLocations;
   let pending = true;
   host.classifyLocations = vi.fn((cwds, route, authority, signal) => {
-    if (authority === undefined && pending) { pending = false; return promise; }
+    if (signal === undefined && pending) { pending = false; return promise; }
     return classify(cwds, route, authority, signal);
   });
 }
@@ -192,7 +192,7 @@ it('registered authorization is checked from current native settings before exac
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   vi.mocked(host.classifyLocations).mockClear();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
-  expect(host.classifyLocations).toHaveBeenCalledWith(['/workspace/A'], endpoint);
+  expect(host.classifyLocations).toHaveBeenCalledWith(['/workspace/A'], endpoint, 'fixture-host', undefined);
   const sequence = methods();
   expect(sequence.indexOf('session/settings')).toBeLessThan(sequence.indexOf('session/attach'));
   expect(sequence.filter(method => method === 'session/attach')).toHaveLength(1);
@@ -216,7 +216,7 @@ it('stale authorized summary cannot authorize current outside cwd', async () => 
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('not authorized'))).toBe(true);
   expect(screen.getByRole('button', { name: 'Open Session A' })).toBeTruthy();
-  expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint);
+  expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint, 'fixture-host', undefined);
   expect(methods()).not.toContain('session/attach'); expect(server.loaded.size).toBe(0);
   expect(methods()).not.toContain('settings/replace'); expect(methods()).not.toContain('session/delete');
 });
@@ -226,7 +226,7 @@ it('unauthorized saved views cannot cold attach on initial restoration or reconn
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={host} />); await server.connect(); });
   await act(async () => { server.client.disconnect(); await server.connect(); });
-  expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint);
+  expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint, 'fixture-host', undefined);
   expect(methods()).not.toContain('session/attach'); expect(server.loaded.size).toBe(0);
   expect(server.client.getSnapshot().sessions.map(row => row.id)).toContain('A');
 });
@@ -281,6 +281,8 @@ it('focusing an authorized-unregistered Session clears old Workspace context and
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
   await host.removeWorkspace('wA');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(document.querySelector('[aria-label^="Select Workspace"][aria-current="page"]')).toBeNull();
   vi.mocked(host.resolveWorkspace).mockClear();
@@ -314,7 +316,7 @@ it('an already attached source cannot Fork a child after current cwd authorizati
 
 it('the shared transport attachment entry fails closed without an admission owner', async () => {
   await server.connect();
-  const dispose = server.client.setAttachmentAdmission(async () => true); dispose();
+  const dispose = server.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true })); dispose();
   await expect(server.client.attach('A')).rejects.toThrow('No Web attachment admission owner');
   expect(methods()).not.toContain('session/attach'); expect(server.loaded.size).toBe(0);
 });
@@ -507,7 +509,7 @@ it('UX-04 shares selected membership across a gated reconnect without authorizin
   const selected = () => screen.getByRole('button', { name: 'Select Workspace Workspace A' }).getAttribute('aria-current');
   expect(selected()).toBe('page');
   const gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
-  host.classifyLocations = vi.fn((_cwds, _endpoint, authority) => authority ? gate.promise : Promise.resolve([{ authorized: false as const, reason: 'denied' as const }]));
+  host.classifyLocations = vi.fn((_cwds, _endpoint, _authority, signal) => signal ? gate.promise : Promise.resolve([{ authorized: false as const, reason: 'denied' as const }]));
   await act(async () => { await server.client.disconnect(); });
   expect(selected()).toBe('page');
   expect(screen.getByRole('button', { name: 'Open Session A' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group')).toBe('wA');
@@ -539,11 +541,11 @@ it('UX-04 native authority replacement at the same endpoint retires presentation
 
 it('UX-04 replacement of the Product Host admission owner fences an older successful admission', async () => {
   await server.connect();
-  const old = deferred<boolean>();
+  const old = deferred<false | import('../src/client/app-server').OperationAdmission>();
   server.client.setAttachmentAdmission(() => old.promise);
   const pending = server.client.admitAttachment('A');
   server.client.setAttachmentAdmission(async () => false);
-  old.resolve(true);
+  old.resolve({ current: () => true, validate: async () => true });
   expect(await pending).toBe(false);
   expect(methods()).not.toContain('session/attach');
 });

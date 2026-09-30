@@ -1,6 +1,7 @@
+import { WorkspaceAuthority } from './authority';
 import type { AppServerClient, ClientView } from '../client/app-server';
 import { endpointIdentity, sameEndpoint } from './endpoint';
-import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type SessionLocation, type WorkspaceCatalog } from './host';
+import { validateLocations, type SessionLocation, type WorkspaceCatalog } from './host';
 
 export type AssociationStatus = 'pending' | 'refreshing' | 'ready' | 'unavailable' | 'disconnected' | 'revoked';
 /** Display evidence deliberately has no authorized field. */
@@ -40,22 +41,24 @@ export class WorkspaceAssociations {
   private catalogs = new Map<number, AbortController>();
   private queued = false;
   private catalogQueued = false;
+  private releaseAuthority?: () => void;
   private releaseDeletion?: () => void;
   private release?: () => void;
   private disposed = false;
-  constructor(private readonly client: AppServerClient, private readonly host: ProductHostWorkspaces) {}
+  constructor(private readonly client: AppServerClient, private readonly authority: WorkspaceAuthority) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.scope === this.identity(this.client.getSnapshot()) ? this.snapshot : EMPTY;
   start() {
     this.disposed = false;
     this.connected = false;
     this.release = this.client.subscribe(this.observe);
+    this.releaseAuthority = this.authority.subscribe(this.retireHost);
     this.releaseDeletion = this.client.subscribeSessionDeletion(id => { this.invalidate(); this.entries.delete(id); this.publish(); this.schedule(); });
     this.observe();
     return () => this.dispose();
   }
   dispose() {
-    this.disposed = true; this.release?.(); this.release = undefined; this.releaseDeletion?.(); this.releaseDeletion = undefined;
+    this.disposed = true; this.releaseAuthority?.(); this.releaseAuthority = undefined; this.release?.(); this.release = undefined; this.releaseDeletion?.(); this.releaseDeletion = undefined;
     this.invalidate(); ++this.catalogRequest;
     for (const controller of this.catalogs.values()) controller.abort();
     this.catalogQueued = false; this.queued = false;
@@ -63,10 +66,18 @@ export class WorkspaceAssociations {
   select(id?: string) {
     if (id === this.selected) return;
     this.selected = id;
-    // Overlapping pending page/selection demand shares its existing read.
-    if (!this.reading.has(this.request) && !['pending', 'refreshing'].includes(this.catalogStatus)) this.refresh();
     this.observe();
   }
+  private retireHost = () => {
+    this.invalidate(); ++this.revision; ++this.catalogRequest;
+    for (const pending of this.catalogs.values()) pending.abort();
+    this.catalogQueued = false;
+    this.entries.clear();
+    const catalog = this.authority.getCatalog();
+    this.catalog = catalog && sameEndpoint(catalog.endpoint, this.client.getSnapshot().endpoint) ? catalog : undefined;
+    this.catalogStatus = this.catalog ? 'ready' : 'unavailable';
+    this.publish(); this.schedule();
+  };
   private identity(state: ClientView) {
     return JSON.stringify([state.authorityRevision, state.authorityId, state.endpoint && endpointIdentity(state.endpoint)]);
   }
@@ -135,16 +146,8 @@ export class WorkspaceAssociations {
     const token = this.catalogRequest, scope = this.scope, generation = this.generation;
     const controller = new AbortController(); this.catalogs.set(token, controller);
     const current = () => this.valid(scope, generation) && token === this.catalogRequest;
-    void this.host.listWorkspaces(controller.signal).then(catalog => {
+    void this.authority.observe(controller.signal).then(({ catalog }) => {
       if (!current()) return;
-      if (!catalog || typeof catalog.authorityId !== 'string' || !catalog.authorityId || !Array.isArray(catalog.workspaces)
-        || new Set(catalog.workspaces.map(row => row.id)).size !== catalog.workspaces.length
-        || catalog.workspaces.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string')
-        || !catalog.picker || !['configured', 'unavailable'].includes(catalog.picker.kind)
-        || (catalog.picker.kind === 'configured' && !Array.isArray(catalog.picker.locations))) throw new Error('Invalid Workspace catalog');
-      if (this.catalog && this.catalog.authorityId !== catalog.authorityId) {
-        this.client.navigation.invalidate(); this.entries.clear();
-      }
       if (!sameEndpoint(catalog.endpoint, this.client.getSnapshot().endpoint)) {
         this.invalidate(); this.entries.clear(); this.catalog = undefined; this.catalogStatus = 'unavailable'; this.publish(); return;
       }
@@ -170,6 +173,8 @@ export class WorkspaceAssociations {
     if (this.reading.size >= 2) { this.queued = true; return; }
     this.queued = false;
     const scope = this.scope, generation = this.generation, revision = this.revision, catalog = this.catalog;
+    const authority = this.authority.capture();
+    if (!authority || authority.catalog.authorityId !== catalog.authorityId) return;
     const endpoint = this.client.getSnapshot().endpoint!;
     const controller = new AbortController(); this.reading.set(token, controller);
     const current = () => this.valid(scope, generation) && this.connected && token === this.request && revision === this.revision && catalog === this.catalog && rows.every(row => this.entries.get(row.id)?.cwd === row.cwd);
@@ -183,7 +188,7 @@ export class WorkspaceAssociations {
       // A selected off-page Session is a separate batch, never a 33rd Host input.
       for (let start = 0; start < rows.length; start += 32) {
         const batch = rows.slice(start, start + 32);
-        const locations = await this.host.classifyLocations(batch.map(row => row.cwd), endpoint, catalog.authorityId, controller.signal);
+        const locations = await this.authority.classify(batch.map(row => row.cwd), endpoint, authority, controller.signal);
         if (!current()) return;
         validateLocations(locations, batch.length);
         if (locations.some(location => location.authorized && location.workspaceId !== undefined && !catalog.workspaces.some(row => row.id === location.workspaceId))) throw new Error('Invalid Workspace classification');
@@ -199,15 +204,8 @@ export class WorkspaceAssociations {
           status: result.authorized ? 'ready' : result.reason === 'unavailable' ? 'unavailable' : 'revoked' });
       });
       this.entries = next; this.publish();
-    })().catch(cause => {
+    })().catch(() => {
       if (!current()) return;
-      if (cause instanceof WorkspaceHostError && cause.kind === 'authority_replaced') {
-        this.client.navigation.invalidate();
-        this.invalidate(); ++this.catalogRequest; this.catalogQueued = false;
-        for (const pending of this.catalogs.values()) pending.abort();
-        this.entries.clear(); this.catalog = undefined; this.catalogStatus = 'unavailable';
-        this.publish(); return;
-      }
       for (const row of rows) {
         const old = this.entries.get(row.id);
         this.entries.set(row.id, { cwd: row.cwd, confirmed: old?.confirmed, status: 'unavailable', revision });

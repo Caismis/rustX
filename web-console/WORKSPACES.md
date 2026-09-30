@@ -183,11 +183,27 @@ Product Host generates its own per-instance `WorkspaceCatalog.authorityId`; disp
 classification submits that identity and a replacement Host refuses it with the
 HTTP-preserved `authority_replaced` kind. That definitive observation immediately
 retires display evidence, even if the next explicit catalog read fails. The refusal
-does not start an automatic retry loop. Definitive Host replacement invalidates
-pending navigation continuations; the client also rejects admission results from
-a replaced admission callback. Both are refusal fences, never grants from display
-evidence. Host-object
-replacement also constructs a new projection. None of these identifiers grant access.
+does not start an automatic retry loop. `WorkspaceAuthority`, created once alongside
+navigation by `App`, owns the current Product Host catalog authority and invalidation
+epoch. `WorkspaceAssociations` subscribes only to retire incompatible display reads
+and evidence and establish the replacement catalog baseline. It never invalidates
+`NavigationEpoch` or supplies an operation fence. Host-object replacement constructs
+new authority and display owners. None of these identifiers alone grant access.
+
+`WorkspaceSessionNavigation` independently observes the Host authority, captures its
+epoch, reads current native `session/settings`, and classifies the exact returned cwd
+with that authority ID. An authorized result returns an operation proof, not a cached
+permission bit. After native RPC backpressure clears, `AppServerClient` reserves a
+bounded dispatch slot and asks that proof to re-observe the Product Host. A delayed
+success from a replaced process cannot pass this final observation. The client then
+checks the captured Host epoch, native generation, navigation continuation and injected
+admission callback identity synchronously before socket send. Replacement or an
+unavailable final observation sends no attach RPC. Callback identity and Host authority
+are separate fences. Fork admission uses the same dispatch proof. There is no display
+owner prerequisite, persistent permission, automatic registration, or second admission
+mode. The final Host observation is the admission linearization read; the synchronous
+send check fences intervening locally observed replacement. Host policy changes after
+an operation is dispatched are not retroactive cancellation of that operation.
 
 Native `session/list` summaries own the visible page's IDs/cwds; selected off-page
 summaries/settings come from the existing native view owner. Same-authority disconnect
@@ -198,8 +214,10 @@ alone is not deletion. A changed cwd immediately loses incompatible evidence.
 
 Request freshness additionally captures connection generation, the local catalog
 invalidation revision, an exact request token, and disposal state. Reconnect changes
-request generation, **not** compatible evidence identity. Explicit refresh, selection,
-reconnect, and committed registration changes reread the catalog. Both catalog success
+request generation, **not** compatible evidence identity. Explicit refresh, reconnect, and committed registration changes reread the catalog.
+Selection only changes bounded page-plus-selected demand: satisfied rows cause no
+catalog or classification read, and an unsatisfied off-page selection reads only its
+cwd. Host replacement invalidates incompatible evidence through the authority owner. Both catalog success
 and failure are fenced before publication. A committed unregister first removes the
 registration association and invalidates all older reads; a failed subsequent reread
 cannot resurrect it. Complete successful catalogs also remove missing registrations.

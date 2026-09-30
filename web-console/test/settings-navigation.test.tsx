@@ -110,7 +110,7 @@ it('navigation D: an authority replacement fences a stale owner-lookup failure',
   // obsolete catalog request keeps running under it.
   const local = new Server(), alternate = new Server();
   const client = new AppServerClient((url, protocols) => (url === endpoint ? local : alternate).socketFactory(url, protocols));
-  client.setAttachmentAdmission(async () => true);
+  client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true }));
   local.handlers.set('session/configuration', () => ({ type: 'session_configuration', application: failing([{ kind: 'workspace', directory: '/workspace/A' }]) }));
   let hold = false;
   let held = deferred<WorkspaceCatalog>();
