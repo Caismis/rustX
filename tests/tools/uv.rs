@@ -1,4 +1,4 @@
-//! Opt-in-by-availability integration for the managed Python package store
+//! uv-dependent integration for the managed Python package store
 //! (Issue #174): the production `uv` backend materializes the isolated
 //! `FastMCP` environment of a discovered package, and a second preparation of
 //! the unchanged package reuses the published state.
@@ -6,13 +6,7 @@
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn production_uv_materializes_a_managed_package_environment() {
-    let uv = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("uv"))
-            .find(|path| path.is_file())
-    });
-    if uv.is_none() {
-        eprintln!("uv unavailable; production uv acceptance not exercised");
+    if crate::common::provider_emulator::required_uv("the production uv acceptance").is_none() {
         return;
     }
     let directory = tempfile::tempdir().expect("fixture root");

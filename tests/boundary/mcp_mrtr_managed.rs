@@ -150,15 +150,9 @@ impl InteractionObserver for PendingSink {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction() {
-    let uv = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("uv"))
-            .find(|path| path.is_file())
-    });
-    if uv.is_none() {
-        eprintln!(
-            "uv unavailable; the real managed FastMCP 4 MRTR acceptance was NOT exercised (skipped)"
-        );
+    if super::common::provider_emulator::required_uv("the real managed FastMCP 4 MRTR acceptance")
+        .is_none()
+    {
         return;
     }
     let directory = tempfile::tempdir().expect("workspace root");

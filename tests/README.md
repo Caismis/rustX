@@ -31,6 +31,33 @@ These are independent dimensions and must not be conflated.
    always `#[ignore]`d. Never correctness authority for generic runtime
    semantics.
 
+Some libtest functions are not ordinary correctness coverage, and are never
+counted as such:
+
+- **Measurement** — `#[ignore]`d instrumented runs
+  (`issue419_measure_native_cold_load`,
+  `stage_profile_real_create_pipeline`) and the Web
+  `pnpm test:issue-420-performance` counters. They record numbers for an
+  issue report, assert no timing threshold and run only explicitly.
+- **Fixture generator** — `#[ignore]`d `regenerate_committed_fixture_corpus`
+  rewrites a committed corpus; the `generate_schemas` and
+  `generate_app_server_protocol` examples regenerate checked-in artifacts
+  (the latter is the App Server protocol lane's drift check).
+- **Fixture child entry point** — a `#[test]` that a parent test
+  re-executes as its child process (for example `child_process_entry`,
+  `staged_rollback_wire_child`, `deletion_process_child`, and the lane
+  checker's `real_cargo_discovery_child`). Without its mode variable it
+  returns at once, so its ordinary "pass" proves nothing; the parent test is
+  the coverage.
+- **Lexical source convention** — a test that checks the spelling of
+  production source text. Rust cannot restrict imports between modules of
+  one crate, so these name a dependency-direction or vocabulary convention
+  honestly and prove neither runtime behavior nor a complete dependency
+  graph. Their names say so (`*_source_spells_*`, `*_sources_spell_*`), and
+  each points to the behavior or type proof that owns the invariant.
+  Checking serialized output, diagnostics, protocol data or generated
+  artifacts is ordinary behavior testing, not this class.
+
 **Physical compilation placement** — where the test code compiles:
 
 - **Source-module unit test** — `#[cfg(test)]` modules in `src/**`.
@@ -44,14 +71,23 @@ compile into the lib test binary to reach private seams. A test that kills
 a real process remains boundary conformance even when it physically lives
 in the in-crate test tree. That is why the in-crate tree has two roots:
 
-| Namespace | Semantic class | Physical placement |
-| --- | --- | --- |
-| `scripted_suites::` (`tests/scripted/`) | deterministic contracts | in-crate lib test |
-| `boundary_suites::` (`tests/boundary/`) | boundary conformance | in-crate lib test |
+| Namespace | Sources | Semantic class | Physical placement |
+| --- | --- | --- | --- |
+| `scripted_suites::` | `tests/scripted/` except `app_server/` | deterministic contracts | in-crate lib test via `src/lib.rs` |
+| `local_runtime::session_runtime_manager::tests::` | `tests/scripted/app_server/` | deterministic contracts | the manager's private `#[cfg(test)] mod tests` |
+| `boundary_suites::` | `tests/boundary/` | boundary conformance | in-crate lib test via `src/lib.rs` |
 
 The namespace prefix is the stable semantic marker and is part of the CI
 contract: jobs select or exclude classes by prefix
 (`cargo test --lib -- boundary_suites::` / `-- --skip boundary_suites::`).
+The compiled namespace, not the directory, is what a selector sees:
+`tests/scripted/app_server/` is included by
+`src/local_runtime/session_runtime_manager.rs` as that owner's private test
+module, so its App Server host, connection, loopback transport and residency
+contracts can reach the manager's `cfg(test)` probes and gates without
+making them `pub(crate)`. It is therefore **not** under `scripted_suites::`,
+and macOS skips it by its own prefix. Do not move it or widen the owner's
+visibility to make the directory match a selector.
 
 ## Why anything compiles into the crate's test build
 
@@ -163,7 +199,18 @@ invariant is a real process boundary.
   rounds, one runtime Interaction, one final `ToolResult`. Its form mixes a
   bounded `enum` with a free-form `string` in one schema, so the acceptance
   also proves the repaired typed schema mapping against a real server. It
-  follows the repository's uv-availability skip convention.
+  requires uv through the shared prerequisite (see
+  [Prerequisites](#prerequisites)).
+- `mcp_tasks` / `mcp_tasks_managed` — the MCP Tasks extension (SEP-2663) as
+  an adapter-local remote sub-lifecycle of one admitted `ToolInvocation`,
+  against the fixture child and a real managed `FastMCP` 4 child.
+- `mcp_recovery` — MCP tool-call liveness, cancellation, transport loss,
+  reconnection and last-known-good capability recovery over real MCP stdio
+  children, ordered by the generic deadline's arming signal and a manual
+  clock.
+- `managed_selection` — real prepared `FastMCP` 4 sources entering the
+  single frozen Agent registry, with source failure and exposure filtering
+  independent.
 The external `subagent` target additionally owns
 `overrides` — the Issue #258 invocation-scoped override contract driven
 against real composed runtime generations: replacement and isolation, the
@@ -220,47 +267,144 @@ meaningful domain/boundary/dependency topology:
 | `durable` | file-backed SQLite | recovery classification, pending-inbound inbox, publication store contract, interaction audit store, transcript history |
 | `process` | the real `rustx` binary / local composition | stdio/JSONL transport over a spawned process, composition identity, capability startup isolation, sessions, runtime config, committed-example resource composition |
 | `subagent` | the child-process boundary | named definition admission/resolution, frozen-policy handshake through a real launched child, end-to-end parent/child composition |
-| `tools` | OS/tooling boundary | Bash supervision, Read/Write/Edit/Grep/Glob, Skills, MCP config/runtime, uv backend |
+| `tools` | OS/tooling boundary | Bash supervision, Read/Write/Edit/Grep/Glob, Skills, MCP config/runtime, uv backend, managed `FastMCP` materialization |
+| `cfg3_catalog` | real configuration source files | CFG3 source resolution, shadowing and replacement, native writers' commit races and stale-write refusal, frozen model/provider invocation identity |
+| `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
 
 ## How CI selects the classes
 
-The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes:
+The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes. The
+workflow's `cargo test` steps are the only selection source; this table
+summarizes them and the lane check below verifies them against Cargo:
+
+| Suite / group | Class | Linux lane | macOS |
+| --- | --- | --- | --- |
+| source-module unit tests (`src/**`) | unit | rust-contracts | yes |
+| `scripted_suites::` | deterministic contracts | rust-contracts | skipped |
+| `local_runtime::session_runtime_manager::tests::` | deterministic contracts | rust-contracts | skipped |
+| `boundary_suites::` | boundary conformance | rust-boundaries | yes (required) |
+| bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts | bins only |
+| `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts | no |
+| `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | yes (required) |
+| `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
 - **quality** (ubuntu) — fmt, clippy, whitespace.
-- **rust-contracts** (ubuntu) — unit tests + in-crate deterministic
-  contracts + pure contract targets:
+- **rust-contracts** (ubuntu) — `cargo build --bins`, then
   `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::`
   and `cargo test --test contracts --test provider --all-features`.
-  A `cargo build --bins` step comes first: the bash tool's unit tests exec
+  The build comes first because the bash tool's unit tests exec
   `target/debug/bash-supervisor` and the interactive-process unit tests exec
-  `target/debug/interactive-supervisor`, and `cargo test --bins` builds the
-  bin test harnesses but does not place either executable there.
-  `--bins` and `--examples` currently select six harnesses that each report
-  "0 passed" — no binary and no example defines a `#[test]` today. They stay
-  in the selector anyway: bin and example test harnesses are part of the
-  automatic Rust coverage boundary, and letting Cargo's own target discovery
-  pick up a future test is simpler than a standing policy that those targets
-  must remain test-free.
-- **rust-boundaries** (ubuntu) — in-crate boundary suites + external
-  boundary targets + the provider emulator's pytest suite:
+  `target/debug/interactive-supervisor`; `cargo test --bins` builds the bin
+  *test harnesses*, which are a different Cargo unit and place neither
+  executable there. The three bin harnesses define no test today, and of
+  the example harnesses only `session_list_benchmark` (workload checker)
+  and `check_test_lanes` (the lane checker's own tests) do. Bins and
+  examples stay selected so Cargo's own target discovery picks up a future
+  test; the lane check allows their harnesses to be empty.
+- **rust-boundaries** (ubuntu) — the emulator's pytest suite,
   `cargo build --bins` (the text_spill suite execs `bash-supervisor`),
   `cargo test --lib --all-features -- boundary_suites::`, then
-  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable
-  --test process --test subagent --test tools --test conformance`.
-- **rust-platform-boundaries** (macos) — only platform-sensitive classes:
+  `cargo test --all-features --test durable --test process --test subagent
+  --test tools --test conformance --test cfg3_catalog --test
+  cfg3_managed_output`. Both test steps set
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
+- **rust-platform-boundaries** (macos) — only platform-sensitive classes,
+  natively: `cargo build --bins --all-features`, then
   `cargo test --lib --bins --all-features -- --skip scripted_suites::
   --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
-  primitives differ across OSes — plus the in-crate boundary suites; the
-  deterministic scripted contract majority is *not* rerun on macOS) plus
-  the five external boundary targets with the emulator mandatory.
-  `contracts`/`provider` are Linux-only: deterministic JSON/SSE translation
-  with no process or filesystem semantics.
-- **tui** — independent Node/pnpm lane with its own native rustX build for
-  real-child integration coverage. The `cargo build --bin rustx` there exists
-  only because the TUI integration tests drive the real binary over the real
-  stdio transport; the lane is not an owner of Rust semantic validation.
+  primitives differ across OSes — plus the in-crate boundary suites) and the
+  seven external boundary targets, both with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The `--no-run` compile steps before
+  them exist for native timing measurement and execute nothing.
+  `contracts`/`provider` and the deterministic contract majority are
+  Linux-only: they carry no process or filesystem semantics. Overlap with
+  Linux is intentional: a macOS boundary test is native proof, not a
+  duplicate.
+- **tui** — independent Node/pnpm lane. `pnpm test` includes the real-child
+  integration suite, which drives the actual `rustx` binary (built by
+  `cargo build --bin rustx` in that lane) over the real stdio and WebSocket
+  transports against the provider emulator, with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The lane is not an owner of Rust
+  semantic validation.
+- **app-server-protocol** — `pnpm check` regenerates the schema and
+  TypeScript through `cargo run --example generate_app_server_protocol` and
+  fails on drift; `pnpm typecheck` checks the fixtures and reference
+  intersections.
+- **web-console** — development launcher `typecheck`/`test`, Web
+  `typecheck`, deterministic `pnpm test` (Vitest over `test/**/*.test.ts(x)`;
+  the `*.measurement.tsx` counters are excluded), `check:i18n`,
+  `check:provenance` (source provenance and dependency notices), then
+  `cargo build --bins` and `pnpm test:e2e`. `test:e2e` is
+  `pnpm build && bash scripts/browser-tests.sh`: the job's only production
+  build (Vite, then `provenance.ts --artifact` over the new `dist/`) runs
+  from checked-in source immediately before Playwright, whose preview server
+  serves that `dist/`, in the digest-pinned browser container. No earlier
+  step builds or reuses `dist/`.
+
+### The lane check
+
+`examples/check_test_lanes.rs` keeps CI selection honest without becoming a
+second copy of it. Each Rust test lane ends with
+`cargo run --example check_test_lanes -- --job <job id>`, which reads the
+workflow's executing `cargo test` steps and asks libtest, through `--list`,
+what each one selects — so filters, `--skip`, features and `cfg` are
+Cargo's and libtest's own semantics. It fails for:
+
+- a Cargo test target (lib, bin, example, integration test) selected by no
+  executing Linux step (`--no-run` does not count);
+- a Linux-discovered runnable test that no Linux step executes;
+- a step that selects no runnable test of a lib or integration-test target;
+- a positive filter that matches nothing, only `#[ignore]`d tests, or only
+  `--skip`ped tests, and a `--skip` that excludes nothing;
+- a suite in its `REQUIREMENTS` table (macOS: `boundary_suites::` and the
+  seven external boundary targets) that is missing or not fully executed on
+  its platform;
+- a step or libtest output it cannot interpret exactly.
+
+Discovery is always native: the macOS job checks macOS, and `--job` refuses
+a job of another platform. Run it without `--job` to check every target of
+the host platform (it compiles what is missing).
+
+Discovery owns the output it parses: each internal `cargo test ... --list`
+passes Cargo's own `--color never` (before `--`), so an inherited
+`CARGO_TERM_COLOR=always` — which the hosted Rust toolchain action exports —
+cannot hide a harness's `Running` line. A harness it cannot recognize is an
+error, never an empty inventory; a recognized bin or example harness may
+list no test.
+
+Its deterministic tests run with `--examples` in rust-contracts. Besides
+the selection rules over a stand-in inventory,
+`real_cargo_discovery_is_independent_of_inherited_color` runs the
+production discovery with real Cargo over a small fixture package (its own
+temporary directory and target directory), once with
+`CARGO_TERM_COLOR=always` and once with `never`, each set only in a
+re-executed child's environment.
+
+## Prerequisites
+
+Mandatory prerequisites fail closed; only explicitly opt-in tooling may
+skip:
+
+- **Real executables.** Tests that exec `bash-supervisor`,
+  `interactive-supervisor` or `rustx` need `cargo build --bins` first;
+  integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
+  executable fails the spawn.
+- **uv and Python 3.12** (the provider emulator and managed `FastMCP`
+  children). Every uv-dependent Rust test resolves uv through
+  `common::provider_emulator::required_uv`: a local checkout without uv
+  skips with a "was NOT exercised" message, and with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR` set a missing uv fails. CI sets it on
+  every step that runs such a boundary. The TUI integration suite applies
+  the same variable to uv and to the built `rustx` binary.
+- **`python3` on the supervised PATH** — required, never skipped, by the
+  Linux process-containment escape regressions.
+- **Container engine** — `pnpm test:e2e` requires Docker or Podman
+  (`CONTAINER_ENGINE`) on Linux x86_64 and fails otherwise.
+- **Opt-in only:** the `#[ignore]`d live provider smoke tests (credentials),
+  measurements and fixture generators. They never run in CI and are not
+  correctness coverage.
 
 Every Rust-bearing lane restores a `Swatinem/rust-cache@v2` lineage of its
 own before its first cargo command, named by a per-lane `shared-key`. Two
@@ -333,7 +477,9 @@ Then the owning domain:
 
 Create a **new integration target** only when no existing target's
 dependency topology fits — e.g. a new external boundary with its own
-fixture process. Never split a target merely because a file grew.
+fixture process. Never split a target merely because a file grew. Assign a
+new target to a lane in `.github/workflows/ci.yml` in the same change; the
+lane check fails until an executing step selects it.
 
 ## Determinism rules
 
@@ -363,22 +509,27 @@ cargo build --bins   # unit tests exec target/debug/{bash,interactive}-superviso
 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features
 
-# In-crate boundary conformance (CI: rust-boundaries):
+# In-crate boundary conformance (CI: rust-boundaries); uv is mandatory:
 cargo build --bins   # text_spill execs the bash-supervisor binary by path
-cargo test --lib --all-features -- boundary_suites::
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
 
 # External boundary targets (CI: rust-boundaries); the emulator is mandatory:
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features \
-  --test durable --test process --test subagent --test tools --test conformance
+  --test durable --test process --test subagent --test tools --test conformance \
+  --test cfg3_catalog --test cfg3_managed_output
 
 # Platform-sensitive classes on macOS (CI: rust-platform-boundaries):
-cargo build --bins
-cargo test --lib --bins --all-features -- \
+cargo build --bins --all-features
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
   --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
-# plus the five external boundary targets above.
+# plus the seven external boundary targets above.
 
-# Everything, the safety net:
+# Lane coverage for one CI job on its own platform, or every target here:
+cargo run --example check_test_lanes -- --job rust-contracts
+cargo run --example check_test_lanes
+
+# Everything, the safety net (it does not prove the CI lanes' selection):
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
 
 # One domain target:
@@ -386,4 +537,7 @@ cargo test --test durable --all-features
 
 # The in-crate scripted contract suites only:
 cargo test --lib --all-features scripted_suites::
+
+# The App Server contracts under the manager's private test module:
+cargo test --lib --all-features local_runtime::session_runtime_manager::tests::
 ```

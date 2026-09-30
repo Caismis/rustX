@@ -2565,8 +2565,71 @@ mod session_resolution {
         assert!(admitted.project_context_files.is_empty());
     }
 
+    /// The shared owner never resolves a Session cwd against the process's
+    /// ambient working directory: a relative cwd is refused before any
+    /// effect-owning boundary is entered.
     #[test]
-    fn resolver_has_no_ambient_cwd_or_environment_mutation_and_cli_delegates() {
+    fn shared_resolver_refuses_relative_cwd_before_any_effect() {
+        let f = Fixture::new();
+        let (manager, _) = f.request.session_input(&f.host).unwrap();
+        let (result, effects) = super::super::static_effects::measure(|| {
+            manager.resolve_session(&SessionConfigInput::new(".".into()))
+        });
+        assert_eq!(
+            result.map(|_| ()).unwrap_err().to_string(),
+            "Session cwd must be absolute"
+        );
+        assert_eq!(effects, [0; 12]);
+    }
+
+    /// The CLI adds no configuration semantics of its own: for the same
+    /// explicit inputs its analysis is exactly the shared Session
+    /// configuration owner's resolution, and its refusal is the owner's.
+    #[test]
+    fn cli_analysis_is_the_shared_resolver_result() {
+        let mut f = Fixture::new();
+        f.project(json!({"agent": {"model": {"model": "host/two"}}}));
+        std::fs::write(
+            f.host.launch_directory.join("AGENTS.md"),
+            "Project guidance",
+        )
+        .unwrap();
+        f.request.model = Some("host/one".into());
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        let shared = manager.resolve_session(&input).unwrap();
+        let cli = analyze(&f.request, &f.host).unwrap();
+        assert_eq!(
+            shared.session_model(),
+            &crate::model::session::SessionModelConfig::of(
+                crate::model::catalog::ModelRef::parse("host/one").unwrap()
+            )
+        );
+        assert_eq!(cli.session_model(), shared.session_model());
+        assert_eq!(cli.input.cwd, shared.input.cwd);
+        assert_eq!(cli.config, shared.config);
+        assert_eq!(cli.provenance, shared.provenance);
+        assert_eq!(cli.component_revisions, shared.component_revisions);
+        assert_eq!(cli.source_revisions, shared.source_revisions);
+        assert_eq!(cli.project_context_files, shared.project_context_files);
+        assert_eq!(shared.project_context_files[0].content, "Project guidance");
+
+        f.project(json!({"agent": {"model": {"model": "host/missing"}}}));
+        f.request.model = None;
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        let shared = manager.resolve_session(&input).map(|_| ()).unwrap_err();
+        let cli = analyze(&f.request, &f.host).map(|_| ()).unwrap_err();
+        assert_eq!(cli.to_string(), shared.to_string());
+    }
+
+    /// Source convention, not a behavior proof: the shared configuration
+    /// owner's source never spells process working-directory or environment
+    /// mutation calls, nor the CLI-only launch types. Rust cannot restrict
+    /// imports or calls inside one crate, so this deliberately limited
+    /// lexical check cannot see an alias; the behavior is proven by the two
+    /// tests above and by `unsafe_code = "deny"`, which already rejects the
+    /// edition-2024 `unsafe` environment mutators crate-wide.
+    #[test]
+    fn configuration_owner_source_spells_no_ambient_process_state_or_cli_type() {
         let source = include_str!("configuration.rs");
         for forbidden in [
             "current_dir(",
@@ -2581,17 +2644,6 @@ mod session_resolution {
                 "shared owner must not contain {forbidden}"
             );
         }
-        let f = Fixture::new();
-        let (manager, _) = f.request.session_input(&f.host).unwrap();
-        let (result, effects) = super::super::static_effects::measure(|| {
-            manager.resolve_session(&SessionConfigInput::new(".".into()))
-        });
-        assert!(result.is_err());
-        assert_eq!(effects, [0; 12]);
-        let cli = include_str!("launch.rs");
-        assert!(cli.contains("manager.resolve_session(&input)"));
-        assert!(!cli.contains("merged.overlay"));
-        assert!(!cli.contains("resolve_agent_profile"));
     }
 
     #[tokio::test]

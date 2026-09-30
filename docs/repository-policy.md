@@ -20,7 +20,7 @@ Dependencies must point inward toward rustX-owned contracts.
 
 External SDK types must terminate at adapter boundaries. Provider SDK types, MCP SDK types, database models, HTTP framework types, process implementation details, and control-plane schemas must not appear in agent-kernel interfaces.
 
-Test seams must not be published API. A fixture that substitutes a runtime-owned dependency — a provider adapter behind a validated catalog binding, a summary service behind a context runtime — must be `#[cfg(test)] pub(crate)` and must be exercised from the crate's own test build. `#[doc(hidden)] pub` hides a seam from documentation but leaves it callable by a consumer, and is not an acceptable substitute. Suites needing such a seam live under `tests/scripted/` (deterministic contracts) or `tests/boundary/` (in-crate boundary conformance) and compile into the crate through `src/lib.rs`; `tests/*/main.rs` binaries use published API only.
+Test seams must not be published API. A fixture that substitutes a runtime-owned dependency — a provider adapter behind a validated catalog binding, a summary service behind a context runtime — must be `#[cfg(test)] pub(crate)` and must be exercised from the crate's own test build. `#[doc(hidden)] pub` hides a seam from documentation but leaves it callable by a consumer, and is not an acceptable substitute. Suites needing such a seam live under `tests/scripted/` (deterministic contracts) or `tests/boundary/` (in-crate boundary conformance) and compile into the crate through `src/lib.rs`, except the App Server contracts in `tests/scripted/app_server/`, which compile as the session runtime manager's private test module so its owner gates stay private; `tests/*/main.rs` binaries use published API only.
 
 Composed Agent Loop conformance must not use a seam at all. There is one canonical external provider-emulation boundary — `test-support/fake-provider`, an external Python 3.12 process managed by uv — and a test that exercises the Agent Loop, the context engine, the tool runtime, or the capability plane end to end must reach it through the real catalog, adapter, HTTP client, and stream parser. A scripted injected adapter and the raw Rust HTTP fixture remain valid for internal state machines and for single-adapter translation tests respectively; neither is an implementation of composed conformance. Python is test-support only and must never become a rustX production runtime dependency.
 
@@ -84,16 +84,35 @@ A pull request that changes a persistence-facing schema, runtime event contract,
 
 ## 8. CI gates
 
-The baseline CI gate is:
+`.github/workflows/ci.yml` is the gate; `tests/README.md` documents its test
+architecture, lane selection and prerequisites. Every lane must pass:
 
-- `cargo fmt --all -- --check`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test --all-targets --all-features`
-- `uv sync --frozen` and `uv run --frozen pytest` in `test-support/fake-provider`
+- **quality** — `cargo fmt --all -- --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings` and
+  `git diff --check`;
+- **Rust test lanes** — deterministic contracts on Linux, real boundaries on
+  Linux, and the platform-sensitive boundaries natively on macOS, each
+  selected by Cargo target and libtest name prefix;
+- **lane coverage** — each Rust test lane runs
+  `cargo run --example check_test_lanes -- --job <job>`, which compares the
+  workflow's executing `cargo test` steps with native Cargo/libtest
+  discovery and fails on an unassigned target, an unexecuted Linux test, a
+  stale filter or `--skip`, or an unexecuted required macOS suite;
+- **provider emulator** — `uv sync --frozen` and `uv run --frozen pytest` in
+  `test-support/fake-provider`;
+- **TUI, App Server protocol and Web** — their typecheck, deterministic
+  tests, generated-protocol drift check, i18n, provenance and notices
+  checks, and the Web browser acceptance after one current-source
+  production build.
 
-The Rust job installs Python 3.12 and uv and runs with `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`, so the Agent Loop conformance suite fails on a missing toolchain instead of skipping itself.
+A mandatory prerequisite fails closed. Every step that runs a uv-dependent
+boundary sets `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`, so a missing toolchain is
+a failure rather than a skipped test; real executables are built before the
+tests that exec them. Opt-in live provider tests, measurements and fixture
+generators are `#[ignore]`d and are not correctness gates.
 
-Additional deterministic runtime fixtures will be added as the executor becomes functional.
+A green command is not coverage by itself: a filtered command that selects
+no runnable test, or a test that no lane executes, is a CI defect.
 
 ## 9. Branch protection
 

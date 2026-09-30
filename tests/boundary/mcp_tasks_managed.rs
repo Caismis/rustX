@@ -80,16 +80,9 @@ impl ProgressReporter for NoProgress {
 /// path: one `tools/call`, one remote task, one rustX poll loop, one result.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_managed_fastmcp_task_completes_through_one_tool_result() {
-    let uv = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("uv"))
-            .find(|path| path.is_file())
-    });
-    if uv.is_none() {
-        eprintln!(
-            "uv unavailable; the real managed FastMCP 4 Tasks acceptance was NOT exercised \
-             (skipped)"
-        );
+    if super::common::provider_emulator::required_uv("the real managed FastMCP 4 Tasks acceptance")
+        .is_none()
+    {
         return;
     }
     let directory = tempfile::tempdir().expect("workspace root");

@@ -530,19 +530,3 @@ pub fn write_python_package(workspace: &Path, name: &str, description: &str) {
     )
     .expect("requirements");
 }
-
-/// The `uv` executable on `PATH`, when present.
-#[must_use]
-pub fn uv_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("uv"))
-            .find(|path| path.is_file())
-    })
-}
-
-/// Whether `uv` is available for Python capability fixtures.
-#[must_use]
-pub fn uv_available() -> bool {
-    uv_path().is_some()
-}

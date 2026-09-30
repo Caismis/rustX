@@ -43,8 +43,8 @@
 //! # Layout
 //!
 //! The sources stay under `tests/` so `src/` contains production code only —
-//! the source-level guards that scan `src/model`, `src/agent`, and
-//! `src/context` keep their exact meaning. Cargo auto-discovers integration
+//! the lexical source conventions that scan `src/agent` and `src/context`
+//! see production code alone. Cargo auto-discovers integration
 //! targets from `tests/*.rs` and `tests/*/main.rs` only, so nothing here is
 //! also built as a separate test binary.
 //!

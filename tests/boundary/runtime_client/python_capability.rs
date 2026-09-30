@@ -32,13 +32,9 @@ use rustx::tools::types::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one complete capability fixture
 async fn capability_projection_covers_native_python_and_skills() {
-    let uv = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("uv"))
-            .find(|path| path.is_file())
-    });
-    if uv.is_none() {
-        eprintln!("uv unavailable; capability Python origin not exercised");
+    if super::super::common::provider_emulator::required_uv("the capability Python origin")
+        .is_none()
+    {
         return;
     }
     let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(

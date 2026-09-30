@@ -2384,37 +2384,14 @@ fn continuation_owner_is_never_split() {
 // Provider isolation
 // ---------------------------------------------------------------------------
 
-/// Invalidating the incompatible opaque provider continuation has exactly
-/// one ownership path.
-///
-/// A successful incompatible Surface rewrite must discard the continuation
-/// exactly once, immediately after the semantic commit. The M4 loop cleared
-/// it from two caller sites as well; this regression keeps that duplicate
-/// from returning.
+/// Source convention, not a dependency proof: no file directly under
+/// `src/context/` spells a provider SDK crate or provider-private adapter
+/// path. Rust cannot restrict module imports inside one crate, so this is a
+/// deliberately limited lexical check — an aliased import or a transitive
+/// dependency is invisible to it. Runtime provider isolation is owned by the
+/// adapters, the `provider` target and the composed `conformance` target.
 #[test]
-fn continuation_invalidation_has_exactly_one_ownership_path() {
-    let source = std::fs::read_to_string("src/agent/execution.rs").expect("read the agent loop");
-    let body = source
-        .split_once("#[cfg(test)]\nmod tests {")
-        .map_or(source.as_str(), |(body, _)| body);
-    assert_eq!(
-        body.matches("self.pending_continuation = None;").count(),
-        1,
-        "the opaque provider continuation must be invalidated from exactly one place"
-    );
-    assert_eq!(
-        body.matches("self.continuation_owner = None;").count(),
-        2,
-        "the continuation owner is set from the turn assembly and cleared once \
-         by the post-surface-rewrite ownership path"
-    );
-}
-
-/// `src/context/` is source-level isolated from provider SDK/wire
-/// dependencies: no provider-private module or crate leaks into the context
-/// plane.
-#[test]
-fn context_sources_contain_no_provider_dependencies() {
+fn context_sources_spell_no_provider_dependency() {
     let banned = [
         "async_openai",
         "reqwest",

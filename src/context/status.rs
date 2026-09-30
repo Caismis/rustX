@@ -1815,12 +1815,16 @@ mod tests {
             &dyn ContributionEmissionLookup,
         ) -> Option<PreparedAgentStatus> = AgentStatusEngine::prepare_with_inputs;
         let _ = production_entry_point;
+    }
 
-        // And production Agent Status source never names the Todo state
-        // owner outside this test suite. The concrete list, its snapshot
-        // authority, and its writer are all reachable only from the
-        // `#[cfg(test)]` import below, so no production path in this module
-        // can read or derive Todo state (Issue #259).
+    /// Source convention, not a type proof: production Agent Status code
+    /// never spells the Todo state owner types outside this test suite
+    /// (Issue #259). The compile-time boundary is the entry-point signature
+    /// bound above; this deliberately limited lexical check additionally
+    /// keeps those names out of the module's own fields and helpers. It
+    /// cannot see an alias or a re-export.
+    #[test]
+    fn ext259_production_agent_status_source_spells_no_todo_owner() {
         let source = include_str!("status.rs");
         let (production, suite) = source
             .split_once("\nmod tests {")

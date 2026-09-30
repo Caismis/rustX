@@ -33,6 +33,7 @@ corepack install
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
+pnpm check:i18n
 pnpm check:provenance
 pnpm build
 pnpm dev
@@ -40,9 +41,12 @@ pnpm dev
 
 Open `http://127.0.0.1:5173`. `pnpm preview` serves the production `dist/` at
 `http://127.0.0.1:4173`. Both bind loopback. There is no frontend lint configuration;
-strict TypeScript, deterministic tests and production build are the frontend checks.
-The separate CI job also runs the real-browser integration below. Rust-only jobs do
+strict TypeScript, deterministic tests, translation ownership, provenance and the
+production build are the frontend checks. The CI job builds production once, inside
+`pnpm test:e2e` right before the real-browser integration below. Rust-only jobs do
 not depend on Node; generated protocol and TUI checks have their own jobs.
+`pnpm test:issue-420-performance` records incremental rendering counters; it is a
+measurement, excluded from `pnpm test` and from CI, and asserts no timing threshold.
 
 ## Normal local development
 
@@ -336,12 +340,14 @@ cargo build --bins
 cd test-support/fake-provider
 uv sync --frozen
 cd ../../web-console
-pnpm exec playwright install chromium
-pnpm test:e2e
+pnpm test:e2e   # CONTAINER_ENGINE=podman to use Podman instead of Docker
 ```
 
-`pnpm test:e2e` builds the frontend and serves its production output on port 5173
-(which must be free). The shared Playwright acceptance suite drives concurrent Sessions, streaming, browser loss,
+`pnpm test:e2e` is `pnpm build && bash scripts/browser-tests.sh`: it builds the
+frontend from the current source (including the artifact provenance check), then
+runs Playwright against its production output on port 5173 (which must be free).
+Chromium runs only in the digest-pinned Playwright container started by
+`browser-tests.sh`; no host browser is installed or used. The shared Playwright acceptance suite drives concurrent Sessions, streaming, browser loss,
 interactions, detached publication, cold settings resolution and the wire inspector.
 Named provider gates and explicit observations establish ordering; there are no
 race-proof sleeps. The provider scenario's final report **and exit status** must

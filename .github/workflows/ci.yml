@@ -118,10 +118,12 @@ jobs:
       - name: Build the binaries the boundary-owning unit tests exec
         run: cargo build --bins
 
-      # Source-module unit tests + the scripted contract suites (agent/,
-      # context/, runtime_client/, capability/, interaction/, background/,
-      # tools/). The in-crate boundary conformance suites are selected OUT by
-      # their `boundary_suites::` prefix; they run in the boundary jobs.
+      # Source-module unit tests + the scripted contract suites
+      # (`scripted_suites::`) + the App Server scripted contracts compiled
+      # under the session runtime manager's private test module
+      # (`local_runtime::session_runtime_manager::tests::`). The in-crate
+      # boundary conformance suites are selected OUT by their
+      # `boundary_suites::` prefix; they run in the boundary jobs.
       #
       # `--examples` runs the `session_list_benchmark` workload-checker tests;
       # `--bins` executes zero tests today, since no binary defines a
@@ -140,12 +142,20 @@ jobs:
       - name: Run the pure contract targets
         run: cargo test --test contracts --test provider --all-features
 
+      # Cargo/libtest discovery of this lane's targets against every Linux
+      # step that selects them: an unassigned target, a stale filter or
+      # --skip, or a Linux test no lane executes fails here. The checker's own
+      # deterministic tests ran above as part of `--examples`.
+      - name: Check test lane coverage
+        run: cargo run --example check_test_lanes -- --job rust-contracts
+
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
   # plane (shell, filesystem, executable discovery), and composed
-  # provider-emulator conformance. The emulator is mandatory:
-  # RUSTX_REQUIRE_PROVIDER_EMULATOR=1 turns a missing toolchain into a hard
-  # failure instead of a silent skip.
+  # provider-emulator conformance. The uv toolchain is mandatory for every
+  # step that runs a uv-dependent boundary (the emulator and the managed
+  # FastMCP children): RUSTX_REQUIRE_PROVIDER_EMULATOR=1 turns a missing
+  # toolchain into a hard failure instead of a silent skip.
   rust-boundaries:
     name: Boundary suites (Linux)
     runs-on: ubuntu-latest
@@ -192,6 +202,8 @@ jobs:
         run: cargo build --bins
 
       - name: Run the in-crate boundary suites
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: 'cargo test --lib --all-features -- boundary_suites::'
 
       - name: Run the external boundary targets
@@ -207,6 +219,11 @@ jobs:
           --test cfg3_catalog
           --test cfg3_managed_output
 
+      # See the same step in `rust-contracts`; this lane's targets are the
+      # lib test harness and the external boundary targets.
+      - name: Check test lane coverage
+        run: cargo run --example check_test_lanes -- --job rust-boundaries
+
   # Platform coverage is intentional, not duplicated by habit. macOS runs
   # exactly the classes where OS semantics matter:
   #
@@ -221,7 +238,8 @@ jobs:
   # - external targets: durable (SQLite/filesystem), process (spawned
   #   binary, stdio/IPC), subagent (child process/control socket), tools
   #   (shell, filesystem, executable discovery), conformance (external
-  #   emulator process).
+  #   emulator process), cfg3_catalog (configuration source resolution over
+  #   real files) and cfg3_managed_output (managed Tool output storage).
   #
   # The contracts and provider targets assert deterministic JSON/SSE
   # translation with no process or filesystem semantics, so they are
@@ -313,6 +331,8 @@ jobs:
         run: /usr/bin/time -l cargo test --lib --bins --all-features --no-run --timings
 
       - name: Run unit tests and the in-crate boundary suites
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: '/usr/bin/time -l cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Compile the external boundary targets
@@ -338,6 +358,13 @@ jobs:
           --test conformance
           --test cfg3_catalog
           --test cfg3_managed_output
+
+      # Native macOS discovery: both --skip selectors must still exclude
+      # tests, and every required boundary suite (see REQUIREMENTS in the
+      # checker) must execute here. The feature set matches the binaries
+      # built above, so no library is rebuilt for the checker.
+      - name: Check test lane coverage
+        run: cargo run --all-features --example check_test_lanes -- --job rust-platform-boundaries
 
       - name: Native Cargo timing reports
         if: always()
@@ -504,9 +531,6 @@ jobs:
       - name: Source provenance and dependency notices
         working-directory: web-console
         run: pnpm check:provenance
-      - name: Production build from checked-in source
-        working-directory: web-console
-        run: pnpm build
       # These tools serve only the browser integration fixture. Rust-only jobs
       # above remain independent of Node and of this frontend package.
       - uses: dtolnay/rust-toolchain@stable
@@ -525,10 +549,14 @@ jobs:
         run: uv sync --frozen
       - name: Build the real App Server and native Tool supervisors
         run: cargo build --bins
-      # browser-tests.sh supplies Chromium, fonts and rasterization libraries in
-      # one digest-pinned Playwright container, also used for reference updates.
-      # No host browser/font install or browser cache can change the rendering.
-      - name: Full product browser acceptance against the real App Server and Product Host
+      # `pnpm test:e2e` is `pnpm build && bash scripts/browser-tests.sh`: the one
+      # production build of this job (Vite plus the artifact provenance check)
+      # runs from checked-in source immediately before browser acceptance, so
+      # no earlier step builds or reuses `dist`. browser-tests.sh supplies
+      # Chromium, fonts and rasterization libraries in one digest-pinned
+      # Playwright container, also used for reference updates. No host
+      # browser/font install or browser cache can change the rendering.
+      - name: Production build and full product browser acceptance against the real App Server and Product Host
         working-directory: web-console
         run: pnpm test:e2e
       - name: Browser evidence

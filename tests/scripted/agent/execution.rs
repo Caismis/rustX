@@ -2243,10 +2243,14 @@ fn replay_rejects_invalid_sequences() {
 // Contract boundaries
 // ---------------------------------------------------------------------------
 
-/// M3 modules contain no provider-specific branching: the agent kernel
-/// source never names a provider protocol.
+/// Source convention, not a behavior proof: no file under `src/agent/`
+/// spells a provider protocol name. This deliberately limited lexical check
+/// keeps provider vocabulary out of the kernel source; it cannot see a
+/// provider branch reached through a neutral name. Provider-independent
+/// execution is proven behaviorally by the scripted `agent` suites, which
+/// drive the loop through a provider-free scripted adapter.
 #[test]
-fn agent_modules_contain_no_provider_branching() {
+fn agent_sources_spell_no_provider_protocol() {
     let agent_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("agent");
