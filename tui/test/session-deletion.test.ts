@@ -49,7 +49,7 @@ test("deletion requests carry native identity and revision only", () => {
 
 test("Rust and TypeScript use the same complete result fixtures", async () => {
   const { readFile } = await import("node:fs/promises");
-  const fixtures = JSON.parse(await readFile(new URL("./deletion-fixtures.json", import.meta.url), "utf8"));
+  const fixtures = JSON.parse(await readFile(new URL("../../protocol/app-server/deletion-fixtures.json", import.meta.url), "utf8"));
   assert.deepEqual(fixtures, Object.values(variants));
 });
 

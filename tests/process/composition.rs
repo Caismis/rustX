@@ -74,7 +74,6 @@ fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture 
     LaunchFixture {
         config: config_path,
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace,
         runtime_root: root.join("private"),
     }

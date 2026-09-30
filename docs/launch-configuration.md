@@ -6,7 +6,9 @@ schema and exact overlay units. Ordinary authoring uses `~/rustx/rustx.toml` and
 roots. Workspace same-name resources shadow User resources completely, including
 malformed duplicates. There is no ancestor configuration accumulation.
 
-`rustx --workspace /absolute/project` resolves User < Workspace configuration.
+`rustx config check --workspace /absolute/project` resolves User < Workspace
+configuration; an App Server Session resolves it for the Workspace it was
+created with.
 `--config /absolute/source.toml` replaces only the User source pathname.
 `--runtime-root /absolute/runtime` changes process storage, whose default is
 `~/rustx/runtime`. Neither flag moves User resources. Configuration paths and

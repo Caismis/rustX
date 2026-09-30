@@ -717,7 +717,6 @@ chat_reasoning_replay = "omit"
             &(LaunchFixture {
                 config: config_path,
                 startup_session: rustx::local_runtime::StartupSession::Empty,
-                session_name: None,
                 workspace,
                 runtime_root: root.path().join("private"),
             })

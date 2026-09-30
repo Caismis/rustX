@@ -31,8 +31,8 @@ rustX currently supports:
 - runtime-owned model selection and switching;
 - native Sessions with resume, rename, clone, fork, and tree workflows;
 - finite background Jobs and durable child Agents with message, activation wait, interrupt and resume controls;
-- Runtime Client protocol over stdio/JSONL and the `rustx-tui` reference
-  terminal client.
+- App Server as the sole external product control protocol over stdio/JSONL
+  and WebSocket, including the `rustx-tui` terminal client.
 
 These are current capabilities of the pre-alpha repository, not a promise of
 production maturity.
@@ -56,7 +56,6 @@ See [Local development](DEVELOPMENT.md) for the canonical App Server, TUI, and c
 cargo build --bin rustx
 pnpm --dir dev install --frozen-lockfile
 pnpm --dir tui install --frozen-lockfile
-./target/debug/rustx --workspace /path/to/project
 pnpm --dir dev tui -- --workspace /absolute/path/to/project
 ```
 
@@ -66,15 +65,16 @@ Native-only startup needs neither Python nor MCP. The
 [advanced resource example](examples/local-runtime/README.md) also demonstrates
 optional managed Python tools and fixed Workflows.
 
-Startup begins on a fresh/unused empty Session. Earlier Sessions remain reachable
-through `/resume`; `--session` requests explicit selection.
-`--name` only names the selected Session. Failed launch resolution or composition
-cannot publish another active Session.
+`rustx` itself starts no Session: clients control it only through
+`rustx app-server`, and a bare `rustx` prints help. The TUI starts on a new
+Session; earlier Sessions remain reachable through `/resume`, and the TUI's
+`--session` requests explicit selection. A failed Session composition publishes
+nothing.
 
 ## Runtime and reference client
 
-`rustx` is the runtime. `rustx-tui` is a reference client and presentation
-layer.
+`rustx` is the runtime; `rustx app-server` is its only external product
+control protocol. `rustx-tui` is a reference client and presentation layer.
 
 The TUI spawns `rustx`, communicates with it through the App Server protocol
 over stdio/JSONL, and projects runtime snapshots and events into a terminal

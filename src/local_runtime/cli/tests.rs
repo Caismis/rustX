@@ -8,7 +8,6 @@ fn cli01_grammar_is_consistent_and_every_command_converts() {
     use clap::CommandFactory;
     Cli::command().debug_assert();
     for args in [
-        vec![],
         vec!["config", "check"],
         vec!["config", "show", "--sources"],
         vec!["config", "show", "--agent", "main"],
@@ -79,15 +78,74 @@ fn cli02_lexical_failures_and_cli03_finite_permissions() {
     ));
 }
 #[test]
-fn cli04_omission_and_identity_conversion() {
-    let Command::Launch(request) = parse(&[]).unwrap() else {
+fn cli04_bare_invocation_is_help_and_launch_grammar_is_retired() {
+    let Command::Help(help) = parse(&[]).unwrap() else {
+        panic!("a bare invocation is help, never an implicit service")
+    };
+    assert!(help.contains("Usage:") && help.contains("app-server"));
+    let session = "ses_eb278475-f606-7143-87df-8cb657e1c7ee";
+    let node = "node_c346d387-9a21-70f0-8e5c-7422521183b3";
+    let conversation = "conv_eb278475-f606-7143-87df-8cb657e1c7ee";
+    // Top-level launch arguments are lexical errors, whatever their values,
+    // alone or in the retired combinations; nothing redirects them.
+    for args in [
+        vec!["--session", session],
+        vec!["--session", session, "--node", node],
+        vec!["--node", node],
+        vec!["--name", "display"],
+        vec!["--inspect-conversation", conversation],
+        vec!["--model", "local/model"],
+        vec!["--config", "/absolute/user.toml"],
+        vec!["--workspace", "/absolute/project"],
+        vec!["--runtime-root", "/absolute/runtime"],
+        vec!["--config=/absolute/user.toml", "config", "check"],
+        vec![
+            "--runtime-root",
+            "/absolute/runtime",
+            "app-server",
+            "--listen",
+            "stdio",
+        ],
+    ] {
+        let error = parse(&args).expect_err(&format!("{args:?}")).to_string();
+        assert!(
+            error.contains("Usage:") && error.len() < 1024,
+            "{args:?}: {error}"
+        );
+    }
+    // The same spellings remain valid where their surviving owner declares them.
+    let Command::Check { request, .. } = parse(&[
+        "config",
+        "check",
+        "--config",
+        "/absolute/user.toml",
+        "--workspace",
+        "/absolute/project",
+        "--runtime-root",
+        "/absolute/runtime",
+        "--model",
+        "local/model",
+    ])
+    .unwrap() else {
         panic!()
     };
-    assert!(
-        request.config.is_none() && request.workspace.is_none() && request.runtime_root.is_none()
-    );
-    assert!(request.model.is_none() && request.session_name.is_none());
-    assert_eq!(request.startup_session, StartupSession::Empty);
+    assert_eq!(request.config, Some("/absolute/user.toml".into()));
+    assert_eq!(request.workspace, Some("/absolute/project".into()));
+    assert_eq!(request.runtime_root, Some("/absolute/runtime".into()));
+    assert_eq!(request.model.as_deref(), Some("local/model"));
+    assert!(matches!(
+        parse(&[
+            "app-server",
+            "--listen",
+            "stdio",
+            "--config",
+            "/absolute/user.toml",
+            "--runtime-root",
+            "/absolute/runtime"
+        ])
+        .unwrap(),
+        Command::AppServer(_)
+    ));
     let Command::Check { request, .. } = parse(&["config", "check"]).unwrap() else {
         panic!()
     };
@@ -97,36 +155,6 @@ fn cli04_omission_and_identity_conversion() {
             && request.runtime_root.is_none()
             && request.model.is_none()
     );
-    let session = "ses_eb278475-f606-7143-87df-8cb657e1c7ee";
-    let node = "node_c346d387-9a21-70f0-8e5c-7422521183b3";
-    let Command::Launch(request) = parse(&[
-        "--session",
-        session,
-        "--node",
-        node,
-        "--name",
-        "  display  ",
-    ])
-    .unwrap() else {
-        panic!()
-    };
-    assert_eq!(
-        request.startup_session,
-        StartupSession::Select {
-            session: SessionId::new(session),
-            node: Some(SessionNodeId::new(node))
-        }
-    );
-    assert_eq!(request.session_name.as_deref(), Some("display"));
-    let conversation = "conv_eb278475-f606-7143-87df-8cb657e1c7ee";
-    assert!(parse(&["--inspect-conversation", conversation]).is_ok());
-    for args in [
-        vec!["--session", session],
-        vec!["--node", node],
-        vec!["--name", "x"],
-    ] {
-        assert!(parse(&[vec!["--inspect-conversation", conversation], args].concat()).is_err());
-    }
 }
 #[test]
 fn cli05_explicit_false_and_typed_init_values() {
@@ -186,7 +214,9 @@ fn cli06_equals_dash_values_and_terminator() {
 #[test]
 fn cli08_help_is_pure_and_cli09_child_is_not_public() {
     for args in [
+        vec![],
         vec!["--help"],
+        vec!["help"],
         vec!["config", "--help"],
         vec!["config", "show", "--help"],
         vec!["workflow", "check", "--help"],
@@ -214,9 +244,16 @@ fn cli08_production_static_dispatch_has_zero_prohibited_effects() {
         .build()
         .unwrap();
     for args in [
+        vec![],
         vec!["--help"],
         vec!["init", "--help"],
         vec!["app-server", "--help"],
+        vec![workspace.as_str(), config.as_str()],
+        vec!["--session", "ses_eb278475-f606-7143-87df-8cb657e1c7ee"],
+        vec![
+            "--inspect-conversation",
+            "conv_eb278475-f606-7143-87df-8cb657e1c7ee",
+        ],
         vec!["config", "check", &workspace, &config],
         vec!["config", "show", "--sources", &workspace, &config],
         vec!["config", "show", "--agent=main", &workspace, &config],
@@ -236,7 +273,7 @@ fn cli08_production_static_dispatch_has_zero_prohibited_effects() {
 #[test]
 fn exact_paths_survive_public_cli_conversion() {
     for value in [" /tmp/rustx config ", "/tmp/rustx config ", " "] {
-        for prefix in [vec![], vec!["config", "check"]] {
+        for prefix in [vec!["config", "check"]] {
             let command = parse(
                 &[
                     prefix,
@@ -252,7 +289,7 @@ fn exact_paths_survive_public_cli_conversion() {
                 .concat(),
             )
             .unwrap();
-            let (Command::Launch(request) | Command::Check { request, .. }) = command else {
+            let Command::Check { request, .. } = command else {
                 panic!()
             };
             for path in [request.config, request.workspace, request.runtime_root] {
@@ -353,59 +390,23 @@ fn exact_empty_values_are_rejected_without_blanket_whitespace_rejection() {
 }
 
 #[test]
-fn launch_normalization_is_explicit_after_exact_lexical_parsing() {
-    let session = " ses_eb278475-f606-7143-87df-8cb657e1c7ee ";
-    let node = " node_c346d387-9a21-70f0-8e5c-7422521183b3 ";
-    let args = [
-        "--model",
-        " local/model ",
-        "--name",
-        " display ",
-        "--session",
-        session,
-        "--node",
-        node,
-    ];
-    let lexical = Cli::try_parse_from(std::iter::once("rustx").chain(args)).unwrap();
-    assert_eq!(
-        lexical.launch.selection.model.as_deref(),
-        Some(" local/model ")
-    );
-    assert_eq!(lexical.launch.name.as_deref(), Some(" display "));
-    assert_eq!(lexical.launch.session.as_deref(), Some(session));
-    assert_eq!(lexical.launch.node.as_deref(), Some(node));
-    let Command::Launch(request) = parse(&args).unwrap() else {
+fn model_selection_normalization_is_explicit_after_exact_lexical_parsing() {
+    let lexical =
+        Cli::try_parse_from(["rustx", "config", "check", "--model", " local/model "]).unwrap();
+    let PublicCommand::Config {
+        command: ConfigCommand::Check(args),
+    } = lexical.command
+    else {
         panic!()
     };
-    assert_eq!(request.model.as_deref(), Some("local/model"));
-    assert_eq!(request.session_name.as_deref(), Some("display"));
-    assert_eq!(
-        request.startup_session,
-        StartupSession::Select {
-            session: SessionId::new(session.trim()),
-            node: Some(SessionNodeId::new(node.trim())),
-        }
-    );
-    let conversation = " conv_eb278475-f606-7143-87df-8cb657e1c7ee ";
-    let Command::Launch(request) = parse(&["--inspect-conversation", conversation]).unwrap() else {
-        panic!()
-    };
-    assert_eq!(
-        request.startup_session,
-        StartupSession::InspectConversation {
-            conversation_id: crate::runtime::identity::ConversationId::parse(conversation.trim())
-                .unwrap(),
-        }
-    );
-    for flag in ["--model", "--name", "--session", "--inspect-conversation"] {
-        assert!(parse(&[flag, " "]).is_err());
-    }
+    assert_eq!(args.selection.model.as_deref(), Some(" local/model "));
     let Command::Check { request, .. } =
         parse(&["config", "check", "--model", " local/model "]).unwrap()
     else {
         panic!()
     };
     assert_eq!(request.model.as_deref(), Some("local/model"));
+    assert!(parse(&["config", "check", "--model", " "]).is_err());
 }
 
 #[cfg(unix)]
@@ -415,7 +416,9 @@ fn os_argv_paths_survive_typed_conversion() {
     use std::os::unix::ffi::OsStringExt;
 
     let path = OsString::from_vec(b"/tmp/rustx-\xff ".to_vec());
-    let Command::Launch(request) = parse_command([
+    let Command::Check { request, .. } = parse_command([
+        OsString::from("config"),
+        OsString::from("check"),
         OsString::from("--config"),
         path.clone(),
         OsString::from("--workspace"),

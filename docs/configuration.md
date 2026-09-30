@@ -44,14 +44,12 @@ accumulate. Runtime files can also contain ownership locks, SQLite sidecars and
 physical execution scratch beneath their native owner directories.
 
 `--config /absolute/file.toml` replaces the User document binding for this
-process. User resources stay at `~/rustx/.agents`; the Workspace document stays
+process (`rustx app-server` and the offline configuration commands). User resources stay at `~/rustx/.agents`; the Workspace document stays
 at `<workspace>/rustx.toml`. `--runtime-root /absolute/directory` replaces only
 the process runtime storage root. Both are fixed process bindings.
 Workspace identity never determines the default runtime storage root.
 
 ```sh
-rustx --workspace /absolute/project
-rustx --config /absolute/user.toml --runtime-root /absolute/runtime --workspace /absolute/project
 rustx app-server --config /absolute/user.toml --runtime-root /absolute/runtime --listen stdio
 rustx app-server --listen ws://127.0.0.1:7777 --token-file /absolute/server-token
 rustx config check --workspace /absolute/project

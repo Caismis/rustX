@@ -18,6 +18,10 @@
 //!         v
 //! LocalConversationCore  (the shared semantic composition, inactive)
 //!         |
+//!         +-- into_bound(): bind RuntimeClientHost over the inert runtime
+//!         |       -> the App Server's SessionRuntimeManager arms its
+//!         |          pre-activation work, then activates
+//!         |
 //!         +-- into_interactive(): bind RuntimeClientHost, then activate
 //!         |       -> LocalConversationRuntime (Runtime Client + endpoint)
 //!         |
@@ -50,22 +54,19 @@
 //! The governing invariant:
 //!
 //! > Durable Session identity and graph state belong to `SessionController`.
-//! > `LocalSessionClient` is a single-runtime CLI attachment, with explicit
-//! > Session identity and client-local routing. Catalog commands do not quiesce
-//! > or replace a runtime. Concurrent residency belongs to `SessionRuntimeManager`.
+//! > Concurrent runtime residency belongs to `SessionRuntimeManager`, which
+//! > composes each resident runtime through this core for the App Server.
 //!
-//! A client — including the Issue #39 TUI — owns the child process
-//! lifecycle and nothing else. It never assembles provider adapters, model
-//! parameters, context engines, tool registries, capability coordinators,
-//! or summary models.
+//! A client — the TUI or the Web console — speaks the App Server protocol and
+//! never assembles provider adapters, model parameters, context engines, tool
+//! registries, capability coordinators, or summary models.
 //!
 //! # Ordering
 //!
 //! Composition follows a fixed order, and the initial capability candidate
-//! is **prepared and committed before any protocol input is served**. A
-//! *core* startup failure therefore never leaves a partially initialized
-//! protocol server: composition returns an error and the process exits
-//! before a single protocol byte is written.
+//! is **prepared and committed before the runtime activates**. A *core*
+//! composition failure therefore never leaves a partially initialized
+//! runtime: composition returns an error before any client can attach.
 //!
 //! # Fatal vs isolated startup failures (Issue #81)
 //!
@@ -125,15 +126,13 @@ use crate::runtime::resources::{
     RuntimeResourceSnapshot,
 };
 use crate::runtime::subagent::{
-    ResolvedSubagentTool, SubagentResolver, child_conversation_inspection_liveness_path,
-    child_conversation_inspection_socket_path, child_conversation_store_path,
-    is_safe_child_conversation_component,
+    ResolvedSubagentTool, SubagentResolver, child_conversation_store_path,
 };
 use crate::runtime::workflow::{WorkflowCatalog, WorkflowOutputLatch, WorkflowRuntime};
 use crate::runtime::workspace::WorkspaceManager;
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
-    HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientSessionControl,
+    HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig,
 };
 use crate::skills::SkillDiscoveryConfig;
 use crate::tools::environment::ToolEnvironment;
@@ -143,18 +142,17 @@ use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ToolDefinition;
 
 use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
-use super::configuration::{AdmittedSessionConfig, SessionLocations};
+use super::configuration::AdmittedSessionConfig;
 
 use super::session::{
-    DisplayPreviewSubject, SessionCatalog, SessionError, SessionId, SessionNodeId,
-    SessionNodeOrigin, SessionPersistentState,
+    SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
+    SessionPersistentState,
 };
-use super::supervisor::{LocalSessionAttachment, SessionAttachmentError};
 
-/// Explicit client-local startup routing, never a catalog-global selection.
+/// Explicit composition startup routing, never a catalog-global selection.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum StartupSession {
-    /// Create an independent empty Session for this CLI attachment.
+    /// Create an independent empty Session for this composition.
     #[default]
     Empty,
     /// Bind an explicitly named Session and optionally choose its graph node.
@@ -165,12 +163,6 @@ pub enum StartupSession {
         /// The lineage node to bind; the Session's own active node when
         /// absent.
         node: Option<SessionNodeId>,
-    },
-    /// Attach a Runtime Client to a known durable child conversation. This
-    /// path owns no Session catalog selection and is read-only.
-    InspectConversation {
-        /// The durable conversation identity to inspect.
-        conversation_id: ConversationId,
     },
 }
 
@@ -183,8 +175,6 @@ pub enum StartupSession {
 pub struct LocalRuntimeDependencies {
     /// Local product Session selection; never part of effective configuration.
     pub startup_session: StartupSession,
-    /// Optional startup metadata operation, independent of configuration resolution.
-    pub session_name: Option<String>,
     /// Optional test/embedding provider environment. Production uses the
     /// resolver's captured host snapshot, never a second launch-time read.
     pub credentials: Option<Arc<dyn CredentialEnvironment>>,
@@ -201,7 +191,6 @@ impl Default for LocalRuntimeDependencies {
     fn default() -> Self {
         Self {
             startup_session: StartupSession::Empty,
-            session_name: None,
             credentials: None,
             estimator: Arc::new(DefaultTokenEstimator),
             child_program: None,
@@ -1082,15 +1071,6 @@ impl LocalConversationCore {
             StartupSession::Select { session, node } => {
                 catalog.plan_attachment(session, node.as_ref())?
             }
-            StartupSession::InspectConversation { .. } => {
-                return Err(LocalRuntimeError::ToolRuntime {
-                    detail: "conversation inspection requires the inspection entry point".into(),
-                });
-            }
-        };
-        let planned = match &dependencies.session_name {
-            Some(name) => planned.with_name(name)?,
-            None => planned,
         };
         let (session_id, node, intent) = planned.destination_lineage()?;
         let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
@@ -1885,43 +1865,7 @@ impl LocalConversationCore {
     /// cannot bind (a fresh core leaves no reason: no bridge exists and
     /// the runtime is inactive).
     pub fn into_interactive(self) -> Result<LocalConversationRuntime, LocalRuntimeError> {
-        self.into_interactive_with_control(None)
-    }
-
-    /// Finishes composition with the native Session supervisor installed as
-    /// the typed Runtime Client control seam.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LocalRuntimeError`] when the Runtime Client host cannot be
-    /// bound over the inactive runtime.
-    pub fn into_interactive_with_session_control(
-        self,
-        control: Arc<dyn RuntimeClientSessionControl>,
-    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
-        self.into_interactive_with_control(Some(control))
-    }
-
-    /// Binds the native Session supervisor as the Runtime Client control
-    /// seam and leaves the runtime **inert**, for a caller that must commit
-    /// durable state between binding and activation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LocalRuntimeError`] when the Runtime Client host cannot be
-    /// bound over the inactive runtime.
-    pub(crate) fn into_bound_with_session_control(
-        self,
-        control: Arc<dyn RuntimeClientSessionControl>,
-    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
-        self.into_bound_with_control(Some(control))
-    }
-
-    fn into_interactive_with_control(
-        self,
-        control: Option<Arc<dyn RuntimeClientSessionControl>>,
-    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
-        let runtime = self.into_bound_with_control(control)?;
+        let runtime = self.into_bound()?;
         runtime.activate();
         Ok(runtime)
     }
@@ -1929,27 +1873,21 @@ impl LocalConversationCore {
     /// Binds the Runtime Client host over the composed runtime and stops
     /// there: the returned runtime is **inert**.
     ///
-    /// Binding and activation are separated so a caller with a durable
-    /// commit of its own — the local product composition and its startup
-    /// catalog transaction — can place that commit between them. Every
-    /// fallible composition step is then on the pre-commit side, and the
-    /// activation that follows the commit cannot fail.
-    pub(crate) fn into_bound_with_control(
-        self,
-        control: Option<Arc<dyn RuntimeClientSessionControl>>,
-    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+    /// Binding and activation are separated so a caller with work of its
+    /// own before activation — the runtime manager's display-projection
+    /// arming, a child's interaction route and observation subscription — can
+    /// place it between them. Every fallible composition step is then on the
+    /// pre-activation side, and the activation that follows cannot fail.
+    pub(crate) fn into_bound(self) -> Result<LocalConversationRuntime, LocalRuntimeError> {
         // 14. The Runtime Client projection/control/attachment adapter over
         // that runtime. Binding is a pre-activation composition decision
         // (Issue #61): the runtime is still inert here, so the host's
         // initial snapshot is the runtime's real state at the activation
         // cut and no bootstrap fact can fabricate a live client event.
-        let host = RuntimeClientHost::new_with_control(
-            RuntimeClientHostConfig {
-                runtime: self.runtime.clone(),
-                replay_limit: None,
-            },
-            control,
-        )?;
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: self.runtime.clone(),
+            replay_limit: None,
+        })?;
 
         Ok(LocalConversationRuntime { core: self, host })
     }
@@ -1967,7 +1905,7 @@ impl LocalConversationCore {
         ),
         LocalRuntimeError,
     > {
-        let runtime = self.into_bound_with_control(None)?;
+        let runtime = self.into_bound()?;
         runtime.runtime().install_interaction_route(route);
         let observations = runtime
             .runtime()
@@ -1989,291 +1927,6 @@ impl LocalConversationCore {
         // The one explicit lifecycle boundary, without step 14.
         self.runtime.activate();
         HeadlessConversationRuntime { core: self }
-    }
-}
-
-/// Single-runtime local CLI composition. Durable authority is independently owned
-/// by `SessionController`; this adapter owns only its attached runtime and host.
-pub struct LocalSessionClient {
-    runtime: LocalConversationRuntime,
-    supervisor: Arc<LocalSessionAttachment>,
-}
-
-impl std::fmt::Debug for LocalSessionClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalSessionClient")
-            .field("conversation_id", self.runtime.runtime().conversation_id())
-            .finish_non_exhaustive()
-    }
-}
-
-impl LocalSessionClient {
-    /// Loads the native catalog, resolves the Session this launch starts on,
-    /// composes that `ConversationRuntime`, binds typed Session control, and
-    /// activates the runtime before serving protocol input.
-    ///
-    /// The startup Session is an empty one unless
-    /// [`LocalRuntimeDependencies::startup_session`] explicitly names a persisted
-    /// Session. Whichever
-    /// it is, the catalog transition is planned first and committed once,
-    /// after composition and host binding have succeeded, so a launch that
-    /// fails changes no published catalog state at all — including a first
-    /// launch, which publishes no catalog. The destination conversation
-    /// database may be seeded before that commit; a conversation the
-    /// catalog does not name is neither selectable nor resumable.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LocalRuntimeError`] when startup configuration, catalog
-    /// loading, capability composition, runtime recovery, or host binding
-    /// fails.
-    #[allow(clippy::too_many_lines)]
-    pub async fn compose(
-        paths: &AdmittedSessionConfig,
-        dependencies: &LocalRuntimeDependencies,
-    ) -> Result<Self, LocalRuntimeError> {
-        // /new uses this client's explicit launch inputs, not settings copied
-        // from the Session that a cold resume is about to resolve.
-        let mut new_session_settings = SessionPersistentState::from_input(&paths.input);
-        new_session_settings.model = Some(paths.config.initial_model().clone());
-        // Admit the one native catalog owner before reading any persisted input.
-        // Retain it through resolution/composition, without a catalog mutex.
-        let lifecycle = Arc::new(
-            crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
-                .map_err(|e| LocalRuntimeError::ToolRuntime {
-                    detail: e.to_string(),
-                })?,
-        );
-        let existing_catalog = SessionCatalog::open_existing(lifecycle.root())?;
-
-        let resumed;
-        let paths = if let StartupSession::Select { session, node } = &dependencies.startup_session
-        {
-            let catalog = existing_catalog.as_ref().ok_or_else(|| {
-                LocalRuntimeError::SessionCatalog(SessionError::UnknownSession {
-                    session_id: session.clone(),
-                })
-            })?;
-            let (_, settings) = catalog.lineage(session, node.as_ref())?;
-            #[cfg(test)]
-            cold_resume_test_support::park(lifecycle.root()).await;
-
-            let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
-                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-            resumed = manager
-                .resolve_session(&settings.input())
-                .map_err(|error| LocalRuntimeError::SessionConfiguration {
-                    session_id: session.clone(),
-                    diagnostic: error.diagnostic,
-                })?
-                .admit(|| paths.credentials.clone())
-                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-            &resumed
-        } else {
-            paths
-        };
-        // The current runtime/project configuration and current ModelCatalog
-        // are resolved before opening or creating durable Session state. A
-        // failed first launch therefore cannot publish an invalid initial
-        // Session-local model.
-        let runtime_config = paths.config.as_ref().clone();
-        let registry = load_model_registry(paths, dependencies)?;
-        SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
-        let mut state = SessionPersistentState::from_input(&paths.input);
-        state.model = Some(paths.config.initial_model().clone());
-        // A first launch builds the root Session in memory and publishes
-        // nothing yet. `catalog.json` is written by the one startup
-        // transaction below, together with whatever else this launch
-        // decided — so a first launch that fails to compose leaves a
-        // runtime root with no catalog at all. The seeded conversation
-        // database it leaves behind is not published state: nothing names
-        // it, so it is neither selectable nor resumable.
-        let mut catalog = match existing_catalog {
-            Some(catalog) => catalog,
-            None => SessionCatalog::create_unpublished(lifecycle.root(), &state)?,
-        };
-        catalog.retain_lifecycle(lifecycle.clone());
-        catalog.recover_upload_preparations()?;
-        for id in catalog.pending_deletion_ids() {
-            let result = match catalog.recover_delete(&id) {
-                Ok(work) => {
-                    // No catalog borrow or global ownership guard spans removal.
-                    let record = work.record.clone();
-                    let cleanup = work.settle().await;
-                    catalog.finish_delete(&record, cleanup)
-                }
-                Err(result) => result,
-            };
-            tracing::debug!(?result, "Session deletion recovery");
-        }
-        // The local client chooses its destination explicitly. Existing Sessions
-        // are read without publishing focus; new private storage is published
-        // only after this client's runtime composition succeeds.
-        let planned = match &dependencies.startup_session {
-            StartupSession::Empty => {
-                if catalog.is_published() {
-                    let prepared = catalog.prepare_session(&state, &[])?;
-                    catalog.plan_session(&prepared, SessionNodeOrigin::New)?
-                } else {
-                    catalog.plan_unchanged(&catalog.persisted_session_ids()[0])
-                }
-            }
-            StartupSession::Select { session, node } => {
-                catalog.plan_attachment(session, node.as_ref())?
-            }
-            StartupSession::InspectConversation { .. } => {
-                unreachable!("dedicated inspection composition")
-            }
-        };
-        // `--name` names the Session this launch bound, whichever one that
-        // is. It is the startup form of `/name` and nothing more: naming is
-        // metadata, so it can only follow a decision about where the launch
-        // starts and can never be part of making it. A launch that names a
-        // Session it also asked to continue therefore renames that Session,
-        // exactly as typing `/name` in it would — and, like the selection
-        // itself, only if the launch actually starts.
-        let planned = match &dependencies.session_name {
-            Some(name) => planned
-                .with_name(name)
-                .map_err(LocalRuntimeError::SessionCatalog)?,
-            None => planned,
-        };
-        // The destination is read from the plan, not from the catalog on
-        // disk: this is where the launch is about to compose.
-        let (session_id, node, session_state) = planned
-            .destination_lineage()
-            .map_err(LocalRuntimeError::SessionCatalog)?;
-        // The startup display projection (Issue #386). Two different
-        // conditions live here and must not be confused:
-        //
-        // *Repair* is Session-owned metadata, derived from the Session's
-        // **root** lineage whatever node this launch selected. A launch that
-        // resumes straight onto a branch still repairs the Session's missing
-        // projection from the root's first ordinary user message — the branch's
-        // own first message is never the subject. The derived line folds into
-        // the plan and rides the one startup catalog transaction below, so a
-        // launch that fails to compose still writes nothing.
-        //
-        // *Arming the live publisher* is root-runtime-specific: only a root
-        // destination whose root lineage has no ordinary user boundary yet arms
-        // the one-shot publisher on the freshly composed runtime.
-        let mut arm_display_projection = false;
-        let planned = if planned.display_preview().is_none() {
-            match &dependencies.startup_session {
-                // A freshly prepared root (or the unpublished first Session)
-                // has no ordinary user boundary by construction, and its row is
-                // not in the catalog on disk at all: its planned/seed state is
-                // the authority, so arming needs no store read and no lookup.
-                StartupSession::Empty => {
-                    arm_display_projection = node.parent.is_none();
-                    planned
-                }
-                StartupSession::Select { .. } => {
-                    match catalog.display_preview_subject(&session_id) {
-                        Ok(DisplayPreviewSubject::Derived(preview)) => planned
-                            .with_display_preview(&preview)
-                            .map_err(LocalRuntimeError::SessionCatalog)?,
-                        Ok(DisplayPreviewSubject::NoBoundary) => {
-                            arm_display_projection = node.parent.is_none();
-                            planned
-                        }
-                        // The first boundary has no renderable text: the
-                        // projection is a settled `None`, never re-armed.
-                        Ok(DisplayPreviewSubject::Unrenderable) => planned,
-                        Err(error) => {
-                            // Repair is best-effort at startup: the row falls
-                            // back to identity and the next explicit seam
-                            // retries.
-                            tracing::warn!(%error, "Session display-preview repair read failed");
-                            planned
-                        }
-                    }
-                }
-                StartupSession::InspectConversation { .. } => planned,
-            }
-        } else {
-            planned
-        };
-        let database_path = catalog.database_path(&session_id, &node.conversation_id);
-        let artifacts_root = database_path
-            .parent()
-            .ok_or_else(|| {
-                LocalRuntimeError::SessionCatalog(SessionError::Catalog {
-                    detail: "active conversation database has no parent".to_owned(),
-                })
-            })?
-            .to_path_buf();
-
-        // Everything fallible happens against the planned destination and
-        // before the catalog changes: composition, recovery, and the
-        // Runtime Client host binding. The runtime is left inert.
-        let core = LocalConversationCore::compose_from_config(
-            paths,
-            dependencies,
-            registry,
-            runtime_config,
-            session_state,
-            node.conversation_id,
-            artifacts_root,
-            lifecycle,
-        )
-        .await?;
-        let supervisor = Arc::new(LocalSessionAttachment::new(
-            catalog,
-            session_id.clone(),
-            new_session_settings,
-            planned.settings_revision(),
-        ));
-        let runtime = core.into_bound_with_session_control(supervisor.clone())?;
-
-        // The one catalog transaction of startup. Before this line the
-        // catalog is byte-for-byte what the launch found; after it, the
-        // intentional metadata change is visible. Routing alone writes nothing.
-        supervisor
-            .commit_startup(planned)
-            .await
-            .map_err(LocalRuntimeError::SessionCatalog)?;
-
-        // Past the commit, nothing may fail on its own terms: the lineage
-        // check below verifies graph membership of the explicitly routed
-        // Conversation, and activation is infallible.
-        supervisor
-            .install_runtime(runtime.runtime().clone())
-            .await
-            .map_err(LocalRuntimeError::SessionSupervisor)?;
-        // Arm while the runtime is still inert: the subscription linearizes
-        // before activation, so the first canonical ordinary user commit of
-        // this root runtime cannot slip past the one-shot publisher.
-        if arm_display_projection {
-            super::session_display_projection::arm_display_projection(
-                supervisor.controller().downgrade_catalog(),
-                session_id,
-                runtime.runtime(),
-            );
-        }
-        runtime.activate();
-        Ok(Self {
-            runtime,
-            supervisor,
-        })
-    }
-
-    /// This client attachment's linear `ConversationRuntime`.
-    #[must_use]
-    pub const fn runtime(&self) -> &ConversationRuntime {
-        self.runtime.runtime()
-    }
-
-    /// The native Session supervisor.
-    #[must_use]
-    pub fn supervisor(&self) -> &Arc<LocalSessionAttachment> {
-        &self.supervisor
-    }
-
-    /// The transport-neutral Runtime Client endpoint.
-    #[must_use]
-    pub fn endpoint(&self) -> RuntimeClientEndpoint {
-        self.runtime.endpoint()
     }
 }
 
@@ -2356,246 +2009,6 @@ impl LocalConversationRuntime {
     #[must_use]
     pub fn endpoint(&self) -> RuntimeClientEndpoint {
         RuntimeClientEndpoint::new(&self.host)
-    }
-}
-
-/// The current read authority of one known conversation inspection.
-enum ConversationInspectionAuthority {
-    /// The child process's actual live Runtime Client read projection.
-    Live(tokio::net::UnixStream),
-    /// The stable child conversation authorities after the live process is
-    /// unavailable.
-    Durable(RuntimeClientHost),
-}
-
-/// A read-only Runtime Client attachment to one known conversation.
-///
-/// Resolution first probes the identity-derived live endpoint. Only when the
-/// child process no longer owns that endpoint does this type bootstrap the
-/// ordinary Runtime Client projection from the child's durable authorities.
-/// The caller and TUI use one conversation identity in both modes.
-pub struct LocalConversationInspection {
-    conversation_id: ConversationId,
-    authority: ConversationInspectionAuthority,
-    _lifecycle: Arc<crate::runtime::local_storage::ConversationAccess>,
-}
-
-impl std::fmt::Debug for LocalConversationInspection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalConversationInspection")
-            .field("conversation_id", &self.conversation_id)
-            .field(
-                "authority",
-                &match &self.authority {
-                    ConversationInspectionAuthority::Live(_) => "live",
-                    ConversationInspectionAuthority::Durable(_) => "durable",
-                },
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-impl LocalConversationInspection {
-    /// Resolves `conversation_id` to the child's live Runtime Client read
-    /// projection when its process is still running. If the process owns the
-    /// disposable liveness lease but endpoint setup failed, this returns an
-    /// explicit [`LocalRuntimeError::LiveInspectionUnavailable`] instead of
-    /// presenting a stale durable projection as live. Once the process is
-    /// gone, the same identity resolves to the stable durable child
-    /// conversation.
-    ///
-    /// The identity is resolved to the local runtime's stable child-store
-    /// layout only at this Rust-owned composition boundary. The TUI and wire
-    /// protocol never receive or store a filesystem path.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LocalRuntimeError::ConversationNotFound`] when the identity
-    /// has no durable child store and no live endpoint, or
-    /// [`LocalRuntimeError::LiveInspectionUnavailable`] when the child is
-    /// still live but its optional endpoint is unavailable, or
-    /// [`LocalRuntimeError::DurableConversation`] when that store cannot be
-    /// opened.
-    #[allow(clippy::too_many_lines)] // Resolve the durable owner and live inspection route together.
-    pub async fn compose(
-        paths: &SessionLocations,
-        conversation_id: &ConversationId,
-    ) -> Result<Self, LocalRuntimeError> {
-        let session_id =
-            super::session_ownership::conversation_owner(&paths.runtime_root, conversation_id)
-                .map_err(|error| LocalRuntimeError::ToolRuntime {
-                    detail: error.to_string(),
-                })?;
-        let lifecycle = Arc::new(
-            crate::runtime::local_storage::ProductRoot::existing(&paths.runtime_root)
-                .and_then(|root| {
-                    crate::runtime::local_storage::ConversationAccess::existing(
-                        &root,
-                        child_conversation_store_path(root.root(), &session_id, conversation_id)
-                            .parent()
-                            .ok_or_else(|| std::io::Error::other("missing child allocation"))?,
-                    )
-                })
-                .map_err(|e| LocalRuntimeError::ToolRuntime {
-                    detail: e.to_string(),
-                })?,
-        );
-        if !is_safe_child_conversation_component(conversation_id) {
-            return Err(LocalRuntimeError::ConversationNotFound {
-                conversation_id: conversation_id.clone(),
-                path: child_conversation_store_path(
-                    &paths.runtime_root,
-                    &session_id,
-                    conversation_id,
-                ),
-            });
-        }
-        let socket_path = lifecycle
-            .confined(&child_conversation_inspection_socket_path(
-                lifecycle.root(),
-                conversation_id,
-            ))
-            .map_err(|e| LocalRuntimeError::ToolRuntime {
-                detail: e.to_string(),
-            })?;
-        if let Ok(stream) = crate::local_runtime::live_inspection::connect_live(&socket_path).await
-        {
-            return Ok(Self {
-                conversation_id: conversation_id.clone(),
-                authority: ConversationInspectionAuthority::Live(stream),
-                _lifecycle: lifecycle,
-            });
-        }
-        let liveness_path = lifecycle
-            .confined(&child_conversation_inspection_liveness_path(
-                lifecycle.root(),
-                &session_id,
-                conversation_id,
-            ))
-            .map_err(|e| LocalRuntimeError::ToolRuntime {
-                detail: e.to_string(),
-            })?;
-        match crate::local_runtime::live_inspection::probe_liveness(&liveness_path) {
-            Ok(Some(true)) => {
-                return Err(LocalRuntimeError::LiveInspectionUnavailable {
-                    conversation_id: conversation_id.clone(),
-                    detail: format!(
-                        "the child runtime is live but its Runtime Client inspection endpoint \
-                         is unavailable ({})",
-                        socket_path.display()
-                    ),
-                });
-            }
-            Ok(Some(false) | None) => {}
-            Err(error) => {
-                return Err(LocalRuntimeError::LiveInspectionUnavailable {
-                    conversation_id: conversation_id.clone(),
-                    detail: format!(
-                        "the child runtime's live inspection status could not be resolved from \
-                         {}: {error}",
-                        liveness_path.display()
-                    ),
-                });
-            }
-        }
-        let database_path = lifecycle
-            .confined(&child_conversation_store_path(
-                lifecycle.root(),
-                &session_id,
-                conversation_id,
-            ))
-            .map_err(|e| LocalRuntimeError::ToolRuntime {
-                detail: e.to_string(),
-            })?;
-        if !database_path.is_file() {
-            return Err(LocalRuntimeError::ConversationNotFound {
-                conversation_id: conversation_id.clone(),
-                path: database_path,
-            });
-        }
-        let store = Arc::new(
-            SqliteConversationStore::open_existing(conversation_id.clone(), &database_path)
-                .map_err(|error| LocalRuntimeError::DurableConversation {
-                    path: database_path.clone(),
-                    detail: error.to_string(),
-                })?
-                .with_lifecycle(lifecycle.clone()),
-        );
-        Ok(Self {
-            conversation_id: conversation_id.clone(),
-            _lifecycle: lifecycle,
-            authority: ConversationInspectionAuthority::Durable(RuntimeClientHost::new_durable(
-                store, None,
-            )?),
-        })
-    }
-
-    /// The in-process Runtime Client endpoint for a durable inspection.
-    ///
-    /// A live inspection is already connected to the child-owned endpoint and
-    /// must be served through the local byte proxy; it has no local semantic
-    /// endpoint in this process.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LocalRuntimeError::Observation`] when this inspection was
-    /// resolved to a live child process.
-    pub fn endpoint(&self) -> Result<RuntimeClientEndpoint, LocalRuntimeError> {
-        match &self.authority {
-            ConversationInspectionAuthority::Live(_) => Err(LocalRuntimeError::Observation {
-                detail: "a live inspection is served by its child-owned endpoint".to_owned(),
-            }),
-            ConversationInspectionAuthority::Durable(host) => Ok(host.endpoint()),
-        }
-    }
-
-    /// Serves this resolved inspection over the current process's stdio.
-    pub(crate) async fn serve(
-        self,
-    ) -> Result<
-        crate::runtime_client::transport::stdio::StdioSessionEnd,
-        crate::runtime_client::transport::stdio::StdioTransportError,
-    > {
-        match self.authority {
-            ConversationInspectionAuthority::Live(stream) => {
-                crate::local_runtime::live_inspection::serve_live_stdio(stream).await
-            }
-            ConversationInspectionAuthority::Durable(host) => {
-                crate::runtime_client::transport::stdio::serve_stdio_jsonl(host.endpoint()).await
-            }
-        }
-    }
-
-    /// Serves this resolved inspection over arbitrary async byte streams.
-    /// The live and durable authorities use the same Runtime Client JSONL
-    /// session semantics; only the byte-stream ownership differs.
-    #[cfg(test)]
-    pub(crate) async fn serve_with_io<R, W>(
-        self,
-        reader: R,
-        writer: W,
-    ) -> Result<
-        crate::runtime_client::transport::stdio::StdioSessionEnd,
-        crate::runtime_client::transport::stdio::StdioTransportError,
-    >
-    where
-        R: tokio::io::AsyncRead + Unpin,
-        W: tokio::io::AsyncWrite + Unpin,
-    {
-        match self.authority {
-            ConversationInspectionAuthority::Live(stream) => {
-                crate::local_runtime::live_inspection::serve_live_with_io(stream, reader, writer)
-                    .await
-            }
-            ConversationInspectionAuthority::Durable(host) => {
-                crate::runtime_client::transport::stdio::serve_stdio_jsonl_with_io(
-                    host.endpoint(),
-                    reader,
-                    writer,
-                )
-                .await
-            }
-        }
     }
 }
 
@@ -2694,31 +2107,6 @@ pub enum LocalRuntimeError {
         /// The failure detail.
         detail: String,
     },
-    /// The requested durable child conversation does not exist at the
-    /// identity-derived local store path.
-    ConversationNotFound {
-        /// The requested conversation identity.
-        conversation_id: ConversationId,
-        /// The identity-derived database path, for diagnostics only.
-        path: PathBuf,
-    },
-    /// The requested durable conversation exists but cannot be opened.
-    DurableConversation {
-        /// The database path, for diagnostics only.
-        path: PathBuf,
-        /// The bounded store failure detail.
-        detail: String,
-    },
-    /// The child runtime is still live, but its optional read-only inspection
-    /// transport is unavailable. This must not be silently replaced by a
-    /// durable snapshot because the durable authorities cannot reproduce all
-    /// disposable live Runtime Client state.
-    LiveInspectionUnavailable {
-        /// The still-live child conversation identity.
-        conversation_id: ConversationId,
-        /// The bounded local routing diagnostic.
-        detail: String,
-    },
     /// The model catalog is invalid or its credentials are unresolved.
     Catalog(ModelCatalogError),
     /// A model binding or the initial session model could not be resolved.
@@ -2757,34 +2145,12 @@ pub enum LocalRuntimeError {
     },
     /// The native SessionCatalog/Graph could not be loaded or published.
     SessionCatalog(SessionError),
-    /// The native Session supervisor could not install or drain a lineage.
-    SessionSupervisor(SessionAttachmentError),
 }
 
 impl std::fmt::Display for LocalRuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io { path, detail } => write!(f, "cannot read {}: {detail}", path.display()),
-            Self::ConversationNotFound {
-                conversation_id,
-                path,
-            } => write!(
-                f,
-                "durable conversation {conversation_id} was not found at {}",
-                path.display()
-            ),
-            Self::DurableConversation { path, detail } => write!(
-                f,
-                "cannot open durable conversation {}: {detail}",
-                path.display()
-            ),
-            Self::LiveInspectionUnavailable {
-                conversation_id,
-                detail,
-            } => write!(
-                f,
-                "live inspection of child conversation {conversation_id} is unavailable: {detail}"
-            ),
             Self::Catalog(error) => write!(f, "model catalog: {error}"),
             Self::Model(error) => write!(f, "session model: {error}"),
             Self::RuntimeConfig(error) => write!(f, "{error}"),
@@ -2805,7 +2171,6 @@ impl std::fmt::Display for LocalRuntimeError {
                 diagnostic.path, diagnostic.reason, diagnostic.correction
             ),
             Self::SessionCatalog(error) => write!(f, "session catalog: {error}"),
-            Self::SessionSupervisor(error) => write!(f, "session supervisor: {error}"),
         }
     }
 }
@@ -2845,12 +2210,6 @@ impl From<HostConstructionError> for LocalRuntimeError {
 impl From<SessionError> for LocalRuntimeError {
     fn from(error: SessionError) -> Self {
         Self::SessionCatalog(error)
-    }
-}
-
-impl From<SessionAttachmentError> for LocalRuntimeError {
-    fn from(error: SessionAttachmentError) -> Self {
-        Self::SessionSupervisor(error)
     }
 }
 
@@ -3405,7 +2764,7 @@ enabled = true
         )
         .await
         .expect("the child composes")
-        .into_bound_with_control(None)
+        .into_bound()
         .expect("the child binds its own Runtime Client host");
         let (snapshot, _) = child.host().snapshot().expect("child snapshot");
         assert_eq!(
@@ -3451,7 +2810,7 @@ enabled = true
         )
         .await
         .expect("the child composes")
-        .into_bound_with_control(None)
+        .into_bound()
         .expect("the child binds its own Runtime Client host");
         assert_eq!(
             child_projection(&bare),
@@ -3481,7 +2840,7 @@ enabled = true
         )
         .await
         .expect("the child composes")
-        .into_bound_with_control(None)
+        .into_bound()
         .expect("the child binds its own Runtime Client host");
         assert_eq!(child_projection(&staged), Some(expected_r1));
     }
@@ -4526,165 +3885,6 @@ enabled = true
     }
 }
 
-#[cfg(test)]
-mod conversation_inspection_tests {
-    use super::{LocalConversationInspection, SessionLocations};
-    use crate::durable::{ConversationStore, SqliteConversationStore};
-    use crate::local_runtime::live_inspection::LiveConversationInspectionLease;
-    use crate::message::content::TextBlock;
-    use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
-    use crate::runtime::identity::{ConversationId, MessageId};
-    use crate::runtime_client::types::{RuntimeClientRequest, RuntimeClientResult};
-
-    fn owned_child(
-        root: &std::path::Path,
-        workspace: &std::path::Path,
-    ) -> (
-        crate::local_runtime::SessionId,
-        ConversationId,
-        std::path::PathBuf,
-    ) {
-        let catalog = crate::local_runtime::session::SessionCatalog::create(
-            root,
-            &crate::local_runtime::session::SessionPersistentState {
-                cwd: workspace.into(),
-                model: None,
-            },
-        )
-        .unwrap();
-        let session = catalog.list_page(None, 0, 1).unwrap().sessions[0]
-            .id
-            .clone();
-        let (parent, _) = catalog.lineage(&session, None).unwrap();
-        let store = SqliteConversationStore::open(
-            parent.conversation_id.clone(),
-            &catalog.database_path(&session, &parent.conversation_id),
-        )
-        .unwrap();
-        let child = ConversationId::generate();
-        let (event, authority) = crate::local_runtime::session::tests::deletion_tests::admit_agent(
-            crate::runtime::subagent::ownership_event(
-                &crate::runtime::identity::AgentId::new("agent-parent"),
-                &parent.conversation_id,
-                &crate::runtime::identity::SubagentId::for_conversation(&parent.conversation_id, 1),
-                &crate::runtime::identity::AgentId::new("child"),
-                &child,
-                &crate::runtime::subagent::AgentActivationOrigin::CreationTool {
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("delegation"),
-                },
-                &crate::runtime::subagent::SubagentName::parse("worker").unwrap(),
-                &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-                &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                    .unwrap(),
-                crate::events::types::SubagentOwnershipKind::Normal,
-                &crate::runtime::workspace::WorkspaceSnapshot::shared(workspace.to_path_buf()),
-                chrono::Utc::now(),
-            ),
-        );
-        store.append_agent_admission(event, &authority).unwrap();
-        let database = catalog.database_path(&session, &child);
-        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
-        (session, child, database)
-    }
-
-    #[tokio::test]
-    async fn resolves_the_known_child_identity_to_the_ordinary_attachment() {
-        let root = tempfile::tempdir().expect("runtime root");
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(&workspace).expect("workspace");
-        let (_session, conversation_id, database_path) =
-            owned_child(&root.path().join("runtime"), &workspace);
-        let store = SqliteConversationStore::open(conversation_id.clone(), &database_path)
-            .expect("child store");
-        store
-            .initialize(&[MessageBlock::User(UserMessageBlock {
-                id: MessageId::new("child-user"),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: "durable child message".to_owned(),
-                })],
-                source: UserSource::Human,
-                kind: crate::message::types::InboundKind::Message,
-                timestamp: None,
-            })])
-            .expect("child history");
-
-        let paths = SessionLocations {
-            workspace,
-            runtime_root: root.path().join("runtime"),
-        };
-        let inspection = LocalConversationInspection::compose(&paths, &conversation_id)
-            .await
-            .expect("identity resolves to the durable child store");
-        let response = inspection
-            .endpoint()
-            .expect("durable inspection exposes a local endpoint")
-            .handle_request(RuntimeClientRequest::Initialize {
-                id: crate::runtime_client::RequestId::new(1),
-                protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-            });
-        let Some(RuntimeClientResult::Initialized {
-            conversation_id: attached_id,
-            snapshot,
-            ..
-        }) = response.result
-        else {
-            panic!("inspection must use the ordinary Runtime Client attachment: {response:?}");
-        };
-        assert_eq!(attached_id, conversation_id);
-        assert_eq!(snapshot.messages.len(), 1);
-        assert!(matches!(
-            &snapshot.messages[0],
-            MessageBlock::User(user)
-                if user.id == MessageId::new("child-user")
-                    && user.content.iter().any(|content| matches!(
-                        content,
-                        UserContentBlock::Text(text) if text.text == "durable child message"
-                ))
-        ));
-    }
-
-    /// A live child whose optional endpoint is unavailable is not silently
-    /// rebuilt from durable state. Once the child-owned lease is released,
-    /// the same identity resolves through the ordinary durable fallback.
-    #[tokio::test]
-    async fn live_uninspectable_identity_does_not_fake_a_durable_live_view() {
-        let root = tempfile::tempdir().expect("runtime root");
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(&workspace).expect("workspace");
-        let runtime_root = root.path().join("runtime");
-        let (session, conversation_id, database_path) = owned_child(&runtime_root, &workspace);
-        let store = SqliteConversationStore::open(conversation_id.clone(), &database_path)
-            .expect("child store");
-        store.initialize(&[]).expect("child history");
-        let lease =
-            LiveConversationInspectionLease::acquire(&runtime_root, &session, &conversation_id)
-                .expect("the running child owns its transient liveness lease");
-        let paths = SessionLocations {
-            workspace,
-            runtime_root,
-        };
-        let error = LocalConversationInspection::compose(&paths, &conversation_id)
-            .await
-            .expect_err("a live but uninspectable child must not fake a durable live view");
-        assert!(matches!(
-            error,
-            super::LocalRuntimeError::LiveInspectionUnavailable {
-                conversation_id: ref actual,
-                ..
-            } if actual == &conversation_id
-        ));
-
-        drop(lease);
-        let inspection = LocalConversationInspection::compose(&paths, &conversation_id)
-            .await
-            .expect("the same identity falls back after the live lease is gone");
-        assert!(
-            inspection.endpoint().is_ok(),
-            "the post-terminal fallback is the local durable Runtime Client host"
-        );
-    }
-}
-
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod composition_tests {
     use std::sync::Arc;
@@ -4724,7 +3924,6 @@ mod composition_tests {
         LaunchFixture {
             config: root.join("rustx.toml"),
             startup_session: super::StartupSession::Empty,
-            session_name: None,
             workspace,
             runtime_root: root.join("runtime"),
         }
@@ -5264,52 +4463,5 @@ mod source_demand_tests {
             admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty()).sources,
             [shared].into()
         );
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod cold_resume_test_support {
-    use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex, Weak};
-    use tokio::sync::watch;
-
-    pub(crate) struct Gate {
-        entered: watch::Sender<bool>,
-        release: watch::Sender<bool>,
-    }
-    static GATES: Mutex<Vec<(PathBuf, Weak<Gate>)>> = Mutex::new(Vec::new());
-    pub(crate) fn arm(runtime_root: &Path) -> Arc<Gate> {
-        let gate = Arc::new(Gate {
-            entered: watch::channel(false).0,
-            release: watch::channel(false).0,
-        });
-        let mut gates = GATES.lock().unwrap();
-        gates.retain(|(path, weak)| path != runtime_root && weak.strong_count() > 0);
-        gates.push((runtime_root.into(), Arc::downgrade(&gate)));
-        gate
-    }
-    impl Gate {
-        pub(crate) async fn entered(&self) {
-            self.entered
-                .subscribe()
-                .wait_for(|entered| *entered)
-                .await
-                .unwrap();
-        }
-        pub(crate) fn release(&self) {
-            self.release.send_replace(true);
-        }
-    }
-    pub(crate) async fn park(runtime_root: &Path) {
-        let gate = GATES
-            .lock()
-            .unwrap()
-            .iter()
-            .find_map(|(path, weak)| (path == runtime_root).then(|| weak.upgrade()).flatten());
-        if let Some(gate) = gate {
-            let mut release = gate.release.subscribe();
-            gate.entered.send_replace(true);
-            release.wait_for(|released| *released).await.unwrap();
-        }
     }
 }

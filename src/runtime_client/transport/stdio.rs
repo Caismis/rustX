@@ -1,4 +1,9 @@
-//! The strict stdio / JSONL Runtime Client transport (Issue #38).
+//! The strict JSONL Runtime Client framing (Issue #38).
+//!
+//! Its one production consumer is the child-owned live inspection socket
+//! (`local_runtime::live_inspection`), which serves a read-only endpoint over
+//! a local Unix stream. No process serves this protocol on its own standard
+//! streams: App Server is the only external product control protocol.
 //!
 //! This module is a bounded byte-stream adapter around
 //! [`RuntimeClientEndpoint`]. It is not a runtime coordinator, not an
@@ -8,8 +13,8 @@
 //! # Framing contract
 //!
 //! ```text
-//! stdin  : one RuntimeClientRequest JSON object per LF-delimited record
-//! stdout : one RuntimeClientResponse OR RuntimeClientProtocolEvent
+//! input  : one RuntimeClientRequest JSON object per LF-delimited record
+//! output : one RuntimeClientResponse OR RuntimeClientProtocolEvent
 //!          per LF-delimited record
 //! ```
 //!
@@ -24,8 +29,7 @@
 //!   CR when CRLF was used on input.
 //! - The output sink carries protocol records only. This module never
 //!   writes human or operator logging anywhere (it uses no `println!` /
-//!   `eprintln!`): failures are returned to the caller, and a future
-//!   process-composition layer decides whether to log them to stderr.
+//!   `eprintln!`): failures are returned to the caller.
 //!
 //! # Bounded dispatch
 //!
@@ -268,30 +272,10 @@ impl std::error::Error for StdioTransportError {
 }
 
 /// Serves one Runtime Client endpoint as a strict stdio JSONL session over
-/// the process's standard input and output.
-///
-/// This is the concrete process composition of
-/// [`serve_stdio_jsonl_with_io`]; it adds no behavior. The endpoint is
-/// consumed, so returning from this function drops it and detaches the
-/// attachment by RAII.
-///
-/// # Errors
-///
-/// Returns [`StdioTransportError`] for every abnormal local transport
-/// termination: framing violations, input/output I/O failures, an oversized
-/// outbound record, and subscription lag/exhaustion. None of them mutates
-/// semantic runtime state.
-pub async fn serve_stdio_jsonl(
-    endpoint: RuntimeClientEndpoint,
-) -> Result<StdioSessionEnd, StdioTransportError> {
-    serve_stdio_jsonl_with_io(endpoint, tokio::io::stdin(), tokio::io::stdout()).await
-}
-
-/// Serves one Runtime Client endpoint as a strict stdio JSONL session over
 /// arbitrary byte streams.
 ///
-/// This is the transport core: the process-stdio adapter, integration
-/// tests, and any future in-process composition all run exactly this loop.
+/// This is the transport core: the child's live inspection socket and the
+/// framing tests run exactly this loop.
 /// The endpoint is consumed, so returning drops it and detaches the
 /// attachment by RAII.
 ///
@@ -304,7 +288,9 @@ pub async fn serve_stdio_jsonl(
 /// # Errors
 ///
 /// Returns [`StdioTransportError`] for every abnormal local transport
-/// termination; see [`serve_stdio_jsonl`].
+/// termination: framing violations, input/output I/O failures, an oversized
+/// outbound record, and subscription lag/exhaustion. None of them mutates
+/// semantic runtime state.
 pub async fn serve_stdio_jsonl_with_io<R, W>(
     endpoint: RuntimeClientEndpoint,
     reader: R,

@@ -61,23 +61,26 @@ pub struct LaunchFixture {
     pub workspace: PathBuf,
     pub runtime_root: PathBuf,
     pub startup_session: StartupSession,
-    pub session_name: Option<String>,
 }
 
 impl LaunchFixture {
+    /// Composes the fixture's Session-backed runtime through the shared
+    /// public composition owner, with this fixture's explicit startup route.
     pub async fn compose(
         &self,
         dependencies: &rustx::local_runtime::LocalRuntimeDependencies,
-    ) -> Result<rustx::local_runtime::LocalSessionClient, rustx::local_runtime::LocalRuntimeError>
-    {
+    ) -> Result<
+        rustx::local_runtime::LocalConversationRuntime,
+        rustx::local_runtime::LocalRuntimeError,
+    > {
         let dependencies = rustx::local_runtime::LocalRuntimeDependencies {
             startup_session: self.startup_session.clone(),
-            session_name: self.session_name.clone(),
             credentials: dependencies.credentials.clone(),
             estimator: dependencies.estimator.clone(),
             child_program: dependencies.child_program.clone(),
         };
-        rustx::local_runtime::LocalSessionClient::compose(&self.resolve(), &dependencies).await
+        rustx::local_runtime::LocalConversationRuntime::compose(&self.resolve(), &dependencies)
+            .await
     }
 
     pub fn request(&self) -> LaunchRequest {
@@ -85,8 +88,6 @@ impl LaunchFixture {
             config: Some(self.config.clone()),
             workspace: Some(self.workspace.clone()),
             runtime_root: Some(self.runtime_root.clone()),
-            startup_session: self.startup_session.clone(),
-            session_name: self.session_name.clone(),
             ..LaunchRequest::default()
         }
     }
@@ -105,16 +106,6 @@ impl LaunchFixture {
 
     pub fn resolve(&self) -> AdmittedSessionConfig {
         self.try_resolve().expect("fixture resolves")
-    }
-
-    pub fn locations(&self) -> rustx::local_runtime::SessionLocations {
-        let host = tempfile::tempdir().expect("isolated host");
-        let environment =
-            HostEnvironment::from_paths(std::env::current_dir().unwrap(), host.path().into())
-                .unwrap();
-        rustx::local_runtime::launch::resolve_locations(&self.request(), &environment)
-            .unwrap()
-            .0
     }
 
     pub fn artifacts_root(&self) -> PathBuf {

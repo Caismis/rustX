@@ -70,7 +70,7 @@ creation omits the override and the native default owner decides. Attachment rea
 that established state. TUI startup does not issue an initialization `setModel`;
 later explicit model changes remain supported. See [#419](issue-419/ownership.md).
 
-## Incremental projection (v29 / Runtime Client 54)
+## Incremental projection (App Server v29)
 
 The existing terminal presentation reducer consumes every native event and the new
 `read_domains_updated` cut (decorated transcript, statistics, Todo, occupancy).

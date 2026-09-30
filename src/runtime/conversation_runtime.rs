@@ -5409,9 +5409,7 @@ impl ConversationRuntime {
     /// # Transactionality
     ///
     /// A rejected update changes nothing: the session keeps its previous
-    /// configuration and no observation is published. Product adapters that
-    /// persist the selected configuration use the same transaction seam and
-    /// persist before this live state is replaced.
+    /// configuration and no observation is published.
     ///
     /// # Errors
     ///
@@ -5425,24 +5423,7 @@ impl ConversationRuntime {
         &self,
         config: SessionModelConfig,
     ) -> Result<SessionModelView, ModelUpdateError> {
-        self.model_set_with_persistence(config, |_| Ok(()))
-    }
-
-    /// Replaces the live model only after an optional product persistence
-    /// callback has accepted the candidate configuration.
-    ///
-    /// The callback runs while the coordinator state is held, so a failure
-    /// leaves both the live model and the catalog unchanged. This ordering is
-    /// used by the native Session host to avoid reporting an error after a
-    /// live model mutation has already taken effect.
-    pub(crate) fn model_set_with_persistence(
-        &self,
-        config: SessionModelConfig,
-        persist: impl FnOnce(SessionModelConfig) -> Result<(), ModelUpdateError>,
-    ) -> Result<SessionModelView, ModelUpdateError> {
-        use crate::local_runtime::configuration::application::{
-            AdoptionError, PreparedConfiguration,
-        };
+        use crate::local_runtime::configuration::application::PreparedConfiguration;
         let (baseline, resources, mut candidate) = {
             let state = self.inner.lock_state();
             if !self.inner.lifecycle.is_running() {
@@ -5460,7 +5441,7 @@ impl ConversationRuntime {
             )
         };
         candidate
-            .apply(config.clone())
+            .apply(config)
             .map_err(|error| invalid_model(&error))?;
         let policy = resources
             .configuration()
@@ -5480,18 +5461,8 @@ impl ConversationRuntime {
             resources: None,
             impact: crate::model::request_shape::CacheImpact::Unproven,
         });
-        let mut persistence_error = None;
-        let outcome = self.adopt_configuration(&mut prepared, baseline, true, || {
-            persist(config).map_err(|error| {
-                persistence_error = Some(error);
-                AdoptionError::Failed {
-                    diagnostic: "Session model persistence failed".into(),
-                }
-            })
-        });
-        outcome.map_err(|rejection| {
-            persistence_error.unwrap_or(ModelUpdateError::ConfigurationAdoption { rejection })
-        })?;
+        self.adopt_configuration(&mut prepared, baseline, true, || Ok(()))
+            .map_err(|rejection| ModelUpdateError::ConfigurationAdoption { rejection })?;
         Ok(view)
     }
 
@@ -6347,19 +6318,6 @@ pub enum ModelUpdateError {
     /// mutation may begin until the runtime is reconstructed.
     DurabilityFailed {
         /// The human-readable failure diagnostic.
-        message: String,
-    },
-    /// Product persistence rejected a valid live candidate before mutation.
-    PersistenceFailed {
-        /// The human-readable persistence diagnostic.
-        message: String,
-    },
-    /// Product persistence crossed its catalog visibility commit point but
-    /// could not prove the final durability barrier. The live candidate was
-    /// not installed; the attachment must be replaced and rebuilt from the
-    /// catalog authority.
-    SessionRestartRequired {
-        /// The bounded replacement diagnostic.
         message: String,
     },
 }

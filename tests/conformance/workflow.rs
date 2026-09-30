@@ -320,7 +320,6 @@ impl Driver {
         let paths = LaunchFixture {
             config: root.path().join("rustx.toml"),
             startup_session: rustx::local_runtime::StartupSession::Empty,
-            session_name: None,
             workspace,
             runtime_root: root.path().join("private"),
         };
@@ -436,7 +435,6 @@ async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
     let paths = LaunchFixture {
         config: root.path().join("rustx.toml"),
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace,
         runtime_root: root.path().join("private"),
     };
@@ -476,7 +474,6 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
     let paths = LaunchFixture {
         config: root.path().join("rustx.toml"),
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace,
         runtime_root: root.path().join("private"),
     };
@@ -724,7 +721,6 @@ impl Driver {
             workspace,
             runtime_root: root.path().join("private"),
             startup_session: rustx::local_runtime::StartupSession::Empty,
-            session_name: None,
         };
         let dependencies = LocalRuntimeDependencies {
             credentials: Some(Arc::new(MapCredentialEnvironment::new([(

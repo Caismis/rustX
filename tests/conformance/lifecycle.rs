@@ -92,7 +92,6 @@ fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture 
     LaunchFixture {
         config: config_path,
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace,
         runtime_root: root.join("private"),
     }
@@ -410,12 +409,13 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
     emulator.finish().await;
 }
 
-/// A real native controller and Runtime Client stay attached throughout B's
-/// preflight while A executes a complete provider-backed ordinary turn.
+/// A real composed Session runtime and its Runtime Client stay attached
+/// throughout historical Session B's deletion preflight while A executes a
+/// complete provider-backed ordinary turn, over an aliased product root.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn active_session_a_executes_while_historical_b_preflight_retains_authority() {
     use rustx::durable::{ConversationStore, SqliteConversationStore};
-    use rustx::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as SessionDeleteResult;
+    use rustx::local_runtime::session_deletion::DeletionTargetSnapshot;
     use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
     let Some(emulator) = ProviderEmulator::start("openai_chat_streamed_turn").await else {
         return;
@@ -428,16 +428,23 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     );
     std::fs::create_dir_all(root.path().join("canonical-product")).unwrap();
     std::os::unix::fs::symlink(root.path().join("canonical-product"), &paths.runtime_root).unwrap();
+    let sessions = |root: &std::path::Path| {
+        rustx::local_runtime::SessionCatalog::open_existing(root)
+            .unwrap()
+            .unwrap()
+            .persisted_session_ids()
+    };
     let historical = paths.clone().compose(&dependencies()).await.unwrap();
-    let b = historical.supervisor().current().await.unwrap();
+    let b_conversation = historical.runtime().conversation_id().clone();
+    let b = sessions(&paths.runtime_root)[0].clone();
     let database = paths
         .runtime_root
         .join("sessions")
-        .join(b.id.as_str())
+        .join(b.as_str())
         .join("conversations")
-        .join(b.active_conversation_id.as_str())
+        .join(b_conversation.as_str())
         .join("conversation.sqlite");
-    let store = SqliteConversationStore::open(b.active_conversation_id.clone(), &database).unwrap();
+    let store = SqliteConversationStore::open(b_conversation.clone(), &database).unwrap();
     store
         .append_canonical(&rustx::message::types::MessageBlock::User(
             rustx::message::types::UserMessageBlock {
@@ -453,8 +460,10 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     historical.runtime().shutdown().await.unwrap();
     drop(historical);
     let product = paths.clone().compose(&dependencies()).await.unwrap();
-    let a = product.supervisor().current().await.unwrap();
-    assert_ne!(a.id, b.id);
+    let a = sessions(&paths.runtime_root)
+        .into_iter()
+        .find(|id| *id != b)
+        .expect("an independent Session A");
     let endpoint = product.endpoint();
     assert!(matches!(
         endpoint
@@ -465,7 +474,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
             .result,
         Some(RuntimeClientResult::Initialized { .. })
     ));
-    let live_target = product.supervisor().inspect_deletion(&a.id).await.unwrap();
+    let live_target = DeletionTargetSnapshot::inspect(&paths.runtime_root, &a).unwrap();
     assert!(
         rustx::local_runtime::session_deletion::DeletionExclusion::acquire(
             &paths.runtime_root,
@@ -475,12 +484,9 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
         "inspection permits a live target, but destructive exclusion still requires retirement"
     );
     drop(live_target);
-    let preflight = product.supervisor().inspect_deletion(&b.id).await.unwrap();
+    let preflight = DeletionTargetSnapshot::inspect(&paths.runtime_root, &b).unwrap();
     assert_eq!(preflight.conversations().len(), 1);
-    assert_eq!(
-        preflight.conversations()[0].conversation_id,
-        b.active_conversation_id
-    );
+    assert_eq!(preflight.conversations()[0].conversation_id, b_conversation);
     let revision = *preflight.ownership_revision();
     assert!(product.runtime().is_activated());
     let submitted = endpoint
@@ -499,49 +505,23 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
         crate::common::request_snapshots(&product.runtime().request_history()).len(),
         1
     );
-    assert_eq!(
-        product
-            .supervisor()
-            .current()
-            .await
-            .unwrap()
-            .active_conversation_id,
-        a.active_conversation_id
-    );
     assert!(
         product.runtime().is_activated(),
         "no switch or restart occurred"
     );
     drop(preflight);
     assert_eq!(
-        product
-            .supervisor()
-            .inspect_deletion(&b.id)
-            .await
+        DeletionTargetSnapshot::inspect(&paths.runtime_root, &b)
             .unwrap()
             .ownership_revision(),
         &revision,
         "A's user/model/assistant activity does not change B ownership"
     );
-    let response = endpoint
-        .handle_request_async(RuntimeClientRequest::SessionDeletePreview {
-            id: RequestId::new(3),
-            session_id: b.id.clone(),
-        })
-        .await;
-    let Some(RuntimeClientResult::SessionDeletion {
-        result: SessionDeleteResult::Preview { preview },
-    }) = response.result
-    else {
-        panic!("finite deletion preview");
-    };
-    assert_eq!(preview.session_id, b.id);
     assert!(
         database.exists(),
         "read-only native inspection preserves the Session"
     );
     assert_eq!(emulator.requests().await.len(), 1);
-    assert_eq!(product.supervisor().current().await.unwrap().id, a.id);
     assert!(product.runtime().is_activated());
     product.runtime().shutdown().await.unwrap();
     emulator.finish().await;

@@ -531,6 +531,7 @@ impl SessionCatalog {
             },
         }
     }
+    #[cfg(test)]
     pub(crate) fn pending_deletion_ids(&self) -> Vec<SessionId> {
         self.document.deletions.keys().cloned().collect()
     }

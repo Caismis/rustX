@@ -1,154 +1,28 @@
-//! The local runtime process lifecycle over the Issue #38 stdio/JSONL
-//! transport.
-//!
-//! # Output contract
+//! The `rustx` process entry: one routing point before any effect.
 //!
 //! ```text
-//! before serving : stdout is exactly empty
-//! while serving  : stdout is Runtime Client JSONL records only
-//! diagnostics    : stderr for runtime transport startup
+//! rustx app-server --listen stdio|ws://IP:PORT  -> the App Server (the only product control protocol)
+//! rustx config|doctor|workflow|init ...         -> native offline configuration owners
+//! rustx --subagent-child                        -> internal typed child startup (fd 0 control IPC)
+//! rustx | rustx --help | rustx help ...         -> help on stderr, exit 0
+//! anything else                                 -> bounded usage diagnostic on stderr, exit 2
 //! ```
-//! Configuration subcommands own stdout for their human/JSON reports; they do
-//! not enter the Runtime Client transport or create a Session.
 //!
-//! Startup configuration failure writes a bounded diagnostic to stderr,
-//! exits non-zero, and leaves stdout at **zero bytes** — composition
-//! finishes entirely before the transport is created, so no partial
-//! protocol frame can exist.
-//!
-//! # Exit semantics
-//!
-//! - clean input EOF at a record boundary, or a peer broken pipe, ends this
-//!   one-active-lineage process **successfully**;
-//! - malformed framing or any other transport error writes a diagnostic to
-//!   stderr and exits **non-zero**;
-//! - semantic `shutdown` responds only after the conversation runtime reaches
-//!   quiescence, and does **not** close the transport. A controlling client
-//!   closes the transport or the process according to its own lifecycle
-//!   policy.
-//!
-//! Transport EOF remains a detach, never an Agent Loop cancellation
-//! primitive, and this module delegates semantic M9 recovery and runtime
-//! quiescence to the conversation runtime rather than implementing either
-//! concern in the transport process.
+//! Parsing completes before host capture, configuration reads, storage, or
+//! any runtime composition, so help and rejected invocations have no effect
+//! and write nothing to stdout. Configuration subcommands own stdout for their
+//! bounded human/JSON reports; App Server stdout belongs to its protocol.
 
 use std::io::Write;
 
-use crate::runtime_client::transport::stdio::{StdioSessionEnd, serve_stdio_jsonl};
-
 use std::ffi::{OsStr, OsString};
-
-use super::cli::parse_arguments;
-use super::composition::{
-    LocalConversationInspection, LocalRuntimeDependencies, LocalSessionClient, StartupSession,
-};
-
-/// The deterministic terminal outcome of the local runtime process.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProcessOutcome {
-    /// The transport closed cleanly; the process exits with code 0.
-    TransportClosed(StdioSessionEnd),
-    /// Startup configuration failed; nothing was ever written to stdout.
-    StartupFailed(String),
-    /// The transport terminated abnormally after serving began.
-    TransportFailed(String),
-}
-
-impl ProcessOutcome {
-    /// The process exit code of this outcome.
-    #[must_use]
-    pub const fn exit_code(&self) -> i32 {
-        match self {
-            Self::TransportClosed(_) => 0,
-            Self::StartupFailed(_) => 2,
-            Self::TransportFailed(_) => 1,
-        }
-    }
-
-    /// The bounded stderr diagnostic of this outcome, when it has one.
-    #[must_use]
-    pub fn diagnostic(&self) -> Option<&str> {
-        match self {
-            Self::TransportClosed(_) => None,
-            Self::StartupFailed(detail) | Self::TransportFailed(detail) => Some(detail),
-        }
-    }
-}
-
-enum ServingRuntime {
-    Session(Box<LocalSessionClient>),
-    Inspection(LocalConversationInspection),
-}
-
-/// Composes the runtime from explicit arguments and serves it on
-/// stdin/stdout.
-///
-/// Returns the terminal outcome instead of exiting, so the binary owns the
-/// single exit point and tests can drive the same code path.
-pub async fn serve(
-    arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>,
-) -> ProcessOutcome {
-    let request = match parse_arguments(arguments) {
-        Ok(paths) => paths,
-        Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
-    };
-    Box::pin(serve_request(request)).await
-}
-
-async fn serve_request(request: super::launch::LaunchRequest) -> ProcessOutcome {
-    let host = match super::launch::HostEnvironment::capture() {
-        Ok(host) => host,
-        Err(error) => return ProcessOutcome::StartupFailed(error),
-    };
-    // Composition completes — including the initial capability commit —
-    // before the transport exists, so a startup failure can never leave a
-    // partially initialized protocol server.
-    let runtime =
-        if let StartupSession::InspectConversation { conversation_id } = &request.startup_session {
-            let locations = match super::launch::resolve_inspection_locations(&request, &host) {
-                Ok(locations) => locations,
-                Err(error) => return ProcessOutcome::StartupFailed(error),
-            };
-            match LocalConversationInspection::compose(&locations, conversation_id).await {
-                Ok(runtime) => ServingRuntime::Inspection(runtime),
-                Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
-            }
-        } else {
-            let paths = match super::launch::resolve(&request, &host) {
-                Ok(paths) => paths,
-                Err(error) => return ProcessOutcome::StartupFailed(error),
-            };
-            match LocalSessionClient::compose(
-                &paths,
-                &LocalRuntimeDependencies {
-                    startup_session: request.startup_session,
-                    session_name: request.session_name,
-                    ..Default::default()
-                },
-            )
-            .await
-            {
-                Ok(runtime) => ServingRuntime::Session(Box::new(runtime)),
-                Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
-            }
-        };
-    let served = match runtime {
-        ServingRuntime::Session(runtime) => serve_stdio_jsonl(runtime.endpoint()).await,
-        ServingRuntime::Inspection(runtime) => runtime.serve().await,
-    };
-    match served {
-        Ok(end) => ProcessOutcome::TransportClosed(end),
-        Err(error) => ProcessOutcome::TransportFailed(error.to_string()),
-    }
-}
 
 /// Runs the process to its single exit point.
 ///
-/// Runtime transport diagnostics go to stderr; configuration commands instead
-/// write bounded human/JSON results to stdout. In
-/// the normal mode stdout carries protocol records and nothing else; in
-/// the internal `--subagent-child` mode stdout is instead owned by the
-/// Activity observation IPC (Issue #178).
+/// Help and argument diagnostics go to stderr; configuration commands write
+/// bounded human/JSON results to stdout. App Server stdout carries protocol
+/// records only; in the internal `--subagent-child` mode stdout is instead
+/// owned by the Activity observation IPC (Issue #178).
 pub async fn run_process(arguments: impl IntoIterator<Item = impl Into<OsString> + Clone>) -> i32 {
     let arguments: Vec<OsString> = arguments.into_iter().map(Into::into).collect();
     // The internal subagent-child mode (Issue #60): one exact flag, no
@@ -179,23 +53,13 @@ pub async fn run_process(arguments: impl IntoIterator<Item = impl Into<OsString>
             };
         }
     };
-    let request = match command {
-        super::cli::Command::Launch(request) => request,
-        super::cli::Command::Help(help) => {
-            return i32::from(write!(std::io::stderr(), "{help}").is_err());
-        }
+    match command {
+        super::cli::Command::Help(help) => i32::from(write!(std::io::stderr(), "{help}").is_err()),
         super::cli::Command::AppServer(request) => {
-            return crate::app_server::process::run_process(request).await;
+            crate::app_server::process::run_process(request).await
         }
-        command => return Box::pin(run_configuration_command(command)).await,
-    };
-    let outcome = Box::pin(serve_request(request)).await;
-    if let Some(diagnostic) = outcome.diagnostic() {
-        let mut stderr = std::io::stderr();
-        let _ = writeln!(stderr, "rustx: {diagnostic}");
-        let _ = stderr.flush();
+        command => Box::pin(run_configuration_command(command)).await,
     }
-    outcome.exit_code()
 }
 
 #[allow(clippy::too_many_lines)] // finite command routing and output ownership
@@ -342,7 +206,7 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
             }
             (report, json)
         }
-        Command::Help(_) | Command::AppServer(_) | Command::Launch(_) => unreachable!(),
+        Command::Help(_) | Command::AppServer(_) => unreachable!(),
     };
     let code = report.exit_code();
     if writeln!(std::io::stdout(), "{}", report.render(json)).is_err() {

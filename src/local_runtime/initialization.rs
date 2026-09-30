@@ -324,7 +324,7 @@ mod tests {
                 )])
             })
             .unwrap();
-        let product = super::super::LocalSessionClient::compose(
+        let product = super::super::LocalConversationRuntime::compose(
             &launch,
             &super::super::LocalRuntimeDependencies::default(),
         )

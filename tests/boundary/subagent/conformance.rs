@@ -41,7 +41,6 @@
 //! - Wall-clock time appears only as an outer anti-hang liveness guard.
 
 use super::super::{common, support};
-use crate::launch_fixture::LaunchFixture;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -809,6 +808,55 @@ async fn send_runtime_client_request<W>(
         .write_all(&record)
         .await
         .expect("Runtime Client request transport");
+}
+
+type LiveInspectionLines = tokio::io::Lines<tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>>;
+
+/// Connects one raw client to the child-owned live inspection socket.
+async fn connect_live_inspection(
+    path: &std::path::Path,
+) -> (LiveInspectionLines, tokio::net::unix::OwnedWriteHalf) {
+    let stream = tokio::net::UnixStream::connect(path)
+        .await
+        .expect("connect the child live inspection socket");
+    let (reader, writer) = stream.into_split();
+    (tokio::io::BufReader::new(reader).lines(), writer)
+}
+
+/// Sends one request over the live socket and reads its correlated response.
+async fn live_inspection_call(
+    lines: &mut LiveInspectionLines,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    request: rustx::runtime_client::RuntimeClientRequest,
+) -> rustx::runtime_client::RuntimeClientResponse {
+    send_runtime_client_request(writer, request).await;
+    let line = tokio::time::timeout(LIVENESS, lines.next_line())
+        .await
+        .expect("live inspection response liveness")
+        .expect("live inspection transport")
+        .expect("live inspection response record");
+    serde_json::from_str(&line).expect("live inspection response JSON")
+}
+
+async fn live_inspection_snapshot(
+    lines: &mut LiveInspectionLines,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    id: u64,
+) -> rustx::runtime_client::RuntimeClientSnapshot {
+    let response = live_inspection_call(
+        lines,
+        writer,
+        rustx::runtime_client::RuntimeClientRequest::SnapshotGet {
+            id: rustx::runtime_client::RequestId::new(id),
+        },
+    )
+    .await;
+    let Some(rustx::runtime_client::RuntimeClientResult::Snapshot { snapshot, .. }) =
+        response.result
+    else {
+        panic!("live inspection returned an unexpected snapshot result: {response:?}");
+    };
+    snapshot
 }
 
 /// Reads the whole durable event journal of one store.
@@ -4807,46 +4855,25 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         "live progress is never durable before batch settlement"
     );
 
-    // The mandatory blocker regression: resolve the same child identity
-    // through the local inspection path while the child is still running.
-    // The resolver must attach to the child-owned Runtime Client projection,
-    // because the durable store intentionally has no progress fact yet.
+    // The retained internal inspection route: the child-owned read-only
+    // Runtime Client JSONL endpoint on the identity-derived Unix socket,
+    // attached while the child is still running. The durable store
+    // intentionally has no progress fact yet, so only the child's live
+    // projection can answer the snapshot below.
+    let socket_path = crate::runtime::subagent::child_conversation_inspection_socket_path(
+        &plane.runtime_root,
+        &child_conversation_id,
+    );
     let live_server =
         rustx::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
-            crate::runtime::subagent::child_conversation_inspection_socket_path(
-                &plane.runtime_root,
-                &child_conversation_id,
-            ),
+            socket_path.clone(),
             child.host.clone(),
         )
         .expect("child live inspection endpoint");
-    let inspection_paths = LaunchFixture {
-        config: dir.path().join("unused-config.toml"),
-        startup_session: rustx::local_runtime::StartupSession::InspectConversation {
-            conversation_id: child_conversation_id.clone(),
-        },
-        session_name: None,
-        workspace: dir.path().join("child-workspace"),
-        runtime_root: plane.runtime_root.clone(),
-    };
-    let inspection = rustx::local_runtime::LocalConversationInspection::compose(
-        &(inspection_paths).locations(),
-        &child_conversation_id,
-    )
-    .await
-    .expect("running child resolves to its live Runtime Client endpoint");
-    assert!(
-        inspection.endpoint().is_err(),
-        "a live inspection must remain attached to the child-owned endpoint"
-    );
-    let (proxy_io, client_io) = tokio::io::duplex(1024 * 1024);
-    let (proxy_reader, proxy_writer) = tokio::io::split(proxy_io);
-    let inspection_task =
-        tokio::spawn(async move { inspection.serve_with_io(proxy_reader, proxy_writer).await });
-    let (client_reader, mut client_writer) = tokio::io::split(client_io);
-    let mut client_lines = tokio::io::BufReader::new(client_reader).lines();
-
-    send_runtime_client_request(
+    let model_requests = child.model.requests().len();
+    let (mut client_lines, mut client_writer) = connect_live_inspection(&socket_path).await;
+    let response = live_inspection_call(
+        &mut client_lines,
         &mut client_writer,
         rustx::runtime_client::RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(1),
@@ -4854,14 +4881,6 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         },
     )
     .await;
-    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
-        &client_lines
-            .next_line()
-            .await
-            .expect("live inspection response transport")
-            .expect("live inspection initialization response"),
-    )
-    .expect("live inspection initialization JSON");
     let rustx::runtime_client::RuntimeClientResult::Initialized {
         conversation_id: attached_id,
         ..
@@ -4869,51 +4888,43 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     else {
         panic!("live inspection returned an unexpected initialization result");
     };
-    assert_eq!(attached_id, child_conversation_id);
+    assert_eq!(
+        attached_id, child_conversation_id,
+        "the exact running child"
+    );
 
     // A live inspector has the ordinary snapshot read path, but none of the
-    // execution/control authority.
-    send_runtime_client_request(
-        &mut client_writer,
-        rustx::runtime_client::RuntimeClientRequest::CancelCurrentAttempt {
-            id: rustx::runtime_client::RequestId::new(2),
-        },
-    )
-    .await;
-    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
-        &client_lines
-            .next_line()
-            .await
-            .expect("read-only rejection transport")
-            .expect("read-only rejection response"),
-    )
-    .expect("read-only rejection JSON");
-    assert!(matches!(
-        response.error,
-        Some(rustx::runtime_client::RuntimeClientError::InvalidState { message })
-            if message == "conversation inspection is read-only"
-    ));
+    // execution/control authority: neither cancellation nor new inbound work
+    // is admitted, and no model request is ever issued for it.
+    for (id, request) in [
+        (
+            2,
+            rustx::runtime_client::RuntimeClientRequest::CancelCurrentAttempt {
+                id: rustx::runtime_client::RequestId::new(2),
+            },
+        ),
+        (
+            3,
+            rustx::runtime_client::RuntimeClientRequest::SubmitInbound {
+                id: rustx::runtime_client::RequestId::new(3),
+                content: vec![rustx::message::types::UserContentBlock::Text(
+                    rustx::message::content::TextBlock {
+                        text: "an inspector must not start a turn".to_owned(),
+                    },
+                )],
+            },
+        ),
+    ] {
+        let response = live_inspection_call(&mut client_lines, &mut client_writer, request).await;
+        assert_eq!(response.id.get(), id);
+        assert!(matches!(
+            response.error,
+            Some(rustx::runtime_client::RuntimeClientError::InvalidState { message })
+                if message == "conversation inspection is read-only"
+        ));
+    }
 
-    send_runtime_client_request(
-        &mut client_writer,
-        rustx::runtime_client::RuntimeClientRequest::SnapshotGet {
-            id: rustx::runtime_client::RequestId::new(3),
-        },
-    )
-    .await;
-    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
-        &client_lines
-            .next_line()
-            .await
-            .expect("live snapshot transport")
-            .expect("live snapshot response"),
-    )
-    .expect("live snapshot JSON");
-    let rustx::runtime_client::RuntimeClientResult::Snapshot { snapshot, .. } =
-        response.result.expect("live snapshot result")
-    else {
-        panic!("live inspection returned an unexpected snapshot result");
-    };
+    let snapshot = live_inspection_snapshot(&mut client_lines, &mut client_writer, 4).await;
     let Some(attempt) = snapshot.attempt.as_ref() else {
         panic!("the live inspection snapshot has no running attempt");
     };
@@ -4935,32 +4946,52 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         "the running inspector reads non-durable foreground progress from the child's live projection"
     );
 
-    send_runtime_client_request(
+    // An abrupt observer disconnect (no detach) cancels nothing, and a
+    // reconnect attaches afresh to the same running child and projection.
+    drop(client_lines);
+    drop(client_writer);
+    let (mut client_lines, mut client_writer) = connect_live_inspection(&socket_path).await;
+    let response = live_inspection_call(
+        &mut client_lines,
         &mut client_writer,
-        rustx::runtime_client::RuntimeClientRequest::Detach {
-            id: rustx::runtime_client::RequestId::new(4),
+        rustx::runtime_client::RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(5),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         },
     )
     .await;
-    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
-        &client_lines
-            .next_line()
-            .await
-            .expect("live detach transport")
-            .expect("live detach response"),
+    assert!(matches!(
+        response.result,
+        Some(rustx::runtime_client::RuntimeClientResult::Initialized { ref conversation_id, .. })
+            if *conversation_id == child_conversation_id
+    ));
+    let snapshot = live_inspection_snapshot(&mut client_lines, &mut client_writer, 6).await;
+    assert!(matches!(
+        snapshot.attempt.as_ref().map(|attempt| &attempt.phase),
+        Some(rustx::runtime_client::RuntimeClientAttemptPhase::Running)
+    ));
+    let response = live_inspection_call(
+        &mut client_lines,
+        &mut client_writer,
+        rustx::runtime_client::RuntimeClientRequest::Detach {
+            id: rustx::runtime_client::RequestId::new(7),
+        },
     )
-    .expect("live detach JSON");
+    .await;
     assert_eq!(
         response.result,
         Some(rustx::runtime_client::RuntimeClientResult::Detached)
     );
     drop(client_lines);
     drop(client_writer);
-    tokio::time::timeout(LIVENESS, inspection_task)
-        .await
-        .expect("live inspection proxy liveness")
-        .expect("live inspection proxy task")
-        .expect("live inspection proxy closes cleanly");
+    assert_eq!(
+        child.model.requests().len(),
+        model_requests,
+        "inspection never issues a model request"
+    );
+    // A held-open connection must not keep the endpoint alive past the
+    // child's shutdown: it is settled when the server stops below.
+    let (mut held_lines, _held_writer) = connect_live_inspection(&socket_path).await;
 
     // Gate B: the second phase becomes the latest visible report
     // (intermediate coalescing is fine — the newest must land).
@@ -5019,53 +5050,24 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     );
     assert_eq!(settled.observation.counters.tool_executions, 1);
     await_serve(wired.serve).await;
-    live_server.shutdown().await;
-
-    // The same identity now resolves through the durable authorities after
-    // the live endpoint is gone. This is the terminal continuity half of the
-    // two-path contract, not a second inspection identity.
-    let offline_inspection = rustx::local_runtime::LocalConversationInspection::compose(
-        &(inspection_paths).locations(),
-        &child_conversation_id,
-    )
-    .await
-    .expect("the settled child resolves to durable inspection");
-    let offline_response = offline_inspection
-        .endpoint()
-        .expect("offline inspection exposes its durable Runtime Client endpoint")
-        .handle_request(rustx::runtime_client::RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(5),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        });
-    let rustx::runtime_client::RuntimeClientResult::Initialized {
-        conversation_id: offline_id,
-        snapshot: offline_snapshot,
-        ..
-    } = offline_response
-        .result
-        .expect("offline inspection initialized")
-    else {
-        panic!("offline inspection returned an unexpected result");
-    };
-    assert_eq!(offline_id, child_conversation_id);
-    assert!(matches!(
-        offline_snapshot
-            .attempt
-            .as_ref()
-            .map(|attempt| &attempt.phase),
-        Some(rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. })
-    ));
-    assert!(offline_snapshot.messages.iter().any(|message| {
-        matches!(
-            message,
-            MessageBlock::Assistant(assistant)
-                if assistant.content.iter().any(|block| matches!(
-                    block,
-                    rustx::message::types::AssistantContentBlock::Text(text)
-                        if text.text.contains("LIVE-PROGRESS-ANSWER")
-                ))
-        )
-    }));
+    // Shutdown settles every connection task: the held connection observes
+    // EOF, the exact routing socket is removed, and nothing can attach.
+    tokio::time::timeout(LIVENESS, live_server.shutdown())
+        .await
+        .expect("live inspection shutdown settles held connections");
+    assert!(
+        tokio::time::timeout(LIVENESS, held_lines.next_line())
+            .await
+            .expect("the held connection closes")
+            .expect("clean close")
+            .is_none(),
+        "shutdown closes a held inspection connection"
+    );
+    assert!(!socket_path.exists(), "shutdown removes the routing socket");
+    assert!(
+        tokio::net::UnixStream::connect(&socket_path).await.is_err(),
+        "nothing attaches after shutdown"
+    );
     assert_eq!(
         terminal_publications(&journal(&plane.store)),
         vec![SubagentTerminalState::Succeeded]

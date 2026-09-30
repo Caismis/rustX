@@ -20,9 +20,11 @@
 //!     -> typed response/event       -> JSONL bytes -> typed response/event
 //! ```
 //!
-//! This exercises the temporary pre-#290 Runtime Client wire contract.
-//! Issue #36's stdio and WebSocket bindings instead reuse the App Server
-//! scenario in `app_server_conformance.rs`, not this old protocol fixture.
+//! This exercises the internal Runtime Client envelope contract: a native
+//! host's typed request surface and the JSONL framing whose one production
+//! consumer is a running child's read-only live inspection socket. External
+//! clients use App Server, whose stdio and WebSocket bindings reuse the
+//! scenario in `app_server_conformance.rs` instead.
 //!
 //! # What belongs here and what does not
 //!

@@ -116,7 +116,8 @@ Lifecycle refresh resolves none of these immutable proposal facts. Results remai
 the bounded canonical ToolMessage preview, and an absent result is not replaced
 by the Tool name. The ledger shows input → result without a detail read.
 
-Runtime Client 54 and App Server 29 are the sole current vocabulary. Rust generation,
+Runtime Client 55 is the internal projection/request vocabulary; App Server 29
+is the sole external product control protocol. Rust generation,
 JSON schema, TypeScript, native serialized fixture, Web and TUI move atomically.
 The previous generated files are removed. No dual decoder, flags, aliases,
 protocol fallback, runtime events or storage migration are added.

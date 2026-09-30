@@ -198,8 +198,19 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
         });
         probe.before_operation.entered().await;
         let worker = connection.clone();
-        let MethodResult::Deletion { result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult::Preview { preview } } =
-            call(&connection, 199, Method::SessionDeletePreview { session_id: target.session_id.clone() }).await else { panic!("preview") };
+        let MethodResult::Deletion {
+            result: crate::app_server::session_deletion::SessionDeletionResult::Preview { preview },
+        } = call(
+            &connection,
+            199,
+            Method::SessionDeletePreview {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("preview")
+        };
         let delete_target = target.clone();
         let delete = tokio::spawn(async move {
             call(
@@ -227,10 +238,27 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
             "unload is waiting on the admitted operation, not the client"
         );
         assert!(matches!(
-            call(&connection, 202, Method::SessionRecoverDeletion { session_id: target.session_id.clone() }).await,
-            MethodResult::Deletion { result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult::Preview { .. } }
+            call(
+                &connection,
+                202,
+                Method::SessionRecoverDeletion {
+                    session_id: target.session_id.clone()
+                }
+            )
+            .await,
+            MethodResult::Deletion {
+                result: crate::app_server::session_deletion::SessionDeletionResult::Preview { .. }
+            }
         ));
-        assert!(f.manager.registry.0.lock().unwrap().retiring_sessions.contains(&target.session_id));
+        assert!(
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .retiring_sessions
+                .contains(&target.session_id)
+        );
         assert!(weak_runtime.upgrade().is_some());
         assert_eq!(
             rejected(
@@ -643,7 +671,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn durable_session_operations_never_compose_a_runtime() {
     bounded(async {
-        use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Deletion;
+        use crate::app_server::session_deletion::SessionDeletionResult as Deletion;
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
@@ -2911,7 +2939,7 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn another_connection_deletes_an_attached_idle_session_and_closes_its_route() {
     bounded(async {
-        use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Deleted;
+        use crate::app_server::session_deletion::SessionDeletionResult as Deleted;
         let f = Fixture::new().await;
         let viewer = AppServerConnection::new(f.host.clone());
         let deleter = AppServerConnection::new(f.host.clone());
@@ -4044,7 +4072,7 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue422_multi_client_deletion_membership_converges_at_commit() {
-    use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Deletion;
+    use crate::app_server::session_deletion::SessionDeletionResult as Deletion;
     bounded(async {
         for uncertain in [false, true] {
             let f = Fixture::with_session_count(None, 1).await;

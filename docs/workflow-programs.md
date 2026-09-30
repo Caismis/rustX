@@ -519,10 +519,13 @@ to the parent's canonical conversation. Workflow Tools remain foreground-only,
 outer siblings remain sequential, and no replay/resume is introduced.
 
 The Event Journal records bounded block/node start and terminal facts with concrete
-instance associations. It remains evidence, never replay authority. Resource and human
-facts use SQLite development schema 30, child IPC 19 and Runtime Client/TUI 22;
-configuration remains 6 and the event envelope remains 1. The native Workflow read
-model supplies bounded coherent live state independently of journal delivery.
+instance associations. It remains evidence, never replay authority. The earlier
+version record for resource and human facts used SQLite development schema 30,
+child IPC 19 and Runtime Client 22; configuration remained 6 and the event envelope
+remained 1.
+The native Workflow read model supplies bounded coherent live state independently
+of journal delivery. TUI receives that projection through App Server, the sole
+external product control protocol.
 See [run projection](workflow-run-projection.md) and [product conformance](workflow-conformance.md).
 
 ## Bounded feedback (WF-05)
@@ -1136,18 +1139,18 @@ complete. Inspection is read-only in meaning and conveys no write authority.
 Esc dismisses Review presentation; it does not answer it. Removing one pending
 item leaves unrelated drafts and interactions intact.
 
-WF-04 uses Runtime Client/TUI 21 and child IPC 19 for Review and required
-Questionnaire invocation correlation. SQLite development schema 30 retains the
-WF-04 audit payloads introduced in schema 29 and adds Loop facts; older stores
+WF-04 introduced Review and required Questionnaire invocation correlation in
+Runtime Client 21 and child IPC 19. TUI carries those interactions through
+App Server. SQLite development schema 30 retains the WF-04 audit payloads introduced in schema 29 and adds Loop facts; older stores
 are refused, without migration. Event
 envelope version remains 1 because framing has not changed. No durable Workflow
 or pending-interaction tables are added.
 
 ## Foreground native details (WF-06)
 
-Runtime Client protocol 22 projects live native run cuts into the foreground
-Workflow Tool details. See [run projection](workflow-run-projection.md) for
-ownership, revision domains, cursor/resync synchronization, finite retention,
+Runtime Client projects live native run cuts (introduced in protocol 22);
+App Server carries them into the foreground Workflow Tool details. See
+[run projection](workflow-run-projection.md) for ownership, revision domains, cursor/resync synchronization, finite retention,
 cancellation draining, candidate applicability, and reconnect/process death.
 
 Invocation overrides never change `borrowed_from`, Workflow run identity, or

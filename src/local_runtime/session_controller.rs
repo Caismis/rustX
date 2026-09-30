@@ -1025,6 +1025,111 @@ mod tests {
     use super::super::configuration::SessionConfigInput;
     use super::super::session::deletion::SessionDeleteResult;
     use super::*;
+    /// Durable Session creation is independent of execution: while another
+    /// Session's runtime holds an in-flight provider request, the native
+    /// catalog owner still publishes a new Session without touching that
+    /// runtime or issuing a model request.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn session_create_publishes_while_another_session_provider_is_blocked() {
+        use crate::model::{ModelEvent, ModelFinishReason};
+        use crate::runtime::conversation_runtime::{
+            ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
+        };
+        use crate::scripted_suites::support::fake::{FakeModel, FakeStep, model_release};
+
+        let (release_tx, release_rx) = model_release();
+        let catalog_root = tempfile::tempdir().expect("catalog root");
+        let template = SessionPersistentState::from_input(
+            &crate::local_runtime::SessionConfigInput::new(catalog_root.path().to_path_buf()),
+        );
+        let catalog = SessionCatalog::create(catalog_root.path(), &template).expect("catalog");
+        let adapter = Arc::new(FakeModel::new(vec![vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::ParkUntilReleased(release_rx),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ]]));
+        let tools = crate::scripted_suites::common::tool_runtime(
+            "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+        );
+        let capabilities = crate::scripted_suites::common::capability_lease(
+            crate::tools::executor::ToolRegistry::new(),
+            &tools,
+        )
+        .await;
+        let coordinator = capabilities.coordinator.clone();
+        let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+            explicit_model: true,
+            agent_id: crate::runtime::identity::AgentId::new("agent-a"),
+            model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
+            approval_mode: crate::runtime::ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator: Arc::new(crate::context::DefaultTokenEstimator),
+                status_engine: None,
+            },
+            tool_runtime: (*tools).clone(),
+            resources: Arc::new(crate::runtime::RuntimeResourceSnapshot::new(
+                crate::runtime::RuntimeResourceRevision::new(1),
+                Vec::new(),
+                None,
+                crate::context::ContextAssembly::new(),
+                coordinator.current_snapshot(),
+            )),
+            resource_loader: Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
+                coordinator.current_snapshot().workspace_root(),
+            )),
+            capability: coordinator,
+            clock: None,
+            initial_messages: Vec::new(),
+            subagents: None,
+            workflow_output: None,
+        })
+        .expect("runtime");
+        let controller = crate::local_runtime::session_controller::SessionController::new(catalog);
+        runtime.activate();
+        runtime
+            .submit_inbound(vec![UserContentBlock::Text(
+                crate::message::content::TextBlock {
+                    text: "unsettled turn".into(),
+                },
+            )])
+            .unwrap();
+        let mut parked = adapter.parked();
+        tokio::time::timeout(
+            std::time::Duration::from_mins(2),
+            parked.wait_for(|value| *value),
+        )
+        .await
+        .expect("provider must park")
+        .expect("provider gate stays open");
+        assert_eq!(adapter.requests().len(), 1);
+        assert!(runtime.has_current_attempt());
+        let before = controller.list_sessions(None, 0, 8).await.unwrap().sessions;
+        let created = controller.create_session(template).await.unwrap();
+        assert!(before.iter().all(|row| row.id != created.session.id));
+        assert_eq!(
+            SessionCatalog::open_existing(catalog_root.path())
+                .unwrap()
+                .unwrap()
+                .persisted_session_ids()
+                .len(),
+            2
+        );
+        assert_eq!(adapter.requests().len(), 1);
+        assert!(runtime.has_current_attempt());
+        let _ = release_tx.send(true);
+        runtime.shutdown().await.unwrap();
+    }
+
     fn settings(path: &std::path::Path) -> SessionPersistentState {
         SessionPersistentState::from_input(&SessionConfigInput::new(path.to_path_buf()))
     }

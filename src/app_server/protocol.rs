@@ -569,7 +569,7 @@ pub enum MethodResult {
         next_offset: Option<usize>,
     },
     Deletion {
-        result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult,
+        result: crate::app_server::session_deletion::SessionDeletionResult,
     },
     Attached {
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -204,7 +204,6 @@ impl Driver {
         let paths = LaunchFixture {
             config: root.path().join("rustx.toml"),
             startup_session: rustx::local_runtime::StartupSession::Empty,
-            session_name: None,
             workspace,
             runtime_root: root.path().join("private"),
         };
@@ -1312,7 +1311,6 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     let paths = LaunchFixture {
         config: root.path().join("rustx.toml"),
         startup_session: rustx::local_runtime::StartupSession::Empty,
-        session_name: None,
         workspace,
         runtime_root: root.path().join("private"),
     };

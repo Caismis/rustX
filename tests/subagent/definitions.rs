@@ -13,7 +13,7 @@ use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
 use rustx::capabilities::{CapabilitySourceState, ToolSourceId};
-use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionClient};
+use rustx::local_runtime::composition::{LocalConversationRuntime, LocalRuntimeDependencies};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
@@ -220,13 +220,12 @@ impl Lab {
         LaunchFixture {
             config: self.root().join("rustx.toml"),
             startup_session: rustx::local_runtime::StartupSession::Empty,
-            session_name: None,
             workspace: self.workspace(),
             runtime_root: self.root().join("runtime"),
         }
     }
 
-    async fn compose(&self) -> LocalSessionClient {
+    async fn compose(&self) -> LocalConversationRuntime {
         (self.paths())
             .compose(&dependencies())
             .await

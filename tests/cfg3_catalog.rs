@@ -231,7 +231,7 @@ fn source_fixture_uses_canonical_bindings_through_a_parent_alias() {
 
 #[tokio::test]
 async fn unused_invalid_resource_collections_warn_without_blocking_unrelated_startup() {
-    use rustx::local_runtime::{LocalRuntimeDependencies, LocalSessionClient};
+    use rustx::local_runtime::{LocalConversationRuntime, LocalRuntimeDependencies};
     for family in ["agents", "workflows", "tools", "skills"] {
         let root = tempfile::tempdir().unwrap();
         let (host, request) = sources(
@@ -250,9 +250,10 @@ async fn unused_invalid_resource_collections_warn_without_blocking_unrelated_sta
             .unwrap()
             .admit(rustx::credentials::CredentialSnapshot::default)
             .unwrap();
-        let product = LocalSessionClient::compose(&captured, &LocalRuntimeDependencies::default())
-            .await
-            .unwrap();
+        let product =
+            LocalConversationRuntime::compose(&captured, &LocalRuntimeDependencies::default())
+                .await
+                .unwrap();
         let resources = product.runtime().runtime_resources();
         let inspection = resources.inspection();
         assert!(

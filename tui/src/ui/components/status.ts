@@ -176,8 +176,6 @@ export interface ConversationContext {
   conversationId: string;
   /** The parent identity when this view was opened from a subagent row. */
   parentConversationId?: string;
-  /** Direct `--inspect-conversation` attachments have no parent in this UI. */
-  readOnly?: boolean;
 }
 
 /** How many footer lines a wide terminal may use. */
@@ -242,8 +240,6 @@ export function footerSegments(
   segments.push(...models.slice(1));
   if (conversation?.parentConversationId != null) {
     segments.push({ text: role.accent("read-only · Esc parent"), priority: 0 });
-  } else if (conversation?.readOnly) {
-    segments.push({ text: role.accent("read-only inspection"), priority: 0 });
   }
   if (state.runtimeShutdown) segments.push({ text: role.warning("draining"), priority: 0 });
   if (connectionState && connectionState !== "connected") {

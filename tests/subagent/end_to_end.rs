@@ -1,8 +1,8 @@
 //! Durable native child Agent activations end to end through the real
 //! `rustx` binary.
 //!
-//! The parent process is driven over the stdio/JSONL Runtime Client
-//! transport exactly like Issue #42. The deterministic provider fixture
+//! The parent process is the real App Server (`rustx app-server --listen
+//! stdio`), driven over the one external product protocol. The deterministic provider fixture
 //! routes by request body: the parent's first turn answers with a `subagent`
 //! tool call, the child runtime (a real second `rustx` process in
 //! `--subagent-child` mode) asks the same fixture about its delegated task,
@@ -11,25 +11,17 @@
 //! # No sleep-based readiness
 //!
 //! Every wait is a protocol round trip: the driver polls the authoritative
-//! snapshot until the committed ledger shows the expected content. The
+//! `session/snapshot` until the committed ledger shows the expected content. The
 //! child's own liveness is bounded by its startup and delegation envelopes,
 //! not by the test.
 
-use std::process::Stdio;
 use std::sync::Arc;
 
-use rustx::runtime_client::types::{
-    RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
-};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use crate::parent::{Parent, ParentBindings};
+use rustx::app_server::protocol::{ErrorData, Method, MethodResult};
 
 /// The outer liveness guard of one process interaction.
 const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
-
-/// The `rustx` binary under test, built by cargo alongside this test.
-fn binary() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))
-}
 
 /// A catalog pointing at a local fixture server.
 fn models_json(base_url: &str) -> String {
@@ -128,220 +120,76 @@ const EXPLORE_INSTRUCTIONS: &str = "You are a read-only exploration subagent of 
 runtime. Answer the delegated task by inspecting the shared workspace with the capabilities \
 your definition authorized.";
 
-/// One spawned `rustx` process wired to its stdio JSONL transport.
-struct Process {
-    child: tokio::process::Child,
-    stdin: tokio::process::ChildStdin,
-    stdout: BufReader<tokio::process::ChildStdout>,
-    next_id: u64,
+/// Writes the parent's authored document and role resources, then launches
+/// the real App Server parent over its Session (a new one unless `resume`
+/// names it). The optional live-inspection bind fault reaches only the real
+/// child process: the parent itself never binds a child endpoint.
+async fn launch_parent(
+    root: &std::path::Path,
+    workspace: &std::path::Path,
+    models: &str,
+    session: &str,
+    key: &str,
+    resume: Option<&rustx::local_runtime::SessionId>,
+    fail_live_inspection: bool,
+) -> Parent {
+    std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
+    std::fs::write(
+        workspace.join(".agents/agents/explore.toml"),
+        EXPLORE_INSTRUCTIONS,
+    )
+    .expect("explore instructions");
+    let mut document: serde_json::Value = rustx::toml_authoring::parse(session.as_bytes()).unwrap();
+    crate::launch_fixture::write_roles(workspace, &mut document["subagents"]);
+    std::fs::write(
+        root.join("rustx.toml"),
+        format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
+    )
+    .expect("rustx.toml");
+    let mut environment = vec![("RUSTX_SUBAGENT_TEST_KEY", key)];
+    if fail_live_inspection {
+        environment.push(("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1"));
+    }
+    Parent::spawn(
+        &ParentBindings::under(root, workspace),
+        &environment,
+        resume,
+    )
+    .await
 }
 
-impl Process {
-    /// Spawns the binary with explicit startup arguments.
-    fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
-        Self::launch(root, models, session, key, None, None, false)
-    }
+/// Launches a new parent Session over `<root>/workspace`.
+async fn spawn_parent(root: &std::path::Path, models: &str, session: &str, key: &str) -> Parent {
+    launch_parent(
+        root,
+        &root.join("workspace"),
+        models,
+        session,
+        key,
+        None,
+        false,
+    )
+    .await
+}
 
-    /// Spawns the parent over an explicit logical workspace. This is used by
-    /// the isolated-subdirectory boundary regression, where the repository
-    /// root and project authority intentionally differ.
-    fn spawn_at_workspace(
-        root: &std::path::Path,
-        workspace: &std::path::Path,
-        models: &str,
-        session: &str,
-        key: &str,
-    ) -> Self {
-        Self::launch_at_workspace(root, workspace, models, session, key, None, None, false)
-    }
-
-    /// Spawns a parent whose real child process receives the deterministic
-    /// live-inspection bind fault seam. The parent itself never binds a child
-    /// endpoint, so the injected capability affects only the child startup.
-    fn spawn_with_live_inspection_failure(
-        root: &std::path::Path,
-        models: &str,
-        session: &str,
-        key: &str,
-    ) -> Self {
-        Self::launch(root, models, session, key, None, None, true)
-    }
-
-    /// Reopens the explicitly identified Session after process death.
-    fn reopen(
-        root: &std::path::Path,
-        models: &str,
-        session: &str,
-        key: &str,
-        session_id: &str,
-    ) -> Self {
-        Self::launch(root, models, session, key, Some(session_id), None, false)
-    }
-
-    /// Opens one durable child conversation through the ordinary local
-    /// Runtime Client inspection startup path. No Session is composed and no
-    /// execution owner is created for this process.
-    fn inspect(
-        root: &std::path::Path,
-        models: &str,
-        session: &str,
-        key: &str,
-        conversation_id: &str,
-    ) -> Self {
-        Self::launch(
-            root,
-            models,
-            session,
-            key,
-            None,
-            Some(conversation_id),
-            false,
-        )
-    }
-
-    fn launch(
-        root: &std::path::Path,
-        models: &str,
-        session: &str,
-        key: &str,
-        resume_session: Option<&str>,
-        inspect_conversation: Option<&str>,
-        fail_live_inspection: bool,
-    ) -> Self {
-        let workspace = root.join("workspace");
-        Self::launch_at_workspace(
-            root,
-            &workspace,
-            models,
-            session,
-            key,
-            resume_session,
-            inspect_conversation,
-            fail_live_inspection,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn launch_at_workspace(
-        root: &std::path::Path,
-        workspace: &std::path::Path,
-        models: &str,
-        session: &str,
-        key: &str,
-        resume_session: Option<&str>,
-        inspect_conversation: Option<&str>,
-        fail_live_inspection: bool,
-    ) -> Self {
-        std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
-        std::fs::write(
-            workspace.join(".agents/agents/explore.toml"),
-            EXPLORE_INSTRUCTIONS,
-        )
-        .expect("explore instructions");
-        let mut document: serde_json::Value =
-            rustx::toml_authoring::parse(session.as_bytes()).unwrap();
-        crate::launch_fixture::write_roles(workspace, &mut document["subagents"]);
-        std::fs::write(
-            root.join("rustx.toml"),
-            format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
-        )
-        .expect("rustx.toml");
-        let mut command = tokio::process::Command::new(binary());
-        command
-            .arg("--config")
-            .arg(root.join("rustx.toml"))
-            .arg("--workspace")
-            .arg(workspace)
-            .arg("--runtime-root")
-            .arg(root.join("private"))
-            .env_clear()
-            .env("HOME", root.join("host"))
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("RUSTX_SUBAGENT_TEST_KEY", key)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if fail_live_inspection {
-            command.env("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1");
-        }
-        if let Some(session_id) = resume_session {
-            command.arg("--session").arg(session_id);
-        }
-        if let Some(conversation_id) = inspect_conversation {
-            command.arg("--inspect-conversation").arg(conversation_id);
-        }
-        let mut child = command.spawn().expect("spawn the rustx binary");
-        let stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
-        Self {
-            child,
-            stdin,
-            stdout,
-            next_id: 1,
-        }
-    }
-
-    /// Sends one request and returns its correlated response, skipping any
-    /// notification lines that arrive first.
-    async fn request(
-        &mut self,
-        build: impl FnOnce(u64) -> RuntimeClientRequest,
-    ) -> RuntimeClientResponse {
-        let id = self.next_id;
-        self.next_id += 1;
-        let request = build(id);
-        let line = serde_json::to_string(&request).expect("serialize the request");
-        tokio::time::timeout(LIVENESS, async {
-            self.stdin.write_all(line.as_bytes()).await.expect("write");
-            self.stdin.write_all(b"\n").await.expect("write newline");
-            self.stdin.flush().await.expect("flush");
-            loop {
-                let mut record = String::new();
-                let read = self
-                    .stdout
-                    .read_line(&mut record)
-                    .await
-                    .expect("read a protocol record");
-                if read == 0 {
-                    use tokio::io::AsyncReadExt;
-                    let mut stderr = String::new();
-                    if let Some(mut handle) = self.child.stderr.take() {
-                        let _ = handle.read_to_string(&mut stderr).await;
-                    }
-                    panic!(
-                        "the process closed stdout before responding (status={:?})\\nstderr:\\n{stderr}",
-                        self.child.try_wait().expect("poll child status")
-                    );
-                }
-                if serde_json::from_str::<RuntimeClientProtocolEvent>(record.trim()).is_ok() {
-                    continue;
-                }
-                let response: RuntimeClientResponse = serde_json::from_str(record.trim())
-                    .unwrap_or_else(|error| {
-                        panic!("stdout must carry protocol records only: {record:?} ({error})")
-                    });
-                assert_eq!(response.id.get(), id, "responses correlate by request id");
-                return response;
-            }
-        })
-        .await
-        .expect("the process must answer")
-    }
-
-    /// Closes the transport input and waits for the process to exit.
-    async fn close_and_wait(mut self) -> (std::process::ExitStatus, String) {
-        drop(self.stdin);
-        let status = tokio::time::timeout(LIVENESS, self.child.wait())
-            .await
-            .expect("the process must exit after transport EOF")
-            .expect("wait");
-        let mut stderr = String::new();
-        if let Some(mut handle) = self.child.stderr.take() {
-            use tokio::io::AsyncReadExt;
-            let _ = handle.read_to_string(&mut stderr).await;
-        }
-        (status, stderr)
-    }
+/// Reopens the explicitly identified Session in a new parent process.
+async fn reopen_parent(
+    root: &std::path::Path,
+    models: &str,
+    session: &str,
+    key: &str,
+    session_id: &rustx::local_runtime::SessionId,
+) -> Parent {
+    launch_parent(
+        root,
+        &root.join("workspace"),
+        models,
+        session,
+        key,
+        Some(session_id),
+        false,
+    )
+    .await
 }
 
 /// Routes one provider request by body content. The parent and the child
@@ -585,54 +433,22 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     .expect("ignored overlay");
 
     let models = models_json(&server.url("/v1"));
-    let mut process = Process::spawn_at_workspace(
+    let mut process = launch_parent(
         root.path(),
         &logical_parent,
         &models,
         ISOLATED_SUBDIRECTORY_SESSION_TOML,
         "subagent-secret",
-    );
-    let response = process
-        .request(|id| RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::Initialized { .. })
-        ),
-        "initialize must succeed: {response:?}"
-    );
-    let response = process
-        .request(|id| RuntimeClientRequest::SubmitInbound {
-            id: rustx::runtime_client::RequestId::new(id),
-            content: vec![rustx::message::types::UserContentBlock::Text(
-                rustx::message::content::TextBlock {
-                    text: "please delegate isolated scope".to_owned(),
-                },
-            )],
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::InboundAccepted { .. })
-        ),
-        "submit_inbound must be accepted: {response:?}"
-    );
+        None,
+        false,
+    )
+    .await;
+    process.attach().await;
+    process.start_turn("please delegate isolated scope").await;
 
     let mut final_snapshot = None;
     for _ in 0..4_000 {
-        let response = process
-            .request(|id| RuntimeClientRequest::SnapshotGet {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-            panic!("snapshot_get must succeed: {response:?}");
-        };
+        let snapshot = process.snapshot().await;
         let answered = snapshot.messages.iter().any(|message| match message {
             rustx::message::types::MessageBlock::User(user) => user.content.iter().any(|block| {
                 matches!(
@@ -738,16 +554,7 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         "wider physical-worktree role, Skill, and project guidance stay undiscovered"
     );
 
-    let response = process
-        .request(|id| RuntimeClientRequest::Shutdown {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    assert!(matches!(
-        response.result,
-        Some(RuntimeClientResult::ShutdownCompleted)
-    ));
-    let (status, stderr) = process.close_and_wait().await;
+    let (status, stderr) = process.shutdown().await;
     assert!(status.success(), "clean shutdown: {stderr}");
 }
 
@@ -781,29 +588,14 @@ async fn subagent_process_stack(alias_root: bool) {
         .unwrap();
     }
     let models = models_json(&server.url("/v1"));
-    let mut process = Process::spawn(root.path(), &models, SESSION_TOML, "subagent-secret");
+    let mut process = spawn_parent(root.path(), &models, SESSION_TOML, "subagent-secret").await;
 
-    // start -> initialize
-    let response = process
-        .request(|id| RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        })
-        .await;
-    let Some(RuntimeClientResult::Initialized { snapshot, .. }) = response.result else {
-        panic!("initialize must succeed: {response:?}");
-    };
+    // start -> initialize -> attach the parent Session
+    let snapshot = process.attach().await;
     assert!(snapshot.agents.is_empty(), "no children at start");
 
     // The composed tool surface includes the subagent intrinsic.
-    let response = process
-        .request(|id| RuntimeClientRequest::CapabilityGet {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    let Some(RuntimeClientResult::Capability { capabilities }) = response.result else {
-        panic!("capability_get must succeed: {response:?}");
-    };
+    let capabilities = snapshot.capabilities;
     assert!(
         capabilities
             .tools
@@ -818,37 +610,14 @@ async fn subagent_process_stack(alias_root: bool) {
     );
 
     // submit the delegating turn
-    let response = process
-        .request(|id| RuntimeClientRequest::SubmitInbound {
-            id: rustx::runtime_client::RequestId::new(id),
-            content: vec![rustx::message::types::UserContentBlock::Text(
-                rustx::message::content::TextBlock {
-                    text: "please delegate".to_owned(),
-                },
-            )],
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::InboundAccepted { .. })
-        ),
-        "submit_inbound must be accepted: {response:?}"
-    );
+    process.start_turn("please delegate").await;
 
     // Poll the authoritative snapshot until the whole chain is visible:
     // the tool call committed, the child settled, its answer arrived as an
     // Agent-authored message, and the parent consumed it.
     let mut final_snapshot = None;
     for _ in 0..4_000 {
-        let response = process
-            .request(|id| RuntimeClientRequest::SnapshotGet {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-            panic!("snapshot_get must succeed: {response:?}");
-        };
+        let snapshot = process.snapshot().await;
         let child_answer = snapshot.messages.iter().any(|message| match message {
             rustx::message::types::MessageBlock::User(user) => {
                 matches!(user.source, rustx::message::types::UserSource::Agent { .. })
@@ -885,15 +654,7 @@ async fn subagent_process_stack(alias_root: bool) {
         let bodies = (0..server.attempt_count())
             .map(|index| server.request_body(usize::try_from(index).expect("index fits usize")))
             .collect::<Vec<_>>();
-        drop(process.stdin);
-        let status = tokio::time::timeout(LIVENESS, process.child.wait())
-            .await
-            .expect("the process must exit after transport EOF");
-        let mut stderr = String::new();
-        if let Some(mut handle) = process.child.stderr.take() {
-            use tokio::io::AsyncReadExt;
-            let _ = handle.read_to_string(&mut stderr).await;
-        }
+        let (status, stderr) = process.shutdown().await;
         panic!(
             "the delegation chain must settle (exit: {status:?})\nstderr:\n{stderr}\n\
              requests: {}\n{}",
@@ -957,13 +718,13 @@ async fn subagent_process_stack(alias_root: bool) {
 
     // The dedicated status surface answers with the same snapshot.
     let response = process
-        .request(|id| RuntimeClientRequest::AgentStatus {
-            id: rustx::runtime_client::RequestId::new(id),
+        .call(Method::AgentStatus {
+            target: process.target(),
             agent_id: subagent.agent_id.clone(),
         })
         .await;
-    let Some(RuntimeClientResult::Agent { agent: status }) = response.result else {
-        panic!("agent_status must succeed: {response:?}");
+    let Ok(MethodResult::Agent { agent: status }) = response else {
+        panic!("agent/status must succeed: {response:?}");
     };
     assert_eq!(
         status.activation_state,
@@ -1011,90 +772,68 @@ async fn subagent_process_stack(alias_root: bool) {
     );
 
     let child_conversation_id = subagent.child_conversation_id.clone();
+    let agent_id = subagent.agent_id.clone();
 
-    // shutdown and clean exit
-    let response = process
-        .request(|id| RuntimeClientRequest::Shutdown {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::ShutdownCompleted)
-        ),
-        "shutdown must complete: {response:?}"
-    );
-    let (status, stderr) = process.close_and_wait().await;
+    // The owner's explicit shutdown and a clean exit.
+    let session_id = process.session_id.clone();
+    let (status, stderr) = process.shutdown().await;
     assert!(
         status.success(),
         "the process must exit cleanly: {status} stderr={stderr}"
     );
+    let attempts_before_reopen = server.attempt_count();
 
-    // The parent and child runtime processes are both gone now. Reopen the
-    // exact identity from the stable child store through the ordinary
-    // Runtime Client bootstrap path. This proves that the child conversation,
-    // rather than the parent observation surface or a live process, is the
-    // durable transcript/execution-history authority.
-    let mut inspector = Process::inspect(
+    // The parent and child runtime processes are both gone now. A new parent
+    // process reopens the Session and reads the child's history through the
+    // one external protocol (`agent/transcript`). This proves that the child
+    // conversation, rather than the parent observation surface or a live
+    // process, is the durable transcript authority, over the product surface.
+    let mut reopened = reopen_parent(
         root.path(),
         &models,
         SESSION_TOML,
         "subagent-secret",
-        child_conversation_id.as_str(),
+        &session_id,
+    )
+    .await;
+    let reopened_snapshot = reopened.attach().await;
+    assert_eq!(
+        reopened_snapshot
+            .agents
+            .iter()
+            .map(|agent| &agent.child_conversation_id)
+            .collect::<Vec<_>>(),
+        vec![&child_conversation_id]
     );
-    let response = inspector
-        .request(|id| RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+    let transcript = reopened
+        .call(Method::AgentTranscript {
+            target: reopened.target(),
+            agent_id: agent_id.clone(),
+            before: None,
+            limit: 32,
         })
         .await;
-    let Some(RuntimeClientResult::Initialized {
-        conversation_id: attached_id,
-        snapshot,
-        ..
-    }) = response.result
-    else {
-        panic!("durable child inspection must initialize: {response:?}");
+    let Ok(MethodResult::Transcript { page }) = transcript else {
+        panic!("durable child history must be readable: {transcript:?}");
     };
-    assert_eq!(attached_id, child_conversation_id);
+    let page = serde_json::to_string(&page).unwrap();
     assert!(
-        snapshot.messages.iter().any(|message| matches!(
-            message,
-            rustx::message::types::MessageBlock::User(user)
-                if user.content.iter().any(|block| matches!(
-                    block,
-                    rustx::message::types::UserContentBlock::Text(text)
-                        if text.text.contains("count the workspace files")
-                ))
-        )),
+        page.contains("count the workspace files"),
         "the child user task comes from its own durable Message Ledger"
     );
     assert!(
-        snapshot.messages.iter().any(|message| matches!(
-            message,
-            rustx::message::types::MessageBlock::Assistant(assistant)
-                if assistant.content.iter().any(|block| matches!(
-                    block,
-                    rustx::message::types::AssistantContentBlock::Text(text)
-                        if text.text.contains("CHILD-ANSWER")
-                ))
-        )),
+        page.contains("CHILD-ANSWER"),
         "the settled child answer is reconstructed from durable child state"
     );
-    assert!(
-        snapshot.attempt.is_some_and(|attempt| matches!(
-            attempt.phase,
-            rustx::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled {
-                outcome: rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
-            }
-        )),
-        "the child Event Journal reconstructs terminal execution history"
+    assert_eq!(
+        server.attempt_count(),
+        attempts_before_reopen,
+        "reading durable child history issues no provider request"
     );
-    let (inspection_status, inspection_stderr) = inspector.close_and_wait().await;
+    let (status, stderr) = reopened.shutdown().await;
     assert!(
-        inspection_status.success(),
-        "the inspection process must close cleanly: {inspection_status} stderr={inspection_stderr}"
+        status.success(),
+        "the reopened parent closes cleanly: {status} stderr={stderr}"
     );
     if alias_root {
         use rustx::local_runtime::session::SessionCatalog;
@@ -1221,61 +960,28 @@ async fn running_child_inspection_is_execution_independent() {
         .await;
         let root = tempfile::tempdir().expect("temp root");
         let models = models_json(&server.url("/v1"));
-        let mut parent = if matches!(mode, RunningChildInspection::EndpointUnavailable) {
-            Process::spawn_with_live_inspection_failure(
-                root.path(),
-                &models,
-                SESSION_TOML,
-                "subagent-secret",
-            )
-        } else {
-            Process::spawn(root.path(), &models, SESSION_TOML, "subagent-secret")
-        };
+        let mut parent = launch_parent(
+            root.path(),
+            &root.path().join("workspace"),
+            &models,
+            SESSION_TOML,
+            "subagent-secret",
+            None,
+            matches!(mode, RunningChildInspection::EndpointUnavailable),
+        )
+        .await;
 
-        let response = parent
-            .request(|id| RuntimeClientRequest::Initialize {
-                id: rustx::runtime_client::RequestId::new(id),
-                protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-            })
+        parent.attach().await;
+        parent
+            .start_turn("please delegate hard parent death gate")
             .await;
-        assert!(
-            matches!(
-                response.result,
-                Some(RuntimeClientResult::Initialized { .. })
-            ),
-            "parent initializes: {response:?}"
-        );
-        let response = parent
-            .request(|id| RuntimeClientRequest::SubmitInbound {
-                id: rustx::runtime_client::RequestId::new(id),
-                content: vec![rustx::message::types::UserContentBlock::Text(
-                    rustx::message::content::TextBlock {
-                        text: "please delegate hard parent death gate".to_owned(),
-                    },
-                )],
-            })
-            .await;
-        assert!(
-            matches!(
-                response.result,
-                Some(RuntimeClientResult::InboundAccepted { .. })
-            ),
-            "delegation inbound is accepted: {response:?}"
-        );
 
         tokio::time::timeout(LIVENESS, gate.wait_entered())
             .await
             .expect("the child reaches the gated provider response");
 
         let (child_conversation_id, parent_before_inspection) = loop {
-            let response = parent
-                .request(|id| RuntimeClientRequest::SnapshotGet {
-                    id: rustx::runtime_client::RequestId::new(id),
-                })
-                .await;
-            let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-                panic!("parent snapshot succeeds at the running frontier: {response:?}");
-            };
+            let snapshot = parent.snapshot().await;
             if let Some(child_conversation_id) = snapshot
                 .agents
                 .iter()
@@ -1304,30 +1010,24 @@ async fn running_child_inspection_is_execution_independent() {
             "the gated workload has exactly parent, child, and parent-continuation requests"
         );
 
+        // The retained internal inspection route is the running child's own
+        // read-only socket; there is no inspector process. Its routing state
+        // is disposable: exactly one socket and one locked liveness lease exist
+        // while the child runs, unless its endpoint bind was refused.
+        let runtime_root = root.path().join("private");
+        let lease = liveness_lease(&runtime_root);
+        assert_eq!(
+            lease_is_held(&lease),
+            Some(true),
+            "the running child holds its liveness lease"
+        );
         let mut inspector = match mode {
             RunningChildInspection::KeepAttached | RunningChildInspection::AttachThenDetach => {
-                let mut inspector = Process::inspect(
-                    root.path(),
-                    &models,
-                    SESSION_TOML,
-                    "subagent-secret",
-                    child_conversation_id.as_str(),
-                );
-                let response = inspector
-                    .request(|id| RuntimeClientRequest::Initialize {
-                        id: rustx::runtime_client::RequestId::new(id),
-                        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-                    })
-                    .await;
-                let Some(RuntimeClientResult::Initialized {
-                    conversation_id,
-                    snapshot,
-                    ..
-                }) = response.result
-                else {
-                    panic!("running child inspection initializes: {response:?}");
-                };
-                assert_eq!(conversation_id, child_conversation_id);
+                let socket = live_sockets(&runtime_root)
+                    .pop()
+                    .expect("the running child owns an inspection socket");
+                let mut inspector = LiveInspector::connect(&socket).await;
+                let snapshot = inspector.initialize(&child_conversation_id).await;
                 assert!(
                     snapshot.messages.iter().any(|message| matches!(
                         message,
@@ -1338,33 +1038,16 @@ async fn running_child_inspection_is_execution_independent() {
                                     if text.text.contains("hard parent death gate")
                             ))
                     )),
-                    "the running inspector reads the child's own durable user message"
+                    "the running inspector reads the child's own user message"
                 );
-                Some(inspector)
+                inspector.assert_read_only().await;
+                Some((inspector, socket))
             }
             RunningChildInspection::EndpointUnavailable => {
-                let inspector = Process::inspect(
-                    root.path(),
-                    &models,
-                    SESSION_TOML,
-                    "subagent-secret",
-                    child_conversation_id.as_str(),
-                );
-                let (status, stderr) = inspector.close_and_wait().await;
-                assert_eq!(
-                    status.code(),
-                    Some(2),
-                    "a live child with no inspection endpoint reports a bounded startup failure"
-                );
                 assert!(
-                    stderr.contains("live inspection of child conversation")
-                        && stderr.contains("is unavailable"),
-                    "the live/degraded distinction is surfaced explicitly: {stderr}"
-                );
-                assert_eq!(
-                    server.attempt_count(),
-                    provider_attempts_before_inspection,
-                    "a failed inspection setup cannot affect semantic execution"
+                    live_sockets(&runtime_root).is_empty(),
+                    "a refused bind leaves no endpoint, while the lease above still \
+                     distinguishes the live child from a gone one"
                 );
                 None
             }
@@ -1373,37 +1056,28 @@ async fn running_child_inspection_is_execution_independent() {
         assert_eq!(
             server.attempt_count(),
             provider_attempts_before_inspection,
-            "inspection initialization makes no provider request"
+            "inspection makes no provider request and starts no turn"
         );
 
         if matches!(mode, RunningChildInspection::AttachThenDetach) {
-            let inspector = inspector
+            let (mut inspector, socket) = inspector
                 .take()
-                .expect("attach-then-detach keeps the inspection process");
-            let (status, stderr) = inspector.close_and_wait().await;
-            assert!(
-                status.success(),
-                "detaching the running inspection is clean: {status} stderr={stderr}"
-            );
+                .expect("attach-then-detach keeps the inspection connection");
+            inspector.detach().await;
+            drop(inspector);
+            // Reconnecting attaches afresh; an abrupt disconnect (no detach)
+            // then cancels nothing.
+            let mut reconnected = LiveInspector::connect(&socket).await;
+            reconnected.initialize(&child_conversation_id).await;
+            drop(reconnected);
             assert_eq!(
                 server.attempt_count(),
                 provider_attempts_before_inspection,
-                "detaching makes no provider request"
+                "detaching and disconnecting make no provider request"
             );
         }
 
-        let response = parent
-            .request(|id| RuntimeClientRequest::SnapshotGet {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        let Some(RuntimeClientResult::Snapshot {
-            snapshot: parent_after_inspection,
-            cursor: inspection_cursor,
-        }) = response.result
-        else {
-            panic!("parent snapshot succeeds after inspection: {response:?}");
-        };
+        let (parent_after_inspection, inspection_cursor) = parent.snapshot_with_cursor().await;
         assert!(
             parent_after_inspection
                 .messages
@@ -1440,16 +1114,7 @@ async fn running_child_inspection_is_execution_independent() {
             "inspection does not change child lifecycle"
         );
 
-        let subscription = parent
-            .request(|id| RuntimeClientRequest::SubscribeEvents {
-                id: rustx::runtime_client::RequestId::new(id),
-                after_cursor: inspection_cursor,
-            })
-            .await;
-        assert!(matches!(
-            subscription.result,
-            Some(RuntimeClientResult::Subscribed { .. })
-        ));
+        parent.subscribe(inspection_cursor).await;
         let preceding_attempt = parent_before_inspection
             .attempt
             .as_ref()
@@ -1466,12 +1131,7 @@ async fn running_child_inspection_is_execution_independent() {
         }
         tokio::time::timeout(LIVENESS, async {
             loop {
-                let response = parent.request(|id| RuntimeClientRequest::SnapshotGet {
-                    id: rustx::runtime_client::RequestId::new(id),
-                }).await;
-                let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-                    panic!("snapshot at the controlled mailbox frontier: {response:?}");
-                };
+                let snapshot = parent.snapshot().await;
                 let ready = if same_attempt {
                     snapshot.agents.iter().any(|child|
                         child.child_conversation_id == child_conversation_id
@@ -1496,14 +1156,7 @@ async fn running_child_inspection_is_execution_independent() {
             .expect("the child answer reaches the parent's final provider request");
         // The final response is held, so this snapshot names the actual
         // answering attempt before its terminal event can race the reader.
-        let response = parent
-            .request(|id| RuntimeClientRequest::SnapshotGet {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-            panic!("snapshot at final answer gate: {response:?}");
-        };
+        let snapshot = parent.snapshot().await;
         let final_attempt = snapshot.attempt.expect("answering attempt").attempt_id;
         assert_eq!(
             final_attempt == preceding_attempt,
@@ -1515,10 +1168,8 @@ async fn running_child_inspection_is_execution_independent() {
         // completion proof. Await this final request's native terminal event.
         tokio::time::timeout(LIVENESS, async {
             loop {
-                let mut record = String::new();
-                assert_ne!(parent.stdout.read_line(&mut record).await.unwrap(), 0);
-                let notification: RuntimeClientProtocolEvent = serde_json::from_str(record.trim()).unwrap();
-                if matches!(notification.event,
+                let event = parent.next_event().await;
+                if matches!(event,
                     rustx::runtime_client::event::RuntimeClientEvent::AttemptSettled {
                         attempt_id,
                         outcome: rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
@@ -1526,18 +1177,7 @@ async fn running_child_inspection_is_execution_independent() {
                 ) { break; }
             }
         }).await.expect("the child-answer attempt settles through its event channel");
-        let response = parent
-            .request(|id| RuntimeClientRequest::SnapshotGet {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        let Some(RuntimeClientResult::Snapshot {
-            snapshot: final_snapshot,
-            ..
-        }) = response.result
-        else {
-            panic!("parent snapshot succeeds after the final attempt: {response:?}");
-        };
+        let final_snapshot = parent.snapshot().await;
         let child_state = final_snapshot
             .agents
             .iter()
@@ -1595,105 +1235,38 @@ async fn running_child_inspection_is_execution_independent() {
             parent_attempt_completed,
         };
 
-        let parent_was_shutdown = if matches!(
-            mode,
-            RunningChildInspection::AfterSettlement | RunningChildInspection::EndpointUnavailable
-        ) {
-            // Shutting down the parent is the existing runtime-owned
-            // quiescence boundary: it waits for the settled child process and
-            // its disposable endpoint to be gone. Opening the identity after
-            // that boundary proves durable fallback rather than a terminal
-            // live projection, without polling filesystem state.
-            let response = parent
-                .request(|id| RuntimeClientRequest::Shutdown {
-                    id: rustx::runtime_client::RequestId::new(id),
-                })
-                .await;
-            assert!(
-                matches!(
-                    response.result,
-                    Some(RuntimeClientResult::ShutdownCompleted)
-                ),
-                "parent shutdown completes before durable inspection: {response:?}"
-            );
-            let mut inspector = Process::inspect(
-                root.path(),
-                &models,
-                SESSION_TOML,
-                "subagent-secret",
-                child_conversation_id.as_str(),
-            );
-            let response = inspector
-                .request(|id| RuntimeClientRequest::Initialize {
-                    id: rustx::runtime_client::RequestId::new(id),
-                    protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-                })
-                .await;
-            let Some(RuntimeClientResult::Initialized {
-                conversation_id,
-                snapshot,
-                ..
-            }) = response.result
-            else {
-                panic!("post-settlement inspection initializes: {response:?}");
-            };
-            assert_eq!(conversation_id, child_conversation_id);
-            assert!(matches!(
-                snapshot.attempt.as_ref().map(|attempt| &attempt.phase),
-                Some(rustx::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled { .. })
-            ));
-            assert!(
-                snapshot.messages.iter().any(|message| matches!(
-                    message,
-                    rustx::message::types::MessageBlock::Assistant(assistant)
-                        if assistant.content.iter().any(|block| matches!(
-                            block,
-                            rustx::message::types::AssistantContentBlock::Text(text)
-                                if text.text.contains("CHILD-ANSWER")
-                        ))
-                )),
-                "post-settlement inspection reads the durable child conversation"
-            );
-            assert_eq!(
-                server.attempt_count(),
-                fingerprint.provider_attempts,
-                "post-settlement durable inspection makes no provider request"
-            );
-            let (status, stderr) = inspector.close_and_wait().await;
-            assert!(
-                status.success(),
-                "post-settlement inspection closes cleanly: {status} stderr={stderr}"
-            );
-            true
-        } else {
-            false
-        };
-
-        if let Some(inspector) = inspector {
-            let (status, stderr) = inspector.close_and_wait().await;
-            assert!(
-                status.success(),
-                "attached inspection closes cleanly after settlement: {status} stderr={stderr}"
-            );
-        }
-        if !parent_was_shutdown {
-            let response = parent
-                .request(|id| RuntimeClientRequest::Shutdown {
-                    id: rustx::runtime_client::RequestId::new(id),
-                })
-                .await;
-            assert!(
-                matches!(
-                    response.result,
-                    Some(RuntimeClientResult::ShutdownCompleted)
-                ),
-                "parent shutdown succeeds: {response:?}"
-            );
-        }
-        let (status, stderr) = parent.close_and_wait().await;
+        // The owner's explicit drain waits for the settled child process, so
+        // afterwards the child's disposable routing state must be settled:
+        // no socket survives, the lease is released, and a held connection
+        // has been closed by the child's own shutdown.
+        let (status, stderr) = parent.shutdown().await;
         assert!(
             status.success(),
             "parent closes cleanly after inspection: {status} stderr={stderr}"
+        );
+        assert!(
+            live_sockets(&runtime_root).is_empty(),
+            "child shutdown removes its inspection socket"
+        );
+        assert_ne!(
+            lease_is_held(&lease),
+            Some(true),
+            "child shutdown releases its liveness lease"
+        );
+        if let Some((mut inspector, socket)) = inspector {
+            assert!(
+                inspector.closed().await,
+                "child shutdown settles a held inspection connection"
+            );
+            assert!(
+                tokio::net::UnixStream::connect(&socket).await.is_err(),
+                "nothing attaches to a retired child"
+            );
+        }
+        assert_eq!(
+            server.attempt_count(),
+            fingerprint.provider_attempts,
+            "inspection settlement makes no provider request"
         );
         fingerprint
     }
@@ -1704,7 +1277,7 @@ async fn running_child_inspection_is_execution_independent() {
             Box::pin(run(RunningChildInspection::KeepAttached, same_attempt)).await;
         let attach_then_detach =
             Box::pin(run(RunningChildInspection::AttachThenDetach, same_attempt)).await;
-        let durable_after_settlement =
+        let routing_after_settlement =
             Box::pin(run(RunningChildInspection::AfterSettlement, same_attempt)).await;
         let endpoint_unavailable = Box::pin(run(
             RunningChildInspection::EndpointUnavailable,
@@ -1714,7 +1287,7 @@ async fn running_child_inspection_is_execution_independent() {
 
         assert_eq!(without_inspector, inspector_attached);
         assert_eq!(without_inspector, attach_then_detach);
-        assert_eq!(without_inspector, durable_after_settlement);
+        assert_eq!(without_inspector, routing_after_settlement);
         assert_eq!(
             without_inspector, endpoint_unavailable,
             "an unavailable observation endpoint changes no semantic execution"
@@ -1772,46 +1345,12 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
     let root = tempfile::tempdir().expect("temp root");
     let models = models_json(&server.url("/v1"));
 
-    let mut parent = Process::spawn(root.path(), &models, SESSION_TOML, "subagent-secret");
-    let response = parent
-        .request(|id| RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        })
+    let mut parent = spawn_parent(root.path(), &models, SESSION_TOML, "subagent-secret").await;
+    parent.attach().await;
+    let session_id = parent.session_id.clone();
+    parent
+        .start_turn("please delegate hard parent death gate")
         .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::Initialized { .. })
-        ),
-        "initial parent must initialize: {response:?}"
-    );
-    let response = parent
-        .request(|id| RuntimeClientRequest::SessionGet {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    let Some(RuntimeClientResult::Session { session }) = response.result else {
-        panic!("the parent exposes its explicit Session identity")
-    };
-    let session_id = session.id;
-    let response = parent
-        .request(|id| RuntimeClientRequest::SubmitInbound {
-            id: rustx::runtime_client::RequestId::new(id),
-            content: vec![rustx::message::types::UserContentBlock::Text(
-                rustx::message::content::TextBlock {
-                    text: "please delegate hard parent death gate".to_owned(),
-                },
-            )],
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::InboundAccepted { .. })
-        ),
-        "delegation inbound must be accepted: {response:?}"
-    );
 
     // The provider gate is reached only by the child's model request, so this
     // is a deterministic nonterminal frontier rather than a timing guess.
@@ -1821,14 +1360,7 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
     let parent_pid = parent.child.id().expect("parent pid");
     let child_pids = wait_for_direct_subagent(parent_pid).await;
     assert_eq!(child_pids.len(), 1, "one real child process is owned");
-    let response = parent
-        .request(|id| RuntimeClientRequest::SnapshotGet {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-        panic!("snapshot captures the admitted Agent before parent death: {response:?}");
-    };
+    let snapshot = parent.snapshot().await;
     assert_eq!(snapshot.agents.len(), 1);
     let admitted = &snapshot.agents[0];
     assert_eq!(admitted.state, rustx::runtime::subagent::AgentState::Active);
@@ -1887,7 +1419,7 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
         .expect("hard-killed parent must be waitable")
         .expect("wait parent");
     assert_eq!(parent_status.signal(), Some(Signal::SIGKILL as i32));
-    drop(parent.stdin);
+    parent.close_input();
 
     // The child's only route to semantic completion is the parent control
     // socket. It must leave after EOF while the provider response remains
@@ -1897,37 +1429,19 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
 
     // Reopen the same durable conversation. Recovery has no child process to
     // adopt and publishes one Runtime-authored Interrupted inbound.
-    let mut recovered = Process::reopen(
+    let mut recovered = reopen_parent(
         root.path(),
         &models,
         SESSION_TOML,
         "subagent-secret",
-        session_id.as_str(),
-    );
-    let response = recovered
-        .request(|id| RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::Initialized { .. })
-        ),
-        "restarted parent must initialize: {response:?}"
-    );
+        &session_id,
+    )
+    .await;
+    recovered.attach().await;
 
     let mut recovered_snapshot = None;
     for _ in 0..4_000 {
-        let response = recovered
-            .request(|id| RuntimeClientRequest::SnapshotGet {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-            panic!("snapshot_get must succeed after recovery: {response:?}");
-        };
+        let snapshot = recovered.snapshot().await;
         let interrupted = snapshot
             .messages
             .iter()
@@ -1989,81 +1503,41 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
     );
 
     let wait = recovered
-        .request(|id| RuntimeClientRequest::AgentWait {
-            id: rustx::runtime_client::RequestId::new(id),
+        .call(Method::AgentWait {
+            target: recovered.target(),
             agent_id: agent_id.clone(),
         })
         .await;
     if kill_child_without_drain {
-        assert!(
-            matches!(
-                wait.error,
-                Some(rustx::runtime_client::RuntimeClientError::AgentSettlement { .. })
-            ),
-            "{wait:?}"
-        );
+        assert!(is_agent_settlement(&wait), "{wait:?}");
         let response = recovered
-            .request(|id| RuntimeClientRequest::AgentSendMessage {
-                id: rustx::runtime_client::RequestId::new(id),
+            .call(Method::AgentSendMessage {
+                target: recovered.target(),
                 agent_id: agent_id.clone(),
                 message: "cannot overlap unproven old ownership".into(),
             })
             .await;
-        assert!(
-            matches!(
-                response.error,
-                Some(rustx::runtime_client::RuntimeClientError::AgentSettlement { .. })
-            ),
-            "{response:?}"
-        );
+        assert!(is_agent_settlement(&response), "{response:?}");
     } else {
         assert!(
-            wait.error.is_none(),
+            wait.is_ok(),
             "native orphan drain proof satisfies wait without inventing an answer: {wait:?}"
         );
     }
-    let response = recovered
-        .request(|id| RuntimeClientRequest::Shutdown {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    assert_recovered_shutdown(&response, kill_child_without_drain);
-    let (status, stderr) = recovered.close_and_wait().await;
-    assert!(
-        status.success(),
-        "transport closes after proven settlement: {stderr}"
-    );
+    assert_recovered_shutdown(recovered.shutdown().await, kill_child_without_drain);
 
     // A second restart must observe the absorbing terminal identity and must
     // not publish a second Runtime notice or relaunch anything.
-    let mut repeated = Process::reopen(
+    let mut repeated = reopen_parent(
         root.path(),
         &models,
         SESSION_TOML,
         "subagent-secret",
-        session_id.as_str(),
-    );
-    let response = repeated
-        .request(|id| RuntimeClientRequest::Initialize {
-            id: rustx::runtime_client::RequestId::new(id),
-            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        })
-        .await;
-    assert!(
-        matches!(
-            response.result,
-            Some(RuntimeClientResult::Initialized { .. })
-        ),
-        "repeated restart must initialize: {response:?}"
-    );
-    let response = repeated
-        .request(|id| RuntimeClientRequest::SnapshotGet {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-        panic!("snapshot_get must succeed on repeated restart: {response:?}");
-    };
+        &session_id,
+    )
+    .await;
+    repeated.attach().await;
+    let snapshot = repeated.snapshot().await;
     assert_eq!(
         snapshot
             .messages
@@ -2085,34 +1559,218 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
         rustx::runtime::subagent::SubagentState::Interrupted
     );
     assert!(direct_subagent_pids(repeated.child.id().expect("repeated pid")).is_empty());
-    let response = repeated
-        .request(|id| RuntimeClientRequest::Shutdown {
-            id: rustx::runtime_client::RequestId::new(id),
-        })
-        .await;
-    assert_recovered_shutdown(&response, kill_child_without_drain);
-    let (status, stderr) = repeated.close_and_wait().await;
-    assert!(
-        status.success(),
-        "repeated transport closes after proven settlement: {stderr}"
-    );
+    assert_recovered_shutdown(repeated.shutdown().await, kill_child_without_drain);
 }
 
+/// The owner's drain is the settlement boundary: missing physical proof
+/// fails closed (non-zero exit naming the unresolved settlement) instead of
+/// being reported as a graceful shutdown.
 #[cfg(unix)]
-fn assert_recovered_shutdown(response: &RuntimeClientResponse, unproven: bool) {
+fn assert_recovered_shutdown((status, stderr): (std::process::ExitStatus, String), unproven: bool) {
     if unproven {
+        assert_eq!(status.code(), Some(2), "{stderr}");
         assert!(
-            matches!(&response.error, Some(rustx::runtime_client::RuntimeClientError::RuntimeFailure { message }) if message.contains("physical settlement is unresolved")),
-            "missing physical proof fails closed: {response:?}"
+            stderr.contains("physical settlement is unresolved"),
+            "missing physical proof fails closed: {stderr}"
         );
     } else {
         assert!(
-            matches!(
-                response.result,
-                Some(RuntimeClientResult::ShutdownCompleted)
-            ),
-            "reconciled physical containment permits graceful shutdown: {response:?}"
+            status.success(),
+            "reconciled physical containment permits graceful shutdown: {stderr}"
         );
+    }
+}
+
+fn is_agent_settlement(
+    outcome: &Result<MethodResult, rustx::app_server::protocol::Failure>,
+) -> bool {
+    matches!(
+        outcome,
+        Err(failure) if matches!(failure.error.data, Some(ErrorData::AgentSettlement { .. }))
+    )
+}
+
+/// The running child's live inspection sockets under the parent runtime root:
+/// disposable routing state, observed from outside without deriving its name.
+fn live_sockets(runtime_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    use std::os::unix::fs::FileTypeExt;
+    std::fs::read_dir(runtime_root)
+        .expect("runtime root")
+        .map(|entry| entry.expect("runtime root entry"))
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_socket()))
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// The single child liveness lease under the parent runtime root.
+fn liveness_lease(runtime_root: &std::path::Path) -> std::path::PathBuf {
+    fn visit(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).expect("read runtime directory") {
+            let path = entry.expect("runtime entry").path();
+            if path.is_dir() {
+                visit(&path, found);
+            } else if path
+                .file_name()
+                .is_some_and(|name| name == ".inspection-live")
+            {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    visit(runtime_root, &mut found);
+    assert_eq!(
+        found.len(),
+        1,
+        "exactly one child liveness lease: {found:?}"
+    );
+    found.pop().unwrap()
+}
+
+/// Whether some process holds the child liveness lease. The probe takes a
+/// shared non-blocking lock, which only an exclusive holder refuses.
+fn lease_is_held(path: &std::path::Path) -> Option<bool> {
+    use nix::fcntl::{Flock, FlockArg};
+    let file = std::fs::File::open(path).ok()?;
+    match Flock::lock(file, FlockArg::LockSharedNonblock) {
+        Ok(lock) => {
+            drop(lock);
+            Some(false)
+        }
+        Err((_, nix::errno::Errno::EWOULDBLOCK)) => Some(true),
+        Err((_, error)) => panic!("probe {}: {error}", path.display()),
+    }
+}
+
+/// One read-only client of a running child's internal inspection socket,
+/// speaking the child's Runtime Client JSONL framing.
+struct LiveInspector {
+    lines: tokio::io::Lines<tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>>,
+    writer: tokio::net::unix::OwnedWriteHalf,
+    next_id: u64,
+}
+
+impl LiveInspector {
+    async fn connect(socket: &std::path::Path) -> Self {
+        use tokio::io::AsyncBufReadExt;
+        let stream = tokio::net::UnixStream::connect(socket)
+            .await
+            .expect("connect the child inspection socket");
+        let (reader, writer) = stream.into_split();
+        Self {
+            lines: tokio::io::BufReader::new(reader).lines(),
+            writer,
+            next_id: 1,
+        }
+    }
+
+    async fn call(
+        &mut self,
+        build: impl FnOnce(
+            rustx::runtime_client::RequestId,
+        ) -> rustx::runtime_client::RuntimeClientRequest,
+    ) -> rustx::runtime_client::RuntimeClientResponse {
+        use tokio::io::AsyncWriteExt;
+        let id = self.next_id;
+        self.next_id += 1;
+        let request = serde_json::to_string(&build(rustx::runtime_client::RequestId::new(id)))
+            .expect("serialize the inspection request");
+        tokio::time::timeout(LIVENESS, async {
+            self.writer
+                .write_all(format!("{request}\n").as_bytes())
+                .await
+                .expect("write the inspection request");
+            loop {
+                let record = self
+                    .lines
+                    .next_line()
+                    .await
+                    .expect("read the inspection socket")
+                    .expect("the inspection socket answers");
+                let value: serde_json::Value = serde_json::from_str(&record).expect("JSONL record");
+                if value.get("id").is_some() {
+                    let response: rustx::runtime_client::RuntimeClientResponse =
+                        serde_json::from_value(value).expect("inspection response");
+                    assert_eq!(response.id.get(), id, "responses correlate");
+                    return response;
+                }
+            }
+        })
+        .await
+        .expect("the child inspection endpoint must answer")
+    }
+
+    /// Attaches read-only to the exact running child.
+    async fn initialize(
+        &mut self,
+        child: &rustx::runtime::identity::ConversationId,
+    ) -> rustx::runtime_client::RuntimeClientSnapshot {
+        let response = self
+            .call(
+                |id| rustx::runtime_client::RuntimeClientRequest::Initialize {
+                    id,
+                    protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+                },
+            )
+            .await;
+        let Some(rustx::runtime_client::RuntimeClientResult::Initialized {
+            conversation_id,
+            snapshot,
+            ..
+        }) = response.result
+        else {
+            panic!("running child inspection initializes: {response:?}");
+        };
+        assert_eq!(&conversation_id, child, "the exact running child");
+        snapshot
+    }
+
+    /// Mutation and new work are refused before dispatch.
+    async fn assert_read_only(&mut self) {
+        for response in [
+            self.call(
+                |id| rustx::runtime_client::RuntimeClientRequest::CancelCurrentAttempt { id },
+            )
+            .await,
+            self.call(
+                |id| rustx::runtime_client::RuntimeClientRequest::SubmitInbound {
+                    id,
+                    content: vec![rustx::message::types::UserContentBlock::Text(
+                        rustx::message::content::TextBlock {
+                            text: "an inspector must not start a turn".into(),
+                        },
+                    )],
+                },
+            )
+            .await,
+        ] {
+            assert!(
+                matches!(
+                    &response.error,
+                    Some(rustx::runtime_client::RuntimeClientError::InvalidState { message })
+                        if message == "conversation inspection is read-only"
+                ),
+                "{response:?}"
+            );
+        }
+    }
+
+    async fn detach(&mut self) {
+        let response = self
+            .call(|id| rustx::runtime_client::RuntimeClientRequest::Detach { id })
+            .await;
+        assert_eq!(
+            response.result,
+            Some(rustx::runtime_client::RuntimeClientResult::Detached)
+        );
+    }
+
+    /// Whether the child closed this connection.
+    async fn closed(&mut self) -> bool {
+        tokio::time::timeout(LIVENESS, self.lines.next_line())
+            .await
+            .expect("the held connection resolves")
+            .is_ok_and(|line| line.is_none())
     }
 }
 
