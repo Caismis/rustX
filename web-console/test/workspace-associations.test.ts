@@ -296,6 +296,56 @@ it.each(['different', 'equivalent'] as const)('mutation completion validates %s 
   }
   f.stop();
 });
+it.each(['success', 'failure'] as const)('same-Host mutation survives native replacement before a late pre-commit catalog %s', async outcome => {
+  const f = await fixture();
+  await act(async () => f.reads[0].gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]));
+  const baseline = f.owner.getSnapshot().catalog!;
+  expect(f.owner.getSnapshot().entries.get('A')).toMatchObject({ status: 'ready', confirmed: { workspaceId: 'A' } });
+  const observation = f.authority.capture()!, replaced = vi.fn();
+  const release = f.authority.subscribe(replaced);
+  const commit = f.owner.captureMutation(), completion = deferred<void>(), started = deferred<void>();
+  vi.mocked(f.host.removeWorkspace).mockImplementation(() => { started.resolve(); return completion.promise; });
+  const mutation = (async () => { await f.host.removeWorkspace('A'); return commit('A'); })();
+  await started.promise;
+  const r1 = deferred<WorkspaceCatalog>(), r2 = deferred<WorkspaceCatalog>();
+  let preCommitSignal: AbortSignal | undefined;
+  vi.mocked(f.host.listWorkspaces)
+    .mockImplementationOnce(signal => { preCommitSignal = signal; return r1.promise; })
+    .mockReturnValueOnce(r2.promise);
+  // Only native identity changes. H1/E is still current while its display baseline is absent.
+  f.publish({ authorityId: 'native-2', authorityRevision: 1, generation: 2 });
+  expect(f.owner.getSnapshot().catalog).toBeUndefined();
+  expect(preCommitSignal?.aborted).toBe(false);
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(2);
+  expect(observation.current()).toBe(true);
+  expect(f.authority.getCatalog()).toBe(baseline);
+  expect(replaced).not.toHaveBeenCalled();
+  completion.resolve();
+  expect(await mutation).toBe(true);
+  // These assertions precede both catalog answers: commit retired R1 and started R2.
+  expect(preCommitSignal?.aborted).toBe(true);
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(3);
+  expect(f.owner.getSnapshot().catalog).toBeUndefined();
+  expect(observation.current()).toBe(true);
+  r2.resolve({ ...baseline, workspaces: baseline.workspaces.filter(row => row.id !== 'A') });
+  const classification = await f.observed(2);
+  await act(async () => classification.gate.resolve([{ authorized: true }, { authorized: true, workspaceId: 'B' }]));
+  expect(f.owner.getSnapshot().status).toBe('ready');
+  expect(f.owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['B']);
+  expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
+  const settled = f.owner.getSnapshot(), published = vi.fn();
+  const unsubscribe = f.owner.subscribe(published);
+  await act(async () => {
+    if (outcome === 'success') r1.resolve(baseline); else r1.reject(new Error('late pre-commit failure'));
+  });
+  expect(f.owner.getSnapshot()).toBe(settled);
+  expect(published).not.toHaveBeenCalled();
+  expect(f.owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['B']);
+  expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
+  expect(observation.current()).toBe(true); expect(replaced).not.toHaveBeenCalled();
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(3); expect(f.reads).toHaveLength(2);
+  unsubscribe(); release(); f.stop();
+});
 it('selected off-page demand participates in status, including unavailable and queued reads', async () => {
   const f = await fixture(); await f.accept(0);
   f.publish({ views: { outside: { id: 'outside', attachment: 'detached', attachmentIntent: 'released', summary: row('outside', '/A') } } });

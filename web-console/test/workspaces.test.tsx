@@ -143,6 +143,51 @@ it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completio
     expect(methods()).toEqual(['initialize', 'session/list']);
   } finally { stop(); }
 });
+it.each(['success', 'failure'] as const)('UX-04 pending unregister survives App native replacement and late catalog %s', async outcome => {
+  const capture = vi.spyOn(WorkspaceAssociations.prototype, 'captureMutation');
+  const host = await mount();
+  const completion = deferred<void>(), started = deferred<void>();
+  vi.mocked(host.removeWorkspace).mockImplementation(() => { started.resolve(); return completion.promise; });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace A' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Unregister Workspace' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Unregister$/ })));
+  await started.promise;
+  const owner = capture.mock.contexts[0] as WorkspaceAssociations;
+  const baseline = owner.getSnapshot().catalog!, r1 = deferred<WorkspaceCatalog>(), r2 = deferred<WorkspaceCatalog>();
+  expect(owner.getSnapshot().entries.get('A')?.confirmed).toEqual({ workspaceId: 'wA' });
+  const displayReads: AbortSignal[] = [];
+  let currentCatalog = baseline;
+  vi.mocked(host.listWorkspaces).mockImplementation(signal => {
+    // Composer reads are independent; gate the display owner's exact read lane.
+    if (!signal) return Promise.resolve(currentCatalog);
+    displayReads.push(signal);
+    return displayReads.length === 1 ? r1.promise : r2.promise;
+  });
+  server.authorityId = 'native-2';
+  await act(async () => { await server.client.disconnect(); await server.connect(); });
+  expect(server.client.getSnapshot().authorityId).toBe('native-2');
+  expect(owner.getSnapshot().catalog).toBeUndefined();
+  expect(displayReads).toHaveLength(1); expect(displayReads[0].aborted).toBe(false);
+  const lists = vi.mocked(host.listWorkspaces).mock.calls.length;
+  // Registration is removed; exact-root authorization remains independent.
+  vi.mocked(host.classifyLocations).mockImplementation(async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd === '/workspace/B' ? 'wB' : undefined })));
+  currentCatalog = { ...baseline, workspaces: baseline.workspaces.filter(row => row.id !== 'wA') };
+  await act(async () => completion.resolve());
+  expect(displayReads).toHaveLength(2); expect(displayReads[0].aborted).toBe(true);
+  expect(host.listWorkspaces).toHaveBeenCalledTimes(lists + 1);
+  expect(capture).toHaveBeenCalledTimes(1); // The old UI continuation commits through the surviving owner.
+  await act(async () => r2.resolve(currentCatalog));
+  expect(owner.getSnapshot().status).toBe('ready');
+  expect(owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['wB']);
+  expect(owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
+  const settled = owner.getSnapshot();
+  await act(async () => {
+    if (outcome === 'success') r1.resolve(baseline); else r1.reject(new Error('late pre-commit failure'));
+  });
+  expect(owner.getSnapshot()).toBe(settled);
+  expect(screen.queryByRole('button', { name: 'Select Workspace Workspace A' })).toBeNull();
+  expect(host.listWorkspaces).toHaveBeenCalledTimes(lists + 1);
+});
 it('picker capability exposes only authorized choices and Session rename uses the native typed operation', async () => {
   const host = await mount();
   server.handlers.set('session/name', request => {

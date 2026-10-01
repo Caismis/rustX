@@ -262,13 +262,22 @@ catalog or classification read, and an unsatisfied off-page selection reads only
 cwd. Host replacement invalidates incompatible evidence through the authority owner. Both catalog success
 and failure are fenced before publication. `captureMutation()` gives navigation a
 completion capability backed by the authority owner's observation of the current
-display catalog. Only while that exact `(authorityId, normalized endpoint)` scope
-remains current can the capability commit removal and start a catalog reread;
+Product Host scope, independently of the current display catalog baseline. The
+capability can commit only while that exact `(authorityId, normalized endpoint)`
+scope remains current, the current native endpoint matches that normalized scope,
+and the display owner has not been disposed;
 an obsolete completion changes neither display evidence nor metadata navigation.
 `refresh()` accepts no deletion evidence. Navigation changes and compatible catalog
-observations do not retire the mutation capability. A same-scope committed unregister first removes the
-registration association and invalidates all older reads; a failed subsequent reread
-cannot resurrect it. Complete successful catalogs also remove missing registrations.
+observations do not retire the mutation capability. Native App Server authority
+replacement retires display evidence and its catalog baseline, but does not retire a
+still-current Product Host mutation capability. Every accepted completion advances
+the catalog/classification invalidation fences and starts or queues a post-commit
+catalog observation. A retained compatible catalog receives the removal delta
+immediately, with matching confirmed associations cleared/refreshed; a failed reread
+cannot resurrect that removal. Without a display catalog, the completion still
+invalidates pre-commit reads and schedules the fresh observation, without fabricating
+a baseline or retaining a stale one. Late pre-commit catalog success or failure cannot
+publish over the committed fact. Complete successful catalogs also remove missing registrations.
 Neither missing-registration invalidation nor explicit unregister completes a new
 classification. Missing catalog membership removes the old confirmation immediately;
 explicit unregister may retain confirmed ungrouped presentation. Both leave the

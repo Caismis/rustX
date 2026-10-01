@@ -133,11 +133,12 @@ export class WorkspaceAssociations {
     else if (demandChanged || generationChanged || connectionChanged) { this.publish(); this.schedule(); }
   };
   /** Only a completion from this captured Product Host scope may commit display evidence.
-   * Navigation, native reconnect and catalog rereads do not retire a Host scope. */
+   * Native authority replacement can retire the display baseline without retiring
+   * this Host scope. Completion always fences pre-commit reads, even without a baseline. */
   captureMutation(): (removed?: string) => boolean {
-    const observation = this.catalog && this.authority.capture(this.catalog);
+    const observation = this.authority.capture();
     return removed => {
-      if (this.disposed || !observation?.current() || !this.catalog || !this.authority.capture(this.catalog)
+      if (this.disposed || !observation?.current()
         || !sameEndpoint(observation.catalog.endpoint, this.client.getSnapshot().endpoint)) return false;
       this.refreshCatalog(removed);
       return true;
