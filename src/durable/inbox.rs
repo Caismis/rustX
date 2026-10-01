@@ -40,7 +40,19 @@ pub const TRANSCRIPT_PAGE_LIMIT_MAX: usize = 256;
 /// This cursor belongs to the transcript ordering spine. It is deliberately
 /// distinct from the Runtime Client observation cursor, the Event Journal
 /// sequence, and the inbound mailbox sequence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(transparent)]
 pub struct TranscriptCursor(u64);
 
@@ -1391,6 +1403,33 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 ///   been durably accepted the answer stays `true` forever.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationStore: Send + Sync + 'static {
+    /// One exact snapshot of native reading authority.
+    fn conversation_read_cut(
+        &self,
+    ) -> Result<super::reading::ConversationReadCut, ConversationStoreError>;
+    /// Bounded native Attempt outline, including immutable copied origins.
+    fn conversation_turns(
+        &self,
+        cut: Option<&super::reading::ConversationReadCut>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<super::reading::ConversationTurnPage, ConversationStoreError>;
+    /// Direct native location/adjacency read, with no intervening history walk.
+    fn conversation_window(
+        &self,
+        at: &super::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<super::reading::DurableConversationWindow, ConversationStoreError>;
+    /// Exact local execution owners of these canonical Assistant identities.
+    fn transcript_attempts(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<AttemptId>, ConversationStoreError>;
+    /// Only copied response provenance intersecting exact requested members.
+    fn inherited_responses_for(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError>;
     /// Private executable Agent authority, never copied into public history or events.
     fn load_agent_authority(
         &self,

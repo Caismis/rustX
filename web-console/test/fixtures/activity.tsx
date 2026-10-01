@@ -5,7 +5,7 @@ import { Tool } from '../../src/app/agent/Tool';
 import { ArtifactContext } from '../../src/app/components/Artifact';
 import { ArtifactResources } from '../../src/client/artifacts';
 import { RuntimeFacts } from '../../src/app/agent/Activity';
-import type { RuntimeClientAgent } from '../../../protocol/app-server/v29';
+import type { RuntimeClientAgent } from '../../../protocol/app-server/v30';
 import { Server, snapshot } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';

@@ -1,13 +1,13 @@
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v29';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v30';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isAgentStatusContext, statusesAt } from '../src/bindings/agent-status';
 import { todoDock } from '../src/bindings/composer-context';
 import { replaceTranscript } from '../src/client/transcript';
-import { Server, snapshot } from './fixture';
+import { Server, snapshot, readingWindow } from './fixture';
 
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); });
@@ -223,7 +223,7 @@ describe('cold attach, live folding and resync converge on one placement', () =>
     server.held.add('session/transcript');
     const earlier = server.client.loadEarlier('A');
     const request = await server.waitFor('session/transcript', 1);
-    await act(async () => { server.socket.success(request, { type: 'transcript', page: { entries: [user('u0', '0')] } }); await earlier; });
+    await act(async () => { server.socket.success(request, { type: 'transcript_window', window: readingWindow({ entries: [user('u0', '0')] }) }); await earlier; });
     expect(annotations(transcript())).toEqual([['old', 'message:u0'], ['s1', 'message:u1'], ['s2', 'message:t1']]);
     expect(server.client.getSnapshot().views.A.snapshot?.statuses).toHaveLength(3);
   });

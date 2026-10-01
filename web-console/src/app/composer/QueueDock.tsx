@@ -10,7 +10,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/app-server';
 import { IconChevronDownOutline14, IconQueueOutline14 } from '../../presentation/primitives/icons';
-import type { PendingInboundRef } from '../../../../protocol/app-server/v29';
+import type { PendingInboundRef } from '../../../../protocol/app-server/v30';
 import css from './QueueDock.module.css';
 
 const QueueGlyph = () => <span className={css.lead} aria-hidden><IconQueueOutline14 /></span>;

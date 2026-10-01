@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v29';
-import { Server, snapshot } from './fixture';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v30';
+import { Server, snapshot, readingWindow } from './fixture';
 import { prependTranscript, refreshTranscript, replaceTranscript, HISTORY_LIMIT } from '../src/client/transcript';
 const entry = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `m${n}`, role: 'assistant', content: [{ type: 'text', text: `Message ${n}` }] } } });
 let server: Server;
@@ -30,10 +30,10 @@ it('a live message arriving during older read survives and advances only the liv
   await server.attached('A'); server.held.add('session/transcript');
   const initialCursor = server.client.getSnapshot().views.A.cursor;
   const older = server.client.loadEarlier('A'); const request = await server.waitFor('session/transcript', 1);
-  expect(request.params).toMatchObject({ before: '10' });
+  expect(request.params).toMatchObject({ at: { type: 'older', before: '10' } });
   await server.update('A', { ...snapshot(), transcript: { entries: [entry(10), entry(11)], next_cursor: '10' } });
   const live = server.client.getSnapshot().views.A.cursor;
-  server.socket.success(request, { type: 'transcript', page: { entries: [entry(8), entry(9)] } }); await older;
+  server.socket.success(request, { type: 'transcript_window', window: readingWindow({ entries: [entry(8), entry(9)] }) }); await older;
   const view = server.client.getSnapshot().views.A;
   expect(view.cursor).toBe(live);
   expect(live).not.toBe(initialCursor);
@@ -47,7 +47,7 @@ it('resync fences an older read even when snapshot refresh installs the same con
   const older = server.client.loadEarlier('A'); const request = await server.waitFor('session/transcript', 1);
   server.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target: server.target('A'), after_cursor: '0', earliest_serviceable: '1' } });
   await server.client.refresh('A');
-  server.socket.success(request, { type: 'transcript', page: { entries: [entry(9)] } }); await older;
+  server.socket.success(request, { type: 'transcript_window', window: readingWindow({ entries: [entry(9)] }) }); await older;
   expect(server.client.getSnapshot().views.A.history?.page.entries).toEqual([entry(10)]);
 });
 it('reconnect replaces historical read caches without replay', async () => {
@@ -56,7 +56,7 @@ it('reconnect replaces historical read caches without replay', async () => {
   const older = server.client.loadEarlier('A'); const rejected = expect(older).rejects.toThrow();
   const request = await server.waitFor('session/transcript', 1); const old = server.socket;
   await server.connect(); await rejected;
-  old.success(request, { type: 'transcript', page: { entries: [entry(9)] } });
+  old.success(request, { type: 'transcript_window', window: readingWindow({ entries: [entry(9)] }) });
   expect(server.client.getSnapshot().views.A.history?.page.entries).toEqual([entry(10)]);
 });
 it('reattachment in the same connection rejects the old page and duplicate load gestures coalesce', async () => {
@@ -65,7 +65,7 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   const older = server.client.loadEarlier('A'); await server.client.loadEarlier('A');
   const request = await server.waitFor('session/transcript', 1);
   await server.client.release('A'); await server.client.attach('A');
-  server.socket.success(request, { type: 'transcript', page: { entries: [entry(9)] } }); await older;
+  server.socket.success(request, { type: 'transcript_window', window: readingWindow({ entries: [entry(9)] }) }); await older;
   expect(server.client.getSnapshot().views.A.history?.page.entries).toEqual([entry(10)]);
   expect(server.requests.filter(item => item.request.method === 'session/transcript')).toHaveLength(1);
 });

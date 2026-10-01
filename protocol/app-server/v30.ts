@@ -58,7 +58,19 @@ export type Request1 =
       method: 'session/transcript';
       params: {
         target: AttachmentTarget;
-        before?: RuntimeClientTranscriptCursor | null;
+        at: ConversationWindowAt;
+        limit: number;
+      };
+    }
+  | {
+      method: 'session/turns';
+      params: {
+        target: AttachmentTarget;
+        cut?: ConversationReadCut | null;
+        /**
+         * Absent selects the newest native outline page.
+         */
+        offset?: number | null;
         limit: number;
       };
     }
@@ -444,9 +456,53 @@ export type SessionNodeId = string;
  */
 export type TraceCursor = string;
 /**
- * The cursor domain of durable transcript paging.
+ * A single transcript read vocabulary; every selector replaces a finite window.
  */
-export type RuntimeClientTranscriptCursor = string;
+export type ConversationWindowAt =
+  | {
+      type: 'latest';
+    }
+  | {
+      before: TranscriptCursor;
+      cut?: ConversationReadCut | null;
+      type: 'older';
+    }
+  | {
+      after: TranscriptCursor;
+      cut: ConversationReadCut;
+      type: 'newer';
+    }
+  | {
+      id: ConversationTurnId;
+      cut: ConversationReadCut;
+      type: 'turn';
+    };
+/**
+ * A durable transcript cursor.
+ *
+ * This cursor belongs to the transcript ordering spine. It is deliberately
+ * distinct from the Runtime Client observation cursor, the Event Journal
+ * sequence, and the inbound mailbox sequence.
+ */
+export type TranscriptCursor = string;
+/**
+ * The identity of one exact historical Conversation Surface state.
+ *
+ * A revision is a monotonic counter in its own identity domain. The empty
+ * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+ * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+ * is precisely "the Surface after the first `n` accepted operations".
+ *
+ * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+ * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+ * or a `CapabilityRevision`: none of those identify a Surface state, and
+ * none of them may be substituted for one.
+ */
+export type SurfaceRevision = string;
+/**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -505,6 +561,10 @@ export type ToolExecutionId = string;
  */
 export type AgentId = string;
 /**
+ * The cursor domain of durable transcript paging.
+ */
+export type RuntimeClientTranscriptCursor = string;
+/**
  * Identifies one finite activation owned by an Agent, or one finite
  * Workflow child execution.
  *
@@ -514,20 +574,6 @@ export type AgentId = string;
  * of physical settlement.
  */
 export type SubagentId = string;
-/**
- * The identity of one exact historical Conversation Surface state.
- *
- * A revision is a monotonic counter in its own identity domain. The empty
- * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
- * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
- * is precisely "the Surface after the first `n` accepted operations".
- *
- * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
- * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
- * or a `CapabilityRevision`: none of those identify a Surface state, and
- * none of them may be substituted for one.
- */
-export type SurfaceRevision = string;
 /**
  * Identifies a committed canonical message block.
  */
@@ -990,6 +1036,14 @@ export type MethodResult =
       type: 'transcript';
     }
   | {
+      window: ConversationWindow;
+      type: 'transcript_window';
+    }
+  | {
+      page: ConversationTurnPage;
+      type: 'conversation_turns';
+    }
+  | {
       view: GoalView;
       type: 'goal';
     }
@@ -1221,10 +1275,6 @@ export type ModelErrorKind =
  */
 export type TraceToolOutcome =
   'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
 /**
  * Identifies one turn within an attempt.
  */
@@ -3448,6 +3498,28 @@ export interface UploadBytes {
   data: string;
 }
 /**
+ * Exact native read authority. Appends, compaction and pending mutations retire it.
+ */
+export interface ConversationReadCut {
+  conversation_id: ConversationId;
+  journal: string;
+  transcript: string;
+  surface_revision: SurfaceRevision;
+  /**
+   * Pending population changes on removal; an admission also advances the
+   * transcript frontier. Existing native CAS revisions increase on edits.
+   */
+  pending_count: string;
+  pending_revision: string;
+}
+/**
+ * Origin survives lineage copying; ordinal never participates in identity.
+ */
+export interface ConversationTurnId {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+}
+/**
  * The authoritative mutable model configuration of one conversation
  * session.
  *
@@ -3605,7 +3677,7 @@ export interface WorkflowRunId {
    */
   conversation_id: string;
   /**
-   * Native admitted attempt, unique across process recovery.
+   * Identifies one attempt to execute an agent manifest.
    */
   attempt_id: string;
   /**
@@ -6865,6 +6937,31 @@ export interface QuestionnaireSubmission1 {
    * At most one entry per answered question.
    */
   answers: QuestionnaireAnswerEntry[];
+}
+export interface ConversationWindow {
+  cut: ConversationReadCut;
+  page: RuntimeClientTranscriptPage;
+  newer_cursor?: RuntimeClientTranscriptCursor | null;
+  target?: ConversationTurnId | null;
+  target_cursor?: RuntimeClientTranscriptCursor | null;
+}
+export interface ConversationTurnPage {
+  cut: ConversationReadCut;
+  total: number;
+  offset: number;
+  /**
+   * @maxItems 64
+   */
+  turns: ConversationTurn[];
+}
+export interface ConversationTurn {
+  id: ConversationTurnId;
+  ordinal: number;
+  /**
+   * None until native work has a visible member or terminal position.
+   */
+  cursor?: TranscriptCursor | null;
+  preview: string;
 }
 /**
  * The current read model; observing it never starts or authorizes work.

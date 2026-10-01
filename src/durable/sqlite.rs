@@ -1353,6 +1353,79 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn transcript_attempts(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<AttemptId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT DISTINCT attempt_id FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='assistant_message_committed' AND json_extract(event_json,'$.event.message_id') IN (SELECT value FROM json_each(?1))").map_err(|error| storage(error.to_string()))?;
+        let rows = statement
+            .query_map(
+                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        rows.map(|row| {
+            row.map(AttemptId::new)
+                .map_err(|error| storage(error.to_string()))
+        })
+        .collect()
+    }
+
+    fn inherited_responses_for(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT p.value FROM bootstrap_identity b,json_each(b.response_provenance) p WHERE EXISTS(SELECT 1 FROM json_each(p.value,'$.process_message_ids') m WHERE m.value IN (SELECT value FROM json_each(?1)))").map_err(|error| storage(error.to_string()))?;
+        let rows = statement
+            .query_map(
+                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        rows.map(|row| {
+            decode(
+                &row.map_err(|error| storage(error.to_string()))?,
+                "selected inherited response",
+            )
+        })
+        .collect()
+    }
+    fn conversation_read_cut(
+        &self,
+    ) -> Result<super::reading::ConversationReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        reading::cut(&transaction, &self.conversation_id)
+    }
+
+    fn conversation_turns(
+        &self,
+        expected: Option<&super::reading::ConversationReadCut>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<super::reading::ConversationTurnPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        reading::turns(&transaction, &self.conversation_id, expected, offset, limit)
+    }
+
+    fn conversation_window(
+        &self,
+        at: &super::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<super::reading::DurableConversationWindow, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        reading::window(&transaction, &self.conversation_id, at, limit)
+    }
     fn load_agent_authority(
         &self,
         agent_id: &crate::runtime::identity::AgentId,
@@ -15334,6 +15407,9 @@ mod tests {
 
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
+mod reading;
+#[cfg(test)]
+mod reading_tests;
 
 #[cfg(test)]
 mod presentation_cancellation_tests {

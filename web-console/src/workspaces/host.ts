@@ -1,4 +1,4 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v29.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v30.ts';
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */

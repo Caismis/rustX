@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v29 envelope and method vocabulary.
+//! Rust authority for the App Server v30 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 29;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -123,7 +123,17 @@ pub enum Method {
     #[serde(rename = "session/transcript")]
     Transcript {
         target: AttachmentTarget,
-        before: Option<crate::runtime_client::snapshot::RuntimeClientTranscriptCursor>,
+        at: crate::durable::reading::ConversationWindowAt,
+        #[schemars(range(min = 1, max = 64))]
+        limit: usize,
+    },
+    #[serde(rename = "session/turns")]
+    ConversationTurns {
+        target: AttachmentTarget,
+        cut: Option<crate::durable::reading::ConversationReadCut>,
+        /// Absent selects the newest native outline page.
+        offset: Option<usize>,
+        #[schemars(range(min = 1, max = 64))]
         limit: usize,
     },
     #[serde(rename = "session/model")]
@@ -496,6 +506,12 @@ pub enum MethodResult {
     },
     Transcript {
         page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,
+    },
+    TranscriptWindow {
+        window: crate::runtime_client::snapshot::ConversationWindow,
+    },
+    ConversationTurns {
+        page: crate::durable::reading::ConversationTurnPage,
     },
     Goal {
         view: crate::goal::GoalView,

@@ -180,6 +180,45 @@ pub(crate) fn decorate_through(
     page: &mut RuntimeClientTranscriptPage,
     through: u64,
 ) -> Result<(), ConversationStoreError> {
+    decorate_projection(store, page, through, None)
+}
+
+pub(crate) fn decorate_window(
+    store: &dyn ConversationStore,
+    page: &mut RuntimeClientTranscriptPage,
+    through: u64,
+) -> Result<(), ConversationStoreError> {
+    let messages: Vec<_> = page
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.item {
+            RuntimeClientTranscriptItem::Message {
+                message: MessageBlock::Assistant(message),
+            } => Some(message.id.clone()),
+            RuntimeClientTranscriptItem::Message {
+                message: MessageBlock::Tool(message),
+            } => Some(message.occurrence.assistant_message_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut attempts: BTreeSet<_> = store.transcript_attempts(&messages)?.into_iter().collect();
+    attempts.extend(page.entries.iter().filter_map(|entry| match &entry.item {
+        RuntimeClientTranscriptItem::AttemptTerminal { turn } => Some(turn.attempt_id.clone()),
+        _ => None,
+    }));
+    decorate_projection(store, page, through, Some(&attempts))?;
+    // Whole-conversation totals have a separate native live projection. A
+    // historical window never scans all unrelated Attempts to rebuild it.
+    page.statistics = None;
+    Ok(())
+}
+
+fn decorate_projection(
+    store: &dyn ConversationStore,
+    page: &mut RuntimeClientTranscriptPage,
+    through: u64,
+    scopes: Option<&BTreeSet<AttemptId>>,
+) -> Result<(), ConversationStoreError> {
     for entry in &mut page.entries {
         entry.completed_response = None;
         entry.turn_process = None;
@@ -212,7 +251,7 @@ pub(crate) fn decorate_through(
         pending,
         statistics,
         terminals,
-    } = project(store, &wanted, &terminal_attempts, through)?;
+    } = project(store, &wanted, &terminal_attempts, through, scopes)?;
     for entry in &mut page.entries {
         if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item {
             if let Some(owner) = terminals.get(&turn.attempt_id) {
@@ -302,6 +341,7 @@ pub(crate) fn lineage_provenance(
         &wanted,
         &BTreeSet::new(),
         store.presentation_frontier()?,
+        None,
     )?;
     Ok(canonical
         .iter()
@@ -319,11 +359,12 @@ fn project(
     wanted: &BTreeSet<MessageId>,
     terminal_attempts: &BTreeSet<AttemptId>,
     through: u64,
+    selected: Option<&BTreeSet<AttemptId>>,
 ) -> Result<ResponseProjection, ConversationStoreError> {
     let mut terminals = BTreeMap::new();
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
     let mut completed: BTreeMap<_, _> = store
-        .load_inherited_responses()?
+        .inherited_responses_for(&wanted.iter().cloned().collect::<Vec<_>>())?
         .into_iter()
         .filter(|response| {
             wanted.contains(&response.closing_message_id)
@@ -357,220 +398,233 @@ fn project(
     }
     let mut statistics = ConversationStatistics::default();
     let mut timings = timing::TimingFold::default();
-    let mut after = 0;
-    loop {
-        let events = store.read_presentation_events(&FactQuery {
-            scope: FactScope::All,
-            kinds: vec![
-                "attempt_started",
-                "turn_started",
-                "model_request_started",
-                "model_request_completed",
-                "model_request_failed",
-                "assistant_message_committed",
-                "attempt_completed",
-                "attempt_cancelled",
-                "attempt_failed",
-                "attempt_timed_out",
-                "attempt_limit_exceeded",
-            ],
-            before: None,
-            after,
-            ascending: true,
-            through,
-            limit: 128,
-        })?;
-        if events.is_empty() {
-            break;
-        }
-        for event in events {
-            after = event.sequence;
-            let Some(id) = event.attempt_id.clone() else {
-                continue;
-            };
-            let evidence = attempts.entry(id.clone()).or_default();
-            match event.event {
-                RuntimeEvent::AttemptStarted { .. } => {
-                    evidence.started_at = Some(event.timestamp);
-                    statistics.turns += 1;
-                    statistics.latest_turn = Some(ConversationTurnClock {
-                        attempt_id: id.clone(),
-                        started_at: event.timestamp,
-                        ended_at: None,
-                    });
-                }
-                RuntimeEvent::TurnStarted => statistics.steps += 1,
-                RuntimeEvent::ModelRequestStarted { request_id, .. } => {
-                    timings.start(request_id.clone());
-                    evidence.timing.start(request_id.clone());
-                    evidence.last_request = Some(request_id);
-                    evidence.requests += 1;
-                    statistics.model_requests += 1;
-                }
-                RuntimeEvent::ModelRequestCompleted {
-                    request_id,
-                    usage,
-                    generation,
-                    ..
-                }
-                | RuntimeEvent::ModelRequestFailed {
-                    request_id,
-                    usage,
-                    generation,
-                    ..
-                } => {
-                    timings.terminal(&request_id, generation, usage.as_ref());
-                    evidence
-                        .timing
-                        .terminal(&request_id, generation, usage.as_ref());
-                    if let Some(usage) = usage {
-                        evidence.reports += 1;
-                        statistics.requests_with_usage += 1;
-                        add_usage(&mut evidence.usage, &usage);
-                        add_usage(&mut statistics.reported_usage, &usage);
+    let scopes = selected.map_or_else(
+        || vec![FactScope::All],
+        |selected| selected.iter().cloned().map(FactScope::Attempt).collect(),
+    );
+    for scope in scopes {
+        let mut after = 0;
+        loop {
+            let events = store.read_presentation_events(&FactQuery {
+                scope: scope.clone(),
+                kinds: vec![
+                    "attempt_started",
+                    "turn_started",
+                    "model_request_started",
+                    "model_request_completed",
+                    "model_request_failed",
+                    "assistant_message_committed",
+                    "attempt_completed",
+                    "attempt_cancelled",
+                    "attempt_failed",
+                    "attempt_timed_out",
+                    "attempt_limit_exceeded",
+                ],
+                before: None,
+                after,
+                ascending: true,
+                through,
+                limit: 128,
+            })?;
+            if events.is_empty() {
+                break;
+            }
+            for event in events {
+                after = event.sequence;
+                let Some(id) = event.attempt_id.clone() else {
+                    continue;
+                };
+                let evidence = attempts.entry(id.clone()).or_default();
+                match event.event {
+                    RuntimeEvent::AttemptStarted { .. } => {
+                        evidence.started_at = Some(event.timestamp);
+                        statistics.turns += 1;
+                        statistics.latest_turn = Some(ConversationTurnClock {
+                            attempt_id: id.clone(),
+                            started_at: event.timestamp,
+                            ended_at: None,
+                        });
                     }
-                }
-                RuntimeEvent::AssistantMessageCommitted { message_id } => {
-                    evidence.members.insert(message_id.clone());
-                    evidence.closing = Some(message_id);
-                }
-                RuntimeEvent::AttemptCompleted {
-                    finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
-                    ..
-                } => {
-                    if let Some(clock) = statistics
-                        .latest_turn
-                        .as_mut()
-                        .filter(|clock| clock.attempt_id == id)
-                    {
-                        clock.ended_at = Some(event.timestamp);
+                    RuntimeEvent::TurnStarted => statistics.steps += 1,
+                    RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+                        timings.start(request_id.clone());
+                        evidence.timing.start(request_id.clone());
+                        evidence.last_request = Some(request_id);
+                        evidence.requests += 1;
+                        statistics.model_requests += 1;
                     }
-                    if let Some(closing) = evidence.closing.take() {
-                        statistics.completed_responses += 1;
-                        if !evidence.members.is_disjoint(wanted)
-                            && let Some(process) = process_view(
+                    RuntimeEvent::ModelRequestCompleted {
+                        request_id,
+                        usage,
+                        generation,
+                        ..
+                    }
+                    | RuntimeEvent::ModelRequestFailed {
+                        request_id,
+                        usage,
+                        generation,
+                        ..
+                    } => {
+                        timings.terminal(&request_id, generation, usage.as_ref());
+                        evidence
+                            .timing
+                            .terminal(&request_id, generation, usage.as_ref());
+                        if let Some(usage) = usage {
+                            evidence.reports += 1;
+                            statistics.requests_with_usage += 1;
+                            add_usage(&mut evidence.usage, &usage);
+                            add_usage(&mut statistics.reported_usage, &usage);
+                        }
+                    }
+                    RuntimeEvent::AssistantMessageCommitted { message_id } => {
+                        evidence.members.insert(message_id.clone());
+                        evidence.closing = Some(message_id);
+                    }
+                    RuntimeEvent::AttemptCompleted {
+                        finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
+                        ..
+                    } => {
+                        if let Some(clock) = statistics
+                            .latest_turn
+                            .as_mut()
+                            .filter(|clock| clock.attempt_id == id)
+                        {
+                            clock.ended_at = Some(event.timestamp);
+                        }
+                        if let Some(closing) = evidence.closing.take() {
+                            statistics.completed_responses += 1;
+                            if !evidence.members.is_disjoint(wanted)
+                                && let Some(process) = process_view(
+                                    store,
+                                    &id,
+                                    &evidence.members,
+                                    Some(closing.clone()),
+                                    evidence.started_at,
+                                    Some(event.timestamp),
+                                    TurnProcessOutcome::Completed,
+                                    Some(event.event_id.clone()),
+                                )?
+                            {
+                                for member in &evidence.members {
+                                    if wanted.contains(member) {
+                                        processes.insert(member.clone(), process.clone());
+                                    }
+                                }
+                            }
+                            if wanted.contains(&closing) {
+                                let retry_message_id = match &evidence.last_request {
+                                    Some(id) => {
+                                        let request = store.load_request_snapshot(id)?;
+                                        store
+                                            .load_surface_snapshot(request.surface_revision)?
+                                            .iter()
+                                            .rev()
+                                            .find_map(|message| match message {
+                                                MessageBlock::User(user)
+                                                    if user.kind == InboundKind::Message =>
+                                                {
+                                                    Some(user.id.clone())
+                                                }
+                                                _ => None,
+                                            })
+                                    }
+                                    None => None,
+                                };
+                                completed.insert(
+                                    closing.clone(),
+                                    CompletedResponseProvenance {
+                                        process_message_ids: evidence
+                                            .members
+                                            .iter()
+                                            .cloned()
+                                            .collect(),
+                                        closing_message_id: closing.clone(),
+                                        origin: ResponseOrigin {
+                                            conversation_id: store.conversation_id().clone(),
+                                            attempt_id: id.clone(),
+                                            closing_message_id: closing,
+                                        },
+                                        completed_at: event.timestamp,
+                                        timing: evidence
+                                            .timing
+                                            .summary(evidence.started_at, event.timestamp),
+                                        retry_message_id,
+                                        usage: (evidence.requests > 0
+                                            && evidence.requests == evidence.reports)
+                                            .then(|| evidence.usage.take())
+                                            .flatten(),
+                                    },
+                                );
+                            }
+                        }
+                        attempts.remove(&id);
+                    }
+                    RuntimeEvent::AttemptCompleted { .. }
+                    | RuntimeEvent::AttemptCancelled { .. }
+                    | RuntimeEvent::AttemptFailed { .. }
+                    | RuntimeEvent::AttemptTimedOut { .. }
+                    | RuntimeEvent::AttemptLimitExceeded { .. } => {
+                        if let Some(clock) = statistics
+                            .latest_turn
+                            .as_mut()
+                            .filter(|clock| clock.attempt_id == id)
+                        {
+                            clock.ended_at = Some(event.timestamp);
+                        }
+                        let outcome = match event.event {
+                            RuntimeEvent::AttemptCancelled { .. } => {
+                                Some(TurnProcessOutcome::Cancelled)
+                            }
+                            RuntimeEvent::AttemptFailed { .. } => Some(TurnProcessOutcome::Failed),
+                            RuntimeEvent::AttemptTimedOut { .. } => {
+                                Some(TurnProcessOutcome::TimedOut)
+                            }
+                            RuntimeEvent::AttemptLimitExceeded { .. } => {
+                                Some(TurnProcessOutcome::LimitExceeded)
+                            }
+                            _ => None,
+                        };
+                        if let Some(outcome) = outcome {
+                            if !terminal_attempts.contains(&id)
+                                && evidence.members.is_disjoint(wanted)
+                            {
+                                attempts.remove(&id);
+                                continue;
+                            }
+                            if let Some(process) = process_view(
                                 store,
                                 &id,
                                 &evidence.members,
-                                Some(closing.clone()),
+                                None,
                                 evidence.started_at,
                                 Some(event.timestamp),
-                                TurnProcessOutcome::Completed,
+                                outcome,
                                 Some(event.event_id.clone()),
-                            )?
-                        {
-                            for member in &evidence.members {
-                                if wanted.contains(member) {
-                                    processes.insert(member.clone(), process.clone());
+                            )? {
+                                for member in &evidence.members {
+                                    if wanted.contains(member) {
+                                        processes.insert(member.clone(), process.clone());
+                                    }
                                 }
+                                terminals.insert(id.clone(), process);
+                            } else if terminal_attempts.contains(&id) {
+                                let cursor = store
+                                    .event_transcript_cursor(&event.event_id)?
+                                    .ok_or_else(|| {
+                                        ConversationStoreError::InvalidReference(
+                                            "terminal has no transcript position".into(),
+                                        )
+                                    })?;
+                                let mut owner = terminal_turn(event.clone(), cursor.into())
+                                    .map_err(ConversationStoreError::InvalidReference)?;
+                                owner.started_at = evidence.started_at;
+                                terminals.insert(id.clone(), owner);
                             }
                         }
-                        if wanted.contains(&closing) {
-                            let retry_message_id = match &evidence.last_request {
-                                Some(id) => {
-                                    let request = store.load_request_snapshot(id)?;
-                                    store
-                                        .load_surface_snapshot(request.surface_revision)?
-                                        .iter()
-                                        .rev()
-                                        .find_map(|message| match message {
-                                            MessageBlock::User(user)
-                                                if user.kind == InboundKind::Message =>
-                                            {
-                                                Some(user.id.clone())
-                                            }
-                                            _ => None,
-                                        })
-                                }
-                                None => None,
-                            };
-                            completed.insert(
-                                closing.clone(),
-                                CompletedResponseProvenance {
-                                    process_message_ids: evidence.members.iter().cloned().collect(),
-                                    closing_message_id: closing.clone(),
-                                    origin: ResponseOrigin {
-                                        conversation_id: store.conversation_id().clone(),
-                                        attempt_id: id.clone(),
-                                        closing_message_id: closing,
-                                    },
-                                    completed_at: event.timestamp,
-                                    timing: evidence
-                                        .timing
-                                        .summary(evidence.started_at, event.timestamp),
-                                    retry_message_id,
-                                    usage: (evidence.requests > 0
-                                        && evidence.requests == evidence.reports)
-                                        .then(|| evidence.usage.take())
-                                        .flatten(),
-                                },
-                            );
-                        }
+                        attempts.remove(&id);
                     }
-                    attempts.remove(&id);
+                    _ => {}
                 }
-                RuntimeEvent::AttemptCompleted { .. }
-                | RuntimeEvent::AttemptCancelled { .. }
-                | RuntimeEvent::AttemptFailed { .. }
-                | RuntimeEvent::AttemptTimedOut { .. }
-                | RuntimeEvent::AttemptLimitExceeded { .. } => {
-                    if let Some(clock) = statistics
-                        .latest_turn
-                        .as_mut()
-                        .filter(|clock| clock.attempt_id == id)
-                    {
-                        clock.ended_at = Some(event.timestamp);
-                    }
-                    let outcome = match event.event {
-                        RuntimeEvent::AttemptCancelled { .. } => {
-                            Some(TurnProcessOutcome::Cancelled)
-                        }
-                        RuntimeEvent::AttemptFailed { .. } => Some(TurnProcessOutcome::Failed),
-                        RuntimeEvent::AttemptTimedOut { .. } => Some(TurnProcessOutcome::TimedOut),
-                        RuntimeEvent::AttemptLimitExceeded { .. } => {
-                            Some(TurnProcessOutcome::LimitExceeded)
-                        }
-                        _ => None,
-                    };
-                    if let Some(outcome) = outcome {
-                        if !terminal_attempts.contains(&id) && evidence.members.is_disjoint(wanted)
-                        {
-                            attempts.remove(&id);
-                            continue;
-                        }
-                        if let Some(process) = process_view(
-                            store,
-                            &id,
-                            &evidence.members,
-                            None,
-                            evidence.started_at,
-                            Some(event.timestamp),
-                            outcome,
-                            Some(event.event_id.clone()),
-                        )? {
-                            for member in &evidence.members {
-                                if wanted.contains(member) {
-                                    processes.insert(member.clone(), process.clone());
-                                }
-                            }
-                            terminals.insert(id.clone(), process);
-                        } else if terminal_attempts.contains(&id) {
-                            let cursor = store
-                                .event_transcript_cursor(&event.event_id)?
-                                .ok_or_else(|| {
-                                    ConversationStoreError::InvalidReference(
-                                        "terminal has no transcript position".into(),
-                                    )
-                                })?;
-                            let mut owner = terminal_turn(event.clone(), cursor.into())
-                                .map_err(ConversationStoreError::InvalidReference)?;
-                            owner.started_at = evidence.started_at;
-                            terminals.insert(id.clone(), owner);
-                        }
-                    }
-                    attempts.remove(&id);
-                }
-                _ => {}
             }
         }
     }

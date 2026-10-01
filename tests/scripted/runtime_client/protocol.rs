@@ -467,8 +467,8 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // Session deletion). Its `effective_extensions` record has no `todo`
     // member, and its `todos` is a bare snapshot that cannot distinguish "no
     // Todo extension composed" from "Todo composed over an empty list". Issue
-    // #259 replaced both under v29, so a v29 client is refused rather than
-    // served a projection it would misread: there is no v28 -> v29 conversion
+    // #259 replaced both under v30, so a v30 client is refused rather than
+    // served a projection it would misread: there is no v28 -> v30 conversion
     // and no compatibility decoder.
     let pre_todo_extension = host.attach(28);
     assert!(matches!(

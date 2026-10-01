@@ -5,12 +5,13 @@ import { snapshot, assistantMessage, userMessage } from "./support/fixtures.ts";
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from "../src/protocol/app-server.ts";
 const entry = (cursor: string, assistant = false): RuntimeClientTranscriptEntry => ({ cursor, item: { type: "message", message: assistant ? assistantMessage(cursor, "answer") : userMessage(cursor, "older") } });
+const window = (page: RuntimeClientTranscriptPage) => ({ page, cut: { conversation_id: snapshot().conversation_id, journal: "0", transcript: "0", surface_revision: "0", pending_count: "0", pending_revision: "0" }, newer_cursor: null, target: null, target_cursor: null });
 const publish = (h: Awaited<ReturnType<typeof harness>>, cursor: string, transcript: RuntimeClientTranscriptPage) => h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor, event: { type: "read_domains_updated", transcript, occupancy: null, todos: null } } });
 
 test("native read-domain events preserve joined history, totals and presentation ownership without snapshots", async () => {
   const h = await harness(snapshot({ transcript: { entries: [entry("4", true)], next_cursor: "4" } }));
   const loading = h.session.loadOlderTranscript(); const request = await nextRequest(h, "session/transcript", 0);
-  h.transport.respond(request.id, { type: "transcript", page: { entries: [entry("2"), entry("3")], next_cursor: "2" } }); await loading;
+  h.transport.respond(request.id, { type: "transcript_window", window: window({ entries: [entry("2"), entry("3")], next_cursor: "2" }) }); await loading;
   const statistics = { turns: "1", steps: "1", completed_responses: "50", model_requests: "100", requests_with_usage: "99" };
   let replacements = 0; h.session.onSnapshot(() => replacements++);
   publish(h, "1", { entries: [entry("4", true)], next_cursor: "4", statistics });
@@ -40,7 +41,7 @@ test("a gated older page joins an intervening native read-domain event", async (
   const h = await harness(snapshot({ transcript: { entries: [entry("4")], next_cursor: "4" } }));
   const loading = h.session.loadOlderTranscript(); const request = await nextRequest(h, "session/transcript", 0);
   publish(h, "1", { entries: [entry("4"), entry("5")], next_cursor: "4" });
-  h.transport.respond(request.id, { type: "transcript", page: { entries: [entry("2"), entry("3")], next_cursor: "2" } });
+  h.transport.respond(request.id, { type: "transcript_window", window: window({ entries: [entry("2"), entry("3")], next_cursor: "2" }) });
   assert.equal(await loading, true); assert.deepEqual(h.session.state.transcript.map(e => e.key), ["committed:2", "committed:3", "committed:4", "committed:5"]); h.client.close();
 });
 

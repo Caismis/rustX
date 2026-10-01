@@ -1,5 +1,18 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "reading.width-left": "Resize conversation from the left",
+  "reading.width-right": "Resize conversation from the right",
+  "reading.turn-navigation": "Turn navigation",
+  "reading.older-turns": "Earlier turns",
+  "reading.newer-turns": "Later turns",
+  "reading.jump-turn": "Jump to turn {n}",
+  "reading.turn-number": "Turn number",
+  "reading.show-turn-page": "Show this turn page",
+  "reading.no-preview": "No text preview",
+  "reading.loading-turns": "Loading turns…",
+  "reading.reload-turns": "Reload turns",
+  "reading.load-newer": "Load later content",
+
   "agent-status.time": "Time",
   "agent-status.background": "Background",
   "agent-status.todo": "Todo",
@@ -210,6 +223,19 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "reading.width-left": "从左侧调整对话宽度",
+  "reading.width-right": "从右侧调整对话宽度",
+  "reading.turn-navigation": "轮次导航",
+  "reading.older-turns": "更早的轮次",
+  "reading.newer-turns": "后续轮次",
+  "reading.jump-turn": "跳转到第 {n} 轮",
+  "reading.turn-number": "轮次编号",
+  "reading.show-turn-page": "显示此轮次所在页",
+  "reading.no-preview": "无文本预览",
+  "reading.loading-turns": "正在加载轮次…",
+  "reading.reload-turns": "重新加载轮次",
+  "reading.load-newer": "加载后续内容",
+
   "agent-status.time": "时间",
   "agent-status.background": "后台",
   "agent-status.todo": "待办",

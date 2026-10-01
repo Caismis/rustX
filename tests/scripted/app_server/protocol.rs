@@ -632,7 +632,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 29, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: 12 })));
         for requested in 0..crate::app_server::protocol::APP_SERVER_PROTOCOL_VERSION {
             let request = serde_json::json!({"jsonrpc":"2.0","id":"previous-generation",
                 "method":"initialize","params":{"protocol_version":requested,
@@ -640,7 +640,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
                 "presentation":{"images":false,"questionnaires":false,"reviews":false}}});
             let response = connection.handle_json(&request.to_string()).await.unwrap();
             assert!(matches!(response, Response::Failure(Failure { error: RpcError {
-                data: Some(ErrorData::UnsupportedVersion { supported: 29, requested: rejected }), .. }, .. }) if rejected == requested));
+                data: Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: rejected }), .. }, .. }) if rejected == requested));
             assert_eq!(connection.attachment_counts(), (0, 0));
         }
         initialize(&connection).await;

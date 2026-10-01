@@ -459,6 +459,7 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     request(&store, "a", 0, Some(usage(Some(80))));
     assistant(&store, "a", "response-a");
     finish(&store, "a");
+    let outline_before = store.conversation_turns(None, 0, 64).unwrap();
     let before = page(&store, None, 64);
     let tail = tails(&before)[0].clone();
     store
@@ -489,6 +490,14 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
         })
         .unwrap();
+    let outline_after = store.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(outline_before.turns, outline_after.turns);
+    assert_ne!(outline_before.cut, outline_after.cut);
+    assert!(
+        store
+            .conversation_turns(Some(&outline_before.cut), 0, 64)
+            .is_err()
+    );
     let after = page(&store, None, 64);
     assert_eq!(tails(&after)[0], &tail);
     assert_eq!(after.statistics, before.statistics);
@@ -806,4 +815,48 @@ fn terminal_cases() -> [(&'static str, RuntimeEvent, TurnProcessOutcome); 4] {
             TurnProcessOutcome::LimitExceeded,
         ),
     ]
+}
+
+#[test]
+fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    for attempt in ["a", "b"] {
+        append(
+            &store,
+            attempt,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new(attempt),
+            },
+        );
+        process_content(&store, attempt);
+        assistant(&store, attempt, &format!("{attempt}-final"));
+        finish(&store, attempt);
+    }
+    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    let read = store
+        .conversation_window(
+            &crate::durable::reading::ConversationWindowAt::Turn {
+                id: outline.turns[0].id.clone(),
+                cut: outline.cut.clone(),
+            },
+            4,
+        )
+        .unwrap();
+    let mut window = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
+    super::decorate_window(&store, &mut window, read.cut.journal).unwrap();
+    let expected = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
+    assert_eq!(window.entries, expected.entries);
+    assert_eq!(tails(&window)[0].origin.attempt_id, AttemptId::new("a"));
+    assert!(window.entries.iter().all(|entry| {
+        entry
+            .turn_process
+            .as_ref()
+            .is_some_and(|owner| owner.attempt_id == AttemptId::new("a"))
+    }));
+    assert_eq!(
+        window.entries[0].tool_calls[0].state,
+        expected.entries[0].tool_calls[0].state
+    );
+    assert!(window.statistics.is_none());
+    assert_eq!(store.conversation_read_cut().unwrap(), outline.cut);
 }

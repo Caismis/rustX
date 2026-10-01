@@ -80,7 +80,7 @@ it('short-history prepend retains reading ownership through disappearing anchors
   const positions: Record<string, number> = { a: 0, b: 100, older: -200 };
   const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id}>{id}</div>);
   const ui = render(<ChatViewport>{content(['a', 'b'])}</ChatViewport>);
-  const el = ui.container.firstElementChild as HTMLElement;
+  const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
   Object.defineProperties(el, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 }, scrollTop: { get: () => top, set: value => { top = value; } } });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
     const offset = ui.container.querySelector('[data-chat-anchor-key="older"]') ? 200 : 0;
@@ -96,4 +96,74 @@ it('short-history prepend retains reading ownership through disappearing anchors
   height = 350; top = 150; fireEvent.scroll(el); resize(); flush(); expect(top).toBe(150); // Browser clamp is not new follow intent.
   height = 800; resize(); flush(); expect(top).toBe(150);
   ui.rerender(<ChatViewport><div>No anchored rows</div></ChatViewport>); flush(); expect(top).toBe(150); // Bounded absolute fallback, never tail.
+});
+
+function coordinatedViewport(historical = false) {
+  let frame: FrameRequestCallback | undefined, height = 1000, top = 0;
+  const positions: Record<string, number> = { a: 0, b: 200, 'turn:target': 500 };
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
+  vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
+  let owner: ChatViewport | null = null;
+  const latest = vi.fn(), user = vi.fn();
+  const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id}>{id}</div>);
+  const element = (ids: string[], past = historical) => <ChatViewport ref={value => { owner = value; }} historical={past} latestLabel="Return to latest" onLatest={latest} onUserIntent={user}>{content(ids)}</ChatViewport>;
+  const ui = render(element(['a', 'b', 'turn:target']));
+  const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
+  Object.defineProperties(el, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 }, scrollTop: { get: () => top, set: value => { top = value; } } });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+    const y = this.dataset.chatAnchorKey ? positions[this.dataset.chatAnchorKey] - top : 0;
+    return { top: y, bottom: y + 200, x: 0, y, height: 200, width: 500, left: 0, right: 500, toJSON() {} };
+  });
+  const flush = () => { const cb = frame; frame = undefined; cb?.(0); };
+  flush();
+  return { ui, el, owner: () => owner!, latest, user, positions, flush, top: () => top,
+    scroll(value: number) { top = value; fireEvent.scroll(el); },
+    grow(value: number) { height += value; resize(); },
+    replace(ids: string[], past = historical) { ui.rerender(element(ids, past)); } };
+}
+
+it('ordinary short detached reading exposes Return to latest and subsequently follows streaming', () => {
+  const v = coordinatedViewport();
+  expect(v.top()).toBe(800); expect(v.ui.queryByRole('button', { name: 'Return to latest' })).toBeNull();
+  v.scroll(210); expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
+  v.grow(400); v.flush(); expect(v.top()).toBe(210);
+  fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' })); v.flush();
+  expect(v.latest).toHaveBeenCalledOnce(); expect(v.top()).toBe(1200);
+  v.grow(300); v.flush(); expect(v.top()).toBe(1500);
+  v.scroll(210); v.grow(200); v.flush(); expect(v.top()).toBe(210);
+});
+
+it('newer native user scroll retires navigation both before reply and before its layout frame', () => {
+  const v = coordinatedViewport();
+  const first = v.owner().beginNavigation(); v.scroll(210);
+  expect(first.current()).toBe(false); expect(first.commit('turn:target')).toBe(false);
+  v.flush(); expect(v.top()).toBe(210);
+  const second = v.owner().beginNavigation(); expect(second.commit('turn:target')).toBe(true);
+  v.scroll(250); v.flush(); expect(v.top()).toBe(250); expect(second.current()).toBe(false);
+});
+
+it('target replacement exits follow, preserves reflow and missing anchors never enter follow', () => {
+  const v = coordinatedViewport();
+  const ticket = v.owner().beginNavigation();
+  v.replace(['turn:target'], true); expect(ticket.commit('turn:target')).toBe(true); v.flush(); expect(v.top()).toBe(500);
+  // Content, Tool/image disclosure and column/sidebar/panel reflow all deliver
+  // the same observer contract; semantic anchor position, not height, wins.
+  for (const reflow of [80, 150, 60, 90]) {
+    v.positions['turn:target'] += reflow; v.grow(reflow + 100); v.flush();
+    expect(v.top()).toBe(v.positions['turn:target']);
+  }
+  const missing = v.owner().beginNavigation(); v.replace([], true); missing.commit('turn:gone'); v.flush();
+  const retained = v.top(); v.grow(500); v.flush(); expect(v.top()).toBe(retained);
+  fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' }));
+  // Latest installation may prepend overlapping content before its frame.
+  v.positions.older = 0; v.replace(['older', 'a', 'b', 'turn:target'], false); v.flush();
+  const bottom = v.top(); v.grow(100); v.flush(); expect(v.top()).toBe(bottom + 100);
+});
+
+it('authority replacement after native installation still retires the scheduled navigation frame', () => {
+  const v = coordinatedViewport(); v.scroll(210);
+  const ticket = v.owner().beginNavigation(); let authority = true;
+  expect(ticket.commit('turn:target', () => authority)).toBe(true);
+  authority = false; v.flush(); expect(v.top()).toBe(210);
 });

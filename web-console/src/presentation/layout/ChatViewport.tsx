@@ -3,9 +3,18 @@ import { Component, createRef, type ReactNode } from 'react';
 
 interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
+interface ViewportProps {
+  children: ReactNode;
+  latestLabel?: string;
+  historical?: boolean;
+  onLatest?: () => void;
+  onUserIntent?: () => void;
+  onActiveAnchor?: (key: string | undefined) => void;
+}
 /** One frame owns every automatic Chat correction. Native user scrolling
  * changes intent synchronously, including while a layout frame is pending. */
-export class ChatViewport extends Component<{ children: ReactNode }> {
+export class ChatViewport extends Component<ViewportProps, { detached: boolean }> {
+  state = { detached: false };
   private viewport = createRef<HTMLDivElement>();
   private content = createRef<HTMLDivElement>();
   private observer?: ResizeObserver;
@@ -14,7 +23,11 @@ export class ChatViewport extends Component<{ children: ReactNode }> {
   private following = true;
   private writtenTop = 0;
   private mounted = false;
-  private rows() { return [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-anchor-key]') ?? [])]; }
+  private intent = 0;
+  private navigation?: { intent: number; anchor: string; current: () => boolean };
+  private active?: string;
+  private explicitLatest = false;
+  private rows() { return [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-anchor-key]') ?? [])].filter(row => !row.closest('[hidden]')); }
   private position(): ReadingPosition | undefined {
     const el = this.viewport.current;
     if (!el) return;
@@ -34,7 +47,12 @@ export class ChatViewport extends Component<{ children: ReactNode }> {
     if (!this.mounted || !el) return;
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     let desired = el.scrollTop;
-    if (this.following) desired = floor;
+    const navigation = this.navigation;
+    this.navigation = undefined;
+    if (navigation && navigation.intent === this.intent && navigation.current()) {
+      const row = this.rows().find(row => row.dataset.chatAnchorKey === navigation.anchor);
+      if (row) desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    } else if (this.following) desired = floor;
     else if (this.reading) {
       const rows = this.rows();
       const anchor = this.reading.anchors.find(anchor => rows.some(row => row.dataset.chatAnchorKey === anchor.key));
@@ -46,18 +64,46 @@ export class ChatViewport extends Component<{ children: ReactNode }> {
     if (Math.abs(el.scrollTop - desired) > 0.5) el.scrollTop = desired;
     this.writtenTop = el.scrollTop;
     this.reading = this.following ? undefined : this.position();
+    this.explicitLatest = false;
+    this.publishActive();
+  };
+  private publishActive = () => {
+    const el = this.viewport.current;
+    if (!el) return;
+    const turns = this.rows().filter(row => row.dataset.chatAnchorKey?.startsWith('turn:'));
+    const top = el.getBoundingClientRect().top;
+    const key = turns.find(row => row.getBoundingClientRect().bottom > top)?.dataset.chatAnchorKey;
+    if (key !== this.active) { this.active = key; this.props.onActiveAnchor?.(key); }
   };
   private onScroll = () => {
     const el = this.viewport.current!;
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     if (Math.abs(el.scrollTop - Math.min(this.writtenTop, floor)) > 0.5) {
-      this.following = floor - el.scrollTop <= 24;
+      this.intent++; this.navigation = undefined; this.props.onUserIntent?.();
+      this.following = !this.props.historical && floor - el.scrollTop <= 24;
       this.reading = this.following ? undefined : this.position();
+      this.setState({ detached: !this.following });
+      this.publishActive();
     }
     this.writtenTop = el.scrollTop;
   };
   /** Explicit action changes intent; positioning still belongs to the frame. */
-  returnToBottom = () => { this.following = true; this.reading = undefined; this.markLayoutDirty(); };
+  returnToBottom = () => {
+    this.intent++; this.navigation = undefined;
+    this.explicitLatest = true;
+    this.props.onLatest?.(); this.following = true; this.reading = undefined;
+    this.setState({ detached: false }); this.markLayoutDirty();
+  };
+  beginNavigation = () => {
+    const intent = ++this.intent;
+    this.navigation = undefined; this.following = false; this.reading = this.position();
+    this.setState({ detached: true });
+    return { current: () => this.mounted && this.intent === intent,
+      commit: (anchor: string, current: () => boolean = () => true) => {
+        if (!this.mounted || this.intent !== intent || !current()) return false;
+        this.navigation = { intent, anchor, current }; this.markLayoutDirty(); return true;
+      } };
+  };
   componentDidMount() {
     this.mounted = true;
     this.markLayoutDirty();
@@ -73,24 +119,26 @@ export class ChatViewport extends Component<{ children: ReactNode }> {
     if (!this.following && this.frame === undefined) this.reading = position;
     return { first: this.rows()[0]?.dataset.chatAnchorKey, position };
   }
-  componentDidUpdate(_previous: Readonly<{ children: ReactNode }>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
+  componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
     const rows = this.rows();
-    if (before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
+    if (!this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
       if (this.following) this.reading = before.position;
       this.following = false;
+      if (!this.state.detached) this.setState({ detached: true });
     }
     this.markLayoutDirty();
   }
   componentWillUnmount() {
     this.mounted = false;
+    this.intent++;
     this.observer?.disconnect();
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
   }
   render() {
-    return <div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}
+    return <div className="chat-reading-surface" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}><div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}
       onClickCapture={event => { if ((event.target as HTMLElement).closest('[data-chat-latest]')) this.returnToBottom(); }}>
       <div ref={this.content}>{this.props.children}</div>
-    </div>;
+    </div>{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" onClick={this.returnToBottom}>{this.props.latestLabel}</button>}</div>;
   }
 }

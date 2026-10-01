@@ -214,21 +214,67 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
-                "before": {
+                "at": {
+                  "$ref": "#/$defs/ConversationWindowAt"
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 64
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "at",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/turns"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "cut": {
                   "anyOf": [
                     {
-                      "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+                      "$ref": "#/$defs/ConversationReadCut"
                     },
                     {
                       "type": "null"
                     }
                   ]
                 },
-                "limit": {
-                  "type": "integer",
+                "offset": {
+                  "description": "Absent selects the newest native outline page.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
                   "format": "uint",
                   "minimum": 0,
                   "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 64
                 }
               },
               "additionalProperties": false,
@@ -1826,10 +1872,161 @@
       "description": "Opaque Trace-only exclusive boundary, valid only in its conversation.\n\nIt is not a live cursor, a transcript cursor, an Event Journal sequence,\na Request ID, or an artifact ID. Clients order by it and page with it;\nthey never parse it.",
       "type": "string"
     },
-    "RuntimeClientTranscriptCursor": {
-      "description": "The cursor domain of durable transcript paging.",
+    "ConversationWindowAt": {
+      "description": "A single transcript read vocabulary; every selector replaces a finite window.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "latest"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "before": {
+              "$ref": "#/$defs/TranscriptCursor"
+            },
+            "cut": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConversationReadCut"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "older"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "before"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/TranscriptCursor"
+            },
+            "cut": {
+              "$ref": "#/$defs/ConversationReadCut"
+            },
+            "type": {
+              "type": "string",
+              "const": "newer"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "after",
+            "cut"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ConversationTurnId"
+            },
+            "cut": {
+              "$ref": "#/$defs/ConversationReadCut"
+            },
+            "type": {
+              "type": "string",
+              "const": "turn"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "cut"
+          ]
+        }
+      ]
+    },
+    "TranscriptCursor": {
+      "description": "A durable transcript cursor.\n\nThis cursor belongs to the transcript ordering spine. It is deliberately\ndistinct from the Runtime Client observation cursor, the Event Journal\nsequence, and the inbound mailbox sequence.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "ConversationReadCut": {
+      "description": "Exact native read authority. Appends, compaction and pending mutations retire it.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "transcript": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "surface_revision": {
+          "$ref": "#/$defs/SurfaceRevision"
+        },
+        "pending_count": {
+          "description": "Pending population changes on removal; an admission also advances the\ntranscript frontier. Existing native CAS revisions increase on edits.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "pending_revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "journal",
+        "transcript",
+        "surface_revision",
+        "pending_count",
+        "pending_revision"
+      ]
+    },
+    "SurfaceRevision": {
+      "description": "The identity of one exact historical Conversation Surface state.\n\nA revision is a monotonic counter in its own identity domain. The empty\nSurface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and\nevery accepted [`SurfaceOp`] advances it by exactly one, so revision `n`\nis precisely \"the Surface after the first `n` accepted operations\".\n\nA revision is deliberately **not** a `MessageId`, an `AttemptId`, a\n`RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,\nor a `CapabilityRevision`: none of those identify a Surface state, and\nnone of them may be substituted for one.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "ConversationTurnId": {
+      "description": "Origin survives lineage copying; ordinal never participates in identity.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id"
+      ]
+    },
+    "AttemptId": {
+      "description": "Identifies one attempt to execute an agent manifest.",
+      "type": "string"
     },
     "SessionModelConfig": {
       "description": "The authoritative mutable model configuration of one conversation\nsession.\n\nThis one type is the session's state, the `model_get` result, and the\n`model_set` parameter: an update is a whole-state replacement, never an\nambiguous JSON patch.",
@@ -2139,6 +2336,11 @@
       "description": "Identifies an Agent independently of its finite activations.\nFor a continuable child, this is the durable Agent-domain identity of\nits child Conversation and remains unchanged across resume.",
       "type": "string"
     },
+    "RuntimeClientTranscriptCursor": {
+      "description": "The cursor domain of durable transcript paging.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
     "SubagentId": {
       "description": "Identifies one finite activation owned by an Agent, or one finite\nWorkflow child execution.\n\nRepeated native Agent activations have distinct `SubagentId`s while\nretaining the same durable `AgentId`. This is not an OS pid: process\nidentity or PID reuse can never establish durable ownership or proof\nof physical settlement.",
       "type": "string"
@@ -2226,11 +2428,6 @@
       "required": [
         "cwd"
       ]
-    },
-    "SurfaceRevision": {
-      "description": "The identity of one exact historical Conversation Surface state.\n\nA revision is a monotonic counter in its own identity domain. The empty\nSurface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and\nevery accepted [`SurfaceOp`] advances it by exactly one, so revision `n`\nis precisely \"the Surface after the first `n` accepted operations\".\n\nA revision is deliberately **not** a `MessageId`, an `AttemptId`, a\n`RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,\nor a `CapabilityRevision`: none of those identify a Surface state, and\nnone of them may be substituted for one.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "MessageId": {
       "description": "Identifies a committed canonical message block.",
@@ -2512,10 +2709,6 @@
         "attempt_id",
         "invocation"
       ]
-    },
-    "AttemptId": {
-      "description": "Identifies one attempt to execute an agent manifest.",
-      "type": "string"
     },
     "WorkflowDefinitionPath": {
       "description": "Static source location; never a concrete execution authority.",
@@ -5261,6 +5454,40 @@
             "type": {
               "type": "string",
               "const": "transcript"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "window": {
+              "$ref": "#/$defs/ConversationWindow"
+            },
+            "type": {
+              "type": "string",
+              "const": "transcript_window"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "window"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/ConversationTurnPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "conversation_turns"
             }
           },
           "additionalProperties": false,
@@ -12737,6 +12964,121 @@
           "type": "string",
           "const": "idle"
         }
+      ]
+    },
+    "ConversationWindow": {
+      "type": "object",
+      "properties": {
+        "cut": {
+          "$ref": "#/$defs/ConversationReadCut"
+        },
+        "page": {
+          "$ref": "#/$defs/RuntimeClientTranscriptPage"
+        },
+        "newer_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationTurnId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cut",
+        "page"
+      ]
+    },
+    "ConversationTurnPage": {
+      "type": "object",
+      "properties": {
+        "cut": {
+          "$ref": "#/$defs/ConversationReadCut"
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationTurn"
+          },
+          "maxItems": 64
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cut",
+        "total",
+        "offset",
+        "turns"
+      ]
+    },
+    "ConversationTurn": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ConversationTurnId"
+        },
+        "ordinal": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cursor": {
+          "description": "None until native work has a visible member or terminal position.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preview": {
+          "type": "string",
+          "maxLength": 240
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ordinal",
+        "preview"
       ]
     },
     "GoalView": {

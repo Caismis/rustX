@@ -27,6 +27,7 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
     }
     let original = page(&store, None, 64);
     let original_b = tails(&original)[1].clone();
+    let original_turns = store.conversation_turns(None, 0, 64).unwrap();
     for generation in 1..=3 {
         let id = ConversationId::generate();
         let path = directory.path().join(format!("child-{generation}.sqlite"));
@@ -46,6 +47,35 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
                 .iter()
                 .zip(&canonical)
                 .all(|(a, b)| message_id_of(a) != message_id_of(b))
+        );
+        let outline = child.conversation_turns(None, 0, 64).unwrap();
+        assert_eq!(
+            outline
+                .turns
+                .iter()
+                .map(|turn| &turn.id)
+                .collect::<Vec<_>>(),
+            original_turns
+                .turns
+                .iter()
+                .map(|turn| &turn.id)
+                .collect::<Vec<_>>()
+        );
+        let location = child
+            .conversation_window(
+                &crate::durable::reading::ConversationWindowAt::Turn {
+                    id: outline.turns[1].id.clone(),
+                    cut: outline.cut.clone(),
+                },
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            location.page.entries[0].cursor,
+            outline.turns[1].cursor.unwrap()
+        );
+        assert!(
+            matches!(&location.page.entries[0].item, crate::durable::TranscriptItem::Message { message } if message_id_of(message) == message_id_of(&seed.canonical()[3]))
         );
         let projected = page(&child, None, 64);
         let inherited = tails(&projected);
@@ -106,6 +136,13 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
     request(&store, "local", 0, Some(usage(None)));
     assistant(&store, "local", "local-response");
     finish(&store, "local");
+    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(outline.total, 3);
+    assert_eq!(
+        outline.turns[2].id.conversation_id,
+        *store.conversation_id()
+    );
+    assert_eq!(outline.turns[2].id.attempt_id, AttemptId::new("local"));
     let current = page(&store, None, 64);
     assert_eq!(tails(&current).len(), 3);
     assert_eq!(

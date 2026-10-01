@@ -3510,7 +3510,42 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
         goal.origin,
         rustx::goal::GoalOrigin::HumanAttempt { .. }
     ));
+    // #430: three model requests above belong to two native Attempts. The
+    // automatic continuation is an ordered turn even before it publishes.
+    let store = tools.durable_store();
+    let cut = store.conversation_read_cut().unwrap();
+    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(outline.total, 2);
+    assert_eq!(outline.turns.len(), 2);
+    let rustx::goal::GoalOrigin::HumanAttempt { attempt_id, .. } = &goal.origin else {
+        panic!("native Human origin");
+    };
+    assert_eq!(&outline.turns[0].id.attempt_id, attempt_id);
+    assert_ne!(outline.turns[0].id, outline.turns[1].id);
+    assert_eq!(outline.turns[0].ordinal, 1);
+    assert_eq!(outline.turns[1].ordinal, 2);
+    assert!(outline.turns[0].cursor.is_some());
+    assert!(outline.turns[1].cursor.is_none());
+    assert_eq!(store.conversation_read_cut().unwrap(), cut);
+    assert_eq!(model.requests().len(), 3, "outline starts no model work");
+
     composed.runtime.shutdown().await.unwrap();
+    let settled = store.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(settled.total, 2);
+    assert_eq!(settled.turns[1].id, outline.turns[1].id);
+    let window = store
+        .conversation_window(
+            &rustx::durable::reading::ConversationWindowAt::Turn {
+                id: settled.turns[1].id.clone(),
+                cut: settled.cut,
+            },
+            1,
+        )
+        .unwrap();
+    assert!(matches!(
+        window.page.entries[0].item,
+        rustx::durable::TranscriptItem::AttemptTerminal { .. }
+    ));
 }
 
 /// Issue #351 requirements 6, 7, 8 and 9.
