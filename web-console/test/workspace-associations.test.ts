@@ -1,5 +1,6 @@
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { expect, it, vi } from 'vitest';
+import { act } from 'react';
 import { NavigationEpoch } from '../src/client/navigation';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
 import type { AppServerClient, ClientView } from '../src/client/app-server';
@@ -18,11 +19,14 @@ async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] =
   const listeners = new Set<() => void>();
   const deletions = new Set<(id: string) => void>();
   const readWaiters = new Map<number, () => void>();
+  let active = 0, maxActive = 0;
   const reads: { cwds: readonly string[]; gate: ReturnType<typeof deferred<SessionLocation[]>>; signal?: AbortSignal }[] = [];
   const host: ProductHostWorkspaces = {
     listWorkspaces: vi.fn(listWorkspaces),
     classifyLocations: vi.fn((cwds, _endpoint, _authority, signal) => {
-      const gate = deferred<SessionLocation[]>(); reads.push({ cwds: [...cwds], gate, signal }); readWaiters.get(reads.length)?.(); return gate.promise;
+      const gate = deferred<SessionLocation[]>(); reads.push({ cwds: [...cwds], gate, signal });
+      maxActive = Math.max(maxActive, ++active);
+      readWaiters.get(reads.length)?.(); return gate.promise.finally(() => { --active; });
     }),
     adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
   };
@@ -38,7 +42,7 @@ async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] =
     await vi.waitFor(() => expect(owner.getSnapshot().entries.get(read.cwds[0].slice(1))?.status).toBe('ready'));
   };
   if (ready) await observed(1);
-  return { owner, authority, navigation, host, reads, stop, publish, observed, accept, listeners, remove: (id: string) => { publish({ sessions: state.sessions.filter(row => row.id !== id), views: {} }); deletions.forEach(listener => listener(id)); }, state: () => state };
+  return { owner, authority, navigation, host, reads, stop, publish, observed, accept, listeners, capacity: () => ({ active, maxActive }), remove: (id: string) => { publish({ sessions: state.sessions.filter(row => row.id !== id), views: {} }); deletions.forEach(listener => listener(id)); }, state: () => state };
 }
 it('retains confirmed evidence during cloned, title-only, reordered and disconnected observations without extra reads', async () => {
   const f = await fixture(); await f.accept(0);
@@ -104,7 +108,7 @@ it('unknown, confirmed ungrouped and revoked observations are distinct', async (
 it.each(['success', 'failure'])('unregister fences late %s even when its independent catalog reread fails', async outcome => {
   const f = await fixture(); await f.accept(0); f.owner.refresh(); const old = await f.observed(2);
   vi.mocked(f.host.listWorkspaces).mockRejectedValueOnce(new Error('reread failed'));
-  f.owner.refresh('A');
+  expect(f.owner.captureMutation()('A')).toBe(true);
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
   if (outcome === 'success') old.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
   else old.gate.reject(new Error('pre-unregister failure'));
@@ -205,7 +209,7 @@ it.each([false, true])('registration replacement classifies on the first refresh
   const f = await fixture(); await f.accept(0);
   const next = catalog(); next.workspaces[0] = { ...next.workspaces[0], id: 'new-A' };
   vi.mocked(f.host.listWorkspaces).mockResolvedValue(next);
-  f.owner.refresh(explicit ? 'A' : undefined);
+  if (explicit) expect(f.owner.captureMutation()('A')).toBe(true); else f.owner.refresh();
   const read = await f.observed(2);
   expect(read.cwds).toEqual(['/A', '/B']);
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed?.workspaceId).toBeUndefined();
@@ -216,16 +220,81 @@ it.each([false, true])('registration replacement classifies on the first refresh
 });
 it.each(['success', 'failure'])('current demand settles independently of obsolete off-page %s', async outcome => {
   const f = await fixture(); const old = f.reads[0];
-  f.publish({ sessions: [row('X', '/B')] }); f.owner.refresh();
+  expect(f.capacity()).toEqual({ active: 1, maxActive: 1 });
+  const lists = vi.mocked(f.host.listWorkspaces).mock.calls.length;
+  // The same native observable update as pagination/search, with no refresh.
+  f.publish({ sessions: [row('X', '/B')] });
+  expect(f.reads).toHaveLength(2);
   const fresh = await f.observed(2);
+  expect(f.capacity()).toEqual({ active: 2, maxActive: 2 });
+  expect(old.signal?.aborted).toBe(false);
+  const ready = settled(f.owner);
   fresh.gate.resolve([{ authorized: true, workspaceId: 'B' }]);
-  await vi.waitFor(() => expect(f.owner.getSnapshot().entries.get('X')?.status).toBe('ready'));
+  await ready;
+  const current = f.owner.getSnapshot().entries.get('X')?.confirmed;
+  expect(current).toEqual({ workspaceId: 'B' });
   expect(f.owner.getSnapshot().status).toBe('ready');
-  if (outcome === 'success') old.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
-  else old.gate.reject(new Error('obsolete'));
-  await old.gate.promise.catch(() => {});
+  expect(f.capacity().active).toBe(1); // A is still unanswered after B is ready.
+  await act(async () => {
+    if (outcome === 'success') old.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
+    else old.gate.reject(new Error('obsolete'));
+  });
+  expect(f.owner.getSnapshot().entries.get('X')?.confirmed).toBe(current);
+  expect(f.owner.getSnapshot().entries.get('X')?.status).toBe('ready');
   expect(f.owner.getSnapshot().status).toBe('ready');
+  expect(f.host.listWorkspaces).toHaveBeenCalledTimes(lists);
+  expect(f.reads).toHaveLength(2);
+  expect(f.capacity()).toEqual({ active: 0, maxActive: 2 });
   expect(f.owner.getSnapshot().entries.has('A')).toBe(true); f.stop();
+});
+it('read completion releases only its own slot while newer reads cover current demand', async () => {
+  const f = await fixture(); const a = f.reads[0];
+  f.publish({ sessions: [row('X', '/B')] });
+  expect(f.reads).toHaveLength(2); const b = f.reads[1];
+  f.publish({ sessions: [row('Y', '/A')] });
+  expect(f.reads).toHaveLength(2); expect(f.owner.getSnapshot().status).toBe('pending');
+  // A's cleanup must leave B tracked. Its freed slot starts C's queued demand.
+  a.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
+  const c = await f.observed(3); expect(c.cwds).toEqual(['/A']);
+  f.publish({ sessions: [row('Z', '/B')] });
+  expect(f.reads).toHaveLength(3); expect(f.capacity()).toEqual({ active: 2, maxActive: 2 });
+  c.gate.resolve([{ authorized: true, workspaceId: 'A' }]);
+  const d = await f.observed(4); expect(d.cwds).toEqual(['/B']);
+  // B settles after A and C, but cannot remove D or start a duplicate D.
+  await act(async () => b.gate.resolve([{ authorized: true, workspaceId: 'B' }]));
+  expect(f.owner.getSnapshot().status).toBe('pending'); expect(f.reads).toHaveLength(4);
+  f.publish({ sessions: [row('Z', '/B'), row('B')] });
+  expect(f.reads).toHaveLength(4);
+  const ready = settled(f.owner); d.gate.resolve([{ authorized: true, workspaceId: 'B' }]); await ready;
+  expect(f.owner.getSnapshot().entries.get('Z')).toMatchObject({ status: 'ready', confirmed: { workspaceId: 'B' } });
+  expect(f.capacity()).toEqual({ active: 0, maxActive: 2 }); expect(f.reads).toHaveLength(4); f.stop();
+});
+
+it.each(['different', 'equivalent'] as const)('mutation completion validates %s normalized Product Host endpoints', async kind => {
+  const f = await fixture(); await f.accept(0);
+  const commit = f.owner.captureMutation();
+  const target = kind === 'different' ? 'ws://localhost:9000/' : 'ws://LOCALHOST:8080';
+  vi.mocked(f.host.listWorkspaces).mockResolvedValue({ ...catalog(), endpoint: target });
+  if (kind === 'different') f.publish({ endpoint: target });
+  else await f.authority.observe();
+  if (kind === 'different') { const read = await f.observed(2); const ready = settled(f.owner); read.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]); await ready; }
+  vi.mocked(f.host.listWorkspaces).mockRejectedValue(new Error('reread failed'));
+  // A navigation decision never defines Product Host mutation validity.
+  f.navigation.invalidate();
+  const before = f.owner.getSnapshot();
+  expect(commit('A')).toBe(kind === 'equivalent');
+  if (kind === 'different') {
+    expect(f.owner.getSnapshot()).toBe(before);
+    expect(before.catalog?.workspaces.map(row => row.id)).toEqual(['A', 'B']);
+    expect(before.entries.get('A')?.confirmed).toEqual({ workspaceId: 'A' });
+  } else {
+    expect(f.owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['B']);
+    expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
+    await act(async () => {});
+    expect(f.owner.getSnapshot().status).toBe('unavailable');
+    expect(f.owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['B']);
+  }
+  f.stop();
 });
 it('selected off-page demand participates in status, including unavailable and queued reads', async () => {
   const f = await fixture(); await f.accept(0);

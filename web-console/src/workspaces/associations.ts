@@ -1,4 +1,4 @@
-import { WorkspaceAuthority } from './authority';
+import { WorkspaceAuthority, type WorkspaceAuthorityObservation } from './authority';
 import type { AppServerClient, ClientView } from '../client/app-server';
 import { endpointIdentity, sameEndpoint } from './endpoint';
 import { validateLocations, type SessionLocation, type WorkspaceCatalog } from './host';
@@ -18,6 +18,16 @@ export interface AssociationSnapshot {
 }
 const EMPTY: AssociationSnapshot = { entries: new Map(), status: 'pending' };
 const LIMIT = 128;
+interface ClassificationRead {
+  readonly epoch: number;
+  readonly scope: string;
+  readonly generation: number;
+  readonly revision: number;
+  readonly catalog: WorkspaceCatalog;
+  readonly authority: WorkspaceAuthorityObservation;
+  readonly rows: readonly { readonly id: string; readonly cwd: string }[];
+  readonly controller: AbortController;
+}
 
 /** One App-lifetime display projection. Native owns summaries; Host owns registration
  * and admission. At most 128 identities, one 32-row page + selected demand, two
@@ -31,15 +41,15 @@ export class WorkspaceAssociations {
   private generation = -1;
   private connected = false;
   private revision = 0;
-  private request = 0;
+  private classificationEpoch = 0;
+  private nextRead = 0;
   private catalogRequest = 0;
   private catalog?: WorkspaceCatalog;
   private catalogStatus: AssociationStatus = 'pending';
   private demand: readonly { id: string; cwd: string }[] = [];
   private demandKey = '';
-  private reading = new Map<number, AbortController>();
+  private reading = new Map<number, ClassificationRead>();
   private catalogs = new Map<number, AbortController>();
-  private queued = false;
   private catalogQueued = false;
   private releaseAuthority?: () => void;
   private releaseDeletion?: () => void;
@@ -61,7 +71,7 @@ export class WorkspaceAssociations {
     this.disposed = true; this.releaseAuthority?.(); this.releaseAuthority = undefined; this.release?.(); this.release = undefined; this.releaseDeletion?.(); this.releaseDeletion = undefined;
     this.invalidate(); ++this.catalogRequest;
     for (const controller of this.catalogs.values()) controller.abort();
-    this.catalogQueued = false; this.queued = false;
+    this.catalogQueued = false;
   }
   select(id?: string) {
     if (id === this.selected) return;
@@ -82,8 +92,8 @@ export class WorkspaceAssociations {
     return JSON.stringify([state.authorityRevision, state.authorityId, state.endpoint && endpointIdentity(state.endpoint)]);
   }
   private invalidate() {
-    ++this.request;
-    for (const controller of this.reading.values()) controller.abort();
+    ++this.classificationEpoch;
+    for (const read of this.reading.values()) read.controller.abort();
   }
   private observe = () => {
     if (this.disposed) return;
@@ -122,8 +132,20 @@ export class WorkspaceAssociations {
     if (replaced || resumed) this.refresh();
     else if (demandChanged || generationChanged || connectionChanged) { this.publish(); this.schedule(); }
   };
-  /** A committed unregister is stronger than a later failed catalog reread. */
-  refresh(removed?: string) {
+  /** Only a completion from this captured Product Host scope may commit display evidence.
+   * Navigation, native reconnect and catalog rereads do not retire a Host scope. */
+  captureMutation(): (removed?: string) => boolean {
+    const observation = this.catalog && this.authority.capture(this.catalog);
+    return removed => {
+      if (this.disposed || !observation?.current() || !this.catalog || !this.authority.capture(this.catalog)
+        || !sameEndpoint(observation.catalog.endpoint, this.client.getSnapshot().endpoint)) return false;
+      this.refreshCatalog(removed);
+      return true;
+    };
+  }
+  refresh() { this.refreshCatalog(); }
+  /** A same-scope committed unregister is stronger than a later failed catalog reread. */
+  private refreshCatalog(removed?: string) {
     this.invalidate(); ++this.revision; ++this.catalogRequest;
     if (removed) {
       if (this.catalog) this.catalog = { ...this.catalog, workspaces: this.catalog.workspaces.filter(row => row.id !== removed) };
@@ -163,21 +185,21 @@ export class WorkspaceAssociations {
   }
   private schedule() {
     if (this.disposed || !this.connected || this.catalogStatus !== 'ready' || !this.catalog) return;
+    const covering = [...this.reading.values()].filter(read => this.currentRead(read));
     const rows = this.demand.filter(row => {
       const entry = this.entries.get(row.id);
-      return !entry || entry.cwd !== row.cwd || entry.revision !== this.revision;
+      const satisfied = entry?.cwd === row.cwd && entry.revision === this.revision;
+      return !satisfied && !covering.some(read => read.rows.some(captured => captured.id === row.id && captured.cwd === row.cwd));
     });
-    if (!rows.length) return;
-    const token = this.request;
-    if (this.reading.has(token)) { this.queued = true; return; }
-    if (this.reading.size >= 2) { this.queued = true; return; }
-    this.queued = false;
+    if (!rows.length || this.reading.size >= 2) return;
     const scope = this.scope, generation = this.generation, revision = this.revision, catalog = this.catalog;
-    const authority = this.authority.capture();
-    if (!authority || authority.catalog.authorityId !== catalog.authorityId) return;
+    const authority = this.authority.capture(catalog);
+    if (!authority) return;
     const endpoint = this.client.getSnapshot().endpoint!;
-    const controller = new AbortController(); this.reading.set(token, controller);
-    const current = () => this.valid(scope, generation) && this.connected && token === this.request && revision === this.revision && catalog === this.catalog && rows.every(row => this.entries.get(row.id)?.cwd === row.cwd);
+    const controller = new AbortController(), id = ++this.nextRead;
+    const read: ClassificationRead = { epoch: this.classificationEpoch, scope, generation, revision, catalog, authority, rows, controller };
+    this.reading.set(id, read);
+    const current = () => this.currentRead(read);
     for (const row of rows) {
       const entry = this.entries.get(row.id);
       this.entries.set(row.id, { cwd: row.cwd, confirmed: entry?.cwd === row.cwd ? entry.confirmed : undefined, status: entry?.confirmed ? 'refreshing' : 'pending', revision: -1 });
@@ -199,6 +221,8 @@ export class WorkspaceAssociations {
       const next = new Map(this.entries);
       rows.forEach((row, index) => {
         const result = results[index], old = next.get(row.id);
+        // Eviction or a newer observation cannot be undone by a captured row.
+        if (old?.cwd !== row.cwd || old.revision === revision) return;
         next.set(row.id, { cwd: row.cwd, revision,
           confirmed: result.authorized ? { workspaceId: result.workspaceId } : result.reason === 'unavailable' ? old?.confirmed : undefined,
           status: result.authorized ? 'ready' : result.reason === 'unavailable' ? 'unavailable' : 'revoked' });
@@ -208,10 +232,15 @@ export class WorkspaceAssociations {
       if (!current()) return;
       for (const row of rows) {
         const old = this.entries.get(row.id);
+        if (old?.cwd !== row.cwd || old.revision === revision) continue;
         this.entries.set(row.id, { cwd: row.cwd, confirmed: old?.confirmed, status: 'unavailable', revision });
       }
       this.publish();
-    }).finally(() => { this.reading.delete(token); if (this.queued) this.schedule(); });
+    }).finally(() => { this.reading.delete(id); this.schedule(); });
+  }
+  private currentRead(read: ClassificationRead) {
+    return this.valid(read.scope, read.generation) && this.connected && !read.controller.signal.aborted
+      && read.epoch === this.classificationEpoch && read.revision === this.revision && read.catalog === this.catalog && read.authority.current();
   }
   private publish() {
     const entries = new Map<string, DisplayAssociation>();

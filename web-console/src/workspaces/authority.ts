@@ -50,8 +50,9 @@ export class WorkspaceAuthority {
       throw cause;
     }
   }
-  capture(): WorkspaceAuthorityObservation | undefined {
-    if (!this.catalog) return;
+  /** Capture the current scope, optionally requiring a display catalog in that scope. */
+  capture(catalog?: WorkspaceCatalog): WorkspaceAuthorityObservation | undefined {
+    if (!this.catalog || (catalog && !sameAuthority(this.catalog, catalog))) return;
     const epoch = this.epoch;
     return { catalog: this.catalog, current: () => epoch === this.epoch };
   }

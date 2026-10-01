@@ -55,8 +55,15 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
   const mutate = async (action: () => Promise<unknown>, metadata: boolean | string = true) => {
     const current = navigation.capture();
     if (busy) return;
+    const commit = metadata ? associations.captureMutation() : undefined;
     setBusy(true); setError('');
-    try { await action(); associations.refresh(typeof metadata === 'string' ? metadata : undefined); setDialog(undefined); if (metadata && current()) metadataChanged(typeof metadata === 'string' ? metadata : undefined); }
+    try {
+      await action();
+      const removed = typeof metadata === 'string' ? metadata : undefined;
+      const committed = commit?.(removed);
+      setDialog(undefined);
+      if (committed && current()) metadataChanged(removed);
+    }
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };

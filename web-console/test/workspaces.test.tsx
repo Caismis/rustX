@@ -5,7 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { NavigationEpoch } from '../src/client/navigation';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
-import { sessionObservation } from '../src/workspaces/WorkspaceNavigation';
+import { sessionObservation, WorkspaceNavigation } from '../src/workspaces/WorkspaceNavigation';
+import { WorkspaceAuthority } from '../src/workspaces/authority';
+import { WorkspaceAssociations } from '../src/workspaces/associations';
+import { selectShell } from '../src/client/selectors';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { configurationSystem } from '../src/app/settings/machines/system';
 import { Server, endpoint, snapshot } from './fixture';
@@ -14,7 +17,11 @@ beforeEach(() => {
   server = new Server(); localStorage.clear();
 });
 afterEach(() => { cleanup(); server.client.disconnect(); localeController.setLocale('en'); });
-function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+function deferred<T>() {
+  let resolve!: (value: T) => void, reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 function hostFixture(picker = true) {
   let rows = ['A', 'B'].map(id => ({ id: `w${id}`, displayName: `Workspace ${id}`, location: `root-${id}`, displayPath: `/workspace/${id}` }));
   const host: ProductHostWorkspaces = {
@@ -77,6 +84,65 @@ it('Workspace settings have no trust gate; names and unregister stay Host-owned'
   expect(host.removeWorkspace).toHaveBeenCalledWith('wA'); expect(server.snapshots.has('A')).toBe(true);
   expect(server.loaded.has('A')).toBe(true); expect(methods()).not.toContain('settings/replace'); expect(methods()).not.toContain('session/delete');
 });
+it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completion commits only to its initiating scope: %s', async kind => {
+  await server.connect();
+  const host = hostFixture();
+  let currentCatalog = await host.listWorkspaces();
+  vi.mocked(host.listWorkspaces).mockImplementation(async () => currentCatalog);
+  const authority = new WorkspaceAuthority(host), owner = new WorkspaceAssociations(server.client, authority);
+  let stop!: () => void;
+  const metadataChanged = vi.fn();
+  await act(async () => {
+    stop = owner.start();
+    render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
+      endpoint={endpoint} navigation={server.client.navigation} wide expand={vi.fn()} metadataChanged={metadataChanged}
+      selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
+      createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
+  });
+  try {
+    expect(owner.getSnapshot().entries.get('A')).toMatchObject({ status: 'ready', confirmed: { workspaceId: 'wA' } });
+    const completion = deferred<void>(), started = deferred<void>();
+    vi.mocked(host.removeWorkspace).mockImplementation(() => { started.resolve(); return completion.promise; });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace A' })));
+    await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Unregister Workspace' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Unregister$/ })));
+    await started.promise;
+    expect(host.removeWorkspace).toHaveBeenCalledWith('wA');
+    if (kind === 'replacement Host') {
+      currentCatalog = { ...currentCatalog, authorityId: 'host-B' };
+      await act(async () => { await authority.observe(); });
+      // B legitimately owns the same Workspace ID, fully classified before A completes.
+      expect(authority.getCatalog()?.authorityId).toBe('host-B');
+      expect(owner.getSnapshot()).toMatchObject({ status: 'ready', catalog: { authorityId: 'host-B' } });
+      expect(owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['wA', 'wB']);
+      expect(owner.getSnapshot().entries.get('A')).toMatchObject({ status: 'ready', confirmed: { workspaceId: 'wA' } });
+    }
+    const before = owner.getSnapshot(), reads = vi.mocked(host.listWorkspaces).mock.calls.length;
+    // Hold any accidental corrective reread: no self-healing can mask deletion.
+    const reread = deferred<WorkspaceCatalog>();
+    vi.mocked(host.listWorkspaces).mockReturnValue(reread.promise);
+    await act(async () => completion.resolve());
+    if (kind === 'replacement Host') {
+      expect(authority.getCatalog()?.authorityId).toBe('host-B');
+      expect(owner.getSnapshot()).toBe(before);
+      expect(owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['wA', 'wB']);
+      expect(owner.getSnapshot().entries.get('A')).toMatchObject({ status: 'ready', confirmed: { workspaceId: 'wA' } });
+      expect(host.listWorkspaces).toHaveBeenCalledTimes(reads);
+      expect(metadataChanged).not.toHaveBeenCalled();
+    } else {
+      expect(owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['wB']);
+      expect(owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
+      expect(host.listWorkspaces).toHaveBeenCalledTimes(reads + 1);
+      expect(metadataChanged).toHaveBeenCalledWith('wA');
+      // Failure is independent of the committed removal; it cannot restore wA.
+      await act(async () => reread.reject(new Error('reread failed')));
+      expect(owner.getSnapshot().status).toBe('unavailable');
+      expect(owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['wB']);
+      expect(owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
+    }
+    expect(methods()).toEqual(['initialize', 'session/list']);
+  } finally { stop(); }
+});
 it('picker capability exposes only authorized choices and Session rename uses the native typed operation', async () => {
   const host = await mount();
   server.handlers.set('session/name', request => {
@@ -88,12 +154,16 @@ it('picker capability exposes only authorized choices and Session rename uses th
   expect(within(dialog).queryByRole('textbox')).toBeNull();
   await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'Workspace C' })));
   expect(host.adoptWorkspace).toHaveBeenCalledWith('root-C');
+  const classifications = vi.mocked(host.classifyLocations).mock.calls.length;
+  const catalogs = vi.mocked(host.listWorkspaces).mock.calls.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' })));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Native name' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
   expect(server.requests.find(row => row.request.method === 'session/name')?.request.params).toEqual({ session_id: 'A', name: 'Native name' });
   expect(host.renameWorkspace).not.toHaveBeenCalled();
+  expect(host.classifyLocations).toHaveBeenCalledTimes(classifications);
+  expect(host.listWorkspaces).toHaveBeenCalledTimes(catalogs);
 });
 it('Host resolution supplies exact cwd, rejects unauthorized identifiers, and a late resolution cannot create or reopen', async () => {
   await server.connect(); const host = hostFixture(), navigation = new NavigationEpoch();
@@ -501,6 +571,37 @@ it('UX-04 keeps confirmed groups while a cloned native page refresh is gated', a
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
   expect(group()).toBe('wA');
   await act(async () => gate.resolve([{ authorized: true, workspaceId: 'wA' }, { authorized: true, workspaceId: 'wB' }]));
+});
+it.each(['success', 'failure'] as const)('UX-04 normal next-page demand settles before the old page %s', async outcome => {
+  server.handlers.set('session/list', request => {
+    if (request.method !== 'session/list') throw new Error('wrong request');
+    return { type: 'sessions', sessions: [server.summary(request.params.offset === 0 ? 'A' : 'B')], next_offset: request.params.offset === 0 ? 32 : undefined };
+  });
+  const host = hostFixture(), a = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>(), b = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
+  vi.mocked(host.classifyLocations).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+  await mount(host);
+  expect(host.classifyLocations).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(host.classifyLocations).mock.calls[0][0]).toEqual(['/workspace/A']);
+  const lists = vi.mocked(host.listWorkspaces).mock.calls.length;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Next$/ })));
+  expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['B']);
+  expect(host.classifyLocations).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(host.classifyLocations).mock.calls[1][0]).toEqual(['/workspace/B']);
+  expect(vi.mocked(host.classifyLocations).mock.calls[0][3]?.aborted).toBe(false);
+  await act(async () => b.resolve([{ authorized: true, workspaceId: 'wB' }]));
+  const group = () => screen.getByRole('button', { name: 'Open Session B' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group');
+  expect(group()).toBe('wB');
+  expect(screen.queryByText(translator('en')('workspace:association.refreshing'))).toBeNull();
+  // A remains unresolved until B's group and aggregate ready notice are proven.
+  await act(async () => {
+    if (outcome === 'success') a.resolve([{ authorized: true, workspaceId: 'wA' }]);
+    else a.reject(new Error('old page failed'));
+  });
+  expect(group()).toBe('wB');
+  expect(screen.queryByText(translator('en')('workspace:association.refreshing'))).toBeNull();
+  expect(screen.queryByText(translator('en')('workspace:association.unavailable'))).toBeNull();
+  expect(host.classifyLocations).toHaveBeenCalledTimes(2);
+  expect(host.listWorkspaces).toHaveBeenCalledTimes(lists);
 });
 
 it('UX-04 shares selected membership across a gated reconnect without authorizing attachment', async () => {

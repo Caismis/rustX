@@ -246,12 +246,27 @@ client-owned retirement notification and removes its display evidence; page abse
 alone is not deletion. A changed cwd immediately loses incompatible evidence.
 
 Request freshness additionally captures connection generation, the local catalog
-invalidation revision, an exact request token, and disposal state. Reconnect changes
+invalidation revision, the classification invalidation epoch, and disposal state.
+Each in-flight classification has a separate unique read ID and captures the display
+scope, native generation, revision, exact catalog reference, Host observation,
+immutable `{id,cwd}` rows and AbortController. Current demand excludes satisfied
+evidence and rows covered by still-valid reads. Uncovered rows can use a free second
+slot while an unrelated old page remains pending; completion releases only its own
+read ID and schedules uncovered current demand. Invalidated reads are aborted and
+cannot publish. Compatible off-page results may populate retained evidence, but
+cannot overwrite a changed cwd, revive an evicted entry, or settle newer evidence.
+Reconnect changes
 request generation, **not** compatible evidence identity. Explicit refresh, reconnect, and committed registration changes reread the catalog.
 Selection only changes bounded page-plus-selected demand: satisfied rows cause no
 catalog or classification read, and an unsatisfied off-page selection reads only its
 cwd. Host replacement invalidates incompatible evidence through the authority owner. Both catalog success
-and failure are fenced before publication. A committed unregister first removes the
+and failure are fenced before publication. `captureMutation()` gives navigation a
+completion capability backed by the authority owner's observation of the current
+display catalog. Only while that exact `(authorityId, normalized endpoint)` scope
+remains current can the capability commit removal and start a catalog reread;
+an obsolete completion changes neither display evidence nor metadata navigation.
+`refresh()` accepts no deletion evidence. Navigation changes and compatible catalog
+observations do not retire the mutation capability. A same-scope committed unregister first removes the
 registration association and invalidates all older reads; a failed subsequent reread
 cannot resurrect it. Complete successful catalogs also remove missing registrations.
 Neither missing-registration invalidation nor explicit unregister completes a new
