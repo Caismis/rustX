@@ -86,10 +86,10 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('button', { name: 'Select Workspace Workspace B' }).click();
     expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(1);
-    await a.workspaceHost.host.renameWorkspace(wa.id, 'Renamed by Host');
-    await a.workspaceHost.host.reorderWorkspace(wa.id);
+    await a.workspaceHost.host.renameWorkspace(await a.workspaceHost.host.listWorkspaces(), wa.id, 'Renamed by Host');
+    await a.workspaceHost.host.reorderWorkspace(await a.workspaceHost.host.listWorkspaces(), wa.id);
     expect(await read()).toEqual(original);
-    await a.workspaceHost.host.removeWorkspace(wa.id);
+    await a.workspaceHost.host.removeWorkspace(await a.workspaceHost.host.listWorkspaces(), wa.id);
     await page.getByRole('button', { name: 'View options' }).click();
     await page.getByRole('menuitem', { name: 'Refresh list' }).click();
     await expect(page.getByRole('button', { name: 'Select Workspace Workspace A', exact: true })).toHaveCount(0);
@@ -110,7 +110,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(other.session.id).toMatch(/^ses_[0-9a-f-]+$/);
     expect((await remoteB.readSettings(other.session.id)).settings.cwd).toBe(b.workspaceA);
     expect((await read()).settings.cwd).toBe(a.workspaceA);
-    expect(await a.workspaceHost.host.classifyLocations([b.workspaceA], a.endpoint)).toEqual([{ authorized: false }]);
+    expect(await a.workspaceHost.host.classifyLocations([b.workspaceA], a.endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
     expect(existsSync(join(a.directory, 'state', 'rustx', 'trust'))).toBe(false);
     expect(readFileSync(join(a.workspaceA, 'rustx.toml'), 'utf8')).toContain('Workspace guidance');
     expect(errors).toEqual([]);

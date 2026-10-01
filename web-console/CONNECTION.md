@@ -4,7 +4,7 @@ The dev launcher owns the App Server, exact endpoint, transport credential, brow
 launch credential, Host config, carrier and private scratch lifetime. Carrier
 authentication hands admission material to the browser; it adds no App Server RPC,
 proxy, native configuration or Workspace authority. The browser connects directly
-with the existing AppServerClient and App Server protocol **v8**.
+with the existing AppServerClient and App Server protocol **v29**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
@@ -85,10 +85,11 @@ requesting a transition. `selectedMode` describes the material-entry selection;
 
 AppServerClient owns endpoint/token validation and replacement admission. Its
 side-effect-free admission check runs immediately before synchronous fencing, with
-no intervening await. Unresolved deletion verification/recovery, eight detached
-evidence batches, or more than 64 current/reserved Session diagnostic rows refuse
+no intervening await. Eight detached evidence batches or more than 64
+current/reserved Session diagnostic rows (including deletion obligations) refuse
 replacement without changing generation, socket, views, evidence, or credentials.
-Same normalized endpoint reconnects bypass replacement admission.
+Same normalized endpoint reconnects perform replacement admission when initialization
+observes a different native `authority_id`, before reading the new catalog.
 
 Admission reserves one detached batch for the old authority, including any evidence
 created by close. The request pump transmits at most eight pending operations; only
@@ -109,12 +110,27 @@ remain in page memory across refusal, Local success, and Local failure, allowing
 explicit user-selected return; neither is persisted. New Remote material replaces
 the remembered material only when its ownership commits.
 
-Browser Session/control state belongs to one concrete App Server authority: the
-exact normalized WebSocket endpoint (scheme, host, port and root path). This is a
-transport authority, not a durable server identity. A server replaced behind the
-same endpoint is indistinguishable without new protocol identity; v8 runtime and
-attachment fencing still apply. Local compositions use ephemeral endpoints. No
-server registry or identity protocol is added.
+Browser Session/control state belongs to the normalized endpoint and native
+AppServerHost process UUID (`initialize.authority_id`). The UUID is stable over
+connections to that process, not across process replacement. It is not durable-store
+identity: a replacement may use the same store or a different one. Neither endpoint,
+cwd, Session ID nor title establishes durable identity. No durable identity protocol
+or browser recovery journal is introduced.
+
+Product Host authority is a separate Workspace-domain identity owned by
+`WorkspaceAuthority`, not by `WorkspaceAssociations` or by the HTTP adapter object's
+identity. Fresh admission captures its epoch, reads native settings and classifies
+that exact cwd under the captured Host ID. Before attach/fork dispatch, holding a
+reserved RPC slot, it re-observes the Host and freshly classifies the same exact cwd
+under that observation and the captured normalized endpoint; process identity alone
+never re-admits. The transport checks that proof plus native generation, navigation
+and injected callback identity before send. At most two such validations hold RPC
+slots at once, so a stalled Product Host read never blocks `turn/cancel` or other
+native control. Host authority scope is `authorityId` plus normalized endpoint.
+Old successful classification cannot authorize a replacement Host, even with the same
+adapter and no display projection running. Display listens to authority retirement
+only to clear incompatible evidence; a cached association never authorizes an
+operation and is never required for its correctness.
 
 ConnectionController explicitly chooses same-authority reconnect or authority
 replacement. Same-authority reconnect retains wanted views/node intent and repairs
@@ -134,12 +150,35 @@ even when Session/interaction IDs collide. Evidence is page-memory only: at most
 eight detached batches, each with the client's bounded operations and up to 64
 Session diagnostics. Capacity refuses replacement rather than evicting evidence;
 explicit acknowledgement removes a batch. Wire observations are replaceable logs
-and clear on authority replacement. Unresolved deletion verification or committed
-deletion recovery refuses replacement with a visible error before disconnect:
-resolve it on the still-current authority and retry. It is neither dropped nor sent to another server.
+and clear on authority replacement.
 
-Ordinary Settings opens **Overview**. Recovery **Show details** and connection
-recovery actions explicitly open **Connection**; transport is never the default.
+Unresolved deletion never requires connecting to the retired process before admitting
+a replacement. Retirement captures Session ID, old endpoint/process UUID and either
+unknown deletion outcome, committed cleanup pending, or committed durability uncertain.
+A lost recovery reply invalidates recovery admission but preserves the earlier committed
+fact. Old attachment/view authority, pending continuations and first submissions are
+fenced before reused IDs enter the replacement catalog. No old delete, preview or
+recovery request is automatically sent to the replacement. Same-process reconnect
+still obtains `session/deletePreview`; explicit recovery uses that fresh observation.
+
+**Settings → Advanced → Connection → Detached authority diagnostics** remains reachable
+while connected or disconnected. It explains and displays retained outcomes, and
+**I have reviewed this historical evidence** removes browser evidence only. This
+acknowledgement neither settles native deletion/cleanup/durability nor sends an RPC.
+There is no cross-authority reconciliation action; users can independently inspect
+the selected authority and obtain its fresh operation preconditions through ordinary
+Session actions. Old target revisions and attachments never participate.
+
+Capacity exhaustion remains a distinct refusal. Review and acknowledge retained batches
+before reconnecting. If more than 64 current/reserved Session diagnostics prevent
+replacement, disconnect and use **Review disconnected Session evidence** in the same
+Connection surface to acknowledge individual browser observations. This removes the
+local view/intent only, emits no native deletion event and performs no mutation.
+Uncertain operation records remain separately inspectable. No reload, storage clearing,
+automatic evidence eviction, or native settlement claim is needed.
+
+Ordinary Settings opens **General**. Recovery **Show details** opens the Advanced
+Connection surface directly; transport is never the default Settings page.
 
 Browser handoff observes OS acceptance, never browser lifetime. On Linux/macOS/WSL,
 `open()` success lets the helper exit without referencing or waiting on the returned

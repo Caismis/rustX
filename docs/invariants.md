@@ -7463,3 +7463,44 @@ extended OpenAI-compatible/vLLM multimodal Tool message contract; endpoint
 incompatibility is a provider error, never a capability downgrade or synthetic
 User fallback. All adapters consume the same newest-16 request projection and
 Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md).
+
+## Web authority retirement and Workspace display demand
+
+- `WorkspaceAuthority` owns Product Host authority scope — the Host process
+  `authorityId` bound to the catalog's normalized endpoint — and its invalidation
+  epoch; a change of either retires every observation and proof. Fresh Workspace
+  admission observes that scope, reads native Session cwd and classifies the exact
+  root with the captured Host ID. The admission linearization read is a fresh Host
+  classification of that exact captured cwd under the current authority and
+  normalized endpoint, made while holding the bounded native dispatch reservation:
+  a root deleted (`unavailable`) or replaced by another physical directory
+  (`denied`) under an unchanged Host process sends nothing. Send then requires that
+  Host epoch, native generation and endpoint, navigation and injected admission
+  callback all remain current. A late old-Host success or failed final validation
+  cannot dispatch attach/fork. The callback and Product Host identities are
+  distinct. Native Session cwd is fixed at creation on every App Server path, so the
+  captured cwd is the operation's cwd.
+- Product Host validation is bounded and cannot starve native control: at most two
+  validations hold ordinary RPC slots at once, waiting ones hold nothing, and each
+  retirement releases its reservation exactly once. Cancellation never waits for a
+  Host read or its deadline.
+- `WorkspaceAssociations` owns display projection only and consumes authority
+  retirement. It never invalidates operation navigation. Selection changes bounded
+  demand without catalog invalidation; only newly unsatisfied cwd identities need
+  classification. Cached display evidence is neither authorization nor a prerequisite
+  for operation correctness.
+
+- Native process identity does not establish durable-store identity. Replacement
+  fences active Session/attachment and continuation authority before reading reused
+  IDs. Old uncertain deletion and committed cleanup/durability obligations remain
+  attributable in bounded detached browser evidence, never replacement admission.
+- Browser acknowledgement removes evidence only; it is neither native settlement
+  nor a replay. Same-authority reconnect retains fresh deletion verification.
+- Workspace registration invalidation does not complete Session classification.
+  Explicit unregister cannot be undone by a stale success or failure; only a complete
+  current Host classification establishes the new classification observation.
+- The single bounded Workspace display owner projects current page, selected
+  off-page Session and catalog/connection status separately from inactive cached
+  evidence. Retained evidence grants no operation authority. See
+  [Workspace ownership](../web-console/WORKSPACES.md) and
+  [connection ownership](../web-console/CONNECTION.md) for bounds and precedence.

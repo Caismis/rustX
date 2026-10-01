@@ -8,7 +8,10 @@ import { ConversationLive } from './agent/ConversationLive';
 import { ConversationSeat, ConversationStatus } from './agent/ConversationSeat';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
-import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
+import type { ProductHostWorkspaces } from '../workspaces/host';
+import { HttpWorkspaceHost } from '../workspaces/http-host';
+import { WorkspaceAuthority } from '../workspaces/authority';
+import { WorkspaceAssociations } from '../workspaces/associations';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -49,6 +52,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const tx = useTranslation();
   const state = useClientSelector(client, selectShell, sameValue);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
+  const workspaceAuthority = useMemo(() => new WorkspaceAuthority(workspaceHost), [workspaceHost]);
+  const associations = useMemo(() => new WorkspaceAssociations(client, workspaceAuthority), [client, workspaceAuthority]);
+  useEffect(() => associations.start(), [associations]);
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   type CenterRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string };
   const [draftBinding, setDraftBinding] = useState(0);
@@ -71,14 +77,20 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const endpoint = state.endpoint ?? '';
   const initialViews = preferences.endpoint === state.endpoint ? preferences.openViews : [];
   const [openViews, setOpenViews] = useState<string[]>(initialViews);
-  const [focus, setFocus] = useState<{ sessionId?: string; workspaceId?: string; generation?: number }>({ sessionId: initialViews[0] });
+  const [focus, setFocus] = useState<{ sessionId?: string }>({ sessionId: initialViews[0] });
   const selected = focus.sessionId;
-  const workspace = focus.generation === state.generation && state.connection === 'connected' ? focus.workspaceId : undefined;
+  useEffect(() => associations.select(selected), [associations, selected]);
+  const selectedCwd = state.sessions.find(row => row.id === selected)?.cwd ?? (selected ? state.views[selected]?.summary?.cwd ?? state.views[selected]?.settings?.cwd : undefined);
+  const associatedWorkspace = useSyncExternalStore(associations.subscribe, () => {
+    const association = selected ? associations.getSnapshot().entries.get(selected) : undefined;
+    return association?.cwd === selectedCwd ? association?.confirmed?.workspaceId : undefined;
+  });
+  const workspace = selected ? associatedWorkspace : center.kind === 'new-conversation' ? center.workspaceId : undefined;
   const navigation = client.navigation;
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
-  const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceHost, client, navigation), [workspaceHost, client, navigation]);
+  const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceAuthority, client, navigation), [workspaceAuthority, client, navigation]);
   useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
   // Existing navigation hints may restore wanted views, never a released claim.
   // Released views are not restored. Sidebar rows remain catalog-owned.
@@ -147,7 +159,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     } catch { /* Storage may be disabled in a trusted browser. */ }
   }, [endpoint, resumeViews]);
   // Every Session focus path publishes the same pair. Until native cwd has been
-  // classified, its Workspace is explicitly empty rather than inherited.
+  // classified, its Workspace is pending rather than inherited from another Session.
   const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean; commitDraft?: boolean } = {}) => {
     if (!options.preserveDraft && !options.commitDraft) setDraftBinding(value => value + 1);
     // Remount/classification of the same pending Conversation is observation,
@@ -164,10 +176,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       try {
         if (options.attach) await client.attach(id, undefined, current);
         if (!current() || generation !== client.getSnapshot().generation) return;
-        const location = await workspaceNavigation.classifySession(id, current);
-        if (!current() || generation !== client.getSnapshot().generation || !location) return;
-        setFocus({ sessionId: id, workspaceId: location.authorized ? location.workspaceId : undefined, generation });
-        options.ready?.();
+        // Preparation callbacks remain admission-bearing even for an existing view.
+        if (options.ready && await workspaceNavigation.admit(id, current) && current() && generation === client.getSnapshot().generation) options.ready();
       } catch (cause) { if (current() && generation === client.getSnapshot().generation) throw cause; }
     });
   };
@@ -192,7 +202,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   };
   const createInWorkspace = (id?: string) => {
     setDraftBinding(value => value + 1);
-    navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation });
+    navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({});
     setCenter({ kind: 'new-conversation', workspaceId: id });
   };
   const newConversationCurrent = useMemo(() => navigation.capture(), [navigation, center]);
@@ -209,8 +219,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   };
   return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
     panels={[]}
-    browser={(wide, expand) => <WorkspaceNavigation key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
-      metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
+    browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
+      metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
       workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={createInWorkspace}
       openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={setDeletingSession}
       forkSession={id => open(id, () => {
@@ -261,7 +271,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
-      <ConversationSeat client={client} host={workspaceHost} sessionId={view?.id}
+      <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
         onCommand={id => invokeCommand({ id })}

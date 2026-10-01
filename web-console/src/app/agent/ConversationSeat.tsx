@@ -3,6 +3,8 @@ import { useState } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
+import type { WorkspaceAuthority } from '../../workspaces/authority';
+import type { WorkspaceAssociations } from '../../workspaces/associations';
 import type { UserInputBlock } from '../../../../protocol/app-server/v29';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
@@ -21,8 +23,8 @@ export function ConversationStatus({ client, sessionId, recover }: { client: App
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, sessionId, initialWorkspace, binding, current, consumed, restored, opened, onCommand }: {
-  client: AppServerClient; host: ProductHostWorkspaces; sessionId?: string; initialWorkspace?: string;
+export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, binding, current, consumed, restored, opened, onCommand }: {
+  client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
   binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
   restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => (() => boolean) | void;
   onCommand: (id: CommandId) => void;
@@ -37,7 +39,7 @@ export function ConversationSeat({ client, host, sessionId, initialWorkspace, bi
   const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <div className={css.composerSeat} data-composer-seat="">
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
-      <ConversationComposer client={client} host={host} initialWorkspace={initialWorkspace} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
+      <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
         context={view && <ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/>}
         active={view ? {
           initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,

@@ -246,8 +246,8 @@ The endpoint/openViews navigation hints retain only wanted views for automatic
 page-reload restoration only at the same normalized endpoint; they never choose
 connection material. Replacing App Server authority closes active browser views
 and focus instead of reinterpreting their IDs against the new server. Old uncertain
-operations remain detached, read-only diagnostics; unresolved deletion recovery
-refuses replacement. See [connection ownership](CONNECTION.md).
+operations and unresolved deletion obligations remain detached, read-only evidence;
+they do not block replacement except at the explicit diagnostic capacity bound. See [connection ownership](CONNECTION.md).
 A released Session remains in the Sidebar catalog, without
 remaining a resume hint; no persisted observation or request state is introduced.
 On a fresh page the Session remains available through the native list

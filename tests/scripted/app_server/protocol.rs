@@ -4171,3 +4171,39 @@ async fn issue422_multi_client_deletion_membership_converges_at_commit() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() {
+    let f = Fixture::new().await;
+    let replacement = crate::app_server::host::AppServerHost::new(
+        f.manager.clone(),
+        crate::local_runtime::app_server_policy::AppServerPolicy::default(),
+    );
+    let mut identities = Vec::new();
+    for host in [f.host.clone(), f.host.clone(), replacement] {
+        let connection = AppServerConnection::new(host);
+        let result = call(
+            &connection,
+            0,
+            Method::Initialize(InitializeParams {
+                protocol_version: APP_SERVER_PROTOCOL_VERSION,
+                client: ClientIdentity {
+                    name: "identity-test".into(),
+                    version: "1".into(),
+                },
+                presentation: PresentationCapabilities::default(),
+            }),
+        )
+        .await;
+        let MethodResult::Initialized { authority_id, .. } = result else {
+            panic!("initialize result")
+        };
+        assert!(!authority_id.is_empty());
+        identities.push(authority_id);
+        connection.close();
+    }
+    assert_eq!(identities[0], identities[1]);
+    assert_ne!(identities[0], identities[2]);
+    assert!(f.provider.request_bodies().is_empty());
+    f.close().await;
+}

@@ -23,7 +23,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       for (const waiter of state.waiters.splice(0)) waiter();
-      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', protocol_version: 29, capabilities: { multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [] } } }));
+      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 29, capabilities: { multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [] } } }));
       return Promise.resolve();
     }
     onMessage(listener: (record: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
@@ -60,7 +60,7 @@ it('mutation wins: an in-flight configuration mutation completes before removal 
   const configuration = host.configureWorkspace(alpha.id, endpoint, write);
   const [submitted] = await awaitMethod('configuration/sourceWrite');
   let removed = false;
-  const removal = host.removeWorkspace(alpha.id).then(() => { removed = true; });
+  const removal = host.removeWorkspace(await host.listWorkspaces(), alpha.id).then(() => { removed = true; });
   await tick();
   expect(removed).toBe(false);
   expect((await host.listWorkspaces()).workspaces.map(row => row.id)).toContain(alpha.id);
@@ -81,7 +81,7 @@ it('revoke wins: a removal in flight fences a concurrently submitted configurati
   const { host, config, endpoint } = fixture();
   const [alpha] = (await host.listWorkspaces()).workspaces;
   let removed = false;
-  const removal = host.removeWorkspace(alpha.id).then(() => { removed = true; });
+  const removal = host.removeWorkspace(await host.listWorkspaces(), alpha.id).then(() => { removed = true; });
   // Lane bodies run on a microtask even for the first caller, so the mutation
   // submitted here provably queues behind the in-flight, still-uncommitted removal.
   const configuration = host.configureWorkspace(alpha.id, endpoint, write);
@@ -120,4 +120,21 @@ it('a confirmed write keeps its acknowledgement when the post-write reread fails
   expect(String((result.commit.reread as { error: unknown }).error)).toContain('native reread failed');
   // Exactly one write reached native; the failure never caused a replay.
   expect(native.state.requests.filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(1);
+});
+
+it('a queued metadata removal checks Host scope only when its registration lane executes', async () => {
+  const { host, config, endpoint } = fixture(), baseline = await host.listWorkspaces(), alpha = baseline.workspaces[0];
+  const configuration = host.configureWorkspace(alpha.id, endpoint, write);
+  const [submitted] = await awaitMethod('configuration/sourceWrite');
+  let settled = false;
+  const removal = host.removeWorkspace({ authorityId: 'retired-host', endpoint }, alpha.id)
+    .then(() => { settled = true; return undefined; }, error => { settled = true; return error; });
+  await tick();
+  expect(settled).toBe(false);
+  expect(readFileSync(config.metadataFile, 'utf8')).toContain(alpha.id);
+  answer(submitted); const [reread] = await awaitMethod('configuration/sourcesRead'); answer(reread);
+  await configuration;
+  expect(await removal).toMatchObject({ kind: 'authority_replaced', uncertain: false });
+  expect((await host.listWorkspaces()).workspaces).toEqual(baseline.workspaces);
+  expect(readFileSync(config.metadataFile, 'utf8')).toContain(alpha.id);
 });

@@ -23,6 +23,8 @@ export interface SessionView {
   deleting?: boolean;
   deletionRecovery?: "committed_cleanup_pending" | "committed_durability_uncertain";
   recoveringDeletion?: boolean;
+  /** Historical committed fact; unlike recovery admission, survives a lost recovery reply. */
+  deletionCommitted?: SessionView['deletionRecovery'];
   id: string;
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
@@ -72,6 +74,8 @@ export interface UncertainOperation {
 export interface ClientView {
   configuration?: Readonly<Record<string, ConfigurationApplication>>;
   authorityRevision?: number;
+  /** Native AppServerHost identity; unlike generation, stable across reconnect. */
+  authorityId?: string;
   detached?: readonly DetachedEvidence[];
   endpoint?: string;
   connection: ConnectionState;
@@ -87,8 +91,9 @@ export interface ClientView {
 /** Read-only historical evidence. Never consulted by attachment/control admission. */
 export interface DetachedEvidence {
   authority: string;
+  authorityId?: string;
   operations: readonly UncertainOperation[];
-  sessions: readonly Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'>[];
+  sessions: readonly (Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'> & { deletion?: 'uncertain' | SessionView['deletionRecovery'] })[];
 }
 export interface Socket {
   onopen: ((event: Event) => unknown) | null;
@@ -99,8 +104,21 @@ export interface Socket {
   close(): void;
 }
 export type SocketFactory = (url: string, protocols: string[]) => Socket;
+/** An operation-owned proof, re-observed after transport backpressure and checked
+ * synchronously again before send. The transport never interprets Host policy.
+ * `validate` must stop its reads when `signal` aborts; the transport never waits for it. */
+export interface OperationAdmission {
+  current: () => boolean;
+  validate: (signal: AbortSignal) => Promise<boolean>;
+}
+type AttachmentAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
+/** One installation lifetime of an attachment-admission owner. Identity is the
+ * object, never the callback: reinstalling the same callback is a new owner. */
+interface AttachmentAdmissionOwner { readonly admit: AttachmentAdmission }
 interface Pending {
-  dispatchCurrent?: () => boolean;
+  dispatchCurrent?: (() => boolean) | OperationAdmission;
+  /** Final validation holding an RPC slot; `timer` is its deadline until send. */
+  validation?: AbortController;
   acknowledged?: (result: MethodResult) => void;
   request: Request;
   context: WireContext;
@@ -166,7 +184,13 @@ function requestLane(method: Request1['method']): 'wait' | 'admission' | 'contro
   }
 }
 const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2 } as const;
+const RPC_CAPACITY = 8;
+/** Operation-admission validations reserve ordinary RPC slots so the final check
+ * stays adjacent to send, but at most two at once: a stalled Product Host read
+ * can never take the remaining slots needed to cancel or control native work. */
+const VALIDATION_CAPACITY = 2;
 
+const dispatchCurrent = ({ dispatchCurrent: proof }: Pending) => !proof || (typeof proof === 'function' ? proof() : proof.current());
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
   a.session_id === b.session_id && a.conversation_id === b.conversation_id &&
@@ -213,7 +237,10 @@ export class AppServerClient {
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
-  constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000) {}
+  constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000) {
+    // Navigation retires admission proofs; release their reservations outside the caller's stack.
+    this.navigation.subscribe(() => queueMicrotask(() => this.pump()));
+  }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
   private publish(patch: Partial<ClientView>) {
@@ -226,21 +253,48 @@ export class AppServerClient {
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
   // Fail closed when there is no admission owner (including after its disposal).
-  private attachmentAdmission?: (id: string, current: () => boolean) => Promise<boolean>;
-  setAttachmentAdmission(admit: (id: string, current: () => boolean) => Promise<boolean>) {
-    this.attachmentAdmission = admit;
-    return () => { if (this.attachmentAdmission === admit) this.attachmentAdmission = undefined; };
+  private attachmentAdmission?: AttachmentAdmissionOwner;
+  setAttachmentAdmission(admit: AttachmentAdmission) {
+    // Every installation is a new incarnation, so retired proofs stay retired
+    // even when the same callback is installed again.
+    const owner: AttachmentAdmissionOwner = { admit };
+    this.replaceAttachmentAdmission(owner);
+    // Cleanup removes only its own incarnation; a stale one never disturbs a newer owner or its proofs.
+    return () => { if (this.attachmentAdmission === owner) this.replaceAttachmentAdmission(undefined); };
   }
-  async admitAttachment(id: string, current: () => boolean = () => true): Promise<boolean> {
+  private replaceAttachmentAdmission(owner?: AttachmentAdmissionOwner) {
+    this.attachmentAdmission = owner;
+    // Owner change retires its proofs; release their reservations outside the caller's stack, as navigation does.
+    queueMicrotask(() => this.pump());
+  }
+  async admitAttachment(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
     const generation = this.state.generation;
-    const valid = () => current() && this.current(generation);
+    const owner = this.attachmentAdmission;
+    const valid = () => current() && this.current(generation) && owner === this.attachmentAdmission;
     if (!valid()) return false;
-    if (!this.attachmentAdmission) throw new Error('No Web attachment admission owner.');
-    const allowed = await this.attachmentAdmission(id, valid);
-    return allowed && valid();
+    if (!owner) throw new Error('No Web attachment admission owner.');
+    const allowed = await owner.admit(id, valid);
+    return allowed && valid() && { current: () => valid() && allowed.current(), validate: allowed.validate };
   }
   restoreViews(ids: readonly string[]) {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
+  }
+  private retireAuthority() {
+    this.navigation.invalidate();
+    this.firstSubmissions.retireAuthority();
+    const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
+      .map(({ id, error, modelMutation, cancellation, deleting, deletionCommitted }) => ({ id, error, modelMutation, cancellation,
+        ...(deleting ? { deletion: deletionCommitted ?? 'uncertain' as const } : {}) }));
+    // Admission reserved capacity for close-time evidence before synchronous fencing.
+    // Generation-guarded continuations cannot create new Session diagnostics;
+    // model/cancellation continuations only update already-reserved Session rows.
+    const detached = [...(this.state.detached ?? [])];
+    if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
+    this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
+    this.listEpoch++; this.listOffset = 0; this.listQuery = '';
+    this.log.clear();
+    this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
+      authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
   }
   // Browser transport authority, not a durable server identity. Reconnect alone
   // can restore wanted Session intent; replacement must retire it after fencing.
@@ -260,19 +314,7 @@ export class AppServerClient {
     if (this.closing) await this.closing;
     if (generation !== this.state.generation || attempt !== this.connectionAttempt) return;
     if (replacing) {
-      this.firstSubmissions.retireAuthority();
-      const sessions = Object.values(this.state.views).filter(view => view.error || view.modelMutation || view.cancellation)
-        .map(({ id, error, modelMutation, cancellation }) => ({ id, error, modelMutation, cancellation }));
-      // Admission reserved capacity for close-time evidence before synchronous fencing.
-      // Generation-guarded continuations cannot create new Session diagnostics;
-      // model/cancellation continuations only update already-reserved Session rows.
-      const detached = [...(this.state.detached ?? [])];
-      if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, operations: this.state.uncertain, sessions });
-      this.attachmentEpochs.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
-      this.listEpoch++; this.listOffset = 0; this.listQuery = '';
-      this.log.clear();
-      this.publish({ views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
-        authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
+      this.retireAuthority();
     }
     this.publish({ configuration: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     // Ownership commits after close/retirement, before attempting the new transport.
@@ -300,9 +342,21 @@ export class AppServerClient {
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 29 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+      if (!hello.authority_id || hello.protocol_version !== 29 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
         throw new Error('Incompatible App Server protocol or capabilities. Protocol v29 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
+      if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
+        try { this.admitAuthorityReplacement(); }
+        catch (error) {
+          // Keep unresolved operation diagnostics under their old authority, but
+          // retire presentation now. No summaries or attachments from the new
+          // process may be read until replacement can safely commit.
+          this.publish({ sessions: [], authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
+          throw error;
+        }
+        this.retireAuthority();
+      }
+      this.publish({ authorityId: hello.authority_id });
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.listSessions();
@@ -335,9 +389,8 @@ export class AppServerClient {
    */
   private admitAuthorityReplacement() {
     const views = Object.values(this.state.views);
-    if (views.some(view => view.deleting)) throw new Error('Resolve pending Session deletion verification/recovery on the current App Server before replacing its authority.');
     if ((this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
-    const sessions = new Set(views.filter(view => view.error || view.modelMutation || view.cancellation).map(view => view.id));
+    const sessions = new Set(views.filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => view.id));
     for (const pending of this.pending.values()) if (pending.context.sessionId) sessions.add(pending.context.sessionId);
     if (sessions.size > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
   }
@@ -348,6 +401,14 @@ export class AppServerClient {
   private closedSockets = new WeakSet<Socket>();
   disconnect() { ++this.connectionAttempt; this.endConnection('disconnected'); return this.closing; }
   acknowledgeDetached(index: number) { this.publish({ detached: this.state.detached?.filter((_, at) => at !== index) }); }
+  /** Browser evidence only. No native settlement, deletion notification or RPC. */
+  acknowledgeSessionDiagnostic(id: string) {
+    if (this.socket || this.pending.size) throw new Error('Disconnect before acknowledging current Session evidence.');
+    const view = this.state.views[id];
+    if (!view || !(view.deleting || view.error || view.modelMutation || view.cancellation)) return;
+    const views = { ...this.state.views }; delete views[id];
+    this.publish({ views });
+  }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }
@@ -357,7 +418,7 @@ export class AppServerClient {
     this.initialized = false;
     const uncertain = [...this.state.uncertain];
     for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timer);
+      clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
       if (pending.sent && pending.mutation) {
         const params = pending.request.params;
         uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId,
@@ -388,7 +449,7 @@ export class AppServerClient {
     }
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
-  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: () => boolean): Promise<Extract<MethodResult, { type: T }>> {
+  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
     if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
     if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
@@ -419,24 +480,53 @@ export class AppServerClient {
     return result as Extract<MethodResult, { type: T }>;
   }
   private pump() {
-    let sent = [...this.pending.values()].filter(p => p.sent && requestLane(p.request.method) === 'rpc').length;
+    // An obsolete proof releases its reservation now, never after its Host read.
+    for (const pending of this.pending.values()) if (pending.validation && !dispatchCurrent(pending)) this.refuse(pending);
+    let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
+    let validating = [...this.pending.values()].filter(p => p.validation).length;
     for (const pending of this.pending.values()) {
       if (!this.socket) break;
       const lane = requestLane(pending.request.method);
-      if (pending.sent || (lane === 'rpc' && sent >= 8)) continue;
-      if (pending.dispatchCurrent && !pending.dispatchCurrent()) {
-        this.pending.delete(String(pending.request.id));
-        pending.reject(new Error('Authority changed before dispatch. No operation was sent.'));
-        if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
-        continue;
-      }
-      const raw = JSON.stringify(pending.request);
-      const generation = this.state.generation;
-      pending.sent = true; if (lane === 'rpc') sent++;
-      this.log.observe('out', generation, raw, pending.context);
-      if (lane === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
-      try { this.socket.send(raw); } catch { this.lose(generation); break; }
+      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY)) continue;
+      if (!dispatchCurrent(pending)) { this.refuse(pending); continue; }
+      const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
+      // A waiting validation holds nothing, so later requests are never blocked behind it.
+      if (proof && validating >= VALIDATION_CAPACITY) continue;
+      if (lane === 'rpc') occupied++;
+      if (proof) {
+        validating++;
+        // Reserve the same bounded RPC slot while the operation owner revalidates.
+        // No request is sent or marked uncertain during this read. The deadline
+        // starts here, not at send; retirement aborts the read without awaiting it.
+        const validation = new AbortController();
+        pending.validation = validation;
+        pending.timer = setTimeout(() => {
+          this.refuse(pending, new Error('Operation admission validation timed out. No operation was sent.')); this.pump();
+        }, this.timeoutMs);
+        // Only the settlement that still owns the reservation may act on it.
+        void proof.validate(validation.signal).then(allowed => {
+          if (pending.validation !== validation) return;
+          if (!allowed || !dispatchCurrent(pending)) this.refuse(pending);
+          else { pending.validation = undefined; clearTimeout(pending.timer); this.sendPending(pending); }
+        }, cause => {
+          if (pending.validation === validation) this.refuse(pending, cause);
+        }).finally(() => this.pump());
+      } else this.sendPending(pending);
     }
+  }
+  private refuse(pending: Pending, cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) {
+    clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
+    this.pending.delete(String(pending.request.id));
+    pending.reject(cause instanceof Error ? cause : new Error(String(cause)));
+    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
+  }
+  private sendPending(pending: Pending) {
+    const raw = JSON.stringify(pending.request);
+    const generation = this.state.generation;
+    pending.sent = true;
+    this.log.observe('out', generation, raw, pending.context);
+    if (requestLane(pending.request.method) === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
+    try { this.socket!.send(raw); } catch { this.lose(generation); }
   }
   private receive(data: unknown, generation: number) {
     if (typeof data !== 'string') { this.lose(generation); return; }
@@ -754,20 +844,27 @@ export class AppServerClient {
       throw error;
     }
   }
+  private deletionListeners = new Set<(id: string) => void>();
+  subscribeSessionDeletion = (listener: (id: string) => void) => {
+    this.deletionListeners.add(listener);
+    return () => { this.deletionListeners.delete(listener); };
+  };
   private settleDeletion(id: string, result: RuntimeClientSessionDeletionResult): void {
     const committed = result.status === 'committed_cleanup_pending' || result.status === 'committed_durability_uncertain';
     if (committed || result.status === 'deleted' || result.status === 'not_found') {
+      this.publish({ sessions: this.state.sessions.filter(row => row.id !== id) });
+      this.deletionListeners.forEach(listener => listener(id));
       this.retireAttachmentWork(id);
       this.attachmentEpochs.set(id, (this.attachmentEpochs.get(id) ?? 0) + 1);
       if (committed) {
         // Retain only a recovery obligation; this is not a resumable conversation.
-        this.setSession(id, { deleting: true, deletionRecovery: result.status,
+        this.setSession(id, { deleting: true, deletionRecovery: result.status, deletionCommitted: result.status,
           recoveringDeletion: false, attachmentIntent: 'released', attachment: 'detached', target: undefined, snapshot: undefined, error: undefined });
       } else {
         const views = { ...this.state.views }; delete views[id]; this.publish({ views });
       }
     } else {
-      this.setSession(id, { deleting: false, deletionRecovery: undefined, recoveringDeletion: false, error: undefined });
+      this.setSession(id, { deleting: false, deletionRecovery: undefined, deletionCommitted: undefined, recoveringDeletion: false, error: undefined });
     }
   }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
@@ -817,8 +914,9 @@ export class AppServerClient {
     const admissionCurrent = () => current() && navigationCurrent();
     let target: AttachmentTarget | undefined;
     try {
-      if (!await this.admitAttachment(id, admissionCurrent) || !admissionCurrent()) return;
-      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, admissionCurrent);
+      const admitted = await this.admitAttachment(id, admissionCurrent);
+      if (!admitted || !admitted.current()) return;
+      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached', undefined, admitted);
       if (!current()) return;
       target = result.target;
       if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });

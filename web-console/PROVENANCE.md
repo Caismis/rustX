@@ -513,8 +513,19 @@ projects native Session summaries and current snapshots to presentation props;
 `client/AppServerClient` owns the typed transport, authoritative reconnect and
 resynchronization. Product Host owns navigation registration/classification and
 authorization; canonical Session cwd and history remain native server state.
-A classification response is valid only for its exact observed summary array.
-No browser-owned durable Session-to-Workspace map exists.
+`workspaces/associations.ts` owns the bounded, identity-keyed display projection
+shared by sidebar and selected Session. Classification publication is fenced by
+captured Session IDs/cwds, authority, request and catalog revision; it is never
+operation authorization. No browser-owned durable Session-to-Workspace map exists.
+
+The independently authored `workspaces/host.ts` is the environment-neutral
+Workspace/configuration contract, pure result validator and single shared
+`WorkspaceHostError` definition. Node `host/workspaces.ts` and `host/http.ts` depend
+on it directly. The independently authored browser adapter moved intact to
+`workspaces/http-host.ts`, which imports that contract and `carrier/http.ts`;
+`app/App.tsx` composes the adapter directly. There is no browser re-export from
+the neutral module. Existing derived consumers' `workspaces/host` dependency
+records remain contract-only; this split introduces no additional upstream reuse.
 
 Connection, Inspector, Appearance, the existing CFG3 editors, conversation feedback
 and browser root/focus support are rustX-specific integration code. These use the
@@ -1085,3 +1096,13 @@ pinned-container browser acceptance passed without screenshot baseline changes.
 PR #425 integrates image/Bash presentation into those same native abstractions.
 The current import closure and local source hashes use App Server v29; upstream
 revisions, licenses, and semantic ledger ownership remain unchanged.
+
+The #433 review repair updates the local WorkspaceNavigation hash for consuming
+current-demand status from the existing display owner, and the Settings dictionary
+hash for English/Chinese evidence acknowledgement and deletion outcome copy. The upstream source, license
+and import closure are unchanged; no additional upstream code or dependency is used.
+
+The #436 contract hardening updates the local WorkspaceNavigation hash so Sidebar
+metadata intent capture requires the same display catalog that rendered the action,
+matching the Composer. The upstream source, license, and import closure are unchanged;
+no additional upstream code or dependency is used.

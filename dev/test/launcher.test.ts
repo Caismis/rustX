@@ -104,7 +104,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   const host = new LocalWorkspaceHost(config);
   const nested = join(f.a, 'nested'); mkdirSync(nested);
   assert.deepEqual((await host.classifyLocations([f.a, f.b, nested, f.directory], config.endpoint)).map(row => row.authorized), [true, true, false, false]);
-  await assert.rejects(host.adoptWorkspace(nested), /unavailable/);
+  await assert.rejects(host.adoptWorkspace(await host.listWorkspaces(), nested), /unavailable/);
   assert.equal(web.spec.component, 'web');
   assert.deepEqual(web.spec.args, [join(root, 'web-console/scripts/dev-carrier.ts')]);
   web.ready.resolve('http://127.0.0.1:4243/');

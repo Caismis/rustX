@@ -331,6 +331,7 @@ impl AppServerConnection {
             }
             *state = Some(params);
             return Ok(MethodResult::Initialized {
+                authority_id: self.host.authority_id().to_owned(),
                 protocol_version: APP_SERVER_PROTOCOL_VERSION,
                 capabilities: ServerCapabilities::default(),
             });

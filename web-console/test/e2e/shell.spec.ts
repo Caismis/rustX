@@ -1,7 +1,27 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { choose } from './shell-actions';
+
+/** The shell reference owns its cold-load interleaving. Present the unclassified
+ * baseline before publishing the Host reply, then await both shared consumers.
+ * An immediately resolved fixture reply can collapse those paints; Chromium's
+ * circular Commands background then differs from the cold-load reference even
+ * with identical final styles. Do not couple this contract to promise timing. */
+async function openClassifiedShell(page: Page, initial?: 'other-uncertain') {
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html?association-gate&initial=${initial ?? ''}`);
+  const tree = page.getByRole('tree', { name: 'Session browser' });
+  await expect(tree).toContainText('Workspace not yet classified');
+  await expect(page.getByRole('button', { name: 'Commands', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toHaveCount(0);
+  // Two frame boundaries present the asserted cold shell before the reply.
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await page.evaluate(() => window.sessionFixture.releaseAssociations());
+  await expect(tree).not.toContainText('Workspace not yet classified');
+  await expect(tree).not.toContainText('Refreshing Workspace associations');
+  await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toBeVisible();
+}
+
 test('stream publications and a turn-local clock preserve chrome identity, geometry and caret', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-24T23:00:00Z') });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
@@ -34,9 +54,10 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  if (mode === 'other-uncertain') await openClassifiedShell(page, mode);
+  else await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  if (mode !== 'background') await page.evaluate(mode => window.sessionFixture.presentation(mode), mode);
+  if (mode !== 'background' && mode !== 'other-uncertain') await page.evaluate(mode => window.sessionFixture.presentation(mode), mode);
   await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
   await expect(page.getByRole('tablist')).toHaveCount(1);
   if (mode === 'background') {
@@ -71,7 +92,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await openClassifiedShell(page);
   await expect(page).toHaveTitle('rustX shell reference');
   await expect(page.getByLabel('Sidebar', { exact: true })).toContainText('rustX');
   await expect(page.locator('body')).not.toContainText('DeepSeek');
@@ -128,6 +149,10 @@ test('Session product states stay concise and recovery evidence remains in Inspe
     else await expect(page.getByLabel('Session status')).toHaveCount(0);
     const ordinary = await page.locator('main').innerText();
     expect(ordinary).not.toMatch(/attempt-A|runtime_incarnation|connection_generation|Attach \/ cold resume|Unload runtime|Detach|Resync/);
+    if (mode === 'reconnect' || mode === 'uncertain') {
+      await expect(page.locator('[data-workspace-group="project"] button[data-session-id="A"]')).toBeVisible();
+      await expect(page.getByRole('status').filter({ hasText: 'Disconnected. Last confirmed groups are shown.' })).toBeVisible();
+    }
     await expectStableScreenshot(page, `session-${mode}-light.png`);
     if (mode === 'uncertain') {
       await page.getByRole('button', { name: 'Toggle Inspector' }).click();

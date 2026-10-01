@@ -48,15 +48,16 @@ export class FakeSocket implements Socket {
 }
 export class Server {
   readonly workspaceHost: ProductHostWorkspaces = {
-    listWorkspaces: async () => ({ endpoint, workspaces: [
+    listWorkspaces: async () => ({ authorityId: 'fixture-host', endpoint, workspaces: [
       { id: 'workspace-a', displayName: 'Workspace A', location: '/workspace', displayPath: '/workspace' },
       { id: 'workspace-b', displayName: 'Workspace B', location: '/workspace/B', displayPath: '/workspace/B' },
     ], picker: { kind: 'configured', locations: [{ id: 'workspace-a', displayName: 'Workspace A' }, { id: 'workspace-b', displayName: 'Workspace B' }] } }),
-    classifyLocations: async cwds => cwds.map(cwd => ({ authorized: ['/workspace/A', '/workspace/B', '/workspace/child', '/workspace/created', '/workspace/fork-child'].includes(cwd) })),
+    classifyLocations: async cwds => cwds.map(cwd => ['/workspace/A', '/workspace/B', '/workspace/child', '/workspace/created', '/workspace/fork-child'].includes(cwd) ? { authorized: true } : { authorized: false, reason: 'denied' }),
     resolveWorkspace: async () => { throw new Error('No test registration'); },
     adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
   };
 
+  authorityId = 'fixture-app-server-authority';
   handlers = new Map<Request['method'], (request: Request) => MethodResult>();
   sockets: FakeSocket[] = [];
   snapshots = new Map<string, RuntimeClientSnapshot>([['A', snapshot('A')], ['B', snapshot('B')]]);
@@ -84,7 +85,7 @@ export class Server {
     queueMicrotask(() => socket.open()); return socket;
   };
   client = new AppServerClient(this.socketFactory);
-  constructor() { this.client.setAttachmentAdmission(async () => true); } // Protocol-only fixture; App installs real Host admission.
+  constructor() { this.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true })); } // Protocol-only fixture; App installs real Host admission.
   get socket() { return this.sockets[this.sockets.length - 1]; }
   target(id: string, socket = this.socket): AttachmentTarget {
     return this.targets.get(socket)!.get(id)!;
@@ -144,7 +145,7 @@ export class Server {
     if (handler) return handler(request);
     let result: MethodResult;
     switch (request.method) {
-      case 'initialize': result = { type: 'initialized', protocol_version: this.version, capabilities: this.capabilities }; break;
+      case 'initialize': result = { type: 'initialized', authority_id: this.authorityId, protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
       case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;

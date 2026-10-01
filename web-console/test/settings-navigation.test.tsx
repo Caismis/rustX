@@ -23,7 +23,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 function catalog(): WorkspaceCatalog {
-  return { endpoint, workspaces: [
+  return { authorityId: 'fixture-host', endpoint, workspaces: [
     { id: 'wA', displayName: 'Workspace A', location: 'a', displayPath: '/workspace/A' },
     { id: 'wB', displayName: 'Workspace B', location: 'b', displayPath: '/workspace/B' },
   ], picker: { kind: 'unavailable', reason: 'test' } };
@@ -35,7 +35,7 @@ function failing(sources: SourceTarget[]): ConfigurationApplication {
 function hostWith(list: () => Promise<WorkspaceCatalog>): ProductHostWorkspaces {
   return {
     listWorkspaces: list,
-    classifyLocations: async cwds => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: cwd === '/workspace/A' ? 'wA' : 'wB' } : { authorized: false as const }),
+    classifyLocations: async cwds => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: cwd === '/workspace/A' ? 'wA' : 'wB' } : { authorized: false as const, reason: 'denied' as const }),
     resolveWorkspace: async () => ({ cwd: '/workspace/A' }),
     adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
     configureWorkspace: async () => { throw new Error('not used'); },
@@ -110,7 +110,7 @@ it('navigation D: an authority replacement fences a stale owner-lookup failure',
   // obsolete catalog request keeps running under it.
   const local = new Server(), alternate = new Server();
   const client = new AppServerClient((url, protocols) => (url === endpoint ? local : alternate).socketFactory(url, protocols));
-  client.setAttachmentAdmission(async () => true);
+  client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true }));
   local.handlers.set('session/configuration', () => ({ type: 'session_configuration', application: failing([{ kind: 'workspace', directory: '/workspace/A' }]) }));
   let hold = false;
   let held = deferred<WorkspaceCatalog>();

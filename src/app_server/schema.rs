@@ -120,6 +120,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(7),
             result: MethodResult::Initialized {
+                authority_id: "fixture-app-server-authority".into(),
                 protocol_version: APP_SERVER_PROTOCOL_VERSION,
                 capabilities: ServerCapabilities::default(),
             },

@@ -5504,6 +5504,10 @@
         {
           "type": "object",
           "properties": {
+            "authority_id": {
+              "description": "Opaque process-owner identity, stable across transport reconnects. Not permission.",
+              "type": "string"
+            },
             "protocol_version": {
               "type": "integer",
               "format": "uint16",
@@ -5521,6 +5525,7 @@
           "additionalProperties": false,
           "required": [
             "type",
+            "authority_id",
             "protocol_version",
             "capabilities"
           ]

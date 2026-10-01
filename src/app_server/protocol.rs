@@ -537,6 +537,8 @@ pub enum MethodResult {
         outcome: crate::runtime_client::types::RuntimeClientAgentWorkspaceDisposalOutcome,
     },
     Initialized {
+        /// Opaque process-owner identity, stable across transport reconnects. Not permission.
+        authority_id: String,
         protocol_version: u16,
         capabilities: ServerCapabilities,
     },

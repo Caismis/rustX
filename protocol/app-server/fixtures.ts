@@ -117,6 +117,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
+      "authority_id": "fixture-app-server-authority",
       "protocol_version": 29,
       "capabilities": {
         "multi_session": true,

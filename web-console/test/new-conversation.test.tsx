@@ -1,12 +1,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationComposer } from '../src/app/new-conversation/ConversationComposer';
+import { WorkspaceAuthority } from '../src/workspaces/authority';
+import { WorkspaceAssociations } from '../src/workspaces/associations';
 import { NavigationEpoch } from '../src/client/navigation';
 import { RpcFailure } from '../src/client/app-server';
-import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host';
+import { sameEndpoint } from '../src/workspaces/endpoint';
+import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v29';
 import { cfg3Source } from './cfg3-data';
-import { Server, snapshot } from './fixture';
+import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
 let server: Server;
 // These catalog tests model a browser without a saved preference. The real
@@ -26,18 +29,19 @@ function workspaceSource(session_models: SourceSettings['session_models'] = { ki
   return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'policy',
     resolved: { models: { 'fixture/configuration-only': authored, 'fixture/native': authored } }, session_models };
 }
-async function mount({ current = () => true, source = workspaceSource(), configureWorkspace, ready = true }: { current?: () => boolean; source?: SourceSettings; configureWorkspace?: (id: string) => Promise<{ kind: 'read'; projection: SourceSettings }>; ready?: boolean } = {}) {
+async function mount({ current = () => true, source = workspaceSource(), configureWorkspace, ready = true, workspaceHost }: { workspaceHost?: Partial<ProductHostWorkspaces>; current?: () => boolean; source?: SourceSettings; configureWorkspace?: (id: string) => Promise<{ kind: 'read'; projection: SourceSettings }>; ready?: boolean } = {}) {
   server = new Server(); await server.connect();
-  const host = { ...server.workspaceHost,
-    listWorkspaces: vi.fn(server.workspaceHost.listWorkspaces),
+  const base = { ...server.workspaceHost, ...workspaceHost };
+  const host = { ...base,
+    listWorkspaces: vi.fn(base.listWorkspaces),
     resolveWorkspace: vi.fn(async () => ({ cwd: '/workspace' })),
     configureWorkspace: vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(configureWorkspace ?? (async () => ({ kind: 'read' as const, projection: source }))),
   };
-  const opened = vi.fn();
-  await act(async () => { render(<ConversationComposer binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={current} opened={opened}/>); });
+  const opened = vi.fn(), authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
+  await act(async () => { render(<ConversationComposer authority={authority} associations={associations} binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={current} opened={opened}/>); });
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Preserved draft' } });
   if (ready) await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
-  return { host, opened };
+  return { host, opened, authority, associations };
 }
 const methods = () => server.requests.map(r => r.request.method);
 const modelChoices = () => screen.queryAllByRole('menuitem').map(item => item.textContent ?? '').filter(label => label.startsWith('fixture/'));
@@ -46,6 +50,39 @@ async function openModelMenu() {
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
 }
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+it.each(['current', 'replacement'] as const)('Composer Add Workspace dispatches its opened picker scope to the %s Host', async kind => {
+  let catalog: WorkspaceCatalog = { authorityId: 'host-A', endpoint,
+    workspaces: [{ id: 'workspace-a', location: 'a', displayName: 'Workspace A', displayPath: '/workspace' }],
+    picker: { kind: 'configured', locations: [{ id: 'c', displayName: 'Workspace C' }] } };
+  const scope = { authorityId: catalog.authorityId, endpoint }, committed = vi.fn();
+  const adopt = vi.fn<ProductHostWorkspaces['adoptWorkspace']>(async (expected, location) => {
+    if (expected.authorityId !== catalog.authorityId || !sameEndpoint(expected.endpoint, catalog.endpoint)) throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
+    committed();
+    catalog = { ...catalog, workspaces: [...catalog.workspaces, { id: 'workspace-c', location, displayName: 'Workspace C', displayPath: '/workspace/C' }] };
+  });
+  const { authority } = await mount({ workspaceHost: { listWorkspaces: async () => catalog, adoptWorkspace: adopt } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: '+ Add Workspace' })));
+  expect(screen.getByRole('button', { name: 'Workspace C' })).toBeTruthy();
+  if (kind === 'replacement') {
+    catalog = { ...catalog, authorityId: 'host-B' };
+    await act(async () => { await authority.observe(); });
+    expect(authority.getCatalog()?.authorityId).toBe('host-B');
+  }
+  const before = catalog;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace C' })));
+  expect(adopt).toHaveBeenCalledExactlyOnceWith(scope, 'c');
+  if (kind === 'replacement') {
+    expect(catalog).toBe(before); expect(committed).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toContain('authority replaced');
+    expect(screen.getByRole('button', { name: 'Workspace C' })).toBeTruthy();
+  } else {
+    expect(committed).toHaveBeenCalledTimes(1);
+    expect(catalog.workspaces.map(row => row.location)).toContain('c');
+    expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Workspace C');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  }
+});
 it.each(['resolve', 'create'] as const)('known %s rejection keeps the actual composer editable and retries only on a new gesture', async phase => {
   const { host, opened } = await mount();
   if (phase === 'resolve') host.resolveWorkspace.mockRejectedValueOnce(new WorkspaceHostError('Workspace revoked'));

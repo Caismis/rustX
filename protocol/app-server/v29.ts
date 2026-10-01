@@ -1037,6 +1037,10 @@ export type MethodResult =
       type: 'workspace_disposed';
     }
   | {
+      /**
+       * Opaque process-owner identity, stable across transport reconnects. Not permission.
+       */
+      authority_id: string;
       protocol_version: number;
       capabilities: ServerCapabilities;
       type: 'initialized';
