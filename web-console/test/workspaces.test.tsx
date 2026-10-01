@@ -201,6 +201,7 @@ it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened i
   vi.mocked(host.renameWorkspace).mockImplementation(write);
   vi.mocked(host.removeWorkspace).mockImplementation(write);
   const authority = new WorkspaceAuthority(host), owner = new WorkspaceAssociations(server.client, authority), metadataChanged = vi.fn();
+  const capture = vi.spyOn(WorkspaceAssociations.prototype, 'captureMutation');
   let stop!: () => void;
   await act(async () => {
     stop = owner.start();
@@ -216,6 +217,8 @@ it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened i
       await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: kind === 'rename' ? 'Rename' : 'Unregister Workspace' })));
       if (kind === 'rename') fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed' } });
     }
+    // The Sidebar captures its intent against the exact catalog that rendered the action.
+    expect(capture).toHaveBeenCalledExactlyOnceWith(catalog);
     catalog = { ...catalog, authorityId: 'host-B' };
     await act(async () => { await authority.observe(); });
     const before = owner.getSnapshot(), reads = vi.mocked(host.listWorkspaces).mock.calls.length;

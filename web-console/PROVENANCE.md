@@ -1101,3 +1101,8 @@ The #433 review repair updates the local WorkspaceNavigation hash for consuming
 current-demand status from the existing display owner, and the Settings dictionary
 hash for English/Chinese evidence acknowledgement and deletion outcome copy. The upstream source, license
 and import closure are unchanged; no additional upstream code or dependency is used.
+
+The #436 contract hardening updates the local WorkspaceNavigation hash so Sidebar
+metadata intent capture requires the same display catalog that rendered the action,
+matching the Composer. The upstream source, license, and import closure are unchanged;
+no additional upstream code or dependency is used.

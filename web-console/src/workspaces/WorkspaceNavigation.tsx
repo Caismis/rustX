@@ -55,7 +55,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
   const edit = (kind: 'workspace' | 'session' | 'remove' | 'add', id: string, title: string) => {
     setError(''); setName(title);
     if (kind === 'session') { setDialog({ kind, id, name: title }); return; }
-    const mutation = associations.captureMutation();
+    const mutation = catalog ? associations.captureMutation(catalog) : undefined;
     if (!mutation || !catalog) { setError(String(new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced'))); return; }
     setDialog({ kind, id, name: title, mutation, catalog });
   };

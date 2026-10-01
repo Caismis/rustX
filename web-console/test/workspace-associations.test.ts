@@ -296,6 +296,27 @@ it.each(['different', 'equivalent'] as const)('mutation completion validates %s 
   }
   f.stop();
 });
+it('captureMutation(catalog) refuses a capability for a catalog outside the accepted Host scope', async () => {
+  const f = await fixture(); await f.accept(0);
+  const rendered = f.owner.getSnapshot().catalog!;
+  const intent = f.owner.captureMutation(rendered)!;
+  expect(intent.scope).toEqual({ authorityId: 'host-1', endpoint });
+  // The accepted Host scope is replaced after the action was rendered from A.
+  vi.mocked(f.host.listWorkspaces).mockResolvedValue(catalog('host-2'));
+  await act(async () => { await f.authority.observe(); });
+  const replacement = f.owner.getSnapshot().catalog!;
+  expect(replacement.authorityId).toBe('host-2');
+  // A capability is only obtainable from the exact catalog that rendered the action.
+  expect(f.owner.captureMutation(rendered)).toBeUndefined();
+  expect(intent.current()).toBe(false);
+  expect(intent.commit('A')).toBe(false);
+  expect(f.owner.captureMutation(replacement)).toMatchObject({ scope: { authorityId: 'host-2', endpoint } });
+  // The stale intent reaches no Product Host metadata write.
+  expect(f.host.renameWorkspace).not.toHaveBeenCalled();
+  expect(f.host.adoptWorkspace).not.toHaveBeenCalled();
+  expect(f.host.removeWorkspace).not.toHaveBeenCalled();
+  f.stop();
+});
 it.each(['success', 'failure'] as const)('same-Host mutation survives native replacement before a late pre-commit catalog %s', async outcome => {
   const f = await fixture();
   await act(async () => f.reads[0].gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]));
