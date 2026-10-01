@@ -125,7 +125,7 @@ it.each(['host', 'callback', 'native', 'unavailable'] as const)('final in-flight
 });
 
 /** Eight operations whose final Host observation never answers until released. */
-async function stalledFinalValidations(retirement: 'navigation' | 'callback' | 'cleanup' | 'timeout' | 'host') {
+async function stalledFinalValidations(retirement: 'navigation' | 'callback' | 'cleanup' | 'reinstall' | 'timeout' | 'host') {
   const server = new Server(); await server.attached('B');
   let hostId = 'host', stall = false;
   const stalled: { signal: AbortSignal; release: () => void }[] = [];
@@ -142,7 +142,9 @@ async function stalledFinalValidations(retirement: 'navigation' | 'callback' | '
     return Response.json({ authorityId: captured, endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } } satisfies WorkspaceCatalog);
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
-  const owner = server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit);
+  // One callback object for the whole fixture: reinstalling it must still be a new owner.
+  const admit = new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit;
+  const owner = server.client.setAttachmentAdmission(admit);
   const admitted = await server.client.admitAttachment('A');
   if (!admitted) throw new Error('fixture admission refused');
   const validations: Promise<boolean>[] = [];
@@ -164,7 +166,7 @@ async function stalledFinalValidations(retirement: 'navigation' | 'callback' | '
   expect(sent('turn/cancel')).toHaveLength(1);
   await expect(cancel).resolves.toMatchObject({ type: 'cancellation_accepted' });
   expect(sent('session/summary')).toHaveLength(0);
-  return { server, authority, owner, stalled, live, validations, refused, settled, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
+  return { server, authority, admit, owner, stalled, live, validations, refused, settled, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
 }
 /** Exactly eight native RPC slots remain: a ninth read waits for one to settle. */
 async function expectRpcCapacity(server: Server) {
@@ -180,7 +182,7 @@ async function expectRpcCapacity(server: Server) {
   expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(before + 9);
 }
 
-it.each(['navigation', 'callback', 'cleanup', 'host', 'timeout'] as const)('%s retirement of stalled final validations never blocks cancellation; late Host answers send nothing', async retirement => {
+it.each(['navigation', 'callback', 'cleanup', 'reinstall', 'host', 'timeout'] as const)('%s retirement of stalled final validations never blocks cancellation; late Host answers send nothing', async retirement => {
   const f = await stalledFinalValidations(retirement);
   try {
     if (retirement === 'navigation') f.server.client.navigation.invalidate();
@@ -188,6 +190,9 @@ it.each(['navigation', 'callback', 'cleanup', 'host', 'timeout'] as const)('%s r
     // and no validation deadline elapses before the reservations are released.
     else if (retirement === 'callback') f.server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(f.authority, f.server.client, f.server.client.navigation).admit);
     else if (retirement === 'cleanup') f.owner();
+    // Remove and reinstall the identical callback before the scheduled pump runs:
+    // the new incarnation never revives proofs captured under the retired one.
+    else if (retirement === 'reinstall') { f.owner(); f.server.client.setAttachmentAdmission(f.admit); }
     else if (retirement === 'host') { f.unstall(); f.replace('replacement-host'); await f.authority.observe(); }
     else {
       // The deadline starts at reservation, not at socket send. Each expiry
@@ -228,7 +233,7 @@ it.each(['navigation', 'callback', 'cleanup', 'host', 'timeout'] as const)('%s r
   } finally { vi.useRealTimers(); f.server.client.disconnect(); }
 });
 
-it('a stale owner cleanup neither retires nor disturbs the newer owner or its in-flight validation', async () => {
+it.each(['a different callback', 'the same callback reinstalled'] as const)('a stale owner cleanup after %s neither retires nor disturbs the newer incarnation or its in-flight validation', async newer => {
   const server = new Server(); await server.connect();
   let lists = 0;
   const entered = deferred<AbortSignal>(), release = deferred<void>();
@@ -238,19 +243,25 @@ it('a stale owner cleanup neither retires nor disturbs the newer owner or its in
     return Response.json({ authorityId: 'host', endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } } satisfies WorkspaceCatalog);
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
-  const owner = () => new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit;
-  const releaseA = server.client.setAttachmentAdmission(owner());
-  server.client.setAttachmentAdmission(owner());
+  const admit = new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit;
+  // A#1 -> B#1, or A#1 -> none -> A#2 with the identical callback object.
+  const releaseOld = server.client.setAttachmentAdmission(admit);
+  if (newer === 'the same callback reinstalled') releaseOld();
+  const releaseNew = server.client.setAttachmentAdmission(newer === 'a different callback' ? new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit : admit);
   try {
     const attach = server.client.attach('A');
-    const signal = await entered.promise; // B's final validation holds its reservation.
-    releaseA();
-    // A pump re-checks every validating proof; B's must still be current.
+    const signal = await entered.promise; // The newer incarnation's final validation holds its reservation.
+    releaseOld();
+    // A pump re-checks every validating proof; the newer incarnation's must still be current.
     await server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary');
     expect(signal.aborted).toBe(false);
     release.resolve(); await attach;
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
     expect(await server.client.admitAttachment('B')).not.toBe(false);
+    // Only the newer incarnation's own cleanup removes it; fresh admission then fails closed.
+    releaseNew();
+    await expect(server.client.attach('B')).rejects.toThrow('No Web attachment admission owner');
+    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
   } finally { server.client.disconnect(); }
 });
 

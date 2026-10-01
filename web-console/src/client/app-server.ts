@@ -111,6 +111,10 @@ export interface OperationAdmission {
   current: () => boolean;
   validate: (signal: AbortSignal) => Promise<boolean>;
 }
+type AttachmentAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
+/** One installation lifetime of an attachment-admission owner. Identity is the
+ * object, never the callback: reinstalling the same callback is a new owner. */
+interface AttachmentAdmissionOwner { readonly admit: AttachmentAdmission }
 interface Pending {
   dispatchCurrent?: (() => boolean) | OperationAdmission;
   /** Final validation holding an RPC slot; `timer` is its deadline until send. */
@@ -249,25 +253,27 @@ export class AppServerClient {
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
   // Fail closed when there is no admission owner (including after its disposal).
-  private attachmentAdmission?: (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
-  setAttachmentAdmission(admit: (id: string, current: () => boolean) => Promise<false | OperationAdmission>) {
-    this.replaceAttachmentAdmission(admit);
-    // A stale cleanup never disturbs a newer owner or its proofs.
-    return () => { if (this.attachmentAdmission === admit) this.replaceAttachmentAdmission(undefined); };
+  private attachmentAdmission?: AttachmentAdmissionOwner;
+  setAttachmentAdmission(admit: AttachmentAdmission) {
+    // Every installation is a new incarnation, so retired proofs stay retired
+    // even when the same callback is installed again.
+    const owner: AttachmentAdmissionOwner = { admit };
+    this.replaceAttachmentAdmission(owner);
+    // Cleanup removes only its own incarnation; a stale one never disturbs a newer owner or its proofs.
+    return () => { if (this.attachmentAdmission === owner) this.replaceAttachmentAdmission(undefined); };
   }
-  private replaceAttachmentAdmission(admit?: (id: string, current: () => boolean) => Promise<false | OperationAdmission>) {
-    if (this.attachmentAdmission === admit) return;
-    this.attachmentAdmission = admit;
+  private replaceAttachmentAdmission(owner?: AttachmentAdmissionOwner) {
+    this.attachmentAdmission = owner;
     // Owner change retires its proofs; release their reservations outside the caller's stack, as navigation does.
     queueMicrotask(() => this.pump());
   }
   async admitAttachment(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
     const generation = this.state.generation;
-    const admission = this.attachmentAdmission;
-    const valid = () => current() && this.current(generation) && admission === this.attachmentAdmission;
+    const owner = this.attachmentAdmission;
+    const valid = () => current() && this.current(generation) && owner === this.attachmentAdmission;
     if (!valid()) return false;
-    if (!admission) throw new Error('No Web attachment admission owner.');
-    const allowed = await admission(id, valid);
+    if (!owner) throw new Error('No Web attachment admission owner.');
+    const allowed = await owner.admit(id, valid);
     return allowed && valid() && { current: () => valid() && allowed.current(), validate: allowed.validate };
   }
   restoreViews(ids: readonly string[]) {
