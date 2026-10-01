@@ -196,6 +196,34 @@ and evidence and establish the replacement catalog baseline. It never invalidate
 `NavigationEpoch` or supplies an operation fence. Host-object replacement constructs
 new authority and display owners. None of these identifiers alone grant access.
 
+Registration writes have two distinct Product Host authority fences. The dispatch
+fence requires every `adoptWorkspace`, `renameWorkspace`, `reorderWorkspace`, and
+`removeWorkspace` call to supply a `WorkspaceAuthorityScope` containing the expected
+`authorityId` and endpoint. HTTP carries it as `scope` alongside the operation's
+arguments, for example `{scope: {authorityId: "host-A", endpoint: "ws://localhost/"},
+id: "W"}` for `/product-host/remove`. Missing/malformed scopes are refused before
+dispatch. `LocalWorkspaceHost`, which owns the immutable instance authority ID,
+checks that ID and the normalized endpoint immediately before changing registrations.
+Remove checks inside its registration lane after waiting for any native configuration
+operation. The check and registration commit have no asynchronous gap; metadata is
+committed by atomic rename before success returns. A mismatch is a definite
+`WorkspaceHostError` with kind `authority_replaced`, zero registration changes and
+no metadata rewrite, preserved by HTTP. There is no retry against the replacement.
+Browser preflight cannot enforce this boundary: an A-scoped request may arrive at B
+even while the browser's A observation still appears current.
+
+The settlement fence separately prevents a legitimately executed A mutation's late
+response from changing B's display. `captureMutation()` returns the captured dispatch
+scope together with `current()` and `commit()` for display settlement. Sidebar
+metadata dialogs and the Composer Add Workspace picker retain that capability and
+their picker inputs from opening, rather than recapturing replacement authority at
+confirmation. Composer observes catalogs through the shared authority owner and
+commits through the shared display owner before its own navigation continuation.
+Neither owner performs the Host write: UI orchestration passes the scope to the Host.
+Host metadata mutation authority, native App Server authority, display association
+evidence, and native operation admission remain separate. These metadata preconditions
+do not change read, configuration, resolution or native admission APIs.
+
 `WorkspaceSessionNavigation` independently observes the Host authority, captures its
 epoch and the native endpoint, reads current native `session/settings`, and classifies
 the exact returned cwd with that authority ID. An authorized result returns an
@@ -260,8 +288,8 @@ request generation, **not** compatible evidence identity. Explicit refresh, reco
 Selection only changes bounded page-plus-selected demand: satisfied rows cause no
 catalog or classification read, and an unsatisfied off-page selection reads only its
 cwd. Host replacement invalidates incompatible evidence through the authority owner. Both catalog success
-and failure are fenced before publication. `captureMutation()` gives navigation a
-completion capability backed by the authority owner's observation of the current
+and failure are fenced before publication. `captureMutation()` gives both UI mutation
+paths a scoped capability backed by the authority owner's observation of the current
 Product Host scope, independently of the current display catalog baseline. The
 capability can commit only while that exact `(authorityId, normalized endpoint)`
 scope remains current, the current native endpoint matches that normalized scope,

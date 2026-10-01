@@ -4,7 +4,7 @@ import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread } from '../src/workspaces/host.ts';
+import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread } from '../src/workspaces/host.ts';
 import { AppServerClient } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 
@@ -60,18 +60,26 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       picker: this.config.picker ? { kind: 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
-  async adoptWorkspace(location: string) {
+  private mutationScope(scope: WorkspaceAuthorityScope) {
+    if (scope.authorityId !== this.authorityId || !sameEndpoint(scope.endpoint, this.config.endpoint)) {
+      throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
+    }
+  }
+  async adoptWorkspace(scope: WorkspaceAuthorityScope, location: string) {
+    this.mutationScope(scope);
     if (!this.config.picker) throw new Error('Directory picker unavailable');
     this.cwd(location);
     if (this.registrations.some(row => row.location === location)) return;
     this.commit([...this.registrations, { id: randomUUID(), location, displayName: this.roots.find(root => root.id === location)!.displayName }]);
   }
-  async renameWorkspace(id: string, displayName: string) {
+  async renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string) {
+    this.mutationScope(scope);
     this.registered(id);
     if (!displayName.trim() || displayName.length > 120) throw new Error('Workspace name must contain 1–120 characters');
     this.commit(this.registrations.map(row => row.id === id ? { ...row, displayName: displayName.trim() } : row));
   }
-  async reorderWorkspace(id: string, before?: string) {
+  async reorderWorkspace(scope: WorkspaceAuthorityScope, id: string, before?: string) {
+    this.mutationScope(scope);
     const row = this.registered(id);
     if (before === id) return;
     if (before) this.registered(before);
@@ -91,8 +99,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.lanes.set(id, work);
     return work.finally(() => { if (this.lanes.get(id) === work) this.lanes.delete(id); });
   }
-  async removeWorkspace(id: string) {
-    return this.lane(id, async () => { this.registered(id); this.commit(this.registrations.filter(row => row.id !== id)); });
+  async removeWorkspace(scope: WorkspaceAuthorityScope, id: string) {
+    // Validate inside the lane, when the queued write actually executes.
+    return this.lane(id, async () => { this.mutationScope(scope); this.registered(id); this.commit(this.registrations.filter(row => row.id !== id)); });
   }
   async resolveWorkspace(id: string, endpoint: string) { this.route(endpoint); return { cwd: this.cwd(this.registered(id).location) }; }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {

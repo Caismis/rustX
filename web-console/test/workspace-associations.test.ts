@@ -108,7 +108,7 @@ it('unknown, confirmed ungrouped and revoked observations are distinct', async (
 it.each(['success', 'failure'])('unregister fences late %s even when its independent catalog reread fails', async outcome => {
   const f = await fixture(); await f.accept(0); f.owner.refresh(); const old = await f.observed(2);
   vi.mocked(f.host.listWorkspaces).mockRejectedValueOnce(new Error('reread failed'));
-  expect(f.owner.captureMutation()('A')).toBe(true);
+  expect(f.owner.captureMutation()!.commit('A')).toBe(true);
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
   if (outcome === 'success') old.gate.resolve([{ authorized: true, workspaceId: 'A' }, { authorized: true, workspaceId: 'B' }]);
   else old.gate.reject(new Error('pre-unregister failure'));
@@ -209,7 +209,7 @@ it.each([false, true])('registration replacement classifies on the first refresh
   const f = await fixture(); await f.accept(0);
   const next = catalog(); next.workspaces[0] = { ...next.workspaces[0], id: 'new-A' };
   vi.mocked(f.host.listWorkspaces).mockResolvedValue(next);
-  if (explicit) expect(f.owner.captureMutation()('A')).toBe(true); else f.owner.refresh();
+  if (explicit) expect(f.owner.captureMutation()!.commit('A')).toBe(true); else f.owner.refresh();
   const read = await f.observed(2);
   expect(read.cwds).toEqual(['/A', '/B']);
   expect(f.owner.getSnapshot().entries.get('A')?.confirmed?.workspaceId).toBeUndefined();
@@ -272,7 +272,7 @@ it('read completion releases only its own slot while newer reads cover current d
 
 it.each(['different', 'equivalent'] as const)('mutation completion validates %s normalized Product Host endpoints', async kind => {
   const f = await fixture(); await f.accept(0);
-  const commit = f.owner.captureMutation();
+  const commit = f.owner.captureMutation()!;
   const target = kind === 'different' ? 'ws://localhost:9000/' : 'ws://LOCALHOST:8080';
   vi.mocked(f.host.listWorkspaces).mockResolvedValue({ ...catalog(), endpoint: target });
   if (kind === 'different') f.publish({ endpoint: target });
@@ -282,7 +282,7 @@ it.each(['different', 'equivalent'] as const)('mutation completion validates %s 
   // A navigation decision never defines Product Host mutation validity.
   f.navigation.invalidate();
   const before = f.owner.getSnapshot();
-  expect(commit('A')).toBe(kind === 'equivalent');
+  expect(commit.commit('A')).toBe(kind === 'equivalent');
   if (kind === 'different') {
     expect(f.owner.getSnapshot()).toBe(before);
     expect(before.catalog?.workspaces.map(row => row.id)).toEqual(['A', 'B']);
@@ -303,9 +303,9 @@ it.each(['success', 'failure'] as const)('same-Host mutation survives native rep
   expect(f.owner.getSnapshot().entries.get('A')).toMatchObject({ status: 'ready', confirmed: { workspaceId: 'A' } });
   const observation = f.authority.capture()!, replaced = vi.fn();
   const release = f.authority.subscribe(replaced);
-  const commit = f.owner.captureMutation(), completion = deferred<void>(), started = deferred<void>();
+  const commit = f.owner.captureMutation()!, completion = deferred<void>(), started = deferred<void>();
   vi.mocked(f.host.removeWorkspace).mockImplementation(() => { started.resolve(); return completion.promise; });
-  const mutation = (async () => { await f.host.removeWorkspace('A'); return commit('A'); })();
+  const mutation = (async () => { await f.host.removeWorkspace(commit.scope, 'A'); return commit.commit('A'); })();
   await started.promise;
   const r1 = deferred<WorkspaceCatalog>(), r2 = deferred<WorkspaceCatalog>();
   let preCommitSignal: AbortSignal | undefined;

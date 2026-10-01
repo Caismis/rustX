@@ -13,14 +13,22 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       let text = '';
       for await (const chunk of request) { text += String(chunk); if (text.length > 65536) throw new Error('Host request too large'); }
       const body = JSON.parse(text);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected Host request object');
       const string = (key: string) => { if (typeof body[key] !== 'string') throw new Error(`Expected ${key}`); return body[key] as string; };
+      const scope = () => {
+        const value = body.scope;
+        if (!value || typeof value !== 'object' || Array.isArray(value)
+          || typeof value.authorityId !== 'string' || !value.authorityId
+          || typeof value.endpoint !== 'string' || !URL.canParse(value.endpoint)) throw new Error('Expected Product Host scope');
+        return { authorityId: value.authorityId as string, endpoint: value.endpoint as string };
+      };
       let value: unknown;
       switch (request.url.slice('/product-host/'.length)) {
         case 'list': value = await host.listWorkspaces(); break;
-        case 'adopt': value = await host.adoptWorkspace(string('location')); break;
-        case 'rename': value = await host.renameWorkspace(string('id'), string('displayName')); break;
-        case 'reorder': value = await host.reorderWorkspace(string('id'), body.before === undefined ? undefined : string('before')); break;
-        case 'remove': value = await host.removeWorkspace(string('id')); break;
+        case 'adopt': value = await host.adoptWorkspace(scope(), string('location')); break;
+        case 'rename': value = await host.renameWorkspace(scope(), string('id'), string('displayName')); break;
+        case 'reorder': value = await host.reorderWorkspace(scope(), string('id'), body.before === undefined ? undefined : string('before')); break;
+        case 'remove': value = await host.removeWorkspace(scope(), string('id')); break;
         case 'resolve': value = await host.resolveWorkspace(string('id'), string('endpoint')); break;
         case 'configuration':
           if (!host.configureWorkspace) throw new Error('Workspace configuration is unavailable on this Host');

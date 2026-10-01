@@ -23,22 +23,22 @@ it('Host metadata groups exact native cwd without owning Session state; unregist
   mkdirSync(join(a, 'descendant'));
   expect(await host.classifyLocations([join(a, 'descendant')], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
   expect(await host.classifyLocations([a, b, join(directory, 'alias'), a + '-outside'], endpoint)).toEqual([{ authorized: true, workspaceId: alpha.id }, { authorized: true, workspaceId: beta.id }, { authorized: true, workspaceId: alpha.id }, { authorized: false, reason: 'unavailable' }]);
-  await host.renameWorkspace(alpha.id, 'Renamed'); await host.reorderWorkspace(beta.id, alpha.id);
+  await host.renameWorkspace(await host.listWorkspaces(), alpha.id, 'Renamed'); await host.reorderWorkspace(await host.listWorkspaces(), beta.id, alpha.id);
   expect((await host.listWorkspaces()).workspaces.map(row => row.displayName)).toEqual(['Beta', 'Renamed']);
   expect(await host.resolveWorkspace(alpha.id, endpoint)).toEqual({ cwd: a });
-  await host.removeWorkspace(alpha.id);
+  await host.removeWorkspace(await host.listWorkspaces(), alpha.id);
   expect(await host.classifyLocations(sessions.map(row => row.cwd), endpoint)).toEqual([{ authorized: true }, { authorized: true, workspaceId: beta.id }]);
   expect(JSON.stringify(sessions)).toBe(before);
   expect((await new LocalWorkspaceHost(config).listWorkspaces()).workspaces.map(row => row.id)).toEqual([beta.id]);
   expect(readFileSync(config.metadataFile, 'utf8')).not.toMatch(/cwd|session|trust|config/i);
-  await host.adoptWorkspace('a'); expect((await host.listWorkspaces()).workspaces).toHaveLength(2);
+  await host.adoptWorkspace(await host.listWorkspaces(), 'a'); expect((await host.listWorkspaces()).workspaces).toHaveLength(2);
 });
 it('only configured opaque handles authorize locations; no path fallback, disabled picker, or cross-process route', async () => {
   const one = fixture(false), two = fixture(true, 'ws://127.0.0.1:8081/');
   const [a] = (await one.host.listWorkspaces()).workspaces;
   expect((await one.host.listWorkspaces()).picker.kind).toBe('unavailable');
-  await expect(one.host.adoptWorkspace('a')).rejects.toThrow('unavailable');
-  await expect(two.host.adoptWorkspace(one.a)).rejects.toThrow('unavailable');
+  await expect(one.host.adoptWorkspace(await one.host.listWorkspaces(), 'a')).rejects.toThrow('unavailable');
+  await expect(two.host.adoptWorkspace(await two.host.listWorkspaces(), one.a)).rejects.toThrow('unavailable');
   await expect(two.host.resolveWorkspace(a.id, two.endpoint)).rejects.toThrow('Unknown');
   await expect(one.host.resolveWorkspace(a.id, two.endpoint)).rejects.toThrow('different rustX process');
   await expect(one.host.classifyLocations(Array(33).fill(one.a), one.endpoint)).rejects.toThrow('bounded');
@@ -46,8 +46,10 @@ it('only configured opaque handles authorize locations; no path fallback, disabl
 it('HTTP carrier refuses path adoption and cross-origin mutations', async () => {
   const f = fixture(); const service = await startWorkspaceHost(f.config);
   try {
-    const response = await fetch(`${service.url}/product-host/adopt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: '/arbitrary/path' }) });
+    const catalog = await service.host.listWorkspaces(), scope = { authorityId: catalog.authorityId, endpoint: catalog.endpoint };
+    const response = await fetch(`${service.url}/product-host/adopt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, location: '/arbitrary/path' }) });
     expect(response.status).toBe(400);
+    expect((await response.json()).message).toContain('Authorized location is unavailable');
     const foreign = await fetch(`${service.url}/product-host/list`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://foreign.example' }, body: '{}' });
     expect(foreign.status).toBe(400);
   } finally { await service.stop(); }
@@ -72,7 +74,7 @@ it('unavailable roots fail fresh admission, unregister preserves it, and symlink
   rmSync(a, { recursive: true });
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'unavailable' }]);
   await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
-  mkdirSync(a); await host.removeWorkspace(workspace.id);
+  mkdirSync(a); await host.removeWorkspace(await host.listWorkspaces(), workspace.id);
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: true }]);
   expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate(new AbortController().signal)).toBe(true);
   rmSync(a, { recursive: true }); symlinkSync(b, a);
@@ -99,9 +101,9 @@ it('the HTTP carrier preserves definitive Host replacement observations', async 
 it('unregister and re-adopt changes registration identity under the same Host authority', async () => {
   const { host, a, endpoint } = fixture();
   const before = await host.listWorkspaces(), old = before.workspaces[0];
-  await host.removeWorkspace(old.id);
+  await host.removeWorkspace(await host.listWorkspaces(), old.id);
   expect(await host.classifyLocations([a], endpoint, before.authorityId)).toEqual([{ authorized: true }]);
-  await host.adoptWorkspace('a');
+  await host.adoptWorkspace(await host.listWorkspaces(), 'a');
   const after = await host.listWorkspaces(), replacement = after.workspaces.find(row => row.location === 'a')!;
   expect(after.authorityId).toBe(before.authorityId);
   expect(replacement.id).not.toBe(old.id);

@@ -9,7 +9,7 @@ import { sessionObservation, WorkspaceNavigation } from '../src/workspaces/Works
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
 import { selectShell } from '../src/client/selectors';
-import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
+import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, type WorkspaceAuthorityScope } from '../src/workspaces/host';
 import { configurationSystem } from '../src/app/settings/machines/system';
 import { Server, endpoint, snapshot } from './fixture';
 let server: Server;
@@ -28,8 +28,8 @@ function hostFixture(picker = true) {
     listWorkspaces: vi.fn(async (): Promise<WorkspaceCatalog> => ({ authorityId: 'fixture-host', endpoint, workspaces: rows, picker: picker ? { kind: 'configured', locations: [{ id: 'root-C', displayName: 'Workspace C' }] } : { kind: 'unavailable', reason: 'Directory picker unavailable' } })),
     classifyLocations: vi.fn(async (cwds: readonly string[]) => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: rows.find(row => row.displayPath === cwd)?.id } : { authorized: false as const, reason: 'denied' as const })),
     resolveWorkspace: vi.fn(async id => { const row = rows.find(row => row.id === id); if (!row) throw new Error('Unauthorized'); return { cwd: row.displayPath }; }),
-    renameWorkspace: vi.fn(async (id, displayName) => { rows = rows.map(row => row.id === id ? { ...row, displayName } : row); }),
-    reorderWorkspace: vi.fn(async () => {}), removeWorkspace: vi.fn(async id => { rows = rows.filter(row => row.id !== id); }),
+    renameWorkspace: vi.fn(async (_scope, id, displayName) => { rows = rows.map(row => row.id === id ? { ...row, displayName } : row); }),
+    reorderWorkspace: vi.fn(async () => {}), removeWorkspace: vi.fn(async (_scope, id) => { rows = rows.filter(row => row.id !== id); }),
     adoptWorkspace: vi.fn(async () => {}),
   };
   return host;
@@ -77,11 +77,11 @@ it('Workspace settings have no trust gate; names and unregister stay Host-owned'
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' })));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed A' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
-  expect(host.renameWorkspace).toHaveBeenCalledWith('wA', 'Renamed A');
+  expect(host.renameWorkspace).toHaveBeenCalledWith({ authorityId: 'fixture-host', endpoint }, 'wA', 'Renamed A');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Renamed A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Unregister Workspace' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Unregister$/ })));
-  expect(host.removeWorkspace).toHaveBeenCalledWith('wA'); expect(server.snapshots.has('A')).toBe(true);
+  expect(host.removeWorkspace).toHaveBeenCalledWith({ authorityId: 'fixture-host', endpoint }, 'wA'); expect(server.snapshots.has('A')).toBe(true);
   expect(server.loaded.has('A')).toBe(true); expect(methods()).not.toContain('settings/replace'); expect(methods()).not.toContain('session/delete');
 });
 it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completion commits only to its initiating scope: %s', async kind => {
@@ -107,7 +107,7 @@ it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completio
     await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Unregister Workspace' })));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Unregister$/ })));
     await started.promise;
-    expect(host.removeWorkspace).toHaveBeenCalledWith('wA');
+    expect(host.removeWorkspace).toHaveBeenCalledWith({ authorityId: 'fixture-host', endpoint }, 'wA');
     if (kind === 'replacement Host') {
       currentCatalog = { ...currentCatalog, authorityId: 'host-B' };
       await act(async () => { await authority.observe(); });
@@ -188,6 +188,47 @@ it.each(['success', 'failure'] as const)('UX-04 pending unregister survives App 
   expect(screen.queryByRole('button', { name: 'Select Workspace Workspace A' })).toBeNull();
   expect(host.listWorkspaces).toHaveBeenCalledTimes(lists + 1);
 });
+it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened intent scope after Host replacement', async kind => {
+  await server.connect(); const host = hostFixture();
+  let catalog = await host.listWorkspaces();
+  const scope = { authorityId: catalog.authorityId, endpoint }, written = vi.fn();
+  vi.mocked(host.listWorkspaces).mockImplementation(async () => catalog);
+  const write = async (expected: WorkspaceAuthorityScope) => {
+    if (expected.authorityId !== catalog.authorityId) throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
+    written();
+  };
+  vi.mocked(host.adoptWorkspace).mockImplementation(write);
+  vi.mocked(host.renameWorkspace).mockImplementation(write);
+  vi.mocked(host.removeWorkspace).mockImplementation(write);
+  const authority = new WorkspaceAuthority(host), owner = new WorkspaceAssociations(server.client, authority), metadataChanged = vi.fn();
+  let stop!: () => void;
+  await act(async () => {
+    stop = owner.start();
+    render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
+      endpoint={endpoint} navigation={server.client.navigation} wide expand={vi.fn()} metadataChanged={metadataChanged}
+      selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
+      createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
+  });
+  try {
+    if (kind === 'add') await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Add Workspace' })));
+    else {
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace A' })));
+      await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: kind === 'rename' ? 'Rename' : 'Unregister Workspace' })));
+      if (kind === 'rename') fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed' } });
+    }
+    catalog = { ...catalog, authorityId: 'host-B' };
+    await act(async () => { await authority.observe(); });
+    const before = owner.getSnapshot(), reads = vi.mocked(host.listWorkspaces).mock.calls.length;
+    expect(before.catalog?.authorityId).toBe('host-B');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: kind === 'add' ? 'Workspace C' : kind === 'rename' ? 'Save name' : /^Unregister$/ })));
+    if (kind === 'add') expect(host.adoptWorkspace).toHaveBeenCalledExactlyOnceWith(scope, 'root-C');
+    else if (kind === 'rename') expect(host.renameWorkspace).toHaveBeenCalledExactlyOnceWith(scope, 'wA', 'renamed');
+    else expect(host.removeWorkspace).toHaveBeenCalledExactlyOnceWith(scope, 'wA');
+    expect(written).not.toHaveBeenCalled(); expect(metadataChanged).not.toHaveBeenCalled();
+    expect(owner.getSnapshot()).toBe(before); expect(host.listWorkspaces).toHaveBeenCalledTimes(reads);
+    expect(screen.getByRole('alert').textContent).toContain('authority replaced');
+  } finally { stop(); }
+});
 it('picker capability exposes only authorized choices and Session rename uses the native typed operation', async () => {
   const host = await mount();
   server.handlers.set('session/name', request => {
@@ -198,7 +239,7 @@ it('picker capability exposes only authorized choices and Session rename uses th
   const dialog = screen.getByRole('dialog', { name: 'Add Workspace' });
   expect(within(dialog).queryByRole('textbox')).toBeNull();
   await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'Workspace C' })));
-  expect(host.adoptWorkspace).toHaveBeenCalledWith('root-C');
+  expect(host.adoptWorkspace).toHaveBeenCalledWith({ authorityId: 'fixture-host', endpoint }, 'root-C');
   const classifications = vi.mocked(host.classifyLocations).mock.calls.length;
   const catalogs = vi.mocked(host.listWorkspaces).mock.calls.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
@@ -316,7 +357,7 @@ it('registered authorization is checked from current native settings before exac
   expect(screen.queryByText(/Untrusted project source/)).toBeNull();
 });
 it('unregister retains authorization and permits ungrouped cold open without recreating registration', async () => {
-  const host = hostFixture(); await host.removeWorkspace('wA'); await mount(host);
+  const host = hostFixture(); await host.removeWorkspace(await host.listWorkspaces(), 'wA'); await mount(host);
   expect(screen.queryByRole('button', { name: 'Select Workspace Ungrouped Sessions' })).toBeNull();
   fireEvent.click(screen.getByText('Sessions outside registered Workspaces'));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
@@ -395,7 +436,7 @@ it('focusing an authorized-unregistered Session clears old Workspace context and
   const host = await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
-  await host.removeWorkspace('wA');
+  await host.removeWorkspace(await host.listWorkspaces(), 'wA');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));

@@ -2435,7 +2435,7 @@
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies.",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies. #436 metadata dispatch repair: retain the opened dialog Product Host mutation scope, send it for add/rename/unregister and independently fence display settlement; native Session rename remains separate.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
         "../bindings/projection",
@@ -2487,7 +2487,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "388ed70e50159ff9da6bd06ac5f985d49d7a909b79a25b0c25d8399682c90e9f"
+      "local_sha256": "7f4cbd019e10c62b7976804cdc840a0ed6e25ba23a604f310b364bfdfc5cd30d"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -2704,7 +2704,7 @@
       "destination": "web-console/src/app/new-conversation/ConversationComposer.tsx",
       "upstream_sha256": "6111132201e2e88ab7c68761db588b38dca1c500af14a2e0314a706f1315f28f",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. #402 review: model choices consume only the native Session-creation ModelCatalogView; each submission binds its own authority, so transport transitions never remount the draft. A submission port fences only native continuation; acknowledged Session recovery uses the current navigation epoch. Issue #406: One unconditional composer seat with explicit no-Session/native Session binding; native creation remains first-submit-owned. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. PR #436: the retained workspaces/host import now resolves only to the environment-neutral contract and shared error; the concrete browser adapter and carrier dependency belong to workspaces/http-host, composed by App.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. #402 review: model choices consume only the native Session-creation ModelCatalogView; each submission binds its own authority, so transport transitions never remount the draft. A submission port fences only native continuation; acknowledged Session recovery uses the current navigation epoch. Issue #406: One unconditional composer seat with explicit no-Session/native Session binding; native creation remains first-submit-owned. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. PR #436: the retained workspaces/host import now resolves only to the environment-neutral contract and shared error; the concrete browser adapter and carrier dependency belong to workspaces/http-host, composed by App. #436 metadata dispatch repair: the Composer picker retains the shared Host mutation capability and locations from opening, sends its expected scope, settles display independently and surfaces definite refusal inside the picker.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v29",
@@ -2718,6 +2718,8 @@
         "../../presentation/primitives/Menu",
         "../../presentation/primitives/Modal.module.css",
         "../../presentation/primitives/icons",
+        "../../workspaces/associations",
+        "../../workspaces/authority",
         "../../workspaces/endpoint",
         "../../workspaces/host",
         "../agent/AgentComposer",
@@ -2734,7 +2736,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "a68bde17d7ff76c3d583c84abfb42bc32c7ab6ae398e927aed86ef1541ddb953",
+      "local_sha256": "b04bf943447d20ac60ab936c0de5457bb633e8bce8e180b9450630d5f91887d0",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",

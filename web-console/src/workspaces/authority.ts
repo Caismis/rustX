@@ -1,7 +1,8 @@
 import { sameEndpoint } from './endpoint';
-import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type WorkspaceCatalog } from './host';
+import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog } from './host';
 
 export interface WorkspaceAuthorityObservation {
+  readonly scope: WorkspaceAuthorityScope;
   readonly catalog: WorkspaceCatalog;
   readonly current: () => boolean;
 }
@@ -32,7 +33,7 @@ export class WorkspaceAuthority {
     this.catalog = catalog;
     if (replaced) this.replaced();
     const captured = this.epoch;
-    return { catalog, current: () => captured === this.epoch };
+    return { scope: { authorityId: catalog.authorityId, endpoint: catalog.endpoint }, catalog, current: () => captured === this.epoch };
   }
   /** Classification never leaves the observation's endpoint scope. */
   async classify(cwds: readonly string[], endpoint: string, observation: WorkspaceAuthorityObservation, signal?: AbortSignal) {
@@ -54,6 +55,6 @@ export class WorkspaceAuthority {
   capture(catalog?: WorkspaceCatalog): WorkspaceAuthorityObservation | undefined {
     if (!this.catalog || (catalog && !sameAuthority(this.catalog, catalog))) return;
     const epoch = this.epoch;
-    return { catalog: this.catalog, current: () => epoch === this.epoch };
+    return { scope: { authorityId: this.catalog.authorityId, endpoint: this.catalog.endpoint }, catalog: this.catalog, current: () => epoch === this.epoch };
   }
 }

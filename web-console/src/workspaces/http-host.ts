@@ -1,6 +1,6 @@
 /** Browser HTTP adapter. Never imported by the Node Product Host. */
 import { carrierFetch } from '../carrier/http.ts';
-import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult } from './host.ts';
+import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult } from './host.ts';
 
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   constructor(private readonly base = '/product-host') {}
@@ -20,10 +20,10 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   }
   listWorkspaces = (signal?: AbortSignal) => this.call<WorkspaceCatalog>('list', {}, signal);
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
-  adoptWorkspace = (location: string) => this.call<void>('adopt', { location });
-  renameWorkspace = (id: string, displayName: string) => this.call<void>('rename', { id, displayName });
-  reorderWorkspace = (id: string, before?: string) => this.call<void>('reorder', { id, before });
-  removeWorkspace = (id: string) => this.call<void>('remove', { id });
+  adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
+  renameWorkspace = (scope: WorkspaceAuthorityScope, id: string, displayName: string) => this.call<void>('rename', { scope, id, displayName });
+  reorderWorkspace = (scope: WorkspaceAuthorityScope, id: string, before?: string) => this.call<void>('reorder', { scope, id, before });
+  removeWorkspace = (scope: WorkspaceAuthorityScope, id: string) => this.call<void>('remove', { scope, id });
   resolveWorkspace = (id: string, endpoint: string) => this.call<{ cwd: string }>('resolve', { id, endpoint });
   classifyLocations = async (cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal) => {
     const result = await this.call<unknown>('classify', { cwds, endpoint, authorityId }, signal);

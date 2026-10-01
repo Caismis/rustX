@@ -1,7 +1,7 @@
 import { WorkspaceAuthority, type WorkspaceAuthorityObservation } from './authority';
 import type { AppServerClient, ClientView } from '../client/app-server';
 import { endpointIdentity, sameEndpoint } from './endpoint';
-import { validateLocations, type SessionLocation, type WorkspaceCatalog } from './host';
+import { validateLocations, type SessionLocation, type WorkspaceAuthorityScope, type WorkspaceCatalog } from './host';
 
 export type AssociationStatus = 'pending' | 'refreshing' | 'ready' | 'unavailable' | 'disconnected' | 'revoked';
 /** Display evidence deliberately has no authorized field. */
@@ -11,6 +11,11 @@ export interface DisplayAssociation {
   readonly status: AssociationStatus;
 }
 interface Entry extends DisplayAssociation { readonly revision: number }
+export interface WorkspaceMutation {
+  readonly scope: WorkspaceAuthorityScope;
+  readonly current: () => boolean;
+  readonly commit: (removed?: string) => boolean;
+}
 export interface AssociationSnapshot {
   readonly catalog?: WorkspaceCatalog;
   readonly entries: ReadonlyMap<string, DisplayAssociation>;
@@ -135,14 +140,16 @@ export class WorkspaceAssociations {
   /** Only a completion from this captured Product Host scope may commit display evidence.
    * Native authority replacement can retire the display baseline without retiring
    * this Host scope. Completion always fences pre-commit reads, even without a baseline. */
-  captureMutation(): (removed?: string) => boolean {
-    const observation = this.authority.capture();
-    return removed => {
-      if (this.disposed || !observation?.current()
-        || !sameEndpoint(observation.catalog.endpoint, this.client.getSnapshot().endpoint)) return false;
+  captureMutation(catalog?: WorkspaceCatalog): WorkspaceMutation | undefined {
+    const observation = this.authority.capture(catalog);
+    if (!observation) return;
+    const current = () => !this.disposed && observation.current()
+      && sameEndpoint(observation.scope.endpoint, this.client.getSnapshot().endpoint);
+    return { scope: observation.scope, current, commit: removed => {
+      if (!current()) return false;
       this.refreshCatalog(removed);
       return true;
-    };
+    } };
   }
   refresh() { this.refreshCatalog(); }
   /** A same-scope committed unregister is stronger than a later failed catalog reread. */

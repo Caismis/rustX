@@ -40,3 +40,16 @@ it('browser classification validates results and forwards cancellation', async (
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([{ authorized: false }]))));
   await expect(new HttpWorkspaceHost().classifyLocations(['/workspace'], 'ws://localhost/')).rejects.toThrow('Invalid Workspace classification');
 });
+
+it('every browser metadata request carries its captured scope and preserves definite refusal', async () => {
+  const scope = { authorityId: 'host-A', endpoint: 'ws://localhost/' }, host = new HttpWorkspaceHost();
+  const fetcher = vi.fn(async () => new Response('null')); vi.stubGlobal('fetch', fetcher);
+  await host.adoptWorkspace(scope, 'root'); await host.renameWorkspace(scope, 'W', 'renamed');
+  await host.reorderWorkspace(scope, 'W', 'next'); await host.removeWorkspace(scope, 'W');
+  expect((fetcher.mock.calls as unknown as [string, RequestInit][]).map(([url, init]) => [new URL(url).pathname, JSON.parse(String(init.body))])).toEqual([
+    ['/product-host/adopt', { scope, location: 'root' }], ['/product-host/rename', { scope, id: 'W', displayName: 'renamed' }],
+    ['/product-host/reorder', { scope, id: 'W', before: 'next' }], ['/product-host/remove', { scope, id: 'W' }],
+  ]);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Workspace Host authority replaced', kind: 'authority_replaced' }), { status: 400 })));
+  await expect(host.removeWorkspace(scope, 'W')).rejects.toMatchObject({ kind: 'authority_replaced', uncertain: false });
+});

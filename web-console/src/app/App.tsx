@@ -271,7 +271,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
-      <ConversationSeat client={client} host={workspaceHost} sessionId={view?.id}
+      <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
         onCommand={id => invokeCommand({ id })}

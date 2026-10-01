@@ -6,7 +6,9 @@ import { useClientSelector, transportSelection, sameValue } from '../../client/s
 import { useEffect, useState, useRef, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
 import type { SessionModelConfig } from '../../../../protocol/app-server/v29';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { ProductHostWorkspaces, WorkspaceCatalog } from '../../workspaces/host';
+import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from '../../workspaces/host';
+import type { WorkspaceAuthority } from '../../workspaces/authority';
+import type { WorkspaceAssociations, WorkspaceMutation } from '../../workspaces/associations';
 import { sameEndpoint } from '../../workspaces/endpoint';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
@@ -21,7 +23,7 @@ import { AgentComposer } from '../agent/AgentComposer';
 import { firstSubmitPort } from './port';
 import { sessionModelBlock, WorkspaceControls, WorkspacePermission } from './WorkspaceControls';
 
-export function ConversationComposer({ client, host, initialWorkspace, current, opened, binding, active, activeView, context, consumed }: { activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; current: () => boolean; opened: (id: string) => (() => boolean) | void }) {
+export function ConversationComposer({ client, host, authority, associations, initialWorkspace, current, opened, binding, active, activeView, context, consumed }: { authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; current: () => boolean; opened: (id: string) => (() => boolean) | void }) {
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const [owner, setOwner] = useState(binding);
@@ -31,7 +33,7 @@ export function ConversationComposer({ client, host, initialWorkspace, current, 
   const [draftConsumed, setDraftConsumed] = useState<{ id: string; sequence: number }>();
   const [intent, setIntent] = useState<SessionModelConfig>();
   const [catalog, setCatalog] = useState<WorkspaceCatalog>();
-  const [error, setError] = useNotice(), [menu, setMenu] = useState(false), [add, setAdd] = useState(false), [adopting, setAdopting] = useState(false);
+  const [error, setError] = useNotice(), [menu, setMenu] = useState(false), [add, setAdd] = useState<{ mutation: WorkspaceMutation; locations: { id: string; displayName: string }[] }>(), [adopting, setAdopting] = useState(false);
   // Transport transitions never remount this draft: each submission binds the
   // authority current at its own gesture, and a committed Session survives.
   const transport = useClientSelector(client, transportSelection, sameValue);
@@ -47,22 +49,23 @@ export function ConversationComposer({ client, host, initialWorkspace, current, 
   const live = transport.connection === 'connected' && current();
   useEffect(() => {
     let alive = true;
-    void host.listWorkspaces().then(value => { if (alive && current()) setCatalog(value); }, e => { if (alive && current()) setError(String(e)); });
+    void authority.observe().then(value => { if (alive && current() && value.current()) setCatalog(value.catalog); }, e => { if (alive && current()) setError(String(e)); });
     return () => { alive = false; };
-  }, [host, current, transport.endpoint, transport.authorityRevision]);
+  }, [authority, current, transport.endpoint, transport.authorityRevision]);
   const bound = sameEndpoint(catalog?.endpoint, transport.endpoint);
   const selected = bound ? catalog?.workspaces.find(w => w.id === workspaceId) : undefined;
   const pick = (id: string) => { setWorkspace(id); setMenu(false); };
   const adopt = async (location: string) => {
-    if (adopting) return;
+    if (adopting || !add) return;
+    const { mutation } = add;
     setAdopting(true); setError('');
     try {
-      await host.adoptWorkspace(location);
-      if (!current()) return;
-      const next = await host.listWorkspaces();
-      if (!current()) return;
-      setCatalog(next); setAdd(false);
-      const adopted = next.workspaces.find(w => w.location === location);
+      await host.adoptWorkspace(mutation.scope, location);
+      if (!mutation.commit() || !current()) return;
+      const next = await authority.observe();
+      if (!current() || !mutation.current() || !next.current()) return;
+      setCatalog(next.catalog); setAdd(undefined);
+      const adopted = next.catalog.workspaces.find(w => w.location === location);
       if (adopted) pick(adopted.id);
     } catch (e) { if (current()) setError(String(e)); }
     finally { if (current()) setAdopting(false); }
@@ -88,17 +91,23 @@ export function ConversationComposer({ client, host, initialWorkspace, current, 
     {!active && <div className={hero.workspaceRow}>
       <Menu open={menu} autoFocus selectedId={selected?.id} onClose={() => setMenu(false)}
         items={[...(bound ? catalog?.workspaces ?? [] : []).map(w => ({ id: w.id, label: w.displayName, icon: <IconFolderClose16 size={16}/> })), ...(bound && catalog?.picker.kind === 'configured' ? [{ id: '::add-workspace', label: tx('common:conversation-composer.add-workspace') }] : [])]}
-        onSelect={id => { if (id === '::add-workspace') { setMenu(false); setAdd(true); } else pick(id); }}
+        onSelect={id => {
+          if (id !== '::add-workspace') { pick(id); return; }
+          setMenu(false);
+          const mutation = associations.captureMutation(catalog);
+          if (!mutation || catalog?.picker.kind !== 'configured') { setError(String(new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced'))); return; }
+          setAdd({ mutation, locations: catalog.picker.locations });
+        }}
         anchor={<button type="button" className={hero.workspace} aria-label={tx('common:conversation-composer.choose-workspace')} aria-haspopup="menu" aria-expanded={menu} disabled={!drafting || adopting} onClick={() => setMenu(v => !v)}><IconFolderClose16 size={16}/><span className={hero.workspaceLabel}>{selected?.displayName ?? tx('common:conversation-composer.choose-workspace')}</span><IconChevronDownOutline14 size={12}/></button>}/>
     </div>}
     <ComposerContextStack todo={context} goal={null} queue={null} composer={<WorkspaceControls client={client} host={host} workspaceId={active ? initialWorkspace : workspaceId}>{(source, approval) => { const selection = intent ?? preference ?? (source?.session_models?.kind === 'available' ? source.session_models.default_model : undefined); const block = () => approval.block() ?? sessionModelBlock(source, selection); return <>{composer(block, (active ? initialWorkspace : selected) && <WorkspacePermission source={source} approval={approval} disabled={active ? active.disabled : !drafting}/>, <AgentControls client={client} view={activeView} blocked={pending} draft={active ? undefined : { source, intent: selection, choose: chooseModel, disabled: !drafting }}/>)}{!active && selected && block() && <small role="status">{displayText(tx, block()!)}</small>}</>; }}</WorkspaceControls>}/>
     {!active && catalog?.picker.kind === 'unavailable' && !selected && <small role="status">{catalog.picker.reason}</small>}
-    {!active && error && <p role="alert">{error}</p>}
+    {!active && !add && error && <p role="alert">{error}</p>}
     {flow?.session && pending && <p className={startupCss.notice} role="status" data-first-submission={flow.phase}>{tx(flow.phase === 'attaching' ? 'common:startup.attaching' : flow.phase === 'uploading' ? 'common:startup.uploading' : flow.phase === 'admitting' ? 'common:startup.admitting' : flow.phase === 'uncertain' ? 'common:startup.uncertain' : flow.failedPhase === 'attaching' ? 'common:startup.attach-failed' : flow.failedPhase === 'uploading' ? 'common:startup.upload-failed' : 'common:startup.admission-failed')}</p>}
     {flow?.error != null && <div className={startupCss.notice} role="alert">{!flow.session && flow.phase === 'rejected' ? tx('common:conversation-composer.no-session-was-created-correct-the-draft-or-workspace-and-submit') : flow.session ? null : tx('common:conversation-composer.creation-outcome-uncertain-inspect-native-sessions-before-starti')}<details><summary>{tx('common:app.show-details')}</summary><pre>{String(flow.error)}</pre>{flow.session && <p>{tx('common:conversation-composer.session-value-was-created-value-upload-s-committed-inspect-that', { p0: flow.session.id, p1: flow.receipts.length })}</p>}</details></div>}
     {flow && ['failed', 'uncertain'].includes(flow.phase) && <Button onClick={() => { setDiscarded(value => value + 1); submissions.discard(flow); }}>{tx('common:conversation-composer.discard-first-submission-draft')}</Button>}
-    <DialogSurface open={add} onClose={() => { if (!adopting) setAdd(false); }} title={tx('common:conversation-composer.add-workspace-2')} overlayClassName={`${modal.root} ${modal.scrim}`} className={modal.dialog}>
-      <div className={modal.content}><div className={modal.header}><h2 className={modal.title}>{tx('common:conversation-composer.add-workspace-2')}</h2></div><div className={modal.body}><p>{tx('common:conversation-composer.choose-a-location-authorized-by-this-product-host')}</p>{catalog?.picker.kind === 'configured' && catalog.picker.locations.map(location => <Button key={location.id} disabled={adopting} onClick={() => void adopt(location.id)}>{location.displayName}</Button>)}<Button disabled={adopting} onClick={() => setAdd(false)}>{tx('common:conversation-composer.cancel')}</Button></div></div>
+    <DialogSurface open={!!add} onClose={() => { if (!adopting) setAdd(undefined); }} title={tx('common:conversation-composer.add-workspace-2')} overlayClassName={`${modal.root} ${modal.scrim}`} className={modal.dialog}>
+      <div className={modal.content}><div className={modal.header}><h2 className={modal.title}>{tx('common:conversation-composer.add-workspace-2')}</h2></div><div className={modal.body}><p>{tx('common:conversation-composer.choose-a-location-authorized-by-this-product-host')}</p>{error && <p role="alert">{error}</p>}{add?.locations.map(location => <Button key={location.id} disabled={adopting} onClick={() => void adopt(location.id)}>{location.displayName}</Button>)}<Button disabled={adopting} onClick={() => setAdd(undefined)}>{tx('common:conversation-composer.cancel')}</Button></div></div>
     </DialogSurface>
   </div>;
 }

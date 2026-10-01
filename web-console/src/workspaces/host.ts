@@ -20,11 +20,13 @@ export type WorkspaceConfigurationResult =
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }
-export interface WorkspaceCatalog {
+export interface WorkspaceAuthorityScope {
   /** Product Host process identity, independent of registration metadata. */
-  authorityId: string;
+  readonly authorityId: string;
   /** With authorityId, the authority scope; compared only by normalized identity. */
-  endpoint: string;
+  readonly endpoint: string;
+}
+export interface WorkspaceCatalog extends WorkspaceAuthorityScope {
   workspaces: ProductHostWorkspace[];
   picker: { kind: 'configured'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
@@ -52,10 +54,11 @@ export class WorkspaceHostError extends Error {
 export interface ProductHostWorkspaces {
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
-  adoptWorkspace(location: string): Promise<void>;
-  renameWorkspace(id: string, displayName: string): Promise<void>;
-  reorderWorkspace(id: string, before?: string): Promise<void>;
-  removeWorkspace(id: string): Promise<void>;
+  /** Each metadata write must validate this expected scope at execution, before changing registrations. */
+  adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;
+  renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string): Promise<void>;
+  reorderWorkspace(scope: WorkspaceAuthorityScope, id: string, before?: string): Promise<void>;
+  removeWorkspace(scope: WorkspaceAuthorityScope, id: string): Promise<void>;
   resolveWorkspace(id: string, endpoint: string): Promise<{ cwd: string }>;
   /** Authorization is independent of registration. Exact Host-owned classification, bounded to a page. */
   classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal): Promise<SessionLocation[]>;
