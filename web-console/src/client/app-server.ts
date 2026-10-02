@@ -1442,8 +1442,11 @@ export class AppServerClient {
         await this.refresh(id);
       }
     } catch (error) {
-      if (isOutcomeUncertain(error) && this.state.views[id]?.cancellation === operation) this.setSession(id, { cancellation: { attemptId, status: 'uncertain' } });
-      else if (current() && this.state.views[id]?.cancellation === operation) this.setSession(id, { cancellation: undefined });
+      // The exact operation owns cleanup even if its unsent transport was retired.
+      // Acknowledgement or a successor operation replaces this marker.
+      if (this.state.views[id]?.cancellation === operation) {
+        this.setSession(id, { cancellation: isOutcomeUncertain(error) ? { attemptId, status: 'uncertain' } : undefined });
+      }
       throw error;
     }
   }

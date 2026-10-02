@@ -49,7 +49,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "f34a835778598c41e5a2cef5d152836007f5a0db2272e8aea9fe315649a86424",
+      "local_sha256": "a7c474cfb08895bbc3096b1bce4a86c9492e839996f214598087c5884176ab5e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",

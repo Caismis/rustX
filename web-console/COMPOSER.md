@@ -214,6 +214,8 @@ missing, corrupt or unreadable storage defaults to Queue. Denied writes leave th
 live page preference usable. No Session, Workspace or native configuration changes,
 migrations or cross-device synchronization are involved. Labels and modifier help
 are localized in English/Chinese and the primary action names its actual delivery.
+The closed preference trigger's visible text also supplies its accessible name,
+including the current Queue/Steer value.
 
 ### Scoped double Escape
 
@@ -239,8 +241,12 @@ The Stop button and double Escape converge on `ConversationSeat` →
 target captures generation, native target and Attempt ID. The client refuses an
 obsolete expected target and revalidates eligibility again beside actual socket
 dispatch, including when RPC capacity deferred it. No protocol change is involved.
-After dispatch, the existing cancellation owner publishes in-flight/stopping,
-acknowledged or uncertain state. Only authoritative Attempt projection determines
+The exact local cancellation operation owns its in-flight/stopping marker. A
+failure known to precede transmission removes only that operation's marker,
+even if its transport/generation has been retired. An older continuation cannot
+clear a successor marker. A transmitted request with a lost reply stays uncertain;
+an acknowledged request stays acknowledged even if its subsequent refresh fails.
+Only authoritative Attempt projection determines
 settlement. A lost reply follows existing refresh/reconnect repair; it is never
 blindly replayed. Further gestures while cancellation is pending create no duplicate
 request. Escape never consumes text, selection, receipts, queued input or attachments.

@@ -218,11 +218,12 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       localStorage.removeItem('rustx-composer-busy-enter-v1');
     }, { locale, theme });
     await page.goto(composerURL); await expect(page).toHaveTitle('rustX Agent reference');
-    const names = locale === 'en' ? { input: 'Message', preference: 'Enter while running', queue: 'Queue', steer: 'Steer', send: 'Send', commands: 'Commands' }
-      : { input: '消息', preference: '运行时 Enter 的行为', queue: '排队', steer: '插话', send: '发送', commands: '命令' };
+    const names = locale === 'en' ? { input: 'Message', preference: 'Enter while running:', preferenceQueue: 'Enter while running: Queue', preferenceSteer: 'Enter while running: Steer', queue: 'Queue', steer: 'Steer', send: 'Send', commands: 'Commands' }
+      : { input: '消息', preference: '运行时 Enter：', preferenceQueue: '运行时 Enter：排队', preferenceSteer: '运行时 Enter：插话', queue: '排队', steer: '插话', send: '发送', commands: '命令' };
     const input = page.getByRole('textbox', { name: names.input, exact: true });
     const primary = page.locator('[data-composer-primary]');
     const preference = page.getByRole('button', { name: names.preference });
+    await expect(preference).toHaveAccessibleName(names.preferenceQueue);
     await page.evaluate(() => window.composerFixture.running(true));
     await input.fill('Queue by default'); await expect(primary).toHaveAccessibleName(names.queue);
     await input.press('Enter'); await expect(input).toHaveValue('');
@@ -233,6 +234,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     await preference.focus(); await page.keyboard.press('Enter');
     await expect(page.getByRole('menuitem', { name: names.queue, exact: true })).toBeFocused();
     await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter'); await expect(preference).toBeFocused();
+    await expect(preference).toHaveAccessibleName(names.preferenceSteer);
     expect(await page.evaluate(() => localStorage.getItem('rustx-composer-busy-enter-v1'))).toBe('steer');
     await input.fill('Preferred steer'); await expect(primary).toHaveAccessibleName(names.steer);
     await input.press('Enter'); await expect(input).toHaveValue('');
@@ -267,10 +269,13 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
 
 test('Busy Enter preference is read from browser storage after a page reload', async ({ page }) => {
   await page.goto(composerURL);
-  const preference = page.getByRole('button', { name: 'Enter while running' });
+  const preference = page.getByRole('button', { name: 'Enter while running:' });
+  await expect(preference).toHaveAccessibleName('Enter while running: Queue');
   await preference.click(); await page.getByRole('menuitem', { name: 'Steer', exact: true }).click();
   expect(await page.evaluate(() => localStorage.getItem('rustx-composer-busy-enter-v1'))).toBe('steer');
+  await expect(preference).toHaveAccessibleName('Enter while running: Steer');
   await page.reload(); await expect(preference).toHaveText('Enter while running: Steer');
+  await expect(preference).toHaveAccessibleName('Enter while running: Steer');
   const primary = page.locator('[data-composer-primary]'), input = page.getByRole('textbox', { name: 'Message', exact: true });
   await input.fill('Idle after reload'); await expect(primary).toHaveAccessibleName('Send');
   await page.evaluate(() => window.composerFixture.running(true)); await expect(primary).toHaveAccessibleName('Steer');

@@ -22,6 +22,10 @@ source, consulted-only files, exact upstream/local hashes and import closure.
 Native cancellation, Queue/Steer admission, upload gates and retained-first-submission
 semantics keep their existing rustX owners. See [COMPOSER.md](COMPOSER.md).
 
+PR #445 is integrated with merged #444's mandatory App Server v32/file-delivery
+contract. Inventory hashes and retained dependency closures describe this final
+source, including v32 imports; upstream reference pins are unchanged.
+
 ## #420 incremental projection and Chat synchronization
 
 Read-only reference inspected: `477b4f420553e8a52c2fbccc464d7561b239c443`,

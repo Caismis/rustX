@@ -219,7 +219,7 @@ export function AgentComposer({ binding = 'default', firstSubmission, disabled, 
       <Menu open={preferenceOpen} autoFocus onClose={() => setPreferenceOpen(false)} selectedId={busyEnter}
         items={['queue', 'steer'].map(id => ({ id, label: tx(id === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') }))}
         onSelect={id => { preference.setBusyEnter(id as 'queue' | 'steer'); setPreferenceOpen(false); }}
-        anchor={<button type="button" className={css.select} aria-label={tx('agent:submission.enter-while-running')} title={tx('agent:submission.enter-while-running')}
+        anchor={<button type="button" className={css.select} title={tx('agent:submission.enter-while-running')}
           aria-haspopup="menu" aria-expanded={preferenceOpen} onClick={() => setPreferenceOpen(value => !value)}>
           {tx('agent:submission.enter-preference', { behavior: tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') })}
         </button>} />

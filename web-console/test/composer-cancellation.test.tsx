@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RuntimeClientSnapshot } from '../../protocol/app-server/v32';
 import { App } from '../src/app/App';
+import { isOutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot, endpoint } from './fixture';
 let server: Server;
 beforeEach(() => { localStorage.clear(); server = new Server(); });
@@ -87,4 +88,73 @@ it('RPC capacity deferral revalidates the Attempt at actual native request admis
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.attempt_id).toBe('attempt-B');
   for (const { request } of server.requests.filter(row => row.request.method === 'server/info')) server.reply(request);
   await Promise.all(occupied); await refused; expect(cancels()).toHaveLength(0);
+});
+
+it('queued unsent cancellation relinquishes its exact marker across disconnect and allows a deliberate same-Attempt cancellation after reconnect', async () => {
+  await mount();
+  server.held.add('server/info');
+  const occupied = Array.from({ length: 8 }, () => server.client.request({ method: 'server/info', params: {} }, 'server_info'));
+  const retiredReads = Promise.allSettled(occupied);
+  await server.waitFor('server/info', 8);
+  const expected = server.client.cancellationTarget('A')!;
+  const cancelled = server.client.cancelTurn(expected).catch(error => error);
+  const operation = server.client.getSnapshot().views.A.cancellation;
+  expect(operation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
+  expect(cancels()).toHaveLength(0);
+  let failure: unknown;
+  // Capacity is never released on this transport: retirement rejects the unsent RPC.
+  await act(async () => { await server.client.disconnect(); failure = await cancelled; await retiredReads; });
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as Error).message).toBe('Disconnected before a response. Unsent operations were discarded.');
+  expect(isOutcomeUncertain(failure)).toBe(false);
+  expect(server.client.getSnapshot().generation).toBeGreaterThan(expected.generation);
+  expect(cancels()).toHaveLength(0);
+  expect(server.client.getSnapshot().uncertain.filter(item => item.method === 'turn/cancel')).toHaveLength(0);
+  expect(server.client.getSnapshot().views.A.cancellation).toBeUndefined();
+  vi.useRealTimers();
+  await act(async () => server.connect());
+  expect(server.client.getSnapshot().views.A.snapshot?.attempt).toMatchObject({ attempt_id: 'attempt-A', phase: { type: 'running' } });
+  const available = server.client.cancellationTarget('A');
+  expect(available).toEqual({ generation: server.client.getSnapshot().generation, target: server.target('A'), attemptId: 'attempt-A' });
+  expect(cancels()).toHaveLength(0); // Reconnect repairs state; it never replays cancellation.
+  server.held.add('turn/cancel');
+  await act(async () => { input().focus(); escape(); escape(); });
+  const request = await server.waitFor('turn/cancel', 1);
+  expect(request).toMatchObject({ method: 'turn/cancel', params: { target: available!.target } });
+  expect(cancels()).toHaveLength(1);
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
+  await act(async () => server.reply(request));
+  expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('acknowledged');
+});
+
+it('an older unsent continuation cannot clear a successor cancellation operation', async () => {
+  server.snapshots.set('A', running()); await server.attached('A');
+  server.held.add('server/info'); server.held.add('turn/cancel');
+  const occupied = Array.from({ length: 8 }, () => server.client.request({ method: 'server/info', params: {} }, 'server_info'));
+  await server.waitFor('server/info', 8);
+  const older = server.client.cancelTurn(server.client.cancellationTarget('A')!).catch(error => error);
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
+  expect(cancels()).toHaveLength(0);
+  // Native replacement retires A's marker while its RPC is still waiting for capacity.
+  server.snapshots.set('A', running('attempt-B'));
+  server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event: { type: 'attempt_started', attempt_id: 'attempt-B' } } });
+  const expectedB = server.client.cancellationTarget('A')!;
+  expect(expectedB.attemptId).toBe('attempt-B');
+  const reads = server.requests.filter(row => row.request.method === 'server/info');
+  // Releasing one slot refuses A synchronously. Admit B before A's continuation runs.
+  server.reply(reads[0].request);
+  const successor = server.client.cancelTurn(expectedB);
+  const operationB = server.client.getSnapshot().views.A.cancellation;
+  expect(operationB).toEqual({ attemptId: 'attempt-B', status: 'in-flight' });
+  const failure = await older;
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure.message).toBe('Authority changed before dispatch. No operation was sent.');
+  expect(isOutcomeUncertain(failure)).toBe(false);
+  expect(server.client.getSnapshot().views.A.cancellation).toBe(operationB);
+  expect(cancels()).toHaveLength(1);
+  expect(cancels()[0]).toMatchObject({ method: 'turn/cancel', params: { target: expectedB.target } });
+  for (const { request } of reads.slice(1)) server.reply(request);
+  await Promise.all(occupied);
+  server.reply(cancels()[0]); await successor;
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-B', status: 'acknowledged' });
 });
