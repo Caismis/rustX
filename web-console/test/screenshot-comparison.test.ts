@@ -173,6 +173,56 @@ it('C: noise may move to unrecorded coordinates inside its approved region, with
   expect(lightResult.changedOutsideRegions).toBe(0);
 });
 
+it('composer corner evidence grants tolerance to exactly its 16 measured sites and bounds', () => {
+  const name = 'composer-running-draft-dark-390-linux.png';
+  const expected = reference(name);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  const sites = entry.regions.flatMap(cells);
+  expect(sites).toHaveLength(16);
+  expect(sites).toEqual(measured.map(([x, y]) => [x, y]));
+  const observed = copy(expected);
+  for (const [x, y, , after] of measured) paint(observed, x, y, after);
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  // The same capture has no allowance under another reference's name.
+  expect(compare(observed, 'composer-idle-draft-dark-390-linux.png', expected, noisePolicy).ok).toBe(false);
+  for (const region of entry.regions) {
+    const excessive = copy(expected);
+    nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    // Neither neighboring pixels nor an extra row inherit the corner's bound.
+    for (const [x, y] of [[region.x - 1, region.y], [region.x + region.width, region.y], [region.x, 75]]) {
+      const adjacent = copy(observed);
+      nudge(adjacent, x, y, 1);
+      const result = compare(adjacent, name, expected, noisePolicy);
+      expect(result.ok).toBe(false);
+      expect(result.changedOutsideRegions).toBe(1);
+    }
+  }
+});
+
+it('composer corner noise cannot conceal text, focus contrast, theme or layout changes', () => {
+  const name = 'composer-running-draft-dark-390-linux.png';
+  const expected = reference(name);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const observed = copy(expected);
+  for (const [x, y, , after] of entry.pixels as MeasuredNoisePixel[]) paint(observed, x, y, after);
+  for (const [x, y] of [[50, 95], [150, 71]]) {
+    const changed = copy(observed);
+    nudge(changed, x, y, 1);
+    expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
+  }
+  const theme = copy(observed);
+  for (let y = 0; y < theme.height; y++)
+    for (let x = 0; x < theme.width; x++) nudge(theme, x, y, 1);
+  expect(compare(theme, name, expected, noisePolicy).ok).toBe(false);
+  const shifted = copy(observed);
+  for (let y = 0; y < shifted.height; y++)
+    for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
+  expect(compare(shifted, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+});
+
 it('D: the same low-amplitude change outside every approved region fails', () => {
   const expected = fixture(NARROW);
   expect(pixel(expected, 200, 700)).toEqual([53, 54, 56, 255]); // flat panel, far from any edge

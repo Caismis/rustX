@@ -190,3 +190,9 @@ workflow's two skip prefixes retains the private-read, wire and root/child tests
 Attempting `cargo run --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries`
 on Linux correctly refuses: that discovery must run natively on macOS. This is a
 platform limitation, not a passing macOS result.
+
+Subsequent hosted run `37010526549` tested repair head `2835d219` through merge
+`4cd2754`: macOS boundaries, both Linux lanes, lint, protocol and TUI passed.
+Full Web conformance failed on the narrow dark composer rasterization variant.
+The independent investigation, bounded evidence and repair validation are
+recorded in [issue-444-web-conformance.md](issue-444-web-conformance.md).
