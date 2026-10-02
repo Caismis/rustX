@@ -4128,13 +4128,19 @@ model = "provider/model"
             frozen.read_cut.journal,
             if member || terminal_wins { 2 } else { 1 }
         );
-        if !terminal_wins {
+        if !terminal_wins && !member {
+            let published = store.append_event(terminal()).unwrap();
+            assert!(published.sequence > frozen.read_cut.journal);
+        }
+        release_tx.send(()).unwrap();
+        let copies = worker.join().unwrap();
+        // The member-backed case creates every destination while the source
+        // still runs. Later source settlement cannot change any copied meaning.
+        if member {
             let published = store.append_event(terminal()).unwrap();
             assert!(published.sequence > frozen.read_cut.journal);
         }
         let after_publication = store.conversation_read_cut().unwrap();
-        release_tx.send(()).unwrap();
-        let copies = worker.join().unwrap();
         let retained = member || terminal_wins;
         let expected = if terminal_wins {
             InheritedTurnOutcome::Cancelled
