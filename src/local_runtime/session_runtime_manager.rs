@@ -2013,7 +2013,7 @@ impl SessionRuntimeManager {
 }
 #[cfg(test)]
 #[path = "../../tests/scripted/app_server/mod.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Debug)]
 pub enum SourceSettingsError {

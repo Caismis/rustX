@@ -43,6 +43,9 @@ impl HostState {
 }
 #[derive(Debug)]
 struct HostInner {
+    #[cfg(test)]
+    file_read_probe: Arc<super::product_host::ReadProbe>,
+    product_host: Mutex<Option<super::product_host::Authority>>,
     authority_id: String,
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
@@ -88,6 +91,30 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    #[cfg(test)]
+    pub(crate) fn file_read_probe(&self) -> Arc<super::product_host::ReadProbe> {
+        self.0.file_read_probe.clone()
+    }
+    /// Native process composition only. There is no public RPC for minting or
+    /// replacing this credential; replacing it synchronously revokes old reads.
+    pub(crate) fn bind_product_host(
+        &self,
+        credential: Option<super::transport::websocket::Credential>,
+    ) {
+        *self.0.product_host.lock().expect("Product Host authority") =
+            credential.map(super::product_host::Authority::new);
+    }
+    pub(super) fn authenticate_product_host(
+        &self,
+        offered: &[&str],
+    ) -> Option<tokio_util::sync::CancellationToken> {
+        self.0
+            .product_host
+            .lock()
+            .expect("Product Host authority")
+            .as_ref()?
+            .authenticate(offered)
+    }
     pub(super) fn register_file_route(&self, route: &Arc<super::connection::Route>) {
         let mut routes = self.0.file_routes.lock().expect("file routes");
         routes.retain(|_, route| {
@@ -125,6 +152,9 @@ impl AppServerHost {
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
         manager.bind_process_policy(policy);
         Self(Arc::new(HostInner {
+            #[cfg(test)]
+            file_read_probe: Arc::default(),
+            product_host: Mutex::default(),
             authority_id: uuid::Uuid::new_v4().to_string(),
             manager,
             state: Mutex::default(),

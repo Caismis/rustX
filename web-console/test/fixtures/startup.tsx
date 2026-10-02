@@ -3,7 +3,7 @@ import { App } from '../../src/app/App';
 import { Server, snapshot } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request, UploadReceipt } from '../../../protocol/app-server/v31';
+import type { Request, UploadReceipt } from '../../../protocol/app-server/v32';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

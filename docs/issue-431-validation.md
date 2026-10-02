@@ -1,6 +1,13 @@
-# Issue #431 implementation and validation audit
+# Issue #431 initial validation and updated architecture audit
 
-Validated on Linux x86_64 on 2026-10-02. The protected original checkout stayed
+The validation commands/counts below describe reviewed head
+`5d24301a5999838afdba5835bcd66aec053597cf`, not the repaired head. Review then
+found that caller-supplied roots were forgeable and Present was child-advertised.
+Green CI did not prove those contracts. The invariant table below is updated for
+the repair; [issue-444-repair-validation.md](issue-444-repair-validation.md) records
+its focused/full validation and precise authority model.
+
+Initially validated on Linux x86_64 on 2026-10-02. The protected original checkout stayed
 on `main` at `89f35bdf5794b7e30f23ee7ce96a5dabdf262551`, with no tracked changes
 and its existing untracked `.playwright-mcp/`. Initial remote inspection found
 no overlapping open PR. Work used the independent
@@ -21,10 +28,10 @@ was reused; source-inventory hashes/imports and image-size's MIT notice were upd
 | --- | --- |
 | Delivery follows successful ordinary settlement/commit | Native `Present` returns typed facts only after validation and cancellation checks. `AgentLoopExecution::commit_tool_result_batch` uses the existing atomic `append_canonical_batch_with_events`; no special loop branch. A gated post-validation cancellation returns no facts. |
 | Typed metadata alone authorizes cards | `AgentTranscript` reads successful canonical transcript Tool messages. It never derives cards from foreground completion, prose, arguments, basenames, or Tool JSON. Failed declarations expose no cards. |
-| File identity differs from ArtifactId | `ToolExecutionResult.deliveries: Vec<SessionFileReference>` is distinct from managed `artifacts`. Closed Web sources and distinct `session/fileRead` / `artifact/read` methods preserve both kinds. |
-| Browser paths confer no authority | Product Host accepts exact attachment/message/index coordinates. Configured native roots come from the Host; the native read resolves only committed metadata. |
+| File identity differs from ArtifactId | `ToolExecutionResult.deliveries: Vec<SessionFileReference>` is distinct from managed `artifacts`. Closed Web sources and a private Product Host credential-authenticated seam versus `artifact/read` preserve both kinds. |
+| Browser paths confer no authority | Product Host accepts exact attachment/message/index coordinates. Current registered roots come only from the private credential-authenticated Host lane; the native read resolves only committed metadata. |
 | History cannot silently retarget | Original Conversation plus cwd device/inode and normalized relative path remain unchanged in clone/fork/branch copies. Native catalog lookup resolves the original published node, not the selected default node. Cold reopen, unrelated same-named files, paging and fork reads are covered. |
-| Every filesystem read rechecks authorization | Native admission, current original mapping, attachment authority, exact configured root, and post-read fences are checked. Allocation ownership excludes physical source deletion. Product Host checks its scope before and after native work. |
+| Every filesystem read rechecks authorization | Native admission, current original mapping, attachment authority, separate native Product Host authority, exact registered root, and post-read fences are checked. Allocation ownership excludes physical source deletion. Product Host checks its scope before and after native work. |
 | Containment holds at open/read | `openat`/`O_NOFOLLOW` directory descriptors anchor every ancestor. The root identity and regular leaf inode are checked; retained edges are checked before bytes and before return. Gated ancestor/leaf symlink and directory/target swaps fail without returning replacement bytes. |
 | Special files cannot block/leak | No-follow leaf metadata must be regular before nonblocking open; the opened descriptor must still be the same regular inode. Directory, FIFO, symlink and `/dev/null` tests reject. |
 | Preview does not run Agent/model work | File reads use existing attachment read authority, canonical store lookup and SessionController allocation access. No Agent Loop mutation or Attempt resume occurs. Native and browser tests assert unchanged model-request counts. |
@@ -58,14 +65,14 @@ shape and managed-output semantics are unchanged.
 
 ## Protocol and generated clients
 
-Rust DTOs generate App Server v31 schema/TypeScript/fixtures together. All Web,
-TUI and protocol imports/handshakes/classification use that vocabulary; v30 files
+Current Rust DTOs generate App Server v32 schema/TypeScript/fixtures together. The public file-read Method is removed; separate native Product Host handshake authentication supplies authority. Present is root-only. All Web,
+TUI and protocol imports/handshakes/classification use that vocabulary; all older generated files
 are removed. Runtime Client is strictly v56 for typed delivery metadata; every
 older peer is rejected. Current/future-version fixtures use v56/v57 respectively.
 Event envelope 1, SQLite 49, Session catalog 13 and subagent IPC 29 remain unchanged.
 There are no version aliases, compatibility readers or parallel delivery records.
 
-## Validation commands and results
+## Initial reviewed-head validation commands and results
 
 Toolchains: Rust 1.98.1, Node 24.21.0 and pnpm 11.13.1. Python 3.12 and the existing
 frozen provider-emulator environment were prepared. Docker was unavailable;

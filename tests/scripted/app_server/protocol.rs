@@ -4208,30 +4208,114 @@ async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() 
     f.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn committed_present_reads_exact_native_scope_through_current_authorized_attachment() {
+// Real transport-authenticated Product Host, never a second ordinary connection.
+const FILE_HOST_TOKEN: &str = "host-secret-000000000000000000000000000000000000000";
+const FILE_BROWSER_TOKEN: &str = "browser-secret-0000000000000000000000000000000000000";
+type FileSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+struct TrustedFileHost {
+    endpoint: String,
+    stop: tokio_util::sync::CancellationToken,
+    serving: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+impl TrustedFileHost {
+    async fn new(f: &Fixture) -> Self {
+        use crate::app_server::transport::websocket;
+        f.host.bind_product_host(Some(
+            websocket::Credential::new(FILE_HOST_TOKEN.into()).unwrap(),
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "ws://{}/product-host/file-read",
+            listener.local_addr().unwrap()
+        );
+        let stop = tokio_util::sync::CancellationToken::new();
+        let serving = tokio::spawn(websocket::serve(
+            listener,
+            f.host.clone(),
+            websocket::Credential::new(FILE_BROWSER_TOKEN.into()).unwrap(),
+            stop.clone(),
+        ));
+        Self {
+            endpoint,
+            stop,
+            serving,
+        }
+    }
+    async fn open(
+        &self,
+        credential: &str,
+    ) -> Result<FileSocket, tokio_tungstenite::tungstenite::Error> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = self.endpoint.as_str().into_client_request().unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            format!("rustx.product-host.file-read.v1, rustx-product-host.{credential}")
+                .parse()
+                .unwrap(),
+        );
+        let (socket, reply) = tokio_tungstenite::connect_async(request).await?;
+        assert_eq!(
+            reply.headers()["sec-websocket-protocol"],
+            "rustx.product-host.file-read.v1"
+        );
+        Ok(socket)
+    }
+    async fn response(&self, read: crate::app_server::product_host::FileRead) -> Response {
+        use futures_util::{SinkExt, StreamExt};
+        let mut socket = self.open(FILE_HOST_TOKEN).await.unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::to_string(&read).unwrap().into(),
+            ))
+            .await
+            .unwrap();
+        let frame = socket.next().await.unwrap().unwrap();
+        let response = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        let _ = socket.close(None).await;
+        response
+    }
+    async fn success(&self, read: crate::app_server::product_host::FileRead) -> MethodResult {
+        match self.response(read).await {
+            Response::Success(reply) => reply.result,
+            Response::Failure(reply) => panic!("trusted file read failed: {:?}", reply.error),
+        }
+    }
+    async fn rejected(&self, read: crate::app_server::product_host::FileRead) -> ErrorData {
+        match self.response(read).await {
+            Response::Failure(reply) => reply.error.data.unwrap(),
+            Response::Success(_) => panic!("file read unexpectedly succeeded"),
+        }
+    }
+    async fn close(self) {
+        self.stop.cancel();
+        self.serving.await.unwrap().unwrap();
+    }
+}
+
+// Shared native fixture scenario; the boundary-suite owner runs it on Linux and macOS.
+pub(crate) async fn committed_present_read_boundary_scenario() {
     use crate::message::types::MessageBlock;
     use crate::tools::session_files::SessionFileReadFailure as FileFailure;
     use base64::Engine;
+    use futures_util::{SinkExt, StreamExt};
     bounded(async {
         let f = Fixture::with_tool(Some("present")).await;
         let path = f.workspaces[0].join("报告 file.md");
         let original = b"# Original\r\n\r\nNative bytes\r\n";
         std::fs::write(&path, original).unwrap();
         let browser = AppServerConnection::new(f.host.clone());
-        let product_host = AppServerConnection::new(f.host.clone());
+        let product_host = TrustedFileHost::new(&f).await;
         initialize(&browser).await;
-        initialize(&product_host).await;
         let target = attach(&browser, &f, 0).await;
-        let read = |message_id| Method::SessionFileRead {
+        let read = |message_id| crate::app_server::product_host::FileRead {
             target: target.clone(),
             message_id,
             delivery_index: 0,
-            allowed_roots: vec![f.workspaces[0].clone()],
+            roots: vec![f.workspaces[0].clone()],
         };
         assert_eq!(
-            rejected(
-                &product_host,
+            product_host.rejected(
                 read(crate::runtime::identity::MessageId::new("invented"))
             )
             .await,
@@ -4286,7 +4370,7 @@ async fn committed_present_reads_exact_native_scope_through_current_authorized_a
         let MethodResult::SessionFileBytes {
             file: returned,
             data,
-        } = call(&product_host, 4102, read(tool.id.clone())).await
+        } = product_host.success( read(tool.id.clone())).await
         else {
             panic!()
         };
@@ -4298,10 +4382,18 @@ async fn committed_present_reads_exact_native_scope_through_current_authorized_a
             original
         );
         assert_eq!(
-            product_host.attachment_counts(),
-            (0, 0),
+            browser.attachment_counts(),
+            (1, 0),
             "file reads create no new attachment"
         );
+        // Browser has every valid coordinate and the exact cwd; neither its
+        // shared transport token nor a claimed Product Host name grants bytes.
+        let forged = serde_json::json!({"jsonrpc":"2.0", "id":4190, "method":"session/fileRead", "params":{
+            "target":target, "message_id":tool.id, "delivery_index":0, "allowed_roots":[f.workspaces[0]], "file":file
+        }});
+        let Some(Response::Failure(denied)) = browser.handle_json(&forged.to_string()).await else { panic!("ordinary file bypass succeeded") };
+        assert_eq!(denied.error.code, -32601);
+        assert!(product_host.open(FILE_BROWSER_TOKEN).await.is_err(), "normal transport credential cannot authenticate private file seam");
         // Historical paging carries the same typed fact after activity folds.
         let MethodResult::TranscriptWindow { window } = call(&browser, 4120, Method::Transcript {
             target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
@@ -4333,24 +4425,21 @@ async fn committed_present_reads_exact_native_scope_through_current_authorized_a
         }).unwrap();
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
-        let MethodResult::SessionFileBytes { file: inherited_file, data } = call(&product_host, 4124, Method::SessionFileRead {
-            target: fork_target, message_id: inherited.id.clone(), delivery_index: 0, allowed_roots: vec![f.workspaces[0].clone()],
+        let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
+            target: fork_target, message_id: inherited.id.clone(), delivery_index: 0, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
         assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original);
         // A same-named unrelated Session cannot resolve invented source coordinates.
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
-        assert_eq!(rejected(&product_host, Method::SessionFileRead {
-            target: unrelated, message_id: tool.id.clone(), delivery_index: 0, allowed_roots: vec![f.workspaces[1].clone()],
+        assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
+            target: unrelated, message_id: tool.id.clone(), delivery_index: 0, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
-        let Method::SessionFileRead { allowed_roots, .. } = &mut denied else {
-            panic!()
-        };
-        *allowed_roots = vec![f.workspaces[1].clone()];
+        denied.roots = vec![f.workspaces[1].clone()];
         assert_eq!(
-            rejected(&product_host, denied).await,
+            product_host.rejected( denied).await,
             ErrorData::SessionFileRead {
                 reason: FileFailure::Unauthorized
             }
@@ -4368,7 +4457,7 @@ async fn committed_present_reads_exact_native_scope_through_current_authorized_a
         );
         std::fs::write(&path, vec![b'x'; 300 * 1024]).unwrap();
         let MethodResult::SessionFileBytes { data, .. } =
-            call(&product_host, 4103, read(tool.id.clone())).await
+            product_host.success( read(tool.id.clone())).await
         else {
             panic!()
         };
@@ -4383,7 +4472,7 @@ async fn committed_present_reads_exact_native_scope_through_current_authorized_a
         let one = permits.clone().acquire_owned().await.unwrap();
         let two = permits.clone().acquire_owned().await.unwrap();
         assert_eq!(
-            rejected(&product_host, read(tool.id.clone())).await,
+            product_host.rejected( read(tool.id.clone())).await,
             ErrorData::SessionFileRead {
                 reason: FileFailure::Capacity
             }
@@ -4400,28 +4489,55 @@ async fn committed_present_reads_exact_native_scope_through_current_authorized_a
         )
         .unwrap();
         assert_eq!(
-            rejected(&product_host, read(tool.id.clone())).await,
+            product_host.rejected( read(tool.id.clone())).await,
             ErrorData::SessionFileRead {
                 reason: FileFailure::TooLarge
             }
         );
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
-            rejected(&product_host, read(tool.id.clone())).await,
+            product_host.rejected( read(tool.id.clone())).await,
             ErrorData::SessionFileRead {
                 reason: FileFailure::Missing
             }
         );
-        call(
-            &browser,
-            4104,
-            Method::SessionDetach {
-                target: target.clone(),
-            },
-        )
-        .await;
+        std::fs::write(&path, original).unwrap();
+        let probe = f.host.file_read_probe();
+        for revoked in ["credential", "socket", "attachment"] {
+            let mut completed = probe.completed.subscribe();
+            probe.completed.send_replace(None);
+            let gate_release = probe.before_bytes.arm_scoped();
+            let mut pending = product_host.open(FILE_HOST_TOKEN).await.unwrap();
+            pending.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
+            let gate = probe.before_bytes.clone();
+            tokio::task::spawn_blocking(move || gate.wait_entered()).await.unwrap();
+            assert_eq!(*completed.borrow(), None, "open descriptor has not published bytes");
+            if revoked == "credential" {
+                f.host.bind_product_host(None);
+                assert!(product_host.open(FILE_HOST_TOKEN).await.is_err(), "revoked secret admits no later read");
+            } else if revoked == "socket" {
+                // This is the exact native fence used when Node aborts after
+                // registration removal or Host replacement, not a clock wait.
+                pending.close(None).await.unwrap();
+                let authority = probe.authority.lock().unwrap().clone().unwrap();
+                authority.cancelled().await;
+            } else {
+                call(&browser, 4193, Method::SessionDetach { target: target.clone() }).await;
+            }
+            drop(gate_release);
+            completed.wait_for(Option::is_some).await.unwrap();
+            assert_eq!(*completed.borrow(), Some(false), "{revoked}: native read publishes no bytes after revocation");
+            while let Some(frame) = pending.next().await {
+                if let Ok(tokio_tungstenite::tungstenite::Message::Text(text)) = frame {
+                    let reply: Response = serde_json::from_str(&text).unwrap();
+                    assert!(matches!(reply, Response::Failure(_)), "{revoked}: no successful bytes may cross socket");
+                }
+            }
+            assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS);
+            if revoked == "credential" { f.host.bind_product_host(Some(crate::app_server::transport::websocket::Credential::new(FILE_HOST_TOKEN.into()).unwrap())); }
+        }
         assert_eq!(
-            rejected(&product_host, read(tool.id.clone())).await,
+            product_host.rejected( read(tool.id.clone())).await,
             ErrorData::StaleAttachment
         );
         assert_eq!(
@@ -4430,7 +4546,7 @@ async fn committed_present_reads_exact_native_scope_through_current_authorized_a
             "all file reads issue zero model requests"
         );
         browser.close();
-        product_host.close();
+        product_host.close().await;
         f.manager.unload(&fork.active_conversation_id).await.unwrap();
         f.close().await;
     })

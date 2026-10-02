@@ -1,6 +1,6 @@
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v31';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v32';
 import css from './GoalActivity.module.css';
 
 /** Historical execution evidence only. The Goal dock owns current state. */

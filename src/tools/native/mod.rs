@@ -410,7 +410,6 @@ fn subagent_child_registration(
     Some(match name {
         "read" => read::registration(policy),
         "read_image" => read_image::registration(),
-        "present" => present::registration(),
         "write" => write::registration(policy),
         "edit" => edit::registration(policy),
         "glob" => glob::registration(policy),
@@ -628,6 +627,7 @@ mod tests {
     fn child_unsafe_capabilities_are_structurally_absent() {
         for name in [
             "subagent",
+            "present",
             "send_message",
             "wait_agent",
             "interrupt_agent",

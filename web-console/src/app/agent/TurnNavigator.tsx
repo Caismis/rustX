@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rail interaction patterns adapted; see PROVENANCE.md. */
 import { useEffect, useId, useState } from 'react';
-import type { ConversationTurn } from '../../../../protocol/app-server/v31';
+import type { ConversationTurn } from '../../../../protocol/app-server/v32';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { turnKey } from '../../client/transcript';

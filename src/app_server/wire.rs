@@ -315,6 +315,9 @@ macro_rules! envelope {
 envelope!(super::protocol::Request);
 envelope!(super::protocol::Response);
 envelope!(super::protocol::Notification);
+// The private Host carrier uses the same exact attachment identities as the
+// ordinary protocol, without adding its operation to the public Method space.
+envelope!(super::product_host::FileRead);
 
 /// The complete public JSON Schema, with the same numeric rules as the codec.
 pub(super) fn protocol_schema() -> Value {
@@ -326,6 +329,20 @@ pub(super) fn protocol_schema() -> Value {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn private_host_read_requires_exact_wire_identity() {
+        use super::super::product_host::FileRead;
+        let mut value = serde_json::json!({
+            "target": {"session_id": "ses_00000000-0000-7000-8000-000000000001", "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+                "runtime_incarnation": "1", "attachment_id": "a"},
+            "message_id": "m", "delivery_index": 0, "roots": ["/workspace"]
+        });
+        let read: FileRead = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&read).unwrap(), value);
+        value["target"]["runtime_incarnation"] = Value::from(1);
+        assert!(serde_json::from_value::<FileRead>(value).is_err());
+    }
 
     #[test]
     fn referenced_and_nested_defaults_use_the_public_exact_domain() {
@@ -418,7 +435,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v31.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v32.ts"),
         )
         .unwrap();
         for domain in [

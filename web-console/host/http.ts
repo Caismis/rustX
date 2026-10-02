@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
 import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
+import { NativeFileReadError } from './file-read.ts';
 /** Workspace authority only. The launcher carrier authenticates before this handler;
  * independently managed deployments supply their own browser authentication. */
 export function workspaceHandler(host?: ProductHostWorkspaces) {
@@ -54,7 +55,7 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       response.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify({
         message: String(error),
         kind: error instanceof WorkspaceHostError ? error.kind : undefined,
-        nativeError: error instanceof AppServerRequestError ? error.error : undefined,
+        nativeError: error instanceof AppServerRequestError || error instanceof NativeFileReadError ? error.error : undefined,
         uncertain: error instanceof UncertainOutcomeError,
       }));
     }

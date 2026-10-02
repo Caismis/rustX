@@ -639,6 +639,33 @@ mod tests {
         );
     }
     #[test]
+    fn present_is_root_available_and_child_selection_is_a_scope_error() {
+        let tools = available();
+        let profile = profile(&["present"]);
+        let root = resolve(
+            &profile,
+            &tools,
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        assert!(root.diagnostics.is_empty());
+        assert_eq!(root.tools.len(), 1);
+        assert_eq!(root.tools[0].name, "present");
+        let child = resolve(
+            &profile,
+            &tools,
+            &CapabilityAvailability::new(),
+            AgentScope::OneShotChild,
+        );
+        assert!(child.tools.is_empty());
+        assert_eq!(
+            child.diagnostics,
+            [AgentProfileDiagnostic::ScopeUnsupported {
+                capability: ScopeCapability::BuiltinTool(root.tools[0].id.clone())
+            }]
+        );
+    }
+    #[test]
     fn cfg273_resolved_generation_is_owned_and_preserves_host_tool_policy() {
         let mut definition = available()
             .definitions()

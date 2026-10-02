@@ -291,9 +291,11 @@ Normative ownership, limits, and historical behavior are in
 | --- | --- |
 | Typed declaration, order/duplicates, malformed input, missing tail, cancellation | `src/tools/native/present.rs` tests |
 | Mutable original bytes, 300 KiB/512 KiB bounds, symlinks, traversal, directories/FIFOs/devices, gated leaf/ancestor replacements, revocation | `src/tools/session_files.rs` tests |
-| Ordinary unique canonical Tool commit, exact read scope, delegated attachment, denied roots, finite admission, no model requests | `tests/scripted/app_server/protocol.rs::committed_present_reads_exact_native_scope_through_current_authorized_attachment` |
+| Ordinary unique canonical Tool commit, real host-only credential admission, browser bypass rejection, gated native revocation, exact scope, denied roots, finite admission, no model requests | `tests/boundary/app_server_file_read.rs::committed_present_reads_exact_native_scope_through_current_authorized_attachment` |
 | Clone/fork/branch and cold reopen preserve source scope; deletion never falls back to destination file | `src/local_runtime/session.rs::session_file_history_copies_preserve_original_scope_and_deleted_source_is_unavailable` |
 | Controlled Workspace reassociation after descriptor open returns no bytes | `src/local_runtime/session.rs::session_file_mapping_loss_between_open_and_read_returns_no_bytes` |
+| Registered-root policy/removal, Host close, abort and late-byte cleanup | `test/product-host-file-read.test.ts` |
+| Root/child capability selection, rejected child profile/override and forced composition | `src/runtime/agent_profile.rs`, `src/local_runtime/composition.rs`, `tests/subagent/overrides.rs` |
 | Gated stale bytes/errors, attachment/authority replacement, URL/concurrency bounds, UTF-8/image failures, retry, inert Markdown and typed-only cards | `test/session-files.test.tsx` |
 | Managed Artifact bounds and lifecycle retained; text now also has original-byte Download | `test/artifacts.test.tsx`, `test/session-files.test.tsx` |
 | Real Write/Bash/present, durable folded cards, Markdown/text/code/raster/unsupported viewers, actual downloaded bytes and Unicode/spaces names, retry/deletion/current bytes, keyboard, narrow/wide geometry, English/Chinese, zero preview model requests | `test/e2e/file-delivery.spec.ts` |

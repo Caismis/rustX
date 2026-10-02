@@ -18,22 +18,6 @@ export type JsonRpcVersion = '2.0';
 export type RequestId = string | number;
 export type Request1 =
   | {
-      method: 'session/fileRead';
-      params: {
-        target: AttachmentTarget;
-        message_id: MessageId;
-        delivery_index: number;
-        /**
-         * Current roots delegated by the authenticated native caller/Product
-         * Host. Intersection with the original Session scope, never file paths.
-         *
-         * @minItems 1
-         * @maxItems 32
-         */
-        allowed_roots: [string, ...string[]];
-      };
-    }
-  | {
       method: 'artifact/read';
       params: {
         target: AttachmentTarget;
@@ -455,10 +439,6 @@ export type RuntimeIncarnationId = string;
  */
 export type AttachmentId = string;
 /**
- * Identifies a committed canonical message block.
- */
-export type MessageId = string;
-/**
  * Identifies a durable artifact produced or referenced by the runtime.
  *
  * An artifact is identified by an opaque runtime-owned id, never by a
@@ -594,6 +574,10 @@ export type SubagentId = string;
  * none of them may be substituted for one.
  */
 export type SurfaceRevision = string;
+/**
+ * Identifies a committed canonical message block.
+ */
+export type MessageId = string;
 /**
  * Which history prefix a lineage operation retains.
  */

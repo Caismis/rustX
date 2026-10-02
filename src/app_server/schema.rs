@@ -248,12 +248,6 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         .expect("bounded Tool protocol fixture"),
     );
     for call in [
-        Method::SessionFileRead {
-            target: target.clone(),
-            message_id: crate::runtime::identity::MessageId::new("delivery-message"),
-            delivery_index: 0,
-            allowed_roots: vec![std::path::PathBuf::from("/workspace")],
-        },
         Method::ArtifactRead {
             target: target.clone(),
             artifact_id: crate::runtime::identity::ArtifactId::new("artifact_1"),
@@ -732,9 +726,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v31.schema.json", "v31.ts"]);
+        assert_eq!(generations, ["v32.schema.json", "v32.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v31.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v32.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -81,7 +81,9 @@ timezone = "UTC"
     }
     const token = randomBytes(32).toString('base64url');
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });
-    app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const productHostToken = randomBytes(32).toString('base64url');
+    const productHostTokenFile = join(directory, 'product-host-token'); writeFileSync(productHostTokenFile, productHostToken, { mode: 0o600 });
+    app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let appErrors = ''; app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
     const endpoint = await readiness(app, 'stderr', appServerEndpoint);
     const control = async (path: string, method = 'GET') => {
@@ -89,7 +91,7 @@ timezone = "UTC"
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);
       return response.json();
     };
-    const hostConfig = { transportToken: token, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
+    const hostConfig = { transportToken: token, productHostToken, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
       { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
     ] };
     const workspaceHost = await startWorkspaceHost(hostConfig);

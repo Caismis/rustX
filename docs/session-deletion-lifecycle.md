@@ -130,13 +130,13 @@ boundary. No queue, timer, distributed worker, or retention policy is introduced
 
 ## Bounded deletion control contract
 
-App Server v31 owns the public `session/deletePreview`, `session/delete`
+App Server v32 owns the public `session/deletePreview`, `session/delete`
 (`session_id` + `expected_target_revision` only), and `session/recoverDeletion` methods.
 Runtime Client v56 has no Session request, result, or error surface, including
 preview. `app_server::session_deletion` owns `SessionDeletePreview`,
 `SessionDeletionBlocker`, and `SessionDeletionResult`, and its `project` function
 adapts native `local_runtime::session::deletion::SessionDeleteResult` to that
-bounded public representation. Schema annotations retain the published v31
+bounded public representation. Schema annotations retain the published v32
 definition names without retaining Runtime Client types or aliases. Native
 Session deletion authority remains in `local_runtime::session::deletion`.
 
@@ -174,7 +174,7 @@ pre-commit failures use a bounded protocol error without private storage paths.
 | `not_found` | No live Session or pending record, including completed deletion |
 
 The TUI consumes these deletion DTOs from the generated App Server
-`protocol/app-server/v31.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
+`protocol/app-server/v32.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
 fixtures validate the wire contract, not deletion persistence. Interactive deletion
 UX consumes these authoritative outcomes; retention policy remains independent.
 
@@ -204,7 +204,7 @@ native target revision, then reconciles paginated visibility from the native
 boundary. Cleanup retry uses `session/recoverDeletion`; no client storage or
 model-visible operation participates. See [TUI deletion help](../tui/README.md#delete-historical-sessions-inside-resume).
 
-## Product and client behavior (App Server v31)
+## Product and client behavior (App Server v32)
 
 `session/deletePreview` describes the finite target; `session/delete` confirms
 that exact revision. A confirmed delete owns retirement even for the focused

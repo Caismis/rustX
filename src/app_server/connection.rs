@@ -119,7 +119,7 @@ fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
 
 pub(super) struct Route {
     pub(super) target: AttachmentTarget,
-    client: ManagedRuntimeClient,
+    pub(super) client: ManagedRuntimeClient,
     pub(super) attachment: RuntimeAttachment,
     external: crate::local_runtime::session_runtime_manager::RuntimeResidencyPin,
     capacity: AttachmentPermit,
@@ -345,30 +345,18 @@ impl AppServerConnection {
             });
         }
         if let Some(target) = runtime_target(&method) {
-            // An authenticated Product Host delegates a read against the
-            // browser's existing exact attachment. No second attachment or
-            // runtime load is created just to read a file.
-            let file_read = matches!(method, Method::SessionFileRead { .. });
-            let route = if file_read {
-                self.host
-                    .file_route(target)
-                    .ok_or_else(|| domain(ErrorData::StaleAttachment))?
-            } else {
-                self.route(target)?
-            };
+            let route = self.route(target)?;
             let client = route.client.clone();
             let changed = self.changed.clone();
             let sessions = self.sessions.clone();
             let manager = self.host.manager().clone();
-            let file_reads = self.host.file_reads();
             let receiver = {
                 let routes = self.routes.lock().expect("routes mutex");
                 if routes.closed
-                    || (!file_read
-                        && !routes
-                            .active
-                            .get(&target.session_id)
-                            .is_some_and(|active| Arc::ptr_eq(active, &route)))
+                    || !routes
+                        .active
+                        .get(&target.session_id)
+                        .is_some_and(|active| Arc::ptr_eq(active, &route))
                 {
                     return Err(domain(ErrorData::StaleAttachment));
                 }
@@ -379,11 +367,7 @@ impl AppServerConnection {
                 self.host
                     .admit_request(|request_owner| {
                         client.start_operation(move || {
-                            let authority = if file_read {
-                                route.attachment.read_authority()
-                            } else {
-                                route.attachment.operation_authority()
-                            };
+                            let authority = route.attachment.operation_authority();
                             async move {
                                 let _request = request_owner;
                                 dispatch_runtime(
@@ -393,7 +377,6 @@ impl AppServerConnection {
                                     changed,
                                     sessions,
                                     manager,
-                                    file_reads,
                                 )
                                 .await
                             }
@@ -921,7 +904,6 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::ModelSet { target, .. }
         | Method::Capability { target, .. }
         | Method::ArtifactRead { target, .. }
-        | Method::SessionFileRead { target, .. }
         | Method::SessionUpload { target, .. }
         | Method::Trace { target, .. }
         | Method::TraceDetail { target, .. }
@@ -962,98 +944,8 @@ async fn dispatch_runtime(
     changed: Arc<tokio::sync::Notify>,
     sessions: SessionController,
     manager: crate::local_runtime::session_runtime_manager::SessionRuntimeManager,
-    file_reads: Arc<tokio::sync::Semaphore>,
 ) -> Result<MethodResult, RpcError> {
     match method {
-        Method::SessionFileRead {
-            target: _,
-            message_id,
-            delivery_index,
-            allowed_roots,
-        } => {
-            use crate::tools::session_files::SessionFileReadFailure as FileFailure;
-            use base64::Engine;
-            let failed = |reason| domain(ErrorData::SessionFileRead { reason });
-            if delivery_index >= crate::tools::session_files::PRESENT_MAX_FILES
-                || allowed_roots.is_empty()
-                || allowed_roots.len() > 32
-                || allowed_roots
-                    .iter()
-                    .any(|p| !p.is_absolute() || p.as_os_str().len() > 4096)
-            {
-                return Err(domain(ErrorData::InvalidParams));
-            }
-            let permit = file_reads
-                .try_acquire_owned()
-                .map_err(|_| failed(FileFailure::Capacity))?;
-            route.attachment.read_authority().map_err(client_error)?;
-            let file = authority
-                .session_file_reference(&message_id, delivery_index)
-                .map_err(|_| failed(FileFailure::Unavailable))?;
-            let (session, node) = sessions
-                .catalog
-                .lock()
-                .await
-                .file_source(&file.scope.conversation_id)
-                .map_err(|_| failed(FileFailure::Unavailable))?;
-            // Native allocation access excludes Session deletion while the read
-            // is owned; acquiring it does not compose or start an Agent.
-            let access = sessions
-                .acquire_session(&session, Some(&node))
-                .await
-                .map_err(|_| failed(FileFailure::Unavailable))?;
-            let reference = file.clone();
-            let read_route = route.clone();
-            let catalog = sessions.catalog.clone();
-            let bytes = tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                let _allocation = access.allocation;
-                let mapped_cwd = access.settings.cwd;
-                let authorized = || {
-                    let mapping_current = catalog.blocking_lock().file_mapping_matches(
-                        &reference.scope.conversation_id,
-                        &session,
-                        &node,
-                        &mapped_cwd,
-                    );
-                    if !mapping_current {
-                        return Err(crate::tools::session_files::unavailable());
-                    }
-                    read_route
-                        .attachment
-                        .read_authority()
-                        .map(|_| ())
-                        .map_err(|_| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::PermissionDenied,
-                                "delivery attachment revoked",
-                            )
-                        })
-                };
-                authorized()?;
-                // Current native mapping only. No textual Host-path fallback.
-                let root = std::fs::canonicalize(&mapped_cwd)
-                    .map_err(|_| crate::tools::session_files::unavailable())?;
-                if !allowed_roots.contains(&root) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "delivery Workspace not authorized by Product Host",
-                    ));
-                }
-                let bytes =
-                    crate::tools::session_files::read_authorized(&root, &reference, authorized)?;
-                authorized()?;
-                Ok::<_, std::io::Error>(bytes)
-            })
-            .await
-            .map_err(|_| domain(ErrorData::OperationFailed))?
-            .map_err(|error| failed(crate::tools::session_files::read_failure(&error)))?;
-            route.attachment.read_authority().map_err(client_error)?;
-            Ok(MethodResult::SessionFileBytes {
-                file,
-                data: base64::engine::general_purpose::STANDARD.encode(bytes),
-            })
-        }
         Method::ConfigurationGet { target } => {
             let mut projection = authority.configuration().map_err(client_error)?;
             projection.application = manager.configuration_application(&target.session_id);
@@ -1370,7 +1262,7 @@ fn native_result(
         _ => return Err(domain(ErrorData::OperationFailed)),
     })
 }
-fn client_error(error: RuntimeClientError) -> RpcError {
+pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
         RuntimeClientError::AgentNotDelivered { agent_id } => {
             ErrorData::AgentNotDelivered { agent_id }
@@ -1401,7 +1293,7 @@ fn client_error(error: RuntimeClientError) -> RpcError {
         _ => ErrorData::InvalidState,
     })
 }
-fn manager_error(error: RuntimeManagerError) -> RpcError {
+pub(super) fn manager_error(error: RuntimeManagerError) -> RpcError {
     match error {
         RuntimeManagerError::ResidencyCapacity => domain(ErrorData::ResidencyCapacity),
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
@@ -1431,7 +1323,7 @@ fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError
         _ => ErrorData::OperationFailed,
     })
 }
-fn domain(data: ErrorData) -> RpcError {
+pub(super) fn domain(data: ErrorData) -> RpcError {
     let message = match &data {
         ErrorData::SessionFileRead { reason } => match reason {
             crate::tools::session_files::SessionFileReadFailure::Missing => {
@@ -1492,7 +1384,7 @@ fn failure(id: Option<RequestId>, error: RpcError) -> Response {
     })
 }
 
-fn host_error(error: HostAdmissionError) -> RpcError {
+pub(super) fn host_error(error: HostAdmissionError) -> RpcError {
     domain(match error {
         HostAdmissionError::ServerDraining => ErrorData::ServerDraining,
         HostAdmissionError::RequestCapacity => ErrorData::RequestCapacity,

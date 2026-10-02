@@ -12,3 +12,5 @@ pub mod transport;
 pub mod host;
 
 pub mod archive_download;
+
+pub(crate) mod product_host;

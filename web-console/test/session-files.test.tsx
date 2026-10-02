@@ -6,7 +6,7 @@ import { ToolDeliveries } from '../src/app/components/Artifact';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import type { DeliveryBytes, DeliveryRead, ProductHostWorkspaces } from '../src/workspaces/host';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v31';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v32';
 import { Server } from './fixture';
 const file: SessionFileReference = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'sub/报告 file.md', name: '报告 file.md', description: 'Explicit report', mime_type: 'text/markdown' };
 const source: PreviewSource = { kind: 'session_file', messageId: 'canonical-tool', index: 0, file };

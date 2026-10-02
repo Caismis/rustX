@@ -192,7 +192,7 @@ share and prematurely release the same receipt. This releases the observation
 journal frontier; later canonical reports cannot be stranded behind an unpublished
 admission fact.
 
-App Server v31 exposes separate `jobs` and `agents` snapshots and `job_updated`
+App Server v32 exposes separate `jobs` and `agents` snapshots and `job_updated`
 and `agent_updated` events. Agent rows carry `agent_id`, `parent_agent_id`, child
 ConversationId, `current_activation`, latest `activation_id`, `activation_state`
 and explicit Admitting/Active/Stopping/Inactive/Unavailable state. Replay folds activations into the

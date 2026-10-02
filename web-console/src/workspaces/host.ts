@@ -1,5 +1,5 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v31.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v31.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v32.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v32.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };

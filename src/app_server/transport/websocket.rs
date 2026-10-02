@@ -20,12 +20,26 @@ pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Browser clients offer this protocol plus `rustx-token.<dedicated token>`.
-pub const SUBPROTOCOL: &str = "rustx.app-server.v31";
+pub const SUBPROTOCOL: &str = "rustx.app-server.v32";
 
 /// Dedicated transport credential. Deliberately has no Debug/Serialize.
 #[derive(Clone)]
 pub struct Credential(String);
 impl Credential {
+    pub(crate) fn offered(&self, offered: &[&str], prefix: &str) -> bool {
+        let expected = format!("{prefix}{}", self.0);
+        offered.iter().any(|value| {
+            value.len() == expected.len()
+                && value
+                    .bytes()
+                    .zip(expected.bytes())
+                    .fold(0u8, |different, (a, b)| different | (a ^ b))
+                    == 0
+        })
+    }
+    pub(crate) fn same_secret(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
     /// Require a bounded URL/header-safe secret (at least 256 random bits when generated).
     /// # Errors
     /// Rejects empty, short, long or non-token characters.
@@ -122,6 +136,9 @@ where
         .max_frame_size(Some(MAX_MESSAGE_BYTES))
         .write_buffer_size(0)
         .max_write_buffer_size(MAX_MESSAGE_BYTES + 1024);
+    let trusted = Arc::new(std::sync::Mutex::new(None));
+    let admitted = trusted.clone();
+    let handshake_host = host.clone();
     #[allow(clippy::result_large_err)]
     // tungstenite requires this concrete handshake response type.
     let callback = move |request: &Request, mut response: Response| {
@@ -132,20 +149,33 @@ where
             .filter_map(|value| value.to_str().ok())
             .flat_map(|value| value.split(',').map(str::trim))
             .collect();
-        let token = format!("rustx-token.{}", credential.0);
-        if request.uri().path() != "/"
-            || request.uri().query().is_some()
-            || !offered.contains(&SUBPROTOCOL)
-            || !offered.contains(&token.as_str())
+        let selected = if request.uri().query().is_none()
+            && request.uri().path() == crate::app_server::product_host::PATH
         {
+            if let Some(authority) = handshake_host.authenticate_product_host(&offered) {
+                *admitted.lock().expect("host handshake") = Some(authority);
+                Some(crate::app_server::product_host::SUBPROTOCOL)
+            } else {
+                None
+            }
+        } else if request.uri().path() == "/"
+            && request.uri().query().is_none()
+            && offered.contains(&SUBPROTOCOL)
+            && credential.offered(&offered, "rustx-token.")
+        {
+            Some(SUBPROTOCOL)
+        } else {
+            None
+        };
+        let Some(selected) = selected else {
             return Err(http::Response::builder()
                 .status(401)
                 .body(Some("Unauthorized".into()))
                 .expect("constant response"));
-        }
+        };
         response.headers_mut().insert(
             "sec-websocket-protocol",
-            http::HeaderValue::from_static(SUBPROTOCOL),
+            http::HeaderValue::from_static(selected),
         );
         Ok(response)
     };
@@ -159,6 +189,10 @@ where
     .map_err(|_| failure("WebSocket handshake deadline exceeded"))?
     .map_err(io::Error::other) } => socket?,
     };
+    let authority = trusted.lock().expect("host handshake").take();
+    if let Some(authority) = authority {
+        return crate::app_server::product_host::serve(socket, host, authority, shutdown).await;
+    }
     let (mut writer, reader) = socket.split();
     let incoming = reader
         .take_while(|message| std::future::ready(!matches!(message, Ok(Message::Close(_)))))

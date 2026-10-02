@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v31 envelope and method vocabulary.
+//! Rust authority for the App Server v32 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 31;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -85,17 +85,6 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
-    #[serde(rename = "session/fileRead")]
-    SessionFileRead {
-        target: AttachmentTarget,
-        message_id: crate::runtime::identity::MessageId,
-        #[schemars(range(max = 7))]
-        delivery_index: usize,
-        /// Current roots delegated by the authenticated native caller/Product
-        /// Host. Intersection with the original Session scope, never file paths.
-        #[schemars(length(min = 1, max = 32))]
-        allowed_roots: Vec<std::path::PathBuf>,
-    },
     #[serde(rename = "artifact/read")]
     ArtifactRead {
         target: AttachmentTarget,

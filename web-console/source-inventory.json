@@ -22,7 +22,7 @@
       "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. Issue #406: Resident input/editor and launcher interaction adapted to native textarea, native first-submit transactions and upload receipts. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../client/app-server",
         "../../client/uploads",
         "../../locale/react",
@@ -46,7 +46,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "905d537e975f37a4cf1cdfcf5ea696429e35e4e8b84195396ad5c53efc29fe4e",
+      "local_sha256": "2ef42214c99c09a4d4df4dc640d73871b6cb25acc31967d3cce638c94ad7f6e8",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -65,7 +65,7 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/questionnaire",
         "../../locale/react",
         "../../presentation/agent/Question.module.css",
@@ -80,7 +80,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "db616007c1dd360d34a93e89e757e5f9c573610dcfbfe8ecb198ae0906306f3c"
+      "local_sha256": "acdcba4cac644239889ecf7194f1a9ff8cd7c683629742c6af00f36f7e2b4295"
     },
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
@@ -109,7 +109,7 @@
       "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/projection",
         "../../client/app-server",
         "../../locale/react",
@@ -129,7 +129,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c2404125d67c4a30cfc11fa2959497d41d63453bd57bfb4640129190b732fff0"
+      "local_sha256": "928b32eeeb835b1b37f6b2a4b940d88a06e23f53d9b34291732dfc97854dcad8"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -231,7 +231,7 @@
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../locale/react",
@@ -249,7 +249,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9ff2e68c9341ad8e665365c79f8b31fa85094e8b200916e645e42f397b9859da"
+      "local_sha256": "71a8ee7013c8d42b14d4ff598da5e9f350a2711b092828b3d9f4100f797aac18"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -271,7 +271,7 @@
       "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../locale/react",
@@ -288,7 +288,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "aa0f82debc6d443c5880724fb391536821ab393d27f28c2c508ba952c783c5d5"
+      "local_sha256": "db31bdcea9f58e87595bcc8775c7ea7f742c26cb22e0d934edda84cc34ea3e11"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -310,7 +310,7 @@
       "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/composer-context",
         "../../locale/react",
         "../../locale/translation",
@@ -326,7 +326,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f26fe3f9da413b0836ea0597b5eba283542c894bb4b80da509f040ff001c025e"
+      "local_sha256": "50673d23dc1767e7ad5e6c5bfaf9492b6cb561b8ad6febdda80da2d022520d15"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -360,7 +360,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
-        "../../../../../protocol/app-server/v31",
+        "../../../../../protocol/app-server/v32",
         "../../../locale/react",
         "../../../locale/translation",
         "../../../presentation/primitives/Button",
@@ -403,7 +403,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "dafc01cdecd29c2b3b0a196bf63977e7415509b0cfae179cfd7571578fde2f31"
+      "local_sha256": "b93cda5881d2c1564e73062680b0763e6141d749327313dc5d10b3519b7c6c0b"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -411,7 +411,7 @@
       "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command WEB-RESET-03: native inert MCP list/detail cards, structured exact arrays, retained native credential redaction and whole definition CAS. infer native MCP transport for display without rewriting authored intent Inherited MCP identities are enumerated from the native resource inventory, which names each identity's winning scope; no browser catalog merge. #392: moved into the Extensions resource detail; MCP and named-Agent definitions and root availability are separate units with separate outcomes, and resource kinds without an authoring API show inventory/diagnostics/selection only. #392 repair: extension focus is typed by the Extensions page from the navigation domain. #393: native diagnostics and alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
-        "../../../../../protocol/app-server/v31",
+        "../../../../../protocol/app-server/v32",
         "../../../bindings/mcp",
         "../../../locale/react",
         "../../../presentation/primitives/Button",
@@ -468,7 +468,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4798b23e2131204f129c9ec028dbdcaea2cadc09f73665df24f83b6bc6fdec70"
+      "local_sha256": "bdaaef3d8ef0945a1a1019e6f94db00ea40718e7afd745ac6d5e30504db427e3"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -476,7 +476,7 @@
       "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. PR #436: the retained workspaces/host import now resolves only to the environment-neutral contract and shared error; the concrete browser adapter and carrier dependency belong to workspaces/http-host, composed by App. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../client/app-server",
         "../../connection/controller",
         "../../locale/react",
@@ -516,7 +516,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1c7fedd7f3a569b310fedb7d123fd2f71617d7b15f0e1193099fa8af9b6d503b"
+      "local_sha256": "178f5dcbdef6f2ea21d94db7b2b62a2330eacb660d616ad0f6b948f07e4a0b1f"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -637,7 +637,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/status-labels",
         "../../locale/react",
         "../../locale/translation",
@@ -683,7 +683,7 @@
           "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
         }
       ],
-      "local_sha256": "423daef5684232c2db75b6d29d19244bdf5996ecad8c50e7b8f7cd7e16d98c07"
+      "local_sha256": "2490169c9068d24ce47f0ec0cdc4fe99bcdb395a1e840384879ac259febf6bee"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -751,7 +751,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. PR #424: project per-Step seats in native Turn group order; preserve exact logical focus and structural ownership. PR #424 compact fold: suppress hidden Step seats and logical targets while preserving expanded native group order. PR #424 review: Ledger seats use exact native group membership, including wire-null Step identity. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "9d198059498d082555cb5ea8d3d1a0bf4f991afc47bc55646028eada2fb981f1",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/status-labels",
         "../../locale/translation"
       ],
@@ -765,7 +765,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "097c746a06d866299909b6051c889a0448b91c39a19c712b485f302b3b77045b",
+      "local_sha256": "9e7a2f55889a43f8f64c8fd8e93f3a3a337a4c9539dbcc060a35f9045dc8b0a9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -816,7 +816,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../locale/translation",
         "./layout"
       ],
@@ -830,7 +830,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ec4a4614f9a91b8a4faa575c0753d4ea0d8e69f7776339fdbd4cfe27ab523147",
+      "local_sha256": "2335f2b5b126c7c504dcdb5d79312af8d0469470ba1d96ca6fa9708f0c1ec2df",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -2529,7 +2529,7 @@
       "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. PR #424: project per-Step seats in native Turn group order; preserve exact logical focus and structural ownership. PR #424 compact fold: suppress hidden Step seats and logical targets while preserving expanded native group order. PR #424 review: Ledger seats use exact native group membership, including wire-null Step identity. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
-        "../../protocol/app-server/v31",
+        "../../protocol/app-server/v32",
         "../src/app/trajectory/Trajectory",
         "../src/app/trajectory/layout",
         "../src/app/trajectory/search",
@@ -2560,7 +2560,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "c9109adb415afe3a3dbae5df299705655728a3683c54f0daaf213c0eaf37bee1"
+      "local_sha256": "eb66ee10ee653b3dbdfe62674bbf0ccce871d1ec062730976a0cbff780dba257"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2581,7 +2581,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../client/transcript",
         "../../locale/react",
         "../../locale/translation",
@@ -2600,7 +2600,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "0240bd0e3c5e34c3e7e48580bc0eb469b1831edf5c516fd1e1839d27b7d6b0bc"
+      "local_sha256": "08049b64657314baee64cfefa260abde817227cbc2e6518b8e845eff931fb80e"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -2649,7 +2649,7 @@
         }
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../locale/react",
         "../../presentation/primitives/Modal",
         "./TurnTail",
@@ -2663,7 +2663,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "cd6609323296f753380987864cc1685d0fe120ff6667699460e9719a938b542f"
+      "local_sha256": "86802f3b489818edaebc47cdd37a2e36f3252a144c4c7b69e229f87e91520ce2"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -2671,7 +2671,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../locale/react",
         "../../locale/translation",
         "../../presentation/markdown/MarkdownText",
@@ -2697,7 +2697,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "c58e27427eb1176134f7e5aa82439dae990e1f9e850b0b479d15ad0a01341e5b"
+      "local_sha256": "2a95024ed4b346b8846ea02f1a104978545a186db312854e206568855fc02847"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2708,7 +2708,7 @@
       "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. #402 review: model choices consume only the native Session-creation ModelCatalogView; each submission binds its own authority, so transport transitions never remount the draft. A submission port fences only native continuation; acknowledged Session recovery uses the current navigation epoch. Issue #406: One unconditional composer seat with explicit no-Session/native Session binding; native creation remains first-submit-owned. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. PR #436: the retained workspaces/host import now resolves only to the environment-neutral contract and shared error; the concrete browser adapter and carrier dependency belong to workspaces/http-host, composed by App. #436 metadata dispatch repair: the Composer picker retains the shared Host mutation capability and locations from opening, sends its expected scope, settles display independently and surfaces definite refusal inside the picker. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../client/app-server",
         "../../client/selectors",
         "../../locale/react",
@@ -2737,7 +2737,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "2ca3cc90c43890592e4835a2eae43fd29eff341aee6b716feb8ab0b6f121d01d",
+      "local_sha256": "4b7b5c4fa16251ae8552c761c8c46ec73ae0a1f9b02ec11fbbaa5a3dbb362e5d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -3131,7 +3131,7 @@
         "Harness context projection and producer forms"
       ],
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../bindings/agent-status",
         "../../locale/react",
         "../../presentation/primitives/DisclosureRow",
@@ -3140,7 +3140,7 @@
         "react"
       ],
       "upstream_sha256": "bb87019d9291d93af6e69ed02ca4f47f040272244af0d023112ec565be9e3427",
-      "local_sha256": "bcfac4588a8ddc8cd1ad4174eef5c89d5637d58bb58b81f841e65d3f7c6fb95d"
+      "local_sha256": "032f3a1bf3f5e159bafdd116b50d8d681df2b244917cdee0191d1b71763b73ae"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3283,7 +3283,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "866d0cfdc4c58f7845511d294bc7dc5e2d75b813397b66ab6d42d8782493a436"
+      "local_sha256": "eb4c5dc3e4da65c610d4fd3acd4e99435a889e8e4d018a347bb4134cec8bf036"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3439,7 +3439,7 @@
       "treatment": "Fixed-pitch native-identity rail, active/pending marks and bounded hover/focus preview adapted to the rustX native Attempt outline and exact read-cut windows. One 64-item page and direct ordinal page access replace Harness runtime/loaded-only assumptions. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: explicit latest versus historical outline-page intent.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v31",
+        "../../../../protocol/app-server/v32",
         "../../client/app-server",
         "../../client/selectors",
         "../../client/transcript",
@@ -3453,7 +3453,7 @@
         "Cordis runtime",
         "Harness scroll ownership"
       ],
-      "local_sha256": "2b91efb5e763ccdccd4ab6e50a431c7ec3d07c557ca55977628e45b7274c9e8b"
+      "local_sha256": "8848709bdc717602ef33cee43f026a60e7e8a617b1d6128a8c6dbbd983975227"
     }
   ],
   "inspected_only": [

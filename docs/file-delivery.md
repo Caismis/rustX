@@ -4,6 +4,12 @@
 `ToolExecutor`, and `NativeToolRegistration`. The normal Tool Plane and Agent Loop
 own invocation, cancellation, settlement, and atomic canonical Tool-result commit.
 There is no delivery database, special Agent Loop branch, or browser model state.
+`present` belongs only to the root Session-capable Agent plane. Named child
+selection produces the existing ScopeUnsupported admission diagnostic; child
+invocation overrides reject it as ChildUnsafeSelector, and frozen child
+composition cannot register it. Child-only Conversations have no published
+Session filesystem mapping, so this Tool is intentionally unavailable there.
+Child-file promotion or delivery ownership is not part of this feature.
 
 ## Declaration
 
@@ -66,27 +72,55 @@ Attempt, or model request.
 
 ## Authorized read and containment
 
-App Server v31 `session/fileRead` addresses an exact existing attachment target,
-canonical Tool message ID, delivery index, and authenticated native caller's
-allowed-root restriction. The browser's authenticated Product Host carrier accepts
-only target/message/index coordinates and Product Host authority scope. It accepts
-no path, root list, or browser-provided SessionFileReference. The Product Host binds
-the request to its configured rustX endpoint and current roots on every call.
+App Server v32 has no public `session/fileRead` Method. An ordinary authenticated
+App Server connection cannot enter the file-read seam, even with the exact
+attachment, canonical Tool message ID, delivery index, Session cwd, and reference.
+Initialize client names are metadata and have no authorization role.
 
-The App Server's bounded weak attachment lookup permits that authenticated Product
-Host to use the browser's existing exact attachment. It neither steals a controller
-nor creates a second attachment/runtime. Native authorization is checked at
-admission, before open/read, after read, and before publishing the response. The
-canonical message must be a successful Tool result in the viewed Conversation
-store. Native Session allocation ownership excludes source deletion during read.
-The original Conversation resolves through SessionController's current filesystem
-mapping and its cwd must exactly equal one of the Product Host's configured
-allowed roots, matching the existing exact-root classification policy. The original node's
-cwd mapping is rechecked before opening, before reading, and after reading;
-reassociation or mapping loss fails the in-flight read. All file bytes come
-from the addressed App Server's filesystem; no Host-path fallback exists. A remote
-or container filesystem needs its actual native mapping and authorized Product
-Host configuration; a same-spelled local path is never a fallback byte source.
+The launcher provisions a separate 256-bit process-ephemeral Product Host secret
+in an owner-only file, passes its path with `--product-host-token-file`, and puts
+its value only in Node's private Host configuration. It differs from the browser's
+ordinary transport token. The browser bootstrap, catalog, JS bundle, URLs,
+transcript, localStorage and ordinary protocol log never receive it. Independently
+managed deployments must provision the same separate owner-only credential to
+this native process and its trusted Product Host; without it file reads are
+unavailable. Native startup rejects reuse of the ordinary credential, symlink or
+non-regular secret files, and files readable by other users.
+
+Only `/product-host/file-read` WebSocket admission accepts the private
+`rustx.product-host.file-read.v1` subprotocol plus `rustx-product-host.<secret>`.
+The response selects only the public subprotocol name, never the secret. Ordinary
+transport credentials cannot authenticate this lane, and this credential cannot
+authenticate the ordinary App Server lane. Handshake admission creates a native
+cancellation authority; no ordinary JSON field can manufacture it. The socket
+accepts one bounded internal read payload and creates no attachment or Agent.
+
+The browser's authenticated Product Host HTTP carrier accepts only authority scope
+and exact target/message/index coordinates. The Node Host supplies canonical roots
+from **current registrations**, after scope/endpoint admission. Configured picker
+locations alone do not authorize file bytes (even though display classification
+may describe them as operator-authorized locations). No browser association cache
+or browser-supplied Workspace ID grants authority. Native lookup resolves the
+original committed fact and current original Session mapping; its cwd must exactly
+match a currently registered root. Viewing forks never substitute their cwd.
+Remote/container reads use the addressed native filesystem, with no Host fallback.
+
+Registration-root changes synchronously abort the Host's owned reads after the
+metadata commit; later operations rebuild policy from the current registrations.
+Host close/replacement and caller disconnect abort too. Rename/reorder alone keep
+the same file policy. Socket disconnect, process shutdown, or native credential
+replacement/removal cancels captured native authority. Credential replacement is a
+native owner seam, never a public RPC; a restarted native process uses a new secret.
+
+Native fences run at authenticated admission, before canonical lookup/allocation,
+before open, after leaf open immediately before bytes, after byte/edge verification,
+and before response serialization/delivery. They check captured host authority,
+attachment read authority, original mapping, exact root and recorded device/inode.
+Publication retires with its owning socket; the Host rechecks its scope, operation
+abort and root availability before returning to the browser. Allocation ownership
+excludes physical Session deletion during reads. Revocation before these fences
+fails or closes the operation without publishing bytes; completed prior reads are
+not retroactively erased. Preview/navigation starts no Agent or model request.
 
 The security opener uses the existing nix dependency. Starting at `/`, it retains
 ancestor directory descriptors opened with `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`.

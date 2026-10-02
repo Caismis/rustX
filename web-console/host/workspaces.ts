@@ -7,9 +7,12 @@ import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread } from '../src/workspaces/host.ts';
 import { AppServerClient } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
+import { readNativeDelivery } from './file-read.ts';
 
 export interface LocalHostConfig {
   transportToken?: string;
+  /** Launcher-provisioned secret for native file reads. Never sent to browser. */
+  productHostToken?: string;
   endpoint: string;
   roots: { id: string; cwd: string; displayName: string }[];
   picker: boolean;
@@ -18,7 +21,8 @@ export interface LocalHostConfig {
 }
 type Registration = { id: string; location: string; displayName: string };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
-  private fileReads = 0;
+  private fileReads = new Set<AbortController>();
+  private closed = false;
   private readonly authorityId = randomUUID();
   private registrations: Registration[];
   private readonly roots: LocalHostConfig['roots'];
@@ -40,7 +44,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const temporary = `${this.config.metadataFile}.${randomUUID()}.tmp`;
     writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 });
     renameSync(temporary, this.config.metadataFile);
+    const previous = new Set(this.registrations.map(row => row.location));
     this.registrations = rows;
+    if (previous.size !== new Set(rows.map(row => row.location)).size || rows.some(row => !previous.has(row.location))) {
+      for (const read of this.fileReads) read.abort();
+    }
   }
   private registered(id: string) {
     const row = this.registrations.find(row => row.id === id);
@@ -62,39 +70,36 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
   private mutationScope(scope: WorkspaceAuthorityScope) {
-    if (scope.authorityId !== this.authorityId || !sameEndpoint(scope.endpoint, this.config.endpoint)) {
+    if (this.closed || scope.authorityId !== this.authorityId || !sameEndpoint(scope.endpoint, this.config.endpoint)) {
       throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
     }
   }
-  /** Native reads use the exact committed declaration, through this Host's
-   * operator roots and endpoint. Paths from the browser are never accepted. */
+  close() { this.closed = true; for (const read of this.fileReads) read.abort(); }
+  /** Only currently registered Workspaces authorize bytes. Configured picker
+   * locations alone authorize neither an initial nor a historical file read. */
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     this.mutationScope(scope);
     if (!read || !Number.isInteger(read.delivery_index) || read.delivery_index < 0 || read.delivery_index > 7
       || typeof read.message_id !== 'string' || !read.message_id || read.message_id.length > 256
       || !read.target || typeof read.target.session_id !== 'string' || typeof read.target.conversation_id !== 'string'
       || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'message_id', 'delivery_index'].includes(key))) throw new Error('Invalid delivery coordinates');
-    if (!this.config.transportToken) throw new Error('Product Host native file mapping unavailable');
-    if (this.fileReads >= 2) throw new Error('Session file read capacity reached');
-    this.fileReads++;
-    let client: AppServerClient | undefined;
-    const abort = () => { void client?.close(); };
+    if (!this.config.productHostToken) throw new Error('Product Host native file mapping unavailable');
+    if (this.fileReads.size >= 2) throw new Error('Session file read capacity reached');
+    const operation = new AbortController();
+    this.fileReads.add(operation);
+    const abort = () => operation.abort();
     signal?.addEventListener('abort', abort, { once: true });
     try {
       signal?.throwIfAborted();
-      const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
-      client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host-file-read', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
+      const roots = this.registrations.map(row => this.cwd(row.location));
+      if (!roots.length || roots.length > 32) throw new Error('Product Host file roots unavailable');
+      const bytes = await readNativeDelivery(this.config.endpoint, this.config.productHostToken, read, roots, operation.signal);
       this.mutationScope(scope);
-      signal?.throwIfAborted();
-      const allowed_roots = this.roots.map(root => this.cwd(root.id));
-      if (!allowed_roots.length || allowed_roots.length > 32) throw new Error('Product Host file roots unavailable');
-      const bytes = await client.call('session/fileRead', { target: read.target, message_id: read.message_id, delivery_index: read.delivery_index, allowed_roots: allowed_roots as [string, ...string[]] }, 'session_file_bytes');
-      this.mutationScope(scope);
-      signal?.throwIfAborted();
+      operation.signal.throwIfAborted();
       // Recheck root availability after asynchronous native work too.
-      for (const root of this.roots) this.cwd(root.id);
+      for (const row of this.registrations) this.cwd(row.location);
       return bytes;
-    } finally { signal?.removeEventListener('abort', abort); await client?.close(); this.fileReads--; }
+    } finally { signal?.removeEventListener('abort', abort); this.fileReads.delete(operation); }
   }
   async adoptWorkspace(scope: WorkspaceAuthorityScope, location: string) {
     this.mutationScope(scope);

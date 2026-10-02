@@ -11,6 +11,8 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
   let passed = false;
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const wire = await wireProbe(page);
+  let deliveryRead: any;
+  page.on('request', request => { if (request.url().endsWith('/product-host/file-read')) deliveryRead = request.postDataJSON().read; });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => {
     const urls = new Set<string>(), create = URL.createObjectURL, revoke = URL.revokeObjectURL;
@@ -56,6 +58,18 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     expect(await page.evaluate(() => (window as any).PWNED)).toBeUndefined();
     await expect(panel.locator('script,img,iframe,object')).toHaveCount(0);
     await download(panel.getByRole('link', { name: 'Download artifact' }), '报告 file.md', original);
+    expect(deliveryRead).toBeDefined();
+    const bypass = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<number>((resolve, reject) => {
+      const socket = new WebSocket(endpoint, ['rustx.app-server.v32', `rustx-token.${token}`]);
+      socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
+      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 32, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
+      socket.onmessage = event => {
+        const reply = JSON.parse(event.data);
+        if (reply.id === 4191) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));
+        else if (reply.id === 4192) { socket.close(); resolve(reply.error?.code ?? 0); }
+      };
+    }), { endpoint: fixture.endpoint, token: fixture.token, read: deliveryRead, cwd: fixture.workspaceA });
+    expect(bypass).toBe(-32601); // All legitimate coordinates and exact cwd still confer no Host authority.
     await close();
     for (const name of ['plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt']) {
       await card(name).getByRole('button', { name: `Preview ${name}`, exact: true }).click();
@@ -93,6 +107,12 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     const chinese = page.getByRole('complementary', { name: '制品预览', exact: true });
     await expect(chinese.locator('pre')).toBeVisible();
     await download(chinese.getByRole('link', { name: '下载制品' }), 'source.rs', readFileSync(join(fixture.workspaceA, 'source.rs')));
+    await chinese.getByRole('button', { name: '关闭产物预览' }).click(); await expect.poll(countUrls).toBe(0);
+    const hostScope = await fixture.workspaceHost.host.listWorkspaces();
+    await fixture.workspaceHost.host.removeWorkspace(hostScope, hostScope.workspaces.find(row => row.location === 'root-a')!.id);
+    await card('source.rs').getByRole('button', { name: '预览 source.rs', exact: true }).click();
+    await expect(chinese.getByRole('alert')).toContainText('not authorized');
+    await expect(chinese.getByRole('link')).toHaveCount(0);
     await chinese.getByRole('button', { name: '关闭产物预览' }).click(); await expect.poll(countUrls).toBe(0);
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);
