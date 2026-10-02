@@ -439,7 +439,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
             supported: 56,
-            requested: 56,
+            requested: 57,
         })
     ));
     // v44 published a resource diagnostic's field path as its `identity`, so a

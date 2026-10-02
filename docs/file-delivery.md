@@ -80,7 +80,8 @@ admission, before open/read, after read, and before publishing the response. The
 canonical message must be a successful Tool result in the viewed Conversation
 store. Native Session allocation ownership excludes source deletion during read.
 The original Conversation resolves through SessionController's current filesystem
-mapping and must intersect the Product Host's allowed roots. The original node's
+mapping and its cwd must exactly equal one of the Product Host's configured
+allowed roots, matching the existing exact-root classification policy. The original node's
 cwd mapping is rechecked before opening, before reading, and after reading;
 reassociation or mapping loss fails the in-flight read. All file bytes come
 from the addressed App Server's filesystem; no Host-path fallback exists. A remote
@@ -124,6 +125,14 @@ the ordinary native failure vocabulary.
 | Raster dimensions | At most 4096 on either axis and 4,194,304 pixels |
 | Raster animation | Static only; animation fails inline but Download remains |
 | Declaration / allowed-root list | 8 entries / 32 native roots |
+
+Each browser Session-file response contains at most 699,052 base64 characters.
+Its transient binary string, decoded text string, byte array, and Blob each
+contain at most 524,288 characters or bytes as applicable; at most two reads/URLs
+are owned. These values are bounded before decoding or URL allocation. A raster's
+logical RGBA output is at most 16,777,216 bytes, with dimensions checked before
+browser decoding. Read buffers and decoded content are effect-owned and ephemeral;
+only finite Blob URLs are retained by the resource owner.
 
 `FilePreviewResources` has a closed Artifact versus Session-file source union,
 separate concrete source owners, and one presentation seat. Rendering and Download
