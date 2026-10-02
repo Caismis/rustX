@@ -1239,7 +1239,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
       "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
-      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
+      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained.",
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "react"
@@ -1251,7 +1251,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "0806728ce1b4b600e832ca6ab8a9de5f7684b52b81a4cd683e786bac5b60ee49",
+      "local_sha256": "c7bc98331961b583ca1797696fde0523283eac32b32a82eef636fb9e1e6623be",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",

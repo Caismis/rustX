@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { useState } from 'react';
+import { AgentTranscript } from '../src/app/agent/AgentTranscript';
+import { TurnNavigator } from '../src/app/agent/TurnNavigator';
+import { Server, snapshot } from './fixture';
+import { turnAnchor } from '../src/client/transcript';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v30';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
 let resize: () => void;
@@ -176,4 +182,78 @@ it('follow publishes the live native turn without a locate cursor; historical an
  v.grow(300);v.flush();expect(v.top()).toBe(500);
  fireEvent.click(v.ui.getByRole('button',{name:'Return to latest'}));v.replace(['a','b','turn:target'],false);v.flush();
  expect(v.active).toHaveBeenLastCalledWith('turn:live');const bottom=v.top();v.grow(100);v.flush();expect(v.top()).toBe(bottom+100);
+});
+
+for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome} long-turn regions own reading and rail through reflow and the final tail`, async () => {
+  const server = new Server();
+  await server.attached('A');
+  const owner = (attempt: string, cursor: string): TurnProcessView => ({
+    conversation_id: 'conversation-A', attempt_id: attempt, control_cursor: cursor,
+    outcome, message_count: 2, tool_call_count: 0, final_message_id: `${attempt}-body`,
+  });
+  const a = owner('A', '1'), b = owner('B', '3');
+  const entry = (cursor: string, id: string, turn_process: TurnProcessView): RuntimeClientTranscriptEntry => ({
+    cursor, turn_process, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text: id }] } },
+  });
+  const entries = [entry('1', 'A-start', a), entry('2', 'A-body', a), entry('3', 'B-start', b), entry('4', 'B-body', b)];
+  server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: {
+    cut: { conversation_id: 'conversation-A', journal: '6', transcript: '4', mutation_revision: '0' },
+    offset: 0, total: 2, turns: [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, preview: '' })),
+  } }));
+  let frame: FrameRequestCallback | undefined, height = 2000;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  const active = vi.fn();
+  function Reading() {
+    const [current, setCurrent] = useState<string>();
+    return <ChatViewport historical onActiveAnchor={key => { active(key); setCurrent(key); }}
+      overlay={<TurnNavigator client={server.client} sessionId="A" active={current} onNavigate={() => {}}/>}>
+      <AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>
+    </ChatViewport>;
+  }
+  const ui = await act(async () => render(<Reading/>));
+  const viewport = ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
+  const positions: Record<string, number> = { [turnAnchor(a)]: 0, 'message:A-start': 0, 'message:A-body': 100,
+    [turnAnchor(b)]: 1000, 'message:B-start': 1000, 'message:B-body': 1100 };
+  Object.defineProperties(viewport, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 } });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+    const key = this.dataset.chatAnchorKey, top = key ? positions[key] - viewport.scrollTop : 0;
+    const size = key?.endsWith('-body') ? 900 : 20;
+    return { top, bottom: top + size, left: 0, right: 500, width: 500, height: size, x: 0, y: top, toJSON() {} };
+  });
+  const flush = () => act(() => { const callback = frame; frame = undefined; callback?.(0); });
+  const scroll = (top: number) => { viewport.scrollTop = top; fireEvent.scroll(viewport); };
+  const expectActive = (turn: TurnProcessView) => {
+    expect(active).toHaveBeenLastCalledWith(turnAnchor(turn));
+    const marks = [...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')];
+    expect(marks.map(mark => mark.getAttribute('data-turn-id'))).toEqual([turnAnchor(turn).slice(5)]);
+  };
+  flush(); scroll(400); flush();
+  expectActive(a); // A marker ends at 20, A body contains 400, B begins at 1000.
+  // Disclosure updates and width/image growth use the same observer and frame.
+  if (outcome === 'completed') fireEvent.click(ui.getAllByRole('button', { name: 'Worked' })[0]);
+  for (const growth of [80, 150, 60]) {
+    positions['message:A-body'] += growth;
+    positions[turnAnchor(b)] += growth; positions['message:B-start'] += growth; positions['message:B-body'] += growth;
+    height += growth;
+    resize(); flush();
+    expect(viewport.scrollTop).toBe(positions['message:A-body'] + 300);
+    expectActive(a);
+  }
+  scroll(positions[turnAnchor(b)] - 1); expectActive(a);
+  scroll(positions[turnAnchor(b)]); expectActive(b);
+  scroll(positions['message:B-body'] + 500); flush();
+  expectActive(b); // No later anchor; B remains active after its marker is gone.
+  ui.unmount(); server.client.disconnect();
+});
+
+
+it('the final native turn remains active beyond its location marker', () => {
+  const v = coordinatedViewport(true);
+  v.scroll(750);
+  expect(v.active).toHaveBeenLastCalledWith('turn:target');
+  v.grow(200); v.flush();
+  expect(v.top()).toBe(750);
+  expect(v.active).toHaveBeenLastCalledWith('turn:target');
 });

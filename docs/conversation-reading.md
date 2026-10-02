@@ -150,7 +150,11 @@ The first native process `control_cursor` absent from the outline cut triggers
 one refresh to make the current turn locatable before settlement. Subsequent
 same-Attempt appends/text deltas do not refresh the outline. A current mark is
 active in follow mode even before a durable anchor exists; detached reading
-publishes its loaded turn anchor. Return to latest restores the current live
+publishes the nearest preceding loaded native turn start. Native starts define
+half-open reading regions: a turn remains active through its separate body, Tool
+output and tail until the next native start reaches the viewport reading position.
+The final region remains active beyond its start marker. Marker height never
+defines a turn end. Return to latest restores the current live
 identity and follow mode through ChatViewport. Paging and an
 ordinal input reach distant pages without accumulating outline history. Transcript
 cache limits remain 512 entries / 8 MiB; ordinary prepend reads are 64 entries.

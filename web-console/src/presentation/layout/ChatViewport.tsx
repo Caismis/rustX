@@ -74,7 +74,10 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     if (!el) return;
     const turns = this.rows().filter(row => row.dataset.chatAnchorKey?.startsWith('turn:'));
     const top = el.getBoundingClientRect().top;
-    const key = this.following && this.props.latestAnchor ? this.props.latestAnchor : turns.find(row => row.getBoundingClientRect().bottom > top)?.dataset.chatAnchorKey;
+    // Native location markers start half-open turn regions. Their visual height
+    // is not the semantic extent: body, Tool output and tails follow separately.
+    // The final region stays open through the remaining transcript.
+    const key = this.following && this.props.latestAnchor ? this.props.latestAnchor : turns.reverse().find(row => row.getBoundingClientRect().top <= top)?.dataset.chatAnchorKey;
     if (key !== this.active) { this.active = key; this.props.onActiveAnchor?.(key); }
   };
   private onScroll = () => {

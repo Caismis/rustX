@@ -5,7 +5,9 @@ Read-only reference inspected: `477b4f420553e8a52c2fbccc464d7561b239c443`,
 use-scroll-follow.ts,use-chat-viewport.ts}`. Existing pinned lineage is unchanged.
 ChatViewport retains its attributed source lineage and adopts the semantic anchor,
 follow-intent and browser-clamp attribution patterns. rustX owns the single RAF
-commit rule and native message identity adapter. Smooth native scrolling and
+commit rule and native message identity adapter. PR #443 repairs active reading
+with native start intervals rather than marker heights; the viewport remains the
+sole geometry reader and automatic scroll writer. Smooth native scrolling and
 Harness runtime/store authority were not imported: they do not satisfy the required
 single frame writer or rustX native authority boundary. Generated imports advance
 with the mandatory protocol; local hashes/dependency closure are refreshed.
