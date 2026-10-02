@@ -246,6 +246,7 @@ fn settled(summary: String, snapshot: &TodoSnapshot) -> ToolExecutionResult {
     let value = serde_json::to_value(snapshot)
         .unwrap_or_else(|_| serde_json::json!({ "tasks": [], "next_id": 1 }));
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Success,
         content: vec![
             ToolResultContent::Text(TextBlock { text: summary }),

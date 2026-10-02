@@ -4207,3 +4207,232 @@ async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() 
     assert!(f.provider.request_bodies().is_empty());
     f.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn committed_present_reads_exact_native_scope_through_current_authorized_attachment() {
+    use crate::message::types::MessageBlock;
+    use crate::tools::session_files::SessionFileReadFailure as FileFailure;
+    use base64::Engine;
+    bounded(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let path = f.workspaces[0].join("报告 file.md");
+        let original = b"# Original\r\n\r\nNative bytes\r\n";
+        std::fs::write(&path, original).unwrap();
+        let browser = AppServerConnection::new(f.host.clone());
+        let product_host = AppServerConnection::new(f.host.clone());
+        initialize(&browser).await;
+        initialize(&product_host).await;
+        let target = attach(&browser, &f, 0).await;
+        let read = |message_id| Method::SessionFileRead {
+            target: target.clone(),
+            message_id,
+            delivery_index: 0,
+            allowed_roots: vec![f.workspaces[0].clone()],
+        };
+        assert_eq!(
+            rejected(
+                &product_host,
+                read(crate::runtime::identity::MessageId::new("invented"))
+            )
+            .await,
+            ErrorData::SessionFileRead {
+                reason: FileFailure::Unavailable
+            }
+        );
+        f.gates[0].release();
+        call(
+            &browser,
+            4100,
+            Method::TurnStart {
+                target: target.clone(),
+                content: wire_text("request-A"),
+            },
+        )
+        .await;
+        await_attempt_settled(&browser, &target.session_id).await;
+        let MethodResult::Snapshot { snapshot, .. } = call(
+            &browser,
+            4101,
+            Method::SessionSnapshot {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        let tools: Vec<_> = snapshot
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::Tool(tool) => Some(tool),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools.len(), 1, "ordinary terminal Tool commit is unique");
+        let tool = tools[0];
+        assert_eq!(
+            tool.result.status,
+            crate::tools::ToolExecutionStatus::Success
+        );
+        assert_eq!(tool.result.deliveries.len(), 1);
+        let file = tool.result.deliveries[0].clone();
+        assert_eq!(file.scope.conversation_id, target.conversation_id);
+        assert_eq!(file.name, "报告 file.md");
+        assert!(tool.result.artifacts.is_empty());
+        let requests = f.provider.request_bodies().len();
+        assert_eq!(requests, 2);
+        let MethodResult::SessionFileBytes {
+            file: returned,
+            data,
+        } = call(&product_host, 4102, read(tool.id.clone())).await
+        else {
+            panic!()
+        };
+        assert_eq!(returned, file);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap(),
+            original
+        );
+        assert_eq!(
+            product_host.attachment_counts(),
+            (0, 0),
+            "file reads create no new attachment"
+        );
+        // Historical paging carries the same typed fact after activity folds.
+        let MethodResult::TranscriptWindow { window } = call(&browser, 4120, Method::Transcript {
+            target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
+        }).await else { panic!() };
+        let MethodResult::TranscriptWindow { window: older } = call(&browser, 4121, Method::Transcript {
+            target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Older {
+                before: window.page.entries[0].cursor.into(), cut: Some(window.cut),
+            }, limit: 64,
+        }).await else { panic!() };
+        assert!(older.page.entries.iter().any(|entry| matches!(&entry.item,
+            crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message: MessageBlock::Tool(tool) }
+                if tool.result.deliveries == [file.clone()])));
+        let access = f.manager.sessions.acquire_session(&target.session_id, Some(&f.sessions[0].active_node)).await.unwrap();
+        let store = crate::durable::SqliteConversationStore::open_existing(target.conversation_id.clone(), &access.database_path).unwrap();
+        let revision = crate::durable::ConversationStore::load_head(&store).unwrap().revision;
+        drop(store); drop(access);
+        let MethodResult::SessionTransition { session: fork, .. } = call(&browser, 4122, Method::SessionFork {
+            session_id: target.session_id.clone(), node_id: Some(f.sessions[0].active_node.clone()),
+            surface_revision: revision, boundary: Some(crate::conversation::message_id_of(snapshot.messages.last().unwrap())),
+            side: crate::local_runtime::session::LineageSide::After,
+        }).await else { panic!() };
+        let fork_target = attach_session(&browser, &fork).await;
+        assert_eq!(fork_target.attachment_id, target.attachment_id, "native local attachment ordinals intentionally collide across Conversations");
+        let MethodResult::Snapshot { snapshot: copied, .. } = call(&browser, 4123, Method::SessionSnapshot {
+            target: fork_target.clone(), trace_records: vec![],
+        }).await else { panic!() };
+        let inherited = copied.messages.iter().find_map(|block| match block {
+            MessageBlock::Tool(tool) if !tool.result.deliveries.is_empty() => Some(tool), _ => None,
+        }).unwrap();
+        assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
+        assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
+        let MethodResult::SessionFileBytes { file: inherited_file, data } = call(&product_host, 4124, Method::SessionFileRead {
+            target: fork_target, message_id: inherited.id.clone(), delivery_index: 0, allowed_roots: vec![f.workspaces[0].clone()],
+        }).await else { panic!() };
+        assert_eq!(inherited_file, file);
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original);
+        // A same-named unrelated Session cannot resolve invented source coordinates.
+        std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
+        let unrelated = attach_session(&browser, &f.sessions[1]).await;
+        assert_eq!(rejected(&product_host, Method::SessionFileRead {
+            target: unrelated, message_id: tool.id.clone(), delivery_index: 0, allowed_roots: vec![f.workspaces[1].clone()],
+        }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
+        let mut denied = read(tool.id.clone());
+        let Method::SessionFileRead { allowed_roots, .. } = &mut denied else {
+            panic!()
+        };
+        *allowed_roots = vec![f.workspaces[1].clone()];
+        assert_eq!(
+            rejected(&product_host, denied).await,
+            ErrorData::SessionFileRead {
+                reason: FileFailure::Unauthorized
+            }
+        );
+        assert_eq!(
+            rejected(
+                &browser,
+                Method::ArtifactRead {
+                    target: target.clone(),
+                    artifact_id: crate::runtime::ArtifactId::new(file.path.clone())
+                }
+            )
+            .await,
+            ErrorData::InvalidState
+        );
+        std::fs::write(&path, vec![b'x'; 300 * 1024]).unwrap();
+        let MethodResult::SessionFileBytes { data, .. } =
+            call(&product_host, 4103, read(tool.id.clone())).await
+        else {
+            panic!()
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap()
+                .len(),
+            300 * 1024
+        );
+        let permits = f.host.file_reads();
+        let one = permits.clone().acquire_owned().await.unwrap();
+        let two = permits.clone().acquire_owned().await.unwrap();
+        assert_eq!(
+            rejected(&product_host, read(tool.id.clone())).await,
+            ErrorData::SessionFileRead {
+                reason: FileFailure::Capacity
+            }
+        );
+        drop(one);
+        drop(two);
+        assert_eq!(
+            permits.available_permits(),
+            crate::tools::session_files::SESSION_FILE_MAX_READS
+        );
+        std::fs::write(
+            &path,
+            vec![b'x'; crate::tools::session_files::SESSION_FILE_MAX_BYTES + 1],
+        )
+        .unwrap();
+        assert_eq!(
+            rejected(&product_host, read(tool.id.clone())).await,
+            ErrorData::SessionFileRead {
+                reason: FileFailure::TooLarge
+            }
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            rejected(&product_host, read(tool.id.clone())).await,
+            ErrorData::SessionFileRead {
+                reason: FileFailure::Missing
+            }
+        );
+        call(
+            &browser,
+            4104,
+            Method::SessionDetach {
+                target: target.clone(),
+            },
+        )
+        .await;
+        assert_eq!(
+            rejected(&product_host, read(tool.id.clone())).await,
+            ErrorData::StaleAttachment
+        );
+        assert_eq!(
+            f.provider.request_bodies().len(),
+            requests,
+            "all file reads issue zero model requests"
+        );
+        browser.close();
+        product_host.close();
+        f.manager.unload(&fork.active_conversation_id).await.unwrap();
+        f.close().await;
+    })
+    .await;
+}

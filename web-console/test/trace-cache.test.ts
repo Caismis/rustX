@@ -243,7 +243,7 @@ it('native TraceChanged coalesces burst reads independently of durable Session u
   server = new Server(); await server.attached('A');
   server.held.add('session/trace');
   let cursor = 0;
-  const emit = (event: import('../../protocol/app-server/v30').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  const emit = (event: import('../../protocol/app-server/v31').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
   emit({ type: 'read_domains_updated', transcript: { entries: [] } });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
   emit({ type: 'trace_changed' });

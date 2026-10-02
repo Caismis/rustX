@@ -1326,6 +1326,7 @@ async fn tool_results_merge_into_one_user_message() {
             tool_call_id: ToolCallId::new(id),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
             result: rustx::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: rustx::tools::types::ToolExecutionStatus::Success,
                 content: vec![rustx::tools::types::ToolResultContent::Text(
                     rustx::message::content::TextBlock {
@@ -1697,6 +1698,7 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
             result: rustx::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: rustx::tools::types::ToolExecutionStatus::Success,
                 content: vec![rustx::tools::types::ToolResultContent::Text(
                     rustx::message::content::TextBlock {

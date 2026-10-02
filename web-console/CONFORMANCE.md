@@ -281,3 +281,24 @@ workaround, semantic sleep or retry is introduced.
   renders physical terminal output, desktop/mobile overflow and console checks.
 - Native Tool renderers label Job and Agent operations separately. The current
   roster comes only from the native snapshot, not historical Tool results.
+
+## Explicit file delivery and safe preview (#431)
+
+Normative ownership, limits, and historical behavior are in
+[the file-delivery contract](../docs/file-delivery.md).
+
+| Boundary | Executable evidence |
+| --- | --- |
+| Typed declaration, order/duplicates, malformed input, missing tail, cancellation | `src/tools/native/present.rs` tests |
+| Mutable original bytes, 300 KiB/512 KiB bounds, symlinks, traversal, directories/FIFOs/devices, gated leaf/ancestor replacements, revocation | `src/tools/session_files.rs` tests |
+| Ordinary unique canonical Tool commit, exact read scope, delegated attachment, denied roots, finite admission, no model requests | `tests/scripted/app_server/protocol.rs::committed_present_reads_exact_native_scope_through_current_authorized_attachment` |
+| Clone/fork/branch preserve source scope; deletion never falls back to destination file | `src/local_runtime/session.rs::session_file_history_copies_preserve_original_scope_and_deleted_source_is_unavailable` |
+| Gated stale bytes/errors, attachment/authority replacement, URL/concurrency bounds, UTF-8/image failures, retry, inert Markdown and typed-only cards | `test/session-files.test.tsx` |
+| Managed Artifact bounds and lifecycle retained; text now also has original-byte Download | `test/artifacts.test.tsx`, `test/session-files.test.tsx` |
+| Real Write/Bash/present, durable folded cards, Markdown/text/code/raster/unsupported viewers, actual downloaded bytes and Unicode/spaces names, retry/deletion/current bytes, keyboard, narrow/wide geometry, English/Chinese, zero preview model requests | `test/e2e/file-delivery.spec.ts` |
+| Managed Artifact text/Markdown/code actual browser downloads through production owner | `test/fixtures/file-preview.tsx`, `test/e2e/file-delivery.spec.ts` |
+
+The managed-download browser fixture controls protocol replies for presentation;
+real ArtifactStore identity/read authorization is separately exercised by native
+`artifact/read` conformance. The Session-file browser scenario uses the actual
+App Server, provider emulator, native Tools, and Node Product Host.

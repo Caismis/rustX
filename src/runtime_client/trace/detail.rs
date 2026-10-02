@@ -385,6 +385,7 @@ mod tests {
                     "tool"
                 }),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![],
                     duration_ms: 1,

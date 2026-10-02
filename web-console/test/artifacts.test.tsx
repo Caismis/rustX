@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import type { UploadedFile } from '../../protocol/app-server/v30';
+import type { UploadedFile } from '../../protocol/app-server/v31';
 import { Server } from './fixture';
 let server: Server;
 let sequence = 0;
@@ -164,13 +164,14 @@ it.each(['picker', 'drop', 'paste'] as const)('explicitly refuses a second %s se
   expect(ui.queryByRole('alert')).toBeNull();
 });
 
-it('reads inert text preview through the bounded native artifact API without allocating a URL', async () => {
+it('renders inert text and downloads the same bounded native bytes through one URL', async () => {
   await server.attached('A'); server.held.add('artifact/read');
   const resources = new ArtifactResources(server.client, 'A');
-  const read = resources.readText('report');
+  const read = resources.load('report', 'text/plain');
   server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: btoa('<script>inert</script>') });
-  expect(await read).toBe('<script>inert</script>'); expect(create).not.toHaveBeenCalled();
-  const obsolete = resources.readText('late'); resources.dispose();
+  expect(await read).toEqual({ text: '<script>inert</script>', url: create.mock.results.at(-1)?.value }); expect(create).toHaveBeenCalledOnce();
+  const obsolete = resources.load('late', 'text/plain'); resources.dispose();
   server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: 'aGk=' });
   await expect(obsolete).rejects.toThrow('Obsolete');
+  expect(revoke).toHaveBeenCalledOnce();
 });

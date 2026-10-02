@@ -836,6 +836,7 @@ mod tests {
             tool_call_id: ToolCallId::new("call_01"),
             tool_id: ToolId::new("tool-bash"),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: Vec::new(),
                 duration_ms: 1,

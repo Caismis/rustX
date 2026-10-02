@@ -364,6 +364,7 @@ fn tool_block(id: &str) -> MessageBlock {
         tool_call_id: ToolCallId::new("call-1"),
         tool_id: ToolId::new("tool-a"),
         result: ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: Vec::new(),
             duration_ms: 1,

@@ -413,6 +413,7 @@ mod tests {
             ToolResultContent::File(file),
         ] {
             let result = ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![block],
                 duration_ms: 0,

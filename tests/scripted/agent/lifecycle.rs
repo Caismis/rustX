@@ -620,6 +620,7 @@ impl ToolExecutor for InstantTool {
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
                         text: format!("{name} done"),
@@ -752,6 +753,7 @@ impl ToolExecutor for GatedTool {
                     .push(invocation.tool_name.clone());
                 self.completed.send_replace(true);
                 ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
                         text: format!("{} done", invocation.tool_name),

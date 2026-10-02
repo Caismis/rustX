@@ -718,7 +718,7 @@ async fn bash_large_output_spills_to_managed_output() {
         "the tool-owned JSON carries no continuation keys: {content}"
     );
     let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
-        &result.managed_output
+        result.managed_output.as_deref()
     else {
         panic!(
             "a complete spill is typed Complete, got {:?}",
@@ -842,7 +842,7 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
-        &result.managed_output
+        result.managed_output.as_deref()
     else {
         panic!(
             "the spill is typed Complete, got {:?}",

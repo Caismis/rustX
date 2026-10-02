@@ -303,6 +303,7 @@ mod tests {
         let id = store.put_bounded(&bytes).unwrap();
         std::fs::remove_file(source).unwrap();
         let mut result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: Vec::new(),
             duration_ms: 0,

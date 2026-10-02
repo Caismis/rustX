@@ -24,6 +24,16 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       };
       let value: unknown;
       switch (request.url.slice('/product-host/'.length)) {
+        case 'file-read':
+          if (!host.readDelivery) throw new Error('Session file reads unavailable on this Product Host');
+          {
+            const read = new AbortController();
+            const closed = () => { if (!response.writableFinished) read.abort(); };
+            response.on('close', closed);
+            try { value = await host.readDelivery(scope(), body.read, read.signal); }
+            finally { response.off('close', closed); }
+          }
+          break;
         case 'list': value = await host.listWorkspaces(); break;
         case 'adopt': value = await host.adoptWorkspace(scope(), string('location')); break;
         case 'rename': value = await host.renameWorkspace(scope(), string('id'), string('displayName')); break;

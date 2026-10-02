@@ -1,21 +1,29 @@
 import { createContext, useEffect, useState } from 'react';
-import type { ArtifactResources } from '../../client/artifacts';
+import { useTranslation } from '../../locale/react';
+import type { FilePreviewResources, LoadedFile, PreviewSource } from '../../client/session-files';
 import { ArtifactPreview as Preview } from '../../presentation/right-panel/ArtifactPreview';
-export interface PreviewArtifact { id: string; name: string; image: boolean; mimeType?: string; }
+export interface PreviewArtifact { source: PreviewSource; name: string; image: boolean; mimeType?: string; download?: boolean }
 export const PreviewContext = createContext<((artifact: PreviewArtifact) => void) | undefined>(undefined);
-export function ArtifactPreview({ artifact, resources }: { artifact: PreviewArtifact; resources: ArtifactResources }) {
+export function ArtifactPreview({ artifact, resources }: { artifact: PreviewArtifact; resources: FilePreviewResources }) {
+  const tx = useTranslation();
   const [attempt, retry] = useState(0);
-  const [content, setContent] = useState<{ text?: string; url?: string; error?: string }>({});
+  const [content, setContent] = useState<Partial<LoadedFile>>({});
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    const read = new AbortController();
     let live = true, owned: string | undefined;
     setLoading(true); setContent({});
-    const text = artifact.mimeType === 'text/plain' || artifact.mimeType === 'application/json' || artifact.mimeType === 'text/markdown';
-    void (text ? resources.readText(artifact.id).then(text => ({ text })) : resources.read(artifact.id, artifact.mimeType).then(url => ({ url }))).then(value => {
-      if ('url' in value) owned = value.url;
-      if (live) setContent(value); else if (owned) resources.release(owned);
+    void resources.load(artifact.source, artifact.mimeType, artifact.image, read.signal).then(value => {
+      owned = value.url;
+      if (!live) { resources.release(artifact.source, owned); return; }
+      setContent(value);
+      if (artifact.download) {
+        const anchor = document.createElement('a');
+        anchor.href = value.url; anchor.download = artifact.name; anchor.click();
+      }
     }).catch(error => { if (live) setContent({ error: String(error) }); }).finally(() => { if (live) setLoading(false); });
-    return () => { live = false; if (owned) resources.release(owned); };
+    return () => { live = false; read.abort(); if (owned) resources.release(artifact.source, owned); };
   }, [artifact, resources, attempt]);
-  return <Preview name={artifact.name} image={artifact.image} {...content} loading={loading} retry={() => retry(value => value + 1)} />;
+  return <Preview name={artifact.name} image={artifact.image} markdown={artifact.mimeType === 'text/markdown'} {...content} loading={loading}
+    decodeError={() => setContent(value => content.url && value.url === content.url ? { ...value, error: tx('artifacts:copy.image-could-not-be-decoded') } : value)} retry={() => retry(value => value + 1)} />;
 }

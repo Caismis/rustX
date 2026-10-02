@@ -338,9 +338,13 @@ pub struct ToolExecutionResult {
     /// Process exit code where the tool executed a process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-    /// Durable artifact/file references produced by the execution.
+    /// Immutable managed Artifact references produced by the execution.
     #[serde(default)]
     pub artifacts: Vec<crate::message::content::FileReference>,
+    /// Runtime-owned explicit declarations of mutable native Session files.
+    /// Only successful canonical Tool results authorize delivery cards.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deliveries: Vec<crate::tools::session_files::SessionFileReference>,
     /// Truncation metadata where output was truncated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncation: Option<TruncationState>,
@@ -354,7 +358,7 @@ pub struct ToolExecutionResult {
     /// properties of tool-owned JSON, and generic runtime publication code
     /// consumes only this typed field, never arbitrary JSON keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_output: Option<ManagedOutputContinuation>,
+    pub managed_output: Option<Box<ManagedOutputContinuation>>,
 }
 
 /// The provider-independent model-facing representation of one tool result.
@@ -512,7 +516,7 @@ impl ToolExecutionResult {
         // accidentally truncated away by an error string.
         let continuation_minimum = self
             .managed_output
-            .as_ref()
+            .as_deref()
             .map(ManagedOutputContinuation::minimum_render)
             .map_or(0, |text| text.len());
         let status_budget = bound.saturating_sub(
@@ -527,7 +531,7 @@ impl ToolExecutionResult {
             .saturating_sub(status.as_ref().map_or(0, String::len) + usize::from(status.is_some()));
         let continuation = self
             .managed_output
-            .as_ref()
+            .as_deref()
             .map(|continuation| continuation.render_bounded(continuation_budget));
 
         let reserved = status.as_ref().map_or(0, String::len)
@@ -1141,6 +1145,7 @@ mod tests {
     #[test]
     fn outcome_unknown_result_round_trip() {
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "the runtime restarted before a durable outcome was committed".to_owned(),
             },
@@ -1225,6 +1230,7 @@ mod tests {
             error: "input schema validation failed: query is required".to_owned(),
         };
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: status.clone(),
             content: Vec::new(),
             duration_ms: 0,
@@ -1253,6 +1259,7 @@ mod tests {
             ),
         };
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: status.clone(),
             content: vec![super::ToolResultContent::Text(
                 crate::message::content::TextBlock {
@@ -1264,11 +1271,11 @@ mod tests {
             artifacts: Vec::new(),
             truncation: None,
             workflow: None,
-            managed_output: Some(super::ManagedOutputContinuation::Complete {
+            managed_output: Some(Box::new(super::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(
                     "/owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000007.txt",
                 ),
-            }),
+            })),
         };
 
         let first = result.model_facing_projection();
@@ -1288,6 +1295,7 @@ mod tests {
     #[test]
     fn model_facing_projection_truncates_only_at_utf8_boundaries() {
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![super::ToolResultContent::Text(
                 crate::message::content::TextBlock {
@@ -1318,6 +1326,7 @@ mod tests {
             error: "e".repeat(bound.saturating_mul(2)),
         };
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: status.clone(),
             content: Vec::new(),
             duration_ms: 0,
@@ -1325,11 +1334,11 @@ mod tests {
             artifacts: Vec::new(),
             truncation: None,
             workflow: None,
-            managed_output: Some(super::ManagedOutputContinuation::Complete {
+            managed_output: Some(Box::new(super::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(
                     "/owned/conversation/tool-output/results/result_01900000-0000-7000-8000-000000000008.txt",
                 ),
-            }),
+            })),
         };
 
         let projection = result.model_facing_projection();
@@ -1369,6 +1378,7 @@ mod tests {
         ];
         for status in statuses {
             let result = ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: status.clone(),
                 content: Vec::new(),
                 duration_ms: 0,

@@ -1918,6 +1918,7 @@ impl ToolExecutor for RecordingParkingExecutor {
                     .await
                     .expect("background release channel stays open");
                 ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 0,

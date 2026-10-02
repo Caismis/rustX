@@ -286,6 +286,7 @@ impl DeadlineProbeTool {
         self.cancel_observed.send_replace(true);
         match self.on_cancel {
             ProbeCancelSettlement::Cancelled => ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Cancelled {
                     reason: CancellationReason::UserRequested,
                     phase: ToolCancellationPhase::DuringExecution,
@@ -299,6 +300,7 @@ impl DeadlineProbeTool {
                 managed_output: None,
             },
             ProbeCancelSettlement::OutcomeUnknown => ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::OutcomeUnknown {
                     detail: "request crossed the external-effect frontier; remote termination \
                              could not be confirmed"
@@ -630,6 +632,7 @@ impl ToolExecutor for DetachedSettlementTool {
                 .await
                 .expect("confirm gate stays open");
             ToolSettlement::Confirmed(ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Cancelled {
                     reason: context.cancellation.reason(),
                     phase: ToolCancellationPhase::DuringExecution,

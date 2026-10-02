@@ -149,7 +149,7 @@ impl Fixture {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
                         {"label":"Continue", "description":"Proceed with the test"},
                         {"label":"Stop", "description":"Do not proceed"}]}]})
-                } else { serde_json::json!({"path":"rustx.toml"}) };
+                } else if name == "present" { serde_json::json!({"files":[{"path":"报告 file.md", "description":"Declared report"}]}) } else { serde_json::json!({"path":"rustx.toml"}) };
                 let chunk = serde_json::json!({"id":"interaction","object":"chat.completion.chunk","created":1,"model":"a",
                     "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"interaction-call","type":"function",
                         "function":{"name":name,"arguments":arguments.to_string()}}]},"finish_reason":"tool_calls"}]});
@@ -218,7 +218,7 @@ impl Fixture {
             .unwrap()
             .insert("local/b".into(), alternate);
         catalog["agent"].as_table_mut().unwrap().insert("tools".into(),
-            toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "ask_user", "job_status"]})).unwrap());
+            toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_status"]})).unwrap());
         documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
         let paths = launch::analyze(&LaunchRequest::default(), &host)

@@ -474,6 +474,7 @@ fn failed_with_continuation(
     continuation: ManagedOutputContinuation,
 ) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Failed { error },
         content: Vec::new(),
         duration_ms: 0,
@@ -481,7 +482,7 @@ fn failed_with_continuation(
         artifacts: Vec::new(),
         truncation: None,
         workflow: None,
-        managed_output: Some(continuation),
+        managed_output: Some(Box::new(continuation)),
     }
 }
 
@@ -827,6 +828,7 @@ async fn run_bash_unix(
         }),
     }];
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status,
         content: result_content,
         duration_ms: 0,
@@ -837,7 +839,7 @@ async fn run_bash_unix(
             original_bytes: combined.complete.then_some(combined.total_bytes),
         }),
         workflow: None,
-        managed_output,
+        managed_output: managed_output.map(Box::new),
     }
 }
 

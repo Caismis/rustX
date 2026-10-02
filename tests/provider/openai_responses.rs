@@ -1175,6 +1175,7 @@ async fn continuation_tail_preserves_tool_then_users_order() {
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
             result: rustx::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: rustx::tools::types::ToolExecutionStatus::Success,
                 content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
                     text: "listed".to_owned(),

@@ -2123,6 +2123,7 @@ impl ConversationBackgroundRegistry {
                         crate::tools::executor::ToolSettlement::Confirmed(result) => result,
                         crate::tools::executor::ToolSettlement::Unconfirmed { detail } => {
                             ToolExecutionResult {
+                                deliveries: Vec::new(),
                                 status: ToolExecutionStatus::OutcomeUnknown { detail },
                                 content: Vec::new(),
                                 duration_ms: 0,
@@ -2200,6 +2201,7 @@ fn accepted_result(
     output_path: &std::path::Path,
 ) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Success,
         content: vec![ToolResultContent::Json {
             value: serde_json::json!({
@@ -2621,6 +2623,7 @@ mod tests {
 
     fn success() -> ToolExecutionResult {
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: Vec::new(),
             duration_ms: 0,
@@ -3552,6 +3555,7 @@ mod tests {
     async fn cancellation_intent_canonicalizes_an_executor_proven_cancellation() {
         let fixture = registry("conv_f5ee60f1-f778-779f-879d-92f282e152be");
         let proven = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Cancelled {
                 reason: crate::runtime::types::CancellationReason::ParentCancelled,
                 phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
@@ -3623,6 +3627,7 @@ mod tests {
     async fn outcome_unknown_settles_as_outcome_unknown_not_failed() {
         let fixture = registry("conv_5977bd2b-f716-7747-bbdc-9e0d573554de");
         let unknown = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "remote termination could not be confirmed".to_owned(),
             },
@@ -3666,6 +3671,7 @@ mod tests {
     async fn timed_out_settles_as_timed_out_not_failed() {
         let fixture = registry("conv_b4656cbc-4ef4-7109-81cb-beddfc802ac8");
         let timed_out = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::TimedOut,
             ..success()
         };
@@ -3702,6 +3708,7 @@ mod tests {
     async fn cancellation_winner_preserves_an_unconfirmed_outcome_unknown() {
         let fixture = registry("conv_80ff6e84-42c6-7500-b9aa-34057d02f303");
         let unknown = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "cancellation was requested after dispatch, but remote termination could not be confirmed"
                     .to_owned(),
@@ -4644,7 +4651,7 @@ mod tests {
         };
         assert!(content.get("full_output").is_none(), "{content}");
         assert_eq!(
-            result.managed_output,
+            result.managed_output.map(|value| *value),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&output_path),
             }),
@@ -4735,7 +4742,7 @@ mod tests {
         // the same one the dispatch advertised.
         assert!(result.truncation.is_none());
         assert_eq!(
-            result.managed_output,
+            result.managed_output.map(|value| *value),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(output_path),
             }),
@@ -4829,7 +4836,7 @@ mod tests {
         let Some(crate::tools::types::ManagedOutputContinuation::Partial {
             locator,
             diagnostic,
-        }) = &result.managed_output
+        }) = result.managed_output.as_deref()
         else {
             panic!(
                 "the continuation is explicitly partial, got {:?}",
@@ -4941,7 +4948,7 @@ mod tests {
         let Some(crate::tools::types::ManagedOutputContinuation::Partial {
             locator,
             diagnostic,
-        }) = &result.managed_output
+        }) = result.managed_output.as_deref()
         else {
             panic!(
                 "the advertised locator survives as typed PARTIAL, got {:?}",
@@ -5053,7 +5060,7 @@ mod tests {
         // exists, so no subprocess output could have existed: the empty
         // advertised file is the complete textual output.
         assert_eq!(
-            result.managed_output,
+            result.managed_output.map(|value| *value),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&advertised),
             }),
@@ -5155,7 +5162,7 @@ mod tests {
             result.status
         );
         assert_eq!(
-            result.managed_output,
+            result.managed_output.map(|value| *value),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&advertised),
             }),
@@ -5211,6 +5218,7 @@ mod tests {
         // times over.
         let expensive = "\u{1}".repeat(crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES / 2);
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![crate::tools::types::ToolResultContent::Json {
                 value: serde_json::json!({
@@ -5225,9 +5233,11 @@ mod tests {
             artifacts: Vec::new(),
             truncation: None,
             workflow: None,
-            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from(path),
-            }),
+            managed_output: Some(Box::new(
+                crate::tools::types::ManagedOutputContinuation::Complete {
+                    locator: std::path::PathBuf::from(path),
+                },
+            )),
         };
         // The exact, directly testable bound: the result PROJECTION never
         // exceeds MAX_MODEL_TOOL_RESULT_BYTES, continuation included.
@@ -5293,6 +5303,7 @@ mod tests {
             "score": 0.91,
         });
         let executor: Arc<dyn ToolExecutor> = Arc::new(InstantExecutor(ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![crate::tools::types::ToolResultContent::Json {
                 value: business.clone(),
@@ -5368,6 +5379,7 @@ mod tests {
         // payload is many times the projection bound.
         let enormous = "é".repeat(bound * 4);
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Failed {
                 error: "output capture failed".to_owned(),
             },
@@ -5379,10 +5391,12 @@ mod tests {
             artifacts: Vec::new(),
             truncation: None,
             workflow: None,
-            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Partial {
-                locator: std::path::PathBuf::from(path),
-                diagnostic: enormous.clone(),
-            }),
+            managed_output: Some(Box::new(
+                crate::tools::types::ManagedOutputContinuation::Partial {
+                    locator: std::path::PathBuf::from(path),
+                    diagnostic: enormous.clone(),
+                },
+            )),
         };
         let projection = result.model_facing_projection().as_text();
         assert!(
@@ -5416,10 +5430,13 @@ mod tests {
         // still bounded rather than silently breaking the invariant.
         let giant_locator = format!("/{}", "a".repeat(bound * 2));
         let pathological = ToolExecutionResult {
+            deliveries: Vec::new(),
             workflow: None,
-            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from(&giant_locator),
-            }),
+            managed_output: Some(Box::new(
+                crate::tools::types::ManagedOutputContinuation::Complete {
+                    locator: std::path::PathBuf::from(&giant_locator),
+                },
+            )),
             ..result.clone()
         };
         let projection = pathological.model_facing_projection().as_text();

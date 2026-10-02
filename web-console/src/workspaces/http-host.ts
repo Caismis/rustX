@@ -1,6 +1,6 @@
 /** Browser HTTP adapter. Never imported by the Node Product Host. */
 import { carrierFetch } from '../carrier/http.ts';
-import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult } from './host.ts';
+import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult, type DeliveryRead, type DeliveryBytes } from './host.ts';
 
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   constructor(private readonly base = '/product-host') {}
@@ -19,6 +19,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     return response.json();
   }
   listWorkspaces = (signal?: AbortSignal) => this.call<WorkspaceCatalog>('list', {}, signal);
+  readDelivery = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal) => this.call<DeliveryBytes>('file-read', { scope, read }, signal);
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
   renameWorkspace = (scope: WorkspaceAuthorityScope, id: string, displayName: string) => this.call<void>('rename', { scope, id, displayName });

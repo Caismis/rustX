@@ -1,7 +1,7 @@
 import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { useEffect, useState } from 'react';
-import type { RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v30';
+import type { RuntimeClientAgent, RuntimeClientJob, RuntimeClientTranscriptPage, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v31';
 import { AppServerClient, RpcFailure, sameTarget } from '../../client/app-server';
 import { json } from '../../bindings/projection';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';

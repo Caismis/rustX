@@ -234,3 +234,40 @@ def web_reading_surface() -> Scenario:
 
 
 SCENARIOS["web_reading_surface"] = web_reading_surface
+
+
+def web_file_delivery() -> Scenario:
+    """Ordinary Write/Bash/present Tool settlement; the browser owns no file facts."""
+    markdown = '# Delivered report\r\n\r\n**Original** Unicode bytes.\r\n\r\n<script>globalThis.PWNED=1</script>\r\n\r\n![blocked](https://example.org/tracker)\r\n'
+    script = """import base64,json,pathlib
+p=pathlib.Path('.')
+(p/'plain 空格.txt').write_bytes(b'plain\\r\\noriginal\\r\\n')
+(p/'source.rs').write_bytes(b'fn main() { println!(\"native\"); }\\n')
+(p/'pixel.png').write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='))
+(p/'data.bin').write_bytes(bytes([0,1,255,128,10]))
+(p/'large.txt').write_bytes(b'x'*(300*1024))
+for name in ('a','b'):
+ (p/name).mkdir()
+ (p/name/'report.md').write_text('Ambiguous basename')
+print(json.dumps({'deliveries':[{'path':'a/report.md'}]}))
+"""
+    files = [{'path': name, 'description': description} for name, description in [
+        ('报告 file.md', 'Explicit Markdown report'), ('plain 空格.txt', 'Created by Bash'),
+        ('source.rs', 'Source code'), ('pixel.png', 'Raster image'),
+        ('data.bin', 'Unsupported inline format'), ('large.txt', 'Above the managed Artifact threshold'),
+    ]]
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Deliver files explicitly',))
+    def tool(call: str, name: str, arguments: dict[str, object]) -> Stream:
+        return Stream(ToolCall(call, name, json.dumps(arguments, ensure_ascii=False)), Finish('tool_calls'))
+    return Scenario('web_file_delivery',
+        Step(expected, tool('delivery-write', 'write', {'path': '报告 file.md', 'content': markdown})),
+        Step(expected, tool('delivery-bash', 'bash', {'command': "python3 - <<'PY'\n" + script + 'PY\n', 'execution_mode': 'foreground'})),
+        Step(expected, Stream(Text('I created report.md and 报告 file.md.'), Gate('delivery-before-declaration'),
+                              ToolCall('delivery-malformed', 'present', json.dumps({'files': [{'path': '../escape'}]})), Finish('tool_calls'))),
+        Step(expected, tool('delivery-present', 'present', {'files': files + [{'path': './报告 file.md', 'description': 'Duplicate discarded'}]})),
+        Step(expected, tool('delivery-repeat', 'present', {'files': [{'path': '报告 file.md', 'description': 'Repeated explicit declaration'}]})),
+        Step(expected, Stream(Text('Delivery finished.'), Finish())),
+    )
+
+
+SCENARIOS['web_file_delivery'] = web_file_delivery

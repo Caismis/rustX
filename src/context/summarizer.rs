@@ -740,6 +740,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![ToolResultContent::Text(TextBlock {
                         text: "x".repeat(50_000),
@@ -794,6 +795,7 @@ mod tests {
                         tool_call_id: ToolCallId::new("call-cancelled"),
                         tool_id: ToolId::new("tool-cancelled"),
                         result: ToolExecutionResult {
+                            deliveries: Vec::new(),
                             status: ToolExecutionStatus::Cancelled { reason, phase },
                             content: Vec::new(),
                             duration_ms: 0,
@@ -840,6 +842,7 @@ mod tests {
                     tool_call_id: ToolCallId::new("call-unknown"),
                     tool_id: ToolId::new("tool-unknown"),
                     result: ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status,
                         content: Vec::new(),
                         duration_ms: 0,

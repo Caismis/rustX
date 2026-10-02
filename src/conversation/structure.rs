@@ -323,6 +323,7 @@ mod tests {
             tool_call_id: ToolCallId::new(call),
             tool_id: ToolId::new("tool-a"),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: Vec::new(),
                 duration_ms: 1,

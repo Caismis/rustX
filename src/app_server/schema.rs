@@ -248,6 +248,12 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         .expect("bounded Tool protocol fixture"),
     );
     for call in [
+        Method::SessionFileRead {
+            target: target.clone(),
+            message_id: crate::runtime::identity::MessageId::new("delivery-message"),
+            delivery_index: 0,
+            allowed_roots: vec![std::path::PathBuf::from("/workspace")],
+        },
         Method::ArtifactRead {
             target: target.clone(),
             artifact_id: crate::runtime::identity::ArtifactId::new("artifact_1"),
@@ -343,6 +349,12 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })));
     }
     for result in [
+        MethodResult::SessionFileBytes {
+            file: crate::tools::session_files::SessionFileReference {
+                scope: crate::tools::session_files::SessionFileScope { conversation_id: target.conversation_id.clone(), device: "1".into(), inode: "2".into() },
+                path: "报告 file.md".into(), name: "报告 file.md".into(), description: Some("Report".into()), mime_type: "text/markdown".into(),
+            }, data: "IyBSZXBvcnQK".into(),
+        },
         MethodResult::Jobs {
             jobs: Vec::new(), returned: 0, matched: 0,
             limit: crate::tools::background::MAX_JOB_LIST_LIMIT, truncated: false,
@@ -459,6 +471,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
     }));
     for data in [
+        super::protocol::ErrorData::SessionFileRead {
+            reason: crate::tools::session_files::SessionFileReadFailure::Unavailable,
+        },
         super::protocol::ErrorData::UnknownAgent {
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
         },
@@ -717,9 +732,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v30.schema.json", "v30.ts"]);
+        assert_eq!(generations, ["v31.schema.json", "v31.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v30.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v31.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

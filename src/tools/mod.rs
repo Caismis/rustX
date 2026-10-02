@@ -28,6 +28,7 @@ pub(crate) mod output;
 pub mod python;
 pub mod runtime;
 pub mod schema;
+pub mod session_files;
 pub mod todo;
 pub mod types;
 pub mod workspace;

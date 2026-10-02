@@ -49,6 +49,13 @@ struct HostInner {
     requests: watch::Sender<usize>,
     transport: Arc<TransportResources>,
     archives: super::archive_download::ArchiveDownloads,
+    file_reads: Arc<tokio::sync::Semaphore>,
+    file_routes: Mutex<
+        std::collections::HashMap<
+            super::protocol::AttachmentTarget,
+            std::sync::Weak<super::connection::Route>,
+        >,
+    >,
 }
 #[derive(Clone, Debug)]
 pub struct AppServerHost(Arc<HostInner>);
@@ -81,6 +88,31 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    pub(super) fn register_file_route(&self, route: &Arc<super::connection::Route>) {
+        let mut routes = self.0.file_routes.lock().expect("file routes");
+        routes.retain(|_, route| {
+            route
+                .upgrade()
+                .is_some_and(|route| route.attachment.read_authority().is_ok())
+        });
+        routes.insert(route.target.clone(), Arc::downgrade(route));
+    }
+    pub(super) fn file_route(
+        &self,
+        target: &super::protocol::AttachmentTarget,
+    ) -> Option<Arc<super::connection::Route>> {
+        let route = self
+            .0
+            .file_routes
+            .lock()
+            .expect("file routes")
+            .get(target)?
+            .upgrade()?;
+        (route.target == *target && route.attachment.read_authority().is_ok()).then_some(route)
+    }
+    pub(crate) fn file_reads(&self) -> Arc<tokio::sync::Semaphore> {
+        self.0.file_reads.clone()
+    }
     pub(crate) fn authority_id(&self) -> &str {
         &self.0.authority_id
     }
@@ -99,6 +131,10 @@ impl AppServerHost {
             requests: watch::channel(0).0,
             transport: Arc::default(),
             archives: super::archive_download::ArchiveDownloads::default(),
+            file_reads: Arc::new(tokio::sync::Semaphore::new(
+                crate::tools::session_files::SESSION_FILE_MAX_READS,
+            )),
+            file_routes: Mutex::default(),
         }))
     }
     #[must_use]

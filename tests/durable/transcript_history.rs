@@ -129,6 +129,7 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
         tool_call_id: ToolCallId::new(call_id),
         tool_id: ToolId::new("tool-read"),
         result: ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![ToolResultContent::Text(TextBlock {
                 text: body.to_owned(),
@@ -138,11 +139,11 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
             artifacts: Vec::new(),
             truncation: None,
             workflow: None,
-            managed_output: Some(rustx::tools::types::ManagedOutputContinuation::Complete {
+            managed_output: Some(Box::new(rustx::tools::types::ManagedOutputContinuation::Complete {
                 locator:
                     "/private/tool-output/results/result_01900000-0000-7000-8000-000000000001.txt"
                         .into(),
-            }),
+            })),
         },
     })
 }

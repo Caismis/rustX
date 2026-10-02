@@ -26,6 +26,7 @@ impl ToolExecutor for NoopExecutor {
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async {
                 ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: rustx::tools::types::ToolExecutionStatus::Failed {
                         error: "noop".to_owned(),
                     },

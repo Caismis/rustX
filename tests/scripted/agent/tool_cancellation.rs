@@ -674,6 +674,7 @@ async fn issue136_cancellation_winner_keeps_the_executor_settled_success() {
 async fn issue136_cancellation_winner_keeps_the_executor_settled_outcome_unknown() {
     let (audit, side_effect, model) = Box::pin(run_cancellation_winner_with_late_executor_outcome(
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "remote termination could not be confirmed".to_owned(),
             },
@@ -732,6 +733,7 @@ async fn issue136_physical_result_winner_freezes_executor_cancellation_reason() 
         definition: common::tool("physical-cancel", "tool-physical-cancel"),
         started,
         result: ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Cancelled {
                 reason: CancellationReason::ParentCancelled,
                 // This is intentionally only a provisional executor value;

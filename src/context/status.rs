@@ -1960,6 +1960,7 @@ mod tests {
             tool_call_id: ToolCallId::new("todo-status-call"),
             tool_id: ToolId::new(TODO_TOOL_ID),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![ToolResultContent::Json {
                     value: serde_json::to_value(snapshot).expect("Todo snapshot serializes"),

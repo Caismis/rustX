@@ -1555,6 +1555,7 @@ impl RuntimeClientProjection {
                 error,
             } => {
                 let result = ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Failed {
                         error: error.clone(),
                     },
@@ -4476,6 +4477,7 @@ mod tests {
 
     fn success_result() -> ToolExecutionResult {
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: Vec::new(),
             duration_ms: 1,
@@ -4492,6 +4494,7 @@ mod tests {
         phase: ToolCancellationPhase,
     ) -> ToolExecutionResult {
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Cancelled { reason, phase },
             content: Vec::new(),
             duration_ms: 1,
@@ -5366,6 +5369,7 @@ mod tests {
             },
         );
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Cancelled {
                 reason: CancellationReason::RuntimeShutdown,
                 phase: ToolCancellationPhase::DuringExecution,
@@ -5461,6 +5465,7 @@ mod tests {
             },
         );
         let result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "executor lost contact after dispatch".to_owned(),
             },
@@ -6247,6 +6252,7 @@ mod tests {
         use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundLifecycle};
         let mut projection = projection();
         let outcome_unknown_result = ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "cancellation raced the executor after dispatch".to_owned(),
             },
@@ -6276,6 +6282,7 @@ mod tests {
                 state: BackgroundLifecycle::TimedOut,
                 progress: None,
                 result: Some(ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::TimedOut,
                     ..success_result()
                 }),

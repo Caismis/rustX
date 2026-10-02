@@ -1,4 +1,7 @@
-import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v30.ts';
+import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v31.ts';
+import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v31.ts';
+export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
+export interface DeliveryBytes { file: SessionFileReference; data: string }
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
@@ -52,6 +55,7 @@ export class WorkspaceHostError extends Error {
   }
 }
 export interface ProductHostWorkspaces {
+  readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */

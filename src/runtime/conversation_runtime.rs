@@ -11236,6 +11236,7 @@ mod tests {
                         .await
                         .expect("release channel stays open");
                     crate::tools::types::ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: crate::tools::types::ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,
@@ -13278,6 +13279,7 @@ mod tests {
                     let reason = context.cancellation.reason();
                     *observed.lock().expect("observed cause lock") = Some(reason);
                     crate::tools::types::ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: crate::tools::types::ToolExecutionStatus::Cancelled {
                             reason,
                             phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
@@ -13549,6 +13551,7 @@ mod tests {
                         .expect("settle gate stays open");
                     let reason = context.cancellation.reason();
                     crate::tools::types::ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Cancelled {
                             reason,
                             phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
@@ -13905,6 +13908,7 @@ mod tests {
                     let reason = context.cancellation.reason();
                     crate::tools::executor::ToolSettlement::Confirmed(
                         crate::tools::types::ToolExecutionResult {
+                            deliveries: Vec::new(),
                             status: ToolExecutionStatus::Cancelled {
                                 reason,
                                 phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
@@ -15130,6 +15134,7 @@ mod tests {
         background.finish(
             &execution_id,
             &crate::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: crate::tools::types::ToolExecutionStatus::Success,
                 content: Vec::new(),
                 duration_ms: 0,
@@ -16591,6 +16596,7 @@ mod tests {
             tool_call_id: crate::runtime::identity::ToolCallId::new(call),
             tool_id: crate::runtime::identity::ToolId::new("tool-a"),
             result: crate::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: crate::tools::types::ToolExecutionStatus::Success,
                 content: Vec::new(),
                 duration_ms: 1,

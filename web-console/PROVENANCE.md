@@ -1136,4 +1136,16 @@ No Harness runtime, Session store, semantic turn derivation, scroll coordinator
 or shell was imported. Native Attempt origins own turn identity; display ordinal
 only selects a native page. Existing derived ChatViewport and conversation CSS
 retain their original provenance with updated local hashes and dependency closure.
-The current generated imports and local dependency closure use mandatory App Server v30.
+The current generated imports and local dependency closure use mandatory App Server v31.
+
+## #431 explicit delivery reference audit
+
+The approved read-only pin `639ed015397290b3745d163aafe02ffee4aa3f84` was inspected;
+[file inventory and exclusions](../docs/issue-431-reference-audit.md) records the
+actual files. Explicit declaration, canonical action coordinates, and one shared
+preview seat informed the design. No new Harness source was copied/adapted at that
+pin, so no conceptual-only source records are added. The existing attributed
+Markdown and RightPanel descendants are reused with their original upstream
+baselines; current local hashes/import closure are refreshed for v31 and Markdown
+preview composition. image-size is an independently pinned MIT dependency for
+encoded raster dimensions, included in generated production dependency notices.

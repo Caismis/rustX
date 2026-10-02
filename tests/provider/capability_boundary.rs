@@ -86,6 +86,7 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: ToolId::new("tool-list"),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![ToolResultContent::Text(TextBlock {
                     text: "[\"a.txt\"]".to_owned(),

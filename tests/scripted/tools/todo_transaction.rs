@@ -263,6 +263,7 @@ fn published_result(id: &str, snapshot: &TodoSnapshot) -> MessageBlock {
         tool_call_id: rustx::runtime::identity::ToolCallId::new(format!("call-{id}")),
         tool_id: rustx::runtime::identity::ToolId::new(TODO_TOOL_ID),
         result: rustx::tools::types::ToolExecutionResult {
+            deliveries: Vec::new(),
             status: rustx::tools::types::ToolExecutionStatus::Success,
             content: vec![
                 rustx::tools::types::ToolResultContent::Text(rustx::message::content::TextBlock {

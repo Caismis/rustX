@@ -326,7 +326,7 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
     assert!(error.contains(&results.display().to_string()));
     assert!(error.contains("cannot allocate the foreground result spill"));
     let Some(crate::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
-        &result.managed_output
+        result.managed_output.as_deref()
     else {
         panic!("allocation did not succeed")
     };
@@ -369,7 +369,7 @@ async fn spill_write_failure_after_allocation_fails_the_invocation_explicitly() 
     let Some(crate::tools::types::ManagedOutputContinuation::Partial {
         locator,
         diagnostic,
-    }) = &result.managed_output
+    }) = result.managed_output.as_deref()
     else {
         panic!(
             "a post-allocation spill write failure must be typed Partial, got {:?}",
@@ -454,7 +454,7 @@ async fn cancellation_owns_the_outcome_and_a_failed_spill_is_never_advertised() 
     let Some(crate::tools::types::ManagedOutputContinuation::Partial {
         locator,
         diagnostic,
-    }) = &result.managed_output
+    }) = result.managed_output.as_deref()
     else {
         panic!(
             "a partial spill is typed Partial, got {:?}",
@@ -552,7 +552,7 @@ async fn large_output_spills_lazily_with_an_absolute_locator() {
         "the tool-owned JSON carries no magic continuation keys: {content}"
     );
     let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
-        &result.managed_output
+        result.managed_output.as_deref()
     else {
         panic!(
             "a complete foreground spill is typed Complete, got {:?}",

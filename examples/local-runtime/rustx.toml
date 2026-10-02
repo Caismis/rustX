@@ -61,7 +61,7 @@ enabled = true
 
 # Ordinary Tool exposure does not change execution or approval policy.
 [agent.tools]
-builtin = ["read", "write", "edit", "glob", "grep", "bash"]
+builtin = ["read", "write", "edit", "glob", "grep", "bash", "present"]
 
 # Explicit provider/model declarations. Provider request overlays are structured TOML tables.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.

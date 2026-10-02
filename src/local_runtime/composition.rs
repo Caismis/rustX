@@ -2616,6 +2616,7 @@ chat_reasoning_replay = "omit"
             tool_call_id: crate::runtime::identity::ToolCallId::new(format!("call-{id}")),
             tool_id: crate::runtime::identity::ToolId::new(crate::tools::todo::TODO_TOOL_ID),
             result: crate::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: crate::tools::types::ToolExecutionStatus::Success,
                 content: vec![crate::tools::types::ToolResultContent::Json {
                     value: serde_json::to_value(snapshot).expect("a Todo snapshot serializes"),

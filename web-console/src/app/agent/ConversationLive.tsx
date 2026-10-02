@@ -11,7 +11,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { HistoryAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v30';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v31';
 import { useRef, useState } from 'react';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';

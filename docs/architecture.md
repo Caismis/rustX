@@ -6,6 +6,16 @@ Terminal Attempt journal facts have ordered native transcript references;
 execution subscribers live below the typed shell boundary. See the
 [review corrections and feedback audit](issue-406/conversation-surface.md#pr-409-review-corrections).
 
+## Explicit Session-file delivery (#431)
+
+The normal native `present` Tool validates existing regular files and returns
+runtime-owned typed metadata. Successful canonical Tool commit is the sole
+delivery publication boundary. Session-file references preserve their original
+Conversation and filesystem root identity through history and lineage copies;
+managed ArtifactIds remain immutable ArtifactStore identities.
+See [the delivery and safe-preview contract](file-delivery.md) for authorization,
+descriptor containment, mutable history, bounds, and resource lifetimes.
+
 ## Native conversation reading (#430)
 
 ConversationStore owns Attempt turn identity/order/location and finite outline/
@@ -88,7 +98,7 @@ native workspace managers derive storage from their composed Conversation access
 `SessionArchiveProducer` in the native library reads catalog/lineage, immutable
 SQLite history and ArtifactStore bytes. It owns one finite cut and one versioned
 inspection archive, without loading runtimes or depending on transport/Trace.
-App Server v30 prepares a scoped streaming-download capability; Web consumes it
+App Server v31 prepares a scoped streaming-download capability; Web consumes it
 through the browser download manager and TUI writes bytes to a client-local file.
 Neither client composes the archive. Execution coordination ends before history
 serialization, compression or transport backpressure. See the exact authority,
@@ -2717,7 +2727,9 @@ result types. Within it, ownership is explicit: `content` is tool-owned
 (`ToolResultContent::Json` is arbitrary tool-owned structured data — rustX
 reserves no ordinary JSON field names and no generic runtime code infers
 semantics from property names such as `full_output`, `partial_output`, or
-`note`), `artifacts` holds genuine semantic artifacts, and
+`note`), `artifacts` holds immutable managed Artifact references,
+`deliveries` holds explicitly declared mutable Session-file references in their
+original native filesystem scope, and
 `managed_output` is the rustX-owned typed continuation metadata of managed
 textual output (absolute read-only locator plus typed complete/partial
 state). A failing result is passed back to the model as correction evidence:
@@ -4501,7 +4513,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v30](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v31](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4526,7 +4538,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v30
+       App Server protocol v31
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4544,7 +4556,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v30, the only external product control protocol, and
+console speak App Server v31, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -4554,7 +4566,7 @@ Runtime Client protocol 34 removed the obsolete global `SessionSummaryView.activ
 field. Version 55 removed every Session catalog request, result and view and the
 Session failure/restart errors: their only implementer was the retired
 standalone launch client, and App Server owns Session control through
-`SessionController`. Current version 55 rejects all older peers.
+`SessionController`. Version 56 adds explicit typed Session-file delivery facts and rejects all older peers.
 
 Version 24 added the typed question
 vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
@@ -5619,7 +5631,7 @@ The following describes that internal framing adapter.
 
 #### Runtime Client configuration projection
 
-App Server v30 projects authored sources, effective configuration and composable
+App Server v31 projects authored sources, effective configuration and composable
 per-unit application state. Save transfers work to native reconciliation; clients
 render native cache impact and submit explicit adoption intent. Scope/version
 notifications and authoritative rereads repair reconnect without mutation replay.
@@ -5656,7 +5668,7 @@ as future authority.
 
 ### Layer 9: TUI and Web
 
-Both are thin App Server v30 clients. TUI `/settings` authors User/Workspace
+Both are thin App Server v31 clients. TUI `/settings` authors User/Workspace
 sources, `/session settings` inspects Session state, `/session adopt` submits the
 inspected candidate, and `/model` changes Session intent. Web Settings separates
 source authoring from Session adoption. Save automatically transfers work to the
@@ -6806,7 +6818,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v30](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v31](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership
@@ -6878,7 +6890,7 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v30).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v31).
 
 ## Image Tool and Bash presentation (#412)
 

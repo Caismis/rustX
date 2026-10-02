@@ -1793,6 +1793,7 @@ fn transcript_tool_occurrences_do_not_alias_across_attempts_and_reopen() {
         let commit_result = |generation: &Generation, text: &str| {
             let id = MessageId::new(format!("{}-result", generation.attempt));
             let result = ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![rustx::tools::types::ToolResultContent::Text(
                     rustx::message::content::TextBlock { text: text.into() },

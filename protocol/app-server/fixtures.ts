@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v30.js';
+import type {ProtocolMessage} from './v31.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -100,7 +100,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 30,
+      "protocol_version": 31,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -118,7 +118,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 30,
+      "protocol_version": 31,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -295,6 +295,24 @@ export const fixtures = [
         ],
         "next_cursor": null
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/fileRead",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "message_id": "delivery-message",
+      "delivery_index": 0,
+      "allowed_roots": [
+        "/workspace"
+      ]
     }
   },
   {
@@ -519,6 +537,25 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "id": "exact-u64",
     "result": {
+      "type": "session_file_bytes",
+      "file": {
+        "scope": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "device": "1",
+          "inode": "2"
+        },
+        "path": "报告 file.md",
+        "name": "报告 file.md",
+        "description": "Report",
+        "mime_type": "text/markdown"
+      },
+      "data": "IyBSZXBvcnQK"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
       "type": "jobs",
       "jobs": [],
       "returned": 0,
@@ -701,6 +738,18 @@ export const fixtures = [
           ],
           "omitted_runs": 0
         }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "session_file_read",
+        "reason": "unavailable"
       }
     }
   },

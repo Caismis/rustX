@@ -133,7 +133,7 @@ pub(super) fn tool_result(message: &ToolMessageBlock) -> TraceToolResult {
             truncated: state.truncated,
             original_bytes: state.original_bytes,
         }),
-        managed_output: result.managed_output.as_ref().map(managed_output),
+        managed_output: result.managed_output.as_deref().map(managed_output),
     }
 }
 

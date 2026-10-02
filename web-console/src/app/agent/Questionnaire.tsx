@@ -7,7 +7,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import clsx from 'clsx';
-import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v30';
+import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v31';
 import { emptyDraft, submission, QuestionnaireValidationError, type QuestionDraft } from '../../bindings/questionnaire';
 import { Button } from '../../presentation/primitives/Button';
 import { IconCheckOutline14, IconChevronLeftOutline14, IconChevronRightOutline14 } from '../../presentation/primitives/icons';

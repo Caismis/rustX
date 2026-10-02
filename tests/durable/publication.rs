@@ -272,6 +272,7 @@ fn tool_message_with_tool(
 
 fn successful_tool_result() -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Success,
         content: Vec::new(),
         duration_ms: 1,
@@ -1962,6 +1963,7 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
                     tool_call_id: call_id.clone(),
                     tool_id: ToolId::new("tool-alpha"),
                     result: ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,
@@ -2159,6 +2161,7 @@ fn canonical_proposal_can_execute_and_commit_its_tool_result() {
                 tool_call_id: call_id.clone(),
                 tool_id: ToolId::new("tool-alpha"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Denied {
                         reason: "policy".to_owned(),
                     },

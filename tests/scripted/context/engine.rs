@@ -90,6 +90,7 @@ fn tool_message(id: &str, owner: &str, index: u32, call_id: &str) -> MessageBloc
         tool_call_id: ToolCallId::new(call_id),
         tool_id: ToolId::new("tool-alpha"),
         result: ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![],
             duration_ms: 1,

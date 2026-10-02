@@ -193,6 +193,7 @@ impl ToolExecutor for SpyTool {
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 0,

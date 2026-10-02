@@ -105,6 +105,7 @@ fn tool_result(id: &str, owner: &MessageId, index: usize, call: &ToolCall) -> Me
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
         result: ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: Vec::new(),
             duration_ms: 1,
