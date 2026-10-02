@@ -1830,6 +1830,7 @@ mod tests {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-1"),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Cancelled {
                     reason: CancellationReason::UserRequested,
                     phase: ToolCancellationPhase::DuringExecution,
@@ -1878,6 +1879,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-1"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status,
                     content: Vec::new(),
                     duration_ms: 0,
@@ -1915,6 +1917,7 @@ mod tests {
             tool_call_id: ToolCallId::new("call-failed"),
             tool_id: ToolId::new("tool-web-search-exa"),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Failed {
                     error: "input schema validation failed: query is required".to_owned(),
                 },

@@ -1086,6 +1086,7 @@ impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
                     .await
                     .expect("release channel stays open");
                 crate::tools::types::ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: crate::tools::types::ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 0,

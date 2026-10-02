@@ -1,3 +1,4 @@
+import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
 import { sameTarget } from './app-server';
 export const ARTIFACT_MAX_BYTES = 256 * 1024;
@@ -13,10 +14,11 @@ export class ArtifactResources {
     if (this.disposed) throw new Error('Obsolete artifact view');
     if (this.active >= ARTIFACT_MAX_TRANSFERS || this.urls.size + this.active >= ARTIFACT_MAX_URLS) throw new Error('Artifact capacity reached; close a preview and retry.');
     const target = this.client.target(this.sessionId);
+    const revision = this.client.getSnapshot().authorityRevision;
     this.active++;
     try {
       const result = await this.client.request({ method: 'artifact/read', params: { target, artifact_id: id } }, 'artifact_bytes');
-      if (this.disposed || !sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target)) throw new Error('Obsolete artifact response');
+      if (this.disposed || revision !== this.client.getSnapshot().authorityRevision || !sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target)) throw new Error('Obsolete artifact response');
       if (result.data.length > Math.ceil(ARTIFACT_MAX_BYTES / 3) * 4) throw new Error('Artifact exceeds 256 KiB');
       const decoded = atob(result.data);
       if (decoded.length > ARTIFACT_MAX_BYTES) throw new Error('Artifact exceeds 256 KiB');
@@ -31,12 +33,24 @@ export class ArtifactResources {
       return url;
     });
   }
-  readText(id: string): Promise<string> {
-    return this.transfer(id, bytes => new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  /** Rendering and Download share one authorized original byte source. */
+  load(id: string, mimeType?: string, image = false, signal?: AbortSignal): Promise<{ url: string; text?: string; error?: string }> {
+    return this.transfer(id, bytes => {
+      signal?.throwIfAborted();
+      const url = URL.createObjectURL(new Blob([bytes], { type: safeArtifactMime(mimeType) }));
+      this.urls.add(url);
+      if (isTextMime(mimeType)) {
+        try { return { url, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) }; }
+        catch { return { url, error: 'File is not valid UTF-8' }; }
+      }
+      if (image) { try { validateRaster(bytes); } catch (cause) { return { url, error: String(cause) }; } }
+      return { url };
+    });
   }
   release(url: string) { if (this.urls.delete(url)) URL.revokeObjectURL(url); }
   dispose() { this.disposed = true; for (const url of this.urls) URL.revokeObjectURL(url); this.urls.clear(); }
 }
+export const isTextMime = (mime?: string) => ['text/plain', 'text/markdown', 'application/json'].includes(mime ?? '');
 
 /** Only inert media/text MIME values from typed metadata; never filename inference.
  * Empty MIME lets Chromium decode semantic images directly from bounded bytes. */

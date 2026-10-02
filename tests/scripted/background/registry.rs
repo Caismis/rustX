@@ -143,6 +143,7 @@ impl ToolExecutor for ControlledExecutor {
                         biased;
                         () = context.cancellation.cancelled() => {
                             return ToolExecutionResult {
+                                deliveries: Vec::new(),
                                 status: ToolExecutionStatus::Cancelled {
                                     reason: CancellationReason::UserRequested,
                                     phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
@@ -229,6 +230,7 @@ fn background_fixture_with_sink(conversation_id: &str, with_sink: bool) -> Backg
 
 fn success() -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Success,
         content: Vec::new(),
         duration_ms: 0,
@@ -242,6 +244,7 @@ fn success() -> ToolExecutionResult {
 
 fn cancelled() -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Cancelled {
             reason: CancellationReason::UserRequested,
             phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,

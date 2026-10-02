@@ -151,6 +151,7 @@ fn assistant_with_calls(id: &str, calls: &[&str]) -> MessageBlock {
 
 fn success_result(body: &str) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Success,
         content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
             text: body.to_owned(),
@@ -1905,6 +1906,7 @@ fn second_crash_after_tool_repair_preserves_external_start_evidence() {
             0,
             "call-1",
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::OutcomeUnknown {
                     detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
                 },
@@ -3089,6 +3091,7 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
         1,
         "call-b",
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
             },

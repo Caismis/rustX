@@ -157,6 +157,9 @@ impl RuntimeAttachment {
     pub(crate) fn operation_authority(&self) -> Result<Arc<ClientInner>, RuntimeClientError> {
         self.access(true)
     }
+    pub(crate) fn read_authority(&self) -> Result<Arc<ClientInner>, RuntimeClientError> {
+        self.access(false)
+    }
 
     fn access(&self, write: bool) -> Result<Arc<ClientInner>, RuntimeClientError> {
         if self.detached.load(Ordering::SeqCst) {

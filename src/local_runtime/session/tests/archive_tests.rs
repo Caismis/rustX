@@ -747,6 +747,7 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
                     tool_call_id: ToolCallId::new("source-call"),
                     tool_id: ToolId::new("tool-test"),
                     result: ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status,
                         content: vec![ToolResultContent::Text(TextBlock {
                             text: authored.into(),
@@ -845,7 +846,7 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!("Tool fixture")
     };
-    tool.result.managed_output = Some(partial.clone());
+    tool.result.managed_output = Some(Box::new(partial.clone()));
     let original_result = tool.result.clone();
     let canonical_tool = serde_json::to_value(&history[2]).unwrap();
     let (directory, catalog, _) = open_catalog();
@@ -862,7 +863,7 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
     ];
     for (index, continuation) in continuations.into_iter().enumerate() {
         let mut result = original_result.clone();
-        result.managed_output = Some(continuation);
+        result.managed_output = Some(Box::new(continuation));
         store
             .append_event(RuntimeEventEnvelope {
                 schema_version: EVENT_SCHEMA_VERSION,

@@ -589,6 +589,7 @@ fn tool_detail_joins_arguments_schema_and_result_from_exact_authorities() {
         "tool-result",
         &call,
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![
                 ToolResultContent::Text(TextBlock {
@@ -606,9 +607,11 @@ fn tool_detail_joins_arguments_schema_and_result_from_exact_authorities() {
                 original_bytes: Some(98_765),
             }),
             workflow: None,
-            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from(MANAGED_OUTPUT_LOCATOR),
-            }),
+            managed_output: Some(Box::new(
+                crate::tools::types::ManagedOutputContinuation::Complete {
+                    locator: std::path::PathBuf::from(MANAGED_OUTPUT_LOCATOR),
+                },
+            )),
         },
         7,
     );
@@ -954,6 +957,7 @@ fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
                 tool_call_id: ToolCallId::new(call),
                 tool_id: ToolId::new(tool),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status,
                     content: vec![],
                     duration_ms: 999_999,
@@ -1233,6 +1237,7 @@ fn summary_pages_carry_no_heavy_request_or_tool_payload() {
         "heavy-result",
         &call,
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![ToolResultContent::Text(TextBlock {
                 text: "R".repeat(400_000),
@@ -1476,6 +1481,7 @@ fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure()
         "allowlist-result",
         &call,
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Failed {
                 error: "exit status 2".into(),
             },
@@ -1487,9 +1493,11 @@ fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure()
             artifacts: vec![],
             truncation: None,
             workflow: None,
-            managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from(MANAGED_OUTPUT_LOCATOR),
-            }),
+            managed_output: Some(Box::new(
+                crate::tools::types::ManagedOutputContinuation::Complete {
+                    locator: std::path::PathBuf::from(MANAGED_OUTPUT_LOCATOR),
+                },
+            )),
         },
         7,
     );
@@ -1909,6 +1917,7 @@ fn canonical_tool_artifacts_merge_by_identity_with_first_occurrence_typing() {
             &format!("artifact-result-{index}"),
             &call,
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content,
                 duration_ms: 0,
@@ -2016,6 +2025,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
             "bounded-result",
             &call,
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![
                     ToolResultContent::Image(image.clone()),
@@ -2130,6 +2140,7 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
             "storage-result",
             &call,
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Failed {
                     error: diagnostic.clone(),
                 },
@@ -2139,7 +2150,8 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
                 artifacts: vec![],
                 truncation: None,
                 workflow: None,
-                managed_output: continuation_for_capture(&captured, available, Some(&diagnostic)),
+                managed_output: continuation_for_capture(&captured, available, Some(&diagnostic))
+                    .map(Box::new),
             },
             4,
         );
@@ -2195,6 +2207,7 @@ fn mandatory_tool_identities_bound_whole_details_and_historical_result_blocks() 
             "identity-result",
             &call,
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![],
                 duration_ms: 1,
@@ -2282,6 +2295,7 @@ fn managed_output_locators_and_diagnostics_are_exact_recorded_facts() {
             "locator-result",
             &call,
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Failed {
                     error: diagnostic.clone(),
                 },
@@ -2291,7 +2305,7 @@ fn managed_output_locators_and_diagnostics_are_exact_recorded_facts() {
                 artifacts: vec![],
                 truncation: None,
                 workflow: None,
-                managed_output: Some(continuation),
+                managed_output: Some(Box::new(continuation)),
             },
             4,
         );
@@ -3424,6 +3438,7 @@ fn a_lifecycle_update_restates_its_summary_rows_mutable_facts_exactly() {
         "lifecycle-result",
         &call,
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![ToolResultContent::Text(TextBlock {
                 text: "done".into(),

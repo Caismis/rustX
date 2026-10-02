@@ -351,6 +351,7 @@ mod tests {
             ToolExecutionHandle::settled_by_operation(
                 Box::pin(async {
                     ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,

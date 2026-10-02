@@ -4,7 +4,7 @@ The dev launcher owns the App Server, exact endpoint, transport credential, brow
 launch credential, Host config, carrier and private scratch lifetime. Carrier
 authentication hands admission material to the browser; it adds no App Server RPC,
 proxy, native configuration or Workspace authority. The browser connects directly
-with the existing AppServerClient and App Server protocol **v30**.
+with the existing AppServerClient and App Server protocol **v32**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
@@ -131,6 +131,17 @@ Old successful classification cannot authorize a replacement Host, even with the
 adapter and no display projection running. Display listens to authority retirement
 only to clear incompatible evidence; a cached association never authorizes an
 operation and is never required for its correctness.
+
+Session-file bytes additionally require a separate native Product Host credential.
+The launcher generates a distinct process-ephemeral 256-bit secret, passes an
+owner-only file with `--product-host-token-file` to the native process and its value
+only to Node's private Host configuration. The browser receives neither. File reads
+use the private `/product-host/file-read` WebSocket lane, not an ordinary App Server
+Method. The Host supplies current registered Workspace roots; configured picker
+locations or display classification alone do not authorize bytes. Root changes and
+Host retirement abort its owned reads. Native handshake authority, attachment and
+mapping fences independently prevent obsolete publication. See
+[the complete delivery contract](../docs/file-delivery.md).
 
 ConnectionController explicitly chooses same-authority reconnect or authority
 replacement. Same-authority reconnect retains wanted views/node intent and repairs

@@ -517,6 +517,7 @@ impl ToolExecutor for FakeTool {
 /// normalizes the reason to the attempt's).
 fn cancelled_execution_result() -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Cancelled {
             reason: rustx::runtime::types::CancellationReason::UserRequested,
             phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
@@ -601,6 +602,7 @@ pub fn tool_call_events(index: u32, call: &ScriptedCall) -> Vec<ModelEvent> {
 #[must_use]
 pub fn success_result(text: &str) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: rustx::tools::types::ToolExecutionStatus::Success,
         content: vec![rustx::tools::types::ToolResultContent::Text(
             rustx::message::content::TextBlock {
@@ -620,6 +622,7 @@ pub fn success_result(text: &str) -> ToolExecutionResult {
 #[must_use]
 pub fn failed_result(error: &str) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: rustx::tools::types::ToolExecutionStatus::Failed {
             error: error.to_owned(),
         },

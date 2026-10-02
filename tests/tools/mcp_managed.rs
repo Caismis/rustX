@@ -1204,6 +1204,7 @@ impl ToolExecutor for UnusedExecutor {
         rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
             Box::pin(async {
                 ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Failed {
                         error: "never invoked".to_owned(),
                     },

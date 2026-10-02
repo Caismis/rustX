@@ -43,12 +43,22 @@ impl HostState {
 }
 #[derive(Debug)]
 struct HostInner {
+    #[cfg(test)]
+    file_read_probe: Arc<super::product_host::ReadProbe>,
+    product_host: Mutex<Option<super::product_host::Authority>>,
     authority_id: String,
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
     transport: Arc<TransportResources>,
     archives: super::archive_download::ArchiveDownloads,
+    file_reads: Arc<tokio::sync::Semaphore>,
+    file_routes: Mutex<
+        std::collections::HashMap<
+            super::protocol::AttachmentTarget,
+            std::sync::Weak<super::connection::Route>,
+        >,
+    >,
 }
 #[derive(Clone, Debug)]
 pub struct AppServerHost(Arc<HostInner>);
@@ -81,6 +91,55 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    #[cfg(test)]
+    pub(crate) fn file_read_probe(&self) -> Arc<super::product_host::ReadProbe> {
+        self.0.file_read_probe.clone()
+    }
+    /// Native process composition only. There is no public RPC for minting or
+    /// replacing this credential; replacing it synchronously revokes old reads.
+    pub(crate) fn bind_product_host(
+        &self,
+        credential: Option<super::transport::websocket::Credential>,
+    ) {
+        *self.0.product_host.lock().expect("Product Host authority") =
+            credential.map(super::product_host::Authority::new);
+    }
+    pub(super) fn authenticate_product_host(
+        &self,
+        offered: &[&str],
+    ) -> Option<tokio_util::sync::CancellationToken> {
+        self.0
+            .product_host
+            .lock()
+            .expect("Product Host authority")
+            .as_ref()?
+            .authenticate(offered)
+    }
+    pub(super) fn register_file_route(&self, route: &Arc<super::connection::Route>) {
+        let mut routes = self.0.file_routes.lock().expect("file routes");
+        routes.retain(|_, route| {
+            route
+                .upgrade()
+                .is_some_and(|route| route.attachment.read_authority().is_ok())
+        });
+        routes.insert(route.target.clone(), Arc::downgrade(route));
+    }
+    pub(super) fn file_route(
+        &self,
+        target: &super::protocol::AttachmentTarget,
+    ) -> Option<Arc<super::connection::Route>> {
+        let route = self
+            .0
+            .file_routes
+            .lock()
+            .expect("file routes")
+            .get(target)?
+            .upgrade()?;
+        (route.target == *target && route.attachment.read_authority().is_ok()).then_some(route)
+    }
+    pub(crate) fn file_reads(&self) -> Arc<tokio::sync::Semaphore> {
+        self.0.file_reads.clone()
+    }
     pub(crate) fn authority_id(&self) -> &str {
         &self.0.authority_id
     }
@@ -93,12 +152,19 @@ impl AppServerHost {
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
         manager.bind_process_policy(policy);
         Self(Arc::new(HostInner {
+            #[cfg(test)]
+            file_read_probe: Arc::default(),
+            product_host: Mutex::default(),
             authority_id: uuid::Uuid::new_v4().to_string(),
             manager,
             state: Mutex::default(),
             requests: watch::channel(0).0,
             transport: Arc::default(),
             archives: super::archive_download::ArchiveDownloads::default(),
+            file_reads: Arc::new(tokio::sync::Semaphore::new(
+                crate::tools::session_files::SESSION_FILE_MAX_READS,
+            )),
+            file_routes: Mutex::default(),
         }))
     }
     #[must_use]

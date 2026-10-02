@@ -4,7 +4,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&root)?;
     let schema = rustx::app_server::schema::protocol_schema();
     std::fs::write(
-        root.join("v30.schema.json"),
+        root.join(format!(
+            "v{}.schema.json",
+            rustx::app_server::protocol::APP_SERVER_PROTOCOL_VERSION
+        )),
         format!("{}\n", serde_json::to_string_pretty(&schema)?),
     )?;
     std::fs::write(

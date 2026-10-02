@@ -206,7 +206,7 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
         }
     }
     let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
-        &result.managed_output
+        result.managed_output.as_deref()
     else {
         panic!(
             "the settled background output is typed Complete, got {:?}",
@@ -301,7 +301,7 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
         .expect("terminal snapshot");
     let result = snapshot.result.expect("terminal result");
     let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
-        &result.managed_output
+        result.managed_output.as_deref()
     else {
         panic!(
             "the settled background output is typed Complete, got {:?}",
@@ -752,6 +752,7 @@ async fn genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound(
             rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
                 Box::pin(async move {
                     ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,

@@ -343,6 +343,12 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })));
     }
     for result in [
+        MethodResult::SessionFileBytes {
+            file: crate::tools::session_files::SessionFileReference {
+                scope: crate::tools::session_files::SessionFileScope { conversation_id: target.conversation_id.clone(), device: "1".into(), inode: "2".into() },
+                path: "报告 file.md".into(), name: "报告 file.md".into(), description: Some("Report".into()), mime_type: "text/markdown".into(),
+            }, data: "IyBSZXBvcnQK".into(),
+        },
         MethodResult::Jobs {
             jobs: Vec::new(), returned: 0, matched: 0,
             limit: crate::tools::background::MAX_JOB_LIST_LIMIT, truncated: false,
@@ -459,6 +465,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
     }));
     for data in [
+        super::protocol::ErrorData::SessionFileRead {
+            reason: crate::tools::session_files::SessionFileReadFailure::Unavailable,
+        },
         super::protocol::ErrorData::UnknownAgent {
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
         },
@@ -717,9 +726,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v30.schema.json", "v30.ts"]);
+        assert_eq!(generations, ["v32.schema.json", "v32.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v30.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v32.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

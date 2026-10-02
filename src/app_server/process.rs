@@ -10,6 +10,7 @@ use crate::local_runtime::{
     session_controller::SessionController,
     session_runtime_manager::{RuntimeResidencyPolicy, SessionRuntimeManager},
 };
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     io::{self, Read},
     os::fd::AsFd,
@@ -31,6 +32,9 @@ pub(crate) struct AppServerArgs {
     /// Dedicated WebSocket credential file; forbidden for stdio
     #[arg(long)]
     token_file: Option<PathBuf>,
+    /// Separate Product Host-only file-read credential; never the browser token.
+    #[arg(long)]
+    product_host_token_file: Option<PathBuf>,
 }
 impl AppServerArgs {
     pub(crate) fn into_request(self) -> Request {
@@ -39,6 +43,7 @@ impl AppServerArgs {
             root: self.runtime_root,
             listen: self.listen,
             token: self.token_file,
+            product_host_token: self.product_host_token_file,
         }
     }
 }
@@ -50,6 +55,7 @@ pub struct Request {
     root: Option<PathBuf>,
     listen: String,
     token: Option<PathBuf>,
+    product_host_token: Option<PathBuf>,
 }
 
 // These roots are exposed by SourceSettings in the JSON protocol. This is
@@ -160,6 +166,32 @@ async fn serve_transport(
         }
         let credential =
             websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())?;
+        if let Some(path) = options.product_host_token {
+            use std::os::unix::fs::MetadataExt;
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || metadata.uid() != nix::unistd::geteuid().as_raw()
+                || metadata.mode() & 0o077 != 0
+            {
+                return Err(io::Error::other(
+                    "Product Host credential requires an owner-only regular file",
+                ));
+            }
+            let mut token = String::new();
+            file.take(130).read_to_string(&mut token)?;
+            let product_host =
+                websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())?;
+            if credential.same_secret(&product_host) {
+                return Err(io::Error::other(
+                    "Product Host credential must differ from transport credential",
+                ));
+            }
+            host.bind_product_host(Some(product_host));
+        }
         let listener = tokio::net::TcpListener::bind(address).await?;
         eprintln!("rustx app-server listening ws://{}", listener.local_addr()?);
         websocket::serve(listener, host, credential, shutdown.clone()).await
@@ -221,8 +253,8 @@ fn inherited_writer(
 async fn run(options: Request) -> Result<(), String> {
     // Transport selection is native process policy, checked before composition.
     if options.listen == "stdio" {
-        if options.token.is_some() {
-            return Err("stdio does not accept --token-file".into());
+        if options.token.is_some() || options.product_host_token.is_some() {
+            return Err("stdio does not accept --token-file or --product-host-token-file".into());
         }
     } else {
         options

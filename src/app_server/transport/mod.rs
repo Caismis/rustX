@@ -45,12 +45,16 @@ impl io::Write for Record {
 }
 
 fn enqueue(sender: &mpsc::Sender<String>, value: &impl Serialize) -> io::Result<()> {
-    let mut record = Record(Vec::new());
-    serde_json::to_writer(&mut record, value).map_err(io::Error::other)?;
-    let record = String::from_utf8(record.0).map_err(io::Error::other)?;
+    let record = serialize_record(value)?;
     sender
         .try_send(record)
         .map_err(|_| failure("outbound capacity exhausted"))
+}
+
+pub(super) fn serialize_record(value: &impl Serialize) -> io::Result<String> {
+    let mut record = Record(Vec::new());
+    serde_json::to_writer(&mut record, value).map_err(io::Error::other)?;
+    String::from_utf8(record.0).map_err(io::Error::other)
 }
 
 struct Detach(Arc<AppServerConnection>);

@@ -1099,6 +1099,7 @@ pub fn todo_result_message(
         tool_call_id: rustx::runtime::identity::ToolCallId::new(format!("call-{id}")),
         tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::todo::TODO_TOOL_ID),
         result: rustx::tools::types::ToolExecutionResult {
+            deliveries: Vec::new(),
             status: rustx::tools::types::ToolExecutionStatus::Success,
             content: vec![rustx::tools::types::ToolResultContent::Json {
                 value: serde_json::to_value(snapshot).expect("a Todo snapshot serializes"),

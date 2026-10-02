@@ -744,6 +744,7 @@ fn process_content(store: &dyn ConversationStore, attempt: &str) {
             tool_call_id: call.id,
             tool_id: call.tool_id,
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![],
                 duration_ms: 1,

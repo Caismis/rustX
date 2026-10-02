@@ -117,10 +117,10 @@ fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
     }
 }
 
-struct Route {
-    target: AttachmentTarget,
-    client: ManagedRuntimeClient,
-    attachment: RuntimeAttachment,
+pub(super) struct Route {
+    pub(super) target: AttachmentTarget,
+    pub(super) client: ManagedRuntimeClient,
+    pub(super) attachment: RuntimeAttachment,
     external: crate::local_runtime::session_runtime_manager::RuntimeResidencyPin,
     capacity: AttachmentPermit,
 }
@@ -703,6 +703,9 @@ impl AppServerConnection {
                         },
                     ))
                 })?;
+                if let MethodResult::Attached { target, .. } = &result {
+                    self.host.register_file_route(&self.route(target)?);
+                }
                 self.changed.notify_one();
                 Ok(result)
             }
@@ -1259,7 +1262,7 @@ fn native_result(
         _ => return Err(domain(ErrorData::OperationFailed)),
     })
 }
-fn client_error(error: RuntimeClientError) -> RpcError {
+pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
         RuntimeClientError::AgentNotDelivered { agent_id } => {
             ErrorData::AgentNotDelivered { agent_id }
@@ -1290,7 +1293,7 @@ fn client_error(error: RuntimeClientError) -> RpcError {
         _ => ErrorData::InvalidState,
     })
 }
-fn manager_error(error: RuntimeManagerError) -> RpcError {
+pub(super) fn manager_error(error: RuntimeManagerError) -> RpcError {
     match error {
         RuntimeManagerError::ResidencyCapacity => domain(ErrorData::ResidencyCapacity),
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
@@ -1320,8 +1323,34 @@ fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError
         _ => ErrorData::OperationFailed,
     })
 }
-fn domain(data: ErrorData) -> RpcError {
+pub(super) fn domain(data: ErrorData) -> RpcError {
     let message = match &data {
+        ErrorData::SessionFileRead { reason } => match reason {
+            crate::tools::session_files::SessionFileReadFailure::Missing => {
+                "Delivered Session file is missing"
+            }
+            crate::tools::session_files::SessionFileReadFailure::Unauthorized => {
+                "Session file access is not authorized"
+            }
+            crate::tools::session_files::SessionFileReadFailure::Unavailable => {
+                "Original delivery Session filesystem is unavailable"
+            }
+            crate::tools::session_files::SessionFileReadFailure::NotRegular => {
+                "Delivered target is not a regular file"
+            }
+            crate::tools::session_files::SessionFileReadFailure::Replaced => {
+                "Session file was replaced during read; reopen explicitly"
+            }
+            crate::tools::session_files::SessionFileReadFailure::TooLarge => {
+                "Delivered Session file exceeds 512 KiB"
+            }
+            crate::tools::session_files::SessionFileReadFailure::Capacity => {
+                "Session file read capacity reached"
+            }
+            crate::tools::session_files::SessionFileReadFailure::ReadFailed => {
+                "Session file read failed"
+            }
+        },
         ErrorData::AgentNotDelivered { .. } => "Agent input was not delivered",
         ErrorData::AgentDeliveryUnknown { .. } => {
             "Agent input acceptance was not acknowledged; delivery is unknown, do not replay automatically"
@@ -1355,7 +1384,7 @@ fn failure(id: Option<RequestId>, error: RpcError) -> Response {
     })
 }
 
-fn host_error(error: HostAdmissionError) -> RpcError {
+pub(super) fn host_error(error: HostAdmissionError) -> RpcError {
     domain(match error {
         HostAdmissionError::ServerDraining => ErrorData::ServerDraining,
         HostAdmissionError::RequestCapacity => ErrorData::RequestCapacity,

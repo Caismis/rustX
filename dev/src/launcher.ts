@@ -80,9 +80,12 @@ export class Launcher {
       this.#active();
       const transportToken = randomBytes(32).toString('base64url');
       const tokenFile = this.#write('transport-token', transportToken);
+      let productHostToken: string;
+      do { productHostToken = randomBytes(32).toString('base64url'); } while (productHostToken === transportToken);
+      const productHostTokenFile = this.#write('product-host-token', productHostToken);
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
-        args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile], cwd: process.cwd(), readiness: 'app-server' }));
-      const config: LocalHostConfig = { endpoint, transportToken, picker: true, metadataFile: join(this.#scratch(), 'workspaces.json'),
+        args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
+      const config: LocalHostConfig = { endpoint, transportToken, productHostToken, picker: true, metadataFile: join(this.#scratch(), 'workspaces.json'),
         roots: args.workspaces.map((cwd, index) => ({ id: `root-${index + 1}`, cwd, displayName: basename(cwd) || cwd })) };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
       let browserLaunchToken: string;

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientSnapshot as Snapshot } from '../../protocol/app-server/v30';
+import type { RuntimeClientEvent as Event, RuntimeClientSnapshot as Snapshot } from '../../protocol/app-server/v32';
 import capture from './fixtures/incremental-native.json';
 import { interaction } from './fixture';
 

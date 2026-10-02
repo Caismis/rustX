@@ -5242,6 +5242,27 @@
         {
           "type": "object",
           "properties": {
+            "file": {
+              "$ref": "#/$defs/SessionFileReference"
+            },
+            "data": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_file_bytes"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "file",
+            "data"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "download": {
               "$ref": "#/$defs/ArchiveDownloadDescriptor"
             },
@@ -6178,6 +6199,66 @@
             "settings"
           ]
         }
+      ]
+    },
+    "SessionFileReference": {
+      "description": "An explicit delivery fact. Bytes and the leaf inode remain mutable.",
+      "type": "object",
+      "properties": {
+        "scope": {
+          "description": "Immutable historical resolution scope.",
+          "$ref": "#/$defs/SessionFileScope"
+        },
+        "path": {
+          "description": "Normalized relative path under that root, never an `ArtifactId`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Original filename, including spaces and Unicode.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Bounded optional user-facing description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "description": "Inert viewer classification. It confers no filesystem authority.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "path",
+        "name",
+        "mime_type"
+      ]
+    },
+    "SessionFileScope": {
+      "description": "The original native filesystem root, independent of the viewing lineage.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "description": "Original Conversation. Copies retain this identity verbatim.",
+          "$ref": "#/$defs/ConversationId"
+        },
+        "device": {
+          "description": "Device/inode identity of the authorized root, encoded losslessly.",
+          "type": "string"
+        },
+        "inode": {
+          "description": "Root inode; never silently rebound after root replacement.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "device",
+        "inode"
       ]
     },
     "ArchiveDownloadDescriptor": {
@@ -9594,12 +9675,19 @@
           "maximum": 2147483647
         },
         "artifacts": {
-          "description": "Durable artifact/file references produced by the execution.",
+          "description": "Immutable managed Artifact references produced by the execution.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/FileReference"
           },
           "default": []
+        },
+        "deliveries": {
+          "description": "Runtime-owned explicit declarations of mutable native Session files.\nOnly successful canonical Tool results authorize delivery cards.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionFileReference"
+          }
         },
         "truncation": {
           "description": "Truncation metadata where output was truncated.",
@@ -18994,6 +19082,23 @@
         {
           "type": "object",
           "properties": {
+            "reason": {
+              "$ref": "#/$defs/SessionFileReadFailure"
+            },
+            "kind": {
+              "type": "string",
+              "const": "session_file_read"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "rejection": {
               "$ref": "#/$defs/AdoptionError"
             },
@@ -19509,6 +19614,20 @@
           ],
           "additionalProperties": false
         }
+      ]
+    },
+    "SessionFileReadFailure": {
+      "description": "Closed file-access failures; diagnostics never become path authority.",
+      "type": "string",
+      "enum": [
+        "missing",
+        "unauthorized",
+        "unavailable",
+        "not_regular",
+        "replaced",
+        "too_large",
+        "capacity",
+        "read_failed"
       ]
     },
     "AdoptionError": {

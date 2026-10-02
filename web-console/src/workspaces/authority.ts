@@ -18,6 +18,7 @@ export class WorkspaceAuthority {
   private listeners = new Set<() => void>();
   constructor(private readonly host: ProductHostWorkspaces) {}
   getCatalog = () => this.catalog;
+  getRevision = () => this.epoch;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private replaced() { ++this.epoch; this.listeners.forEach(listener => listener()); }
   async observe(signal?: AbortSignal): Promise<WorkspaceAuthorityObservation> {

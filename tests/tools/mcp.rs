@@ -378,7 +378,7 @@ mod unix_tests {
             rustx::tools::types::ToolExecutionStatus::Success
         );
         let Some(rustx::tools::types::ManagedOutputContinuation::Complete { locator }) =
-            &over.managed_output
+            over.managed_output.as_deref()
         else {
             panic!("boundary-plus-one MCP result must be Complete: {over:?}");
         };
@@ -410,7 +410,7 @@ mod unix_tests {
             rustx::tools::types::ToolExecutionStatus::Success
         );
         assert!(matches!(
-            aggregate.managed_output,
+            aggregate.managed_output.as_deref(),
             Some(rustx::tools::types::ManagedOutputContinuation::Complete { .. })
         ));
         assert!(aggregate.truncation.is_some());
@@ -521,7 +521,7 @@ mod unix_tests {
         );
         let result = terminal.result.expect("terminal result");
         assert_eq!(
-            result.managed_output,
+            result.managed_output.map(|value| *value),
             Some(rustx::tools::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&advertised),
             })

@@ -515,6 +515,7 @@ mod tests {
 
     fn tool_result() -> crate::tools::types::ToolExecutionResult {
         crate::tools::types::ToolExecutionResult {
+            deliveries: Vec::new(),
             status: crate::tools::types::ToolExecutionStatus::Success,
             content: Vec::new(),
             duration_ms: 1,

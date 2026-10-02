@@ -1554,6 +1554,42 @@ impl SessionCatalog {
         Ok((node.clone(), session.state.clone()))
     }
 
+    /// Historical file delivery resolution never uses the viewing Session's
+    /// default node. Deleted/unpublished original lineages are unavailable.
+    pub(crate) fn file_source(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<(SessionId, SessionNodeId), SessionError> {
+        for (id, session) in &self.document.sessions {
+            if !self.document.deletions.contains_key(id)
+                && let Some(node) = session
+                    .nodes
+                    .values()
+                    .find(|node| &node.conversation_id == conversation)
+            {
+                return Ok((id.clone(), node.id.clone()));
+            }
+        }
+        Err(SessionError::Catalog {
+            detail: "original delivery Session unavailable".into(),
+        })
+    }
+
+    /// Recheck the original published filesystem mapping at each read fence.
+    /// A Workspace reassociation cannot finish an in-flight read from the old mapping.
+    pub(crate) fn file_mapping_matches(
+        &self,
+        conversation: &ConversationId,
+        session: &SessionId,
+        node: &SessionNodeId,
+        cwd: &Path,
+    ) -> bool {
+        self.lineage(session, Some(node))
+            .is_ok_and(|(lineage, state)| {
+                lineage.conversation_id == *conversation && state.cwd == cwd
+            })
+    }
+
     /// Whether any Session or node in this catalog names `conversation`.
     ///
     /// The catalog is the sole reachability authority for a lineage: a
@@ -3832,6 +3868,190 @@ model = "provider/model"
         }
     }
 
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One real canonical copy/deletion contract across all lineage cuts.
+    async fn session_file_history_copies_preserve_original_scope_and_deleted_source_is_unavailable()
+    {
+        use super::{LineageSide, deletion};
+        use crate::tools::session_files::{declare, read_authorized};
+        let (catalog_root, mut catalog, _) = open_catalog();
+        let (conversation, session, node) = append_history(&catalog, &[]);
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().canonicalize().unwrap();
+        fs::write(cwd.join("报告 file.md"), b"ORIGINAL").unwrap();
+        let reference = declare(&cwd, &conversation, "报告 file.md", None).unwrap();
+        let mut history = source_history();
+        let MessageBlock::Tool(tool) = &mut history[2] else {
+            panic!()
+        };
+        tool.result.deliveries = vec![reference.clone()];
+        let store = store_for(&catalog, &session, &conversation);
+        for message in &history {
+            store.append_canonical(message).unwrap();
+        }
+        let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+        let clone = catalog.prepare_clone_session(&state(), &source).unwrap();
+        let (fork, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                LineageSide::Before,
+            )
+            .unwrap();
+        let (branch, _) = catalog
+            .prepare_tree_node(
+                &session,
+                &state(),
+                &source,
+                &MessageId::new("source-user-c"),
+                LineageSide::Before,
+            )
+            .unwrap();
+        catalog
+            .publish_session(&clone, SessionNodeOrigin::New)
+            .unwrap();
+        catalog
+            .publish_session(&fork, SessionNodeOrigin::New)
+            .unwrap();
+        catalog
+            .publish_node(&session, &branch, node.clone(), SessionNodeOrigin::New)
+            .unwrap();
+        let reopened = reopen_catalog(catalog_root.path());
+        assert_eq!(
+            reopened.file_source(&conversation).unwrap(),
+            (session.clone(), node.clone())
+        );
+        for destination in [&clone, &fork, &branch] {
+            let copied = store_for(
+                &reopened,
+                &destination.session_id,
+                &destination.conversation_id,
+            )
+            .load_canonical()
+            .unwrap();
+            let deliveries: Vec<_> = copied
+                .iter()
+                .filter_map(|block| match block {
+                    MessageBlock::Tool(tool) => Some(&tool.result.deliveries),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(deliveries, vec![&reference]);
+            assert_ne!(destination.conversation_id, reference.scope.conversation_id);
+            assert!(
+                crate::tools::ArtifactStore::archive_lengths(
+                    destination.database_path.parent().unwrap(),
+                    || Ok(())
+                )
+                .unwrap()
+                .is_empty()
+            );
+        }
+        assert_eq!(
+            catalog.file_source(&conversation).unwrap(),
+            (session.clone(), node)
+        );
+        let unrelated = tempfile::tempdir().unwrap();
+        fs::write(unrelated.path().join(&reference.path), b"UNRELATED").unwrap();
+        assert!(
+            read_authorized(
+                &unrelated.path().canonicalize().unwrap(),
+                &reference,
+                || Ok(())
+            )
+            .is_err()
+        );
+        fs::write(cwd.join(&reference.path), b"CURRENT").unwrap();
+        assert_eq!(
+            read_authorized(&cwd, &reference, || Ok(())).unwrap(),
+            b"CURRENT"
+        );
+        let deletion::SessionDeleteResult::Preview { preview } = catalog.delete_preview(&session)
+        else {
+            panic!()
+        };
+        let work = catalog
+            .commit_delete(&session, &preview.target_revision)
+            .unwrap()
+            .unwrap();
+        assert!(catalog.file_source(&conversation).is_err());
+        let cleaned = work.run();
+        assert!(matches!(
+            catalog.finish_delete(&work.record, cleaned),
+            deletion::SessionDeleteResult::Deleted { .. }
+        ));
+        // The copied canonical facts remain truthful references, without bytes or fallback.
+        for destination in [&clone, &fork] {
+            assert!(catalog.snapshot(&destination.session_id).is_ok());
+            let copied = store_for(
+                &catalog,
+                &destination.session_id,
+                &destination.conversation_id,
+            )
+            .load_canonical()
+            .unwrap();
+            assert!(copied.iter().any(|block| matches!(block, MessageBlock::Tool(tool) if tool.result.deliveries == [reference.clone()])));
+        }
+        assert!(
+            catalog
+                .file_source(&reference.scope.conversation_id)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn session_file_mapping_loss_between_open_and_read_returns_no_bytes() {
+        use crate::tools::session_files::{declare, read_authorized, read_failure, unavailable};
+        let (_catalog_root, mut catalog, _) = open_catalog();
+        let (conversation, session, node) = append_history(&catalog, &[]);
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().canonicalize().unwrap();
+        fs::write(cwd.join("file.txt"), b"ORIGINAL").unwrap();
+        let reference = declare(&cwd, &conversation, "file.txt", None).unwrap();
+        let mut original = state();
+        original.cwd = cwd.clone();
+        let revision = catalog.settings_revision(&session).unwrap();
+        let revision = catalog
+            .replace_settings(&session, revision, original)
+            .unwrap();
+        assert!(catalog.file_mapping_matches(&conversation, &session, &node, &cwd));
+        let unrelated = tempfile::tempdir().unwrap();
+        fs::write(unrelated.path().join("file.txt"), b"UNRELATED").unwrap();
+        let mut replacement = state();
+        replacement.cwd = unrelated.path().canonicalize().unwrap();
+        let catalog = std::cell::RefCell::new(catalog);
+        let checks = std::cell::Cell::new(0);
+        let result = read_authorized(&cwd, &reference, || {
+            checks.set(checks.get() + 1);
+            if checks.get() == 2 {
+                // The descriptor is open, but no bytes have been read yet.
+                catalog
+                    .borrow_mut()
+                    .replace_settings(&session, revision, replacement.clone())
+                    .unwrap();
+            }
+            if catalog
+                .borrow()
+                .file_mapping_matches(&conversation, &session, &node, &cwd)
+            {
+                Ok(())
+            } else {
+                Err(unavailable())
+            }
+        });
+        assert_eq!(checks.get(), 2);
+        assert_eq!(
+            read_failure(&result.unwrap_err()),
+            crate::tools::session_files::SessionFileReadFailure::Unavailable
+        );
+        assert_eq!(
+            catalog.borrow().file_source(&conversation).unwrap(),
+            (session, node)
+        );
+    }
+
     fn source_history() -> Vec<MessageBlock> {
         vec![
             user("source-user-a", "A"),
@@ -3858,6 +4078,7 @@ model = "provider/model"
                 tool_call_id: ToolCallId::new("source-call"),
                 tool_id: ToolId::new("tool-test"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 1,
@@ -6241,6 +6462,7 @@ model = "provider/model"
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![crate::tools::types::ToolResultContent::Text(TextBlock {
                         text: text.into(),
@@ -6791,6 +7013,7 @@ model = "provider/model"
             tool_call_id: ToolCallId::new(call),
             tool_id: ToolId::new(crate::tools::todo::TODO_TOOL_ID),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![crate::tools::types::ToolResultContent::Json {
                     value: serde_json::json!({

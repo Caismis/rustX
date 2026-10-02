@@ -138,6 +138,7 @@ pub(crate) async fn authorize(
 
 pub(crate) fn terminal(status: ToolExecutionStatus) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status,
         content: Vec::new(),
         duration_ms: 0,

@@ -140,6 +140,7 @@ impl ToolExecutor for GoalExecutor {
                 })();
                 match result {
                     Ok(value) => ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: vec![ToolResultContent::Json { value }],
                         duration_ms: 0,

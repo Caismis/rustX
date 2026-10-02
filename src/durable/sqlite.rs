@@ -266,9 +266,9 @@ fn count_conversation_store_open() {
 /// values are stored in their canonical binary64 encoding.
 ///
 /// This is a semantic format change with no table change, and it is exactly
-/// the kind that must gate open: a v30 journal can contain the obsolete
+/// the kind that must gate open: a v31 journal can contain the obsolete
 /// Questionnaire payload, which the typed vocabulary cannot interpret — an
-/// authored label is not an option index, and a v30 request records no
+/// authored label is not an option index, and a v31 request records no
 /// requester identity at all. Refusing the file states that honestly rather
 /// than decoding an old audit fact under invented semantics.
 ///
@@ -10081,6 +10081,7 @@ mod tests {
             tool_call_id: call.id,
             tool_id: call.tool_id,
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![],
                 duration_ms: 0,
@@ -10137,6 +10138,7 @@ mod tests {
             tool_call_id: call.id,
             tool_id: call.tool_id,
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![],
                 duration_ms: 0,
@@ -10288,6 +10290,7 @@ mod tests {
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![crate::tools::types::ToolResultContent::Text(
                         crate::message::content::TextBlock { text: text.into() },
@@ -10415,6 +10418,7 @@ mod tests {
                     tool_call_id: call.id.clone(),
                     tool_id: call.tool_id.clone(),
                     result: ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: if index == 0 {
                             ToolExecutionStatus::Success
                         } else {
@@ -14715,11 +14719,11 @@ mod tests {
     /// It is the obsolete choice-only shape: each question carries `options`
     /// and `multi_select` instead of a typed `answer`, and the subject records
     /// no requester identity at all.
-    const V30_QUESTIONNAIRE_REQUESTED: &str = r#"{"schema_version":1,"event_id":"interaction-requested-v30","sequence":1,"conversation_id":"conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73","timestamp":"2026-01-01T00:00:00Z","event":{"type":"interaction_requested","interaction_id":"interaction-v30","subject":{"type":"questionnaire","invocation_id":{"caller":"agent","call_id":"legacy-call"},"questionnaire":{"questions":[{"question":"Which direction?","header":"Direction","options":[{"label":"First","description":"The first authored option."},{"label":"Second","description":"The second authored option."}],"multi_select":false}]}}}}"#;
+    const V30_QUESTIONNAIRE_REQUESTED: &str = r#"{"schema_version":1,"event_id":"interaction-requested-v31","sequence":1,"conversation_id":"conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73","timestamp":"2026-01-01T00:00:00Z","event":{"type":"interaction_requested","interaction_id":"interaction-v31","subject":{"type":"questionnaire","invocation_id":{"caller":"agent","call_id":"legacy-call"},"questionnaire":{"questions":[{"question":"Which direction?","header":"Direction","options":[{"label":"First","description":"The first authored option."},{"label":"Second","description":"The second authored option."}],"multi_select":false}]}}}}"#;
 
     /// The matching schema-30 settlement: the answer names the authored
     /// **label**, which the typed vocabulary replaced with an option index.
-    const V30_QUESTIONNAIRE_SETTLED: &str = r#"{"schema_version":1,"event_id":"interaction-settled-v30","sequence":2,"conversation_id":"conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73","timestamp":"2026-01-01T00:00:01Z","event":{"type":"interaction_settled","interaction_id":"interaction-v30","settlement":{"type":"questionnaire_submitted","submission":{"answers":[{"question_index":0,"answer":{"type":"single_option","value":{"label":"First"}}}]}}}}"#;
+    const V30_QUESTIONNAIRE_SETTLED: &str = r#"{"schema_version":1,"event_id":"interaction-settled-v31","sequence":2,"conversation_id":"conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73","timestamp":"2026-01-01T00:00:01Z","event":{"type":"interaction_settled","interaction_id":"interaction-v31","settlement":{"type":"questionnaire_submitted","submission":{"answers":[{"question_index":0,"answer":{"type":"single_option","value":{"label":"First"}}}]}}}}"#;
 
     /// Issue #242 changed the durable *semantic vocabulary* of the
     /// Questionnaire interaction audit, so the store version must gate open.
@@ -14740,7 +14744,7 @@ mod tests {
     #[test]
     fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("questionnaire-v30.sqlite");
+        let path = directory.path().join("questionnaire-v31.sqlite");
         let conversation_id = ConversationId::new("conv_7ee23a93-1fb2-7d39-84d8-def51c2d5f73");
         {
             // A fully-shaped store at the current schema, carrying the exact
@@ -14753,10 +14757,10 @@ mod tests {
             for (sequence, event_id, payload) in [
                 (
                     1i64,
-                    "interaction-requested-v30",
+                    "interaction-requested-v31",
                     V30_QUESTIONNAIRE_REQUESTED,
                 ),
-                (2i64, "interaction-settled-v30", V30_QUESTIONNAIRE_SETTLED),
+                (2i64, "interaction-settled-v31", V30_QUESTIONNAIRE_SETTLED),
             ] {
                 connection
                     .execute(
@@ -15423,6 +15427,7 @@ mod tests {
                 tool_call_id: ToolCallId::new(call_id),
                 tool_id: ToolId::new(tool_id),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Cancelled { reason, phase },
                     content: Vec::new(),
                     duration_ms: 0,

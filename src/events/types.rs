@@ -1248,6 +1248,7 @@ mod tests {
             tool_call_id: ToolCallId::new("call_01"),
             tool_id: ToolId::new("tool-list"),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: Vec::new(),
                 duration_ms: 5,
@@ -1444,6 +1445,7 @@ mod tests {
                 tool_call_id: call_b.clone(),
                 tool_id: tool_b.clone(),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 20,
@@ -1458,6 +1460,7 @@ mod tests {
                 tool_call_id: call_a.clone(),
                 tool_id: tool_a.clone(),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 40,

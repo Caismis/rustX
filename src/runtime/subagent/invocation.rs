@@ -509,6 +509,13 @@ mod tests {
 
     #[test]
     fn sub258_structural_child_rules_survive_at_the_invocation_boundary() {
+        let delivery = parse(serde_json::json!({"tools": {"builtin": ["present"]}}))
+            .unwrap()
+            .validate_spelling();
+        assert!(matches!(
+            delivery,
+            Err(SubagentOverrideError::ChildUnsafeSelector { .. })
+        ));
         let recursive = parse(serde_json::json!({"tools": {"builtin": ["subagent"]}}))
             .expect("parses")
             .validate_spelling();

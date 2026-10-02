@@ -25,7 +25,7 @@ export function parseArguments(argv: readonly string[], root: string): Arguments
         workspaces.push(value);
       }
     } else {
-      if (mode === 'web' && (flag === '--listen' || flag === '--token-file')) throw new Error(`${flag} is owned by the Web composition`);
+      if (mode === 'web' && (flag === '--listen' || flag === '--token-file' || flag === '--product-host-token-file')) throw new Error(`${flag} is owned by the Web composition`);
       forwarded.push(flag);
       // Native App Server options are pairs. Preserve opaque values even when
       // they happen to spell a launcher flag; do not reinterpret native syntax.

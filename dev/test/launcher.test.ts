@@ -76,27 +76,33 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   const h = harness(), launcher = new Launcher(root, h.spawn);
   const starting = launcher.start(f.args);
   await h.count(1);
-  const app = h.calls[0], tokenFile = app.spec.args.at(-1)!;
+  const app = h.calls[0], tokenFile = app.spec.args[app.spec.args.indexOf('--token-file') + 1], productHostTokenFile = app.spec.args[app.spec.args.indexOf('--product-host-token-file') + 1];
   const scratch = dirname(tokenFile);
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   assert.equal(app.spec.component, 'app-server');
-  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile]);
+  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile]);
   assert.match(readFileSync(tokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
   assert.equal(statSync(tokenFile).mode & 0o777, 0o600);
+  assert.equal(statSync(productHostTokenFile).mode & 0o777, 0o600);
+  assert.match(readFileSync(productHostTokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(readFileSync(productHostTokenFile, 'utf8'), readFileSync(tokenFile, 'utf8'));
   assert.equal(statSync(scratch).mode & 0o777, 0o700);
-  assert.deepEqual(readdirSync(scratch), ['transport-token']);
+  assert.deepEqual(readdirSync(scratch), ['product-host-token', 'transport-token']);
   app.ready.resolve('ws://127.0.0.1:4242/');
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
-  assert.deepEqual(config, { endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
+  assert.deepEqual(config, { endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
     { id: 'root-1', cwd: f.a, displayName: 'workspace with spaces' }, { id: 'root-2', cwd: f.b, displayName: 'second' },
   ] });
-  assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'transport-token', 'web-bootstrap.json']);
+  assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
   const bootstrapFile = web.spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!;
   const bootstrap = JSON.parse(readFileSync(bootstrapFile, 'utf8'));
   assert.equal(statSync(bootstrapFile).mode & 0o777, 0o600);
   assert.equal(bootstrap.transportTokenFile, tokenFile);
+  assert.equal(JSON.stringify(bootstrap).includes(config.productHostToken), false);
+  assert.equal(JSON.stringify(bootstrap).includes(productHostTokenFile), false);
+  assert.equal(JSON.stringify(await new LocalWorkspaceHost(config).listWorkspaces()).includes(config.productHostToken), false);
   assert.equal(bootstrap.appServerEndpoint, config.endpoint);
   assert.match(bootstrap.browserLaunchToken, /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(bootstrap.browserLaunchToken, readFileSync(tokenFile, 'utf8'));
@@ -153,7 +159,7 @@ test('signal fence wins over late readiness: no Host config or second child afte
   app.ready.resolve('ws://127.0.0.1:4444/');
   await Promise.resolve();
   assert.equal(h.calls.length, 1);
-  assert.deepEqual(readdirSync(scratch), ['transport-token']);
+  assert.deepEqual(readdirSync(scratch), ['product-host-token', 'transport-token']);
   app.exit(0); app.reap.resolve();
   await starting;
   assert.equal(await terminal, 129);
@@ -214,7 +220,11 @@ test('each composition mints distinct credentials; browser handoff waits for car
     const started = launcher.start({ ...f.args, noOpen }).then(async ready => {
       assert.ok(ready); await handoff(ready.url, noOpen, async url => { opened.push(url); }, line => printed.push(line)); return ready;
     });
-    const token = readFileSync(h.calls[0].spec.args.at(-1)!, 'utf8');
+    const native = h.calls[0].spec.args;
+    const token = readFileSync(native[native.indexOf('--token-file') + 1], 'utf8');
+    const privateToken = readFileSync(native[native.indexOf('--product-host-token-file') + 1], 'utf8');
+    assert.ok(!seen.has(privateToken)); seen.add(privateToken);
+    assert.notEqual(privateToken, token);
     assert.ok(!seen.has(token)); seen.add(token);
     h.calls[0].ready.resolve('ws://127.0.0.1:1234/'); await h.count(2);
     const config = JSON.parse(readFileSync(h.calls[1].spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!, 'utf8'));
@@ -223,6 +233,8 @@ test('each composition mints distinct credentials; browser handoff waits for car
     h.calls[1].ready.resolve('http://127.0.0.1:1235/'); const ready = await started;
     assert.deepEqual(opened, noOpen ? [] : [ready.url]); assert.equal(printed.length, 1);
     assert.ok(!printed.join('').includes(token));
+    assert.ok(!printed.join('').includes(privateToken));
+    assert.ok(!JSON.stringify(config).includes(privateToken));
     const settled = launcher.settle(0); h.calls.forEach(call => call.reap.resolve()); await settled;
     assert.equal(existsSync(config.transportTokenFile), false);
   }

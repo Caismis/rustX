@@ -983,6 +983,11 @@ export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
 export type Response = Success | Failure;
 export type MethodResult =
   | {
+      file: SessionFileReference;
+      data: string;
+      type: 'session_file_bytes';
+    }
+  | {
       download: ArchiveDownloadDescriptor;
       type: 'session_archive';
     }
@@ -2595,6 +2600,10 @@ export type SessionModelsView =
     };
 export type ErrorData =
   | {
+      reason: SessionFileReadFailure;
+      kind: 'session_file_read';
+    }
+  | {
       rejection: AdoptionError;
       kind: 'configuration_adoption';
     }
@@ -2713,6 +2722,18 @@ export type ErrorData =
   | {
       kind: 'operation_failed';
     };
+/**
+ * Closed file-access failures; diagnostics never become path authority.
+ */
+export type SessionFileReadFailure =
+  | 'missing'
+  | 'unauthorized'
+  | 'unavailable'
+  | 'not_regular'
+  | 'replaced'
+  | 'too_large'
+  | 'capacity'
+  | 'read_failed';
 export type AdoptionError =
   | {
       status: 'busy';
@@ -4213,6 +4234,45 @@ export interface Success {
   result: MethodResult;
 }
 /**
+ * An explicit delivery fact. Bytes and the leaf inode remain mutable.
+ */
+export interface SessionFileReference {
+  scope: SessionFileScope;
+  /**
+   * Normalized relative path under that root, never an `ArtifactId`.
+   */
+  path: string;
+  /**
+   * Original filename, including spaces and Unicode.
+   */
+  name: string;
+  /**
+   * Bounded optional user-facing description.
+   */
+  description?: string | null;
+  /**
+   * Inert viewer classification. It confers no filesystem authority.
+   */
+  mime_type: string;
+}
+/**
+ * Immutable historical resolution scope.
+ */
+export interface SessionFileScope {
+  /**
+   * Original Conversation. Copies retain this identity verbatim.
+   */
+  conversation_id: string;
+  /**
+   * Device/inode identity of the authorized root, encoded losslessly.
+   */
+  device: string;
+  /**
+   * Root inode; never silently rebound after root replacement.
+   */
+  inode: string;
+}
+/**
  * Resolve path against the selected App Server's HTTP(S) origin. Only an
  * owned stdio child supplies a loopback port; never a server filesystem path.
  */
@@ -5641,9 +5701,14 @@ export interface ToolExecutionResult {
    */
   exit_code?: number | null;
   /**
-   * Durable artifact/file references produced by the execution.
+   * Immutable managed Artifact references produced by the execution.
    */
   artifacts?: FileReference[];
+  /**
+   * Runtime-owned explicit declarations of mutable native Session files.
+   * Only successful canonical Tool results authorize delivery cards.
+   */
+  deliveries?: SessionFileReference[];
   /**
    * Truncation metadata where output was truncated.
    */
@@ -6368,9 +6433,14 @@ export interface ToolExecutionResult1 {
    */
   exit_code?: number | null;
   /**
-   * Durable artifact/file references produced by the execution.
+   * Immutable managed Artifact references produced by the execution.
    */
   artifacts?: FileReference[];
+  /**
+   * Runtime-owned explicit declarations of mutable native Session files.
+   * Only successful canonical Tool results authorize delivery cards.
+   */
+  deliveries?: SessionFileReference[];
   /**
    * Truncation metadata where output was truncated.
    */
@@ -6704,9 +6774,14 @@ export interface ToolExecutionResult2 {
    */
   exit_code?: number | null;
   /**
-   * Durable artifact/file references produced by the execution.
+   * Immutable managed Artifact references produced by the execution.
    */
   artifacts?: FileReference[];
+  /**
+   * Runtime-owned explicit declarations of mutable native Session files.
+   * Only successful canonical Tool results authorize delivery cards.
+   */
+  deliveries?: SessionFileReference[];
   /**
    * Truncation metadata where output was truncated.
    */
@@ -9808,9 +9883,14 @@ export interface ToolExecutionResult3 {
    */
   exit_code?: number | null;
   /**
-   * Durable artifact/file references produced by the execution.
+   * Immutable managed Artifact references produced by the execution.
    */
   artifacts?: FileReference[];
+  /**
+   * Runtime-owned explicit declarations of mutable native Session files.
+   * Only successful canonical Tool results authorize delivery cards.
+   */
+  deliveries?: SessionFileReference[];
   /**
    * Truncation metadata where output was truncated.
    */

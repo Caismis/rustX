@@ -2278,6 +2278,54 @@ chat_reasoning_replay = "omit"
         builtin_with_policy(name, ToolInvocationPolicy::default())
     }
 
+    #[tokio::test]
+    async fn child_model_inventory_has_no_present_and_forced_delivery_fails_composition() {
+        let directory = lab();
+        let core = LocalConversationCore::compose_subagent_child(
+            &spec(
+                directory.path(),
+                vec![builtin("read")],
+                Vec::new(),
+                Vec::new(),
+            ),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .unwrap();
+        let snapshot = core.capability().current_snapshot();
+        assert!(
+            snapshot
+                .tool_registry()
+                .model_definitions()
+                .iter()
+                .all(|tool| tool.name != "present")
+        );
+        let present = crate::tools::native::definitions(
+            crate::tools::native::NativeToolPolicies::default(),
+            None,
+        )
+        .into_iter()
+        .map(|(tool, _)| tool)
+        .find(|tool| tool.name == "present")
+        .unwrap();
+        let forced = ResolvedSubagentTool::Builtin {
+            tool_id: present.id.clone(),
+            name: present.name.clone(),
+            definition: present,
+        };
+        let result = LocalConversationCore::compose_subagent_child(
+            &spec(directory.path(), vec![forced], Vec::new(), Vec::new()),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(super::LocalRuntimeError::NativeTools { .. })),
+            "no child runtime can execute or commit a successful present result"
+        );
+    }
+
     fn spec(
         root: &std::path::Path,
         tools: Vec<ResolvedSubagentTool>,
@@ -2616,6 +2664,7 @@ chat_reasoning_replay = "omit"
             tool_call_id: crate::runtime::identity::ToolCallId::new(format!("call-{id}")),
             tool_id: crate::runtime::identity::ToolId::new(crate::tools::todo::TODO_TOOL_ID),
             result: crate::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: crate::tools::types::ToolExecutionStatus::Success,
                 content: vec![crate::tools::types::ToolResultContent::Json {
                     value: serde_json::to_value(snapshot).expect("a Todo snapshot serializes"),

@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 const host = process.env.RUSTX_WORKSPACE_HOST_CONFIG ? new LocalWorkspaceHost(JSON.parse(readFileSync(process.env.RUSTX_WORKSPACE_HOST_CONFIG, 'utf8'))) : undefined;
 export default defineConfig({
-  plugins: [react(), { name: 'product-host-workspaces', configureServer(server) { server.middlewares.use(workspaceHandler(host)); }, configurePreviewServer(server) { server.middlewares.use(workspaceHandler(host)); } }],
+  plugins: [react(), { name: 'product-host-workspaces', configureServer(server) { server.middlewares.use(workspaceHandler(host)); server.httpServer?.on('close', () => host?.close()); }, configurePreviewServer(server) { server.middlewares.use(workspaceHandler(host)); server.httpServer.on('close', () => host?.close()); } }],
   // TanStack Form core always constructs a devtools event client that
   // broadcasts and queues complete form state, secret field values included.
   // It is replaced by an inert module in the bundle and in tests alike; see

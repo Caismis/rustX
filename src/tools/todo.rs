@@ -1936,6 +1936,7 @@ mod tests {
             tool_call_id: ToolCallId::new("call-todo"),
             tool_id: ToolId::new(TODO_TOOL_ID),
             result: ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: ToolExecutionStatus::Success,
                 content: vec![
                     ToolResultContent::Text(TextBlock {
@@ -2113,6 +2114,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-bash"),
                 tool_id: ToolId::new("tool-bash"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![ToolResultContent::Text(TextBlock {
                         text: "ok".to_owned(),
@@ -2521,6 +2523,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-bash"),
                 tool_id: ToolId::new("tool-bash"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: vec![ToolResultContent::Json {
                         value: serde_json::json!({ "tasks": [], "next_id": 9 }),

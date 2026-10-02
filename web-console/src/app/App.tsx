@@ -18,12 +18,12 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v30';
+import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v32';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock } from '../bindings/composer-context';
-import { ArtifactResources } from '../client/artifacts';
+import { FilePreviewResources } from '../client/session-files';
 import { ArtifactPreview, PreviewContext, type PreviewArtifact } from './components/ArtifactPreview';
 import { ArtifactContext } from './components/Artifact';
 import { AppFrame } from '../presentation/layout/AppFrame';
@@ -54,6 +54,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const state = useClientSelector(client, selectShell, sameValue);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
   const workspaceAuthority = useMemo(() => new WorkspaceAuthority(workspaceHost), [workspaceHost]);
+  const fileAuthority = useSyncExternalStore(workspaceAuthority.subscribe, workspaceAuthority.getRevision);
   const associations = useMemo(() => new WorkspaceAssociations(client, workspaceAuthority), [client, workspaceAuthority]);
   useEffect(() => associations.start(), [associations]);
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
@@ -70,7 +71,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const openSettings = (target: SettingsTarget) => navigationActor.send({ type: 'OPEN', target });
   const openConnectionSettings = () => navigationActor.send({ type: 'OPEN.CONNECTION' });
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: ArtifactResources }>();
+  const [artifactPreview, setArtifactPreview] = useState<{ artifact: PreviewArtifact; resources: FilePreviewResources }>();
   const [theme, setTheme] = useState(readTheme);
   useEffect(() => applyTheme(theme), [theme]);
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
@@ -115,7 +116,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
   const selectedView = selected ? state.views[selected] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
-  const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation]);
+  const artifacts = useMemo(() => selected && view?.target ? new FilePreviewResources(client, selected, workspaceHost, workspaceAuthority) : undefined, [client, selected, view?.target, state.generation, state.authorityRevision, workspaceHost, workspaceAuthority, fileAuthority]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
   const attached = !view?.deleting && connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
@@ -228,7 +229,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
-    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel closeLabel={artifactPreview && artifactPreview.resources === artifacts ? tx('artifacts:preview.close') : tx('common:right-panel.close-inspector')} {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? tx('common:app.artifact-preview') : tx('common:app.developer-inspector')}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={artifactPreview.artifact.id} artifact={artifactPreview.artifact} resources={artifacts!} /> : <LiveInspector client={client} sessionId={view?.id} />}</RightPanel>}
+    rightOpen={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} rightPanel={geometry => <RightPanel closeLabel={artifactPreview && artifactPreview.resources === artifacts ? tx('artifacts:preview.close') : tx('common:right-panel.close-inspector')} {...geometry} open={inspectorOpen || !!(artifactPreview && artifactPreview.resources === artifacts)} close={() => { setInspectorOpen(false); setArtifactPreview(undefined); }} title={artifactPreview && artifactPreview.resources === artifacts ? tx('common:app.artifact-preview') : tx('common:app.developer-inspector')}>{artifactPreview && artifactPreview.resources === artifacts ? <ArtifactPreview key={JSON.stringify(artifactPreview.artifact.source)} artifact={artifactPreview.artifact} resources={artifacts!} /> : <LiveInspector client={client} sessionId={view?.id} />}</RightPanel>}
     overlay={<>
       {/* Settings renders the navigation machine's state and nothing else: which
           target, page and detail are open is decided there, including whether
@@ -272,7 +273,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
-      <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
+      <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts?.artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}

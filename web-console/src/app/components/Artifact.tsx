@@ -1,6 +1,6 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v30';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v32';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
@@ -28,7 +28,22 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
   }, [resources, id, mimeType, attempt]);
   return <div><AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
     onLoad={resources ? () => setAttempt(value => value + 1) : undefined}
-    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />{preview && resources && <Button size="sm" onClick={() => preview({ id, name, image, mimeType })}>{tx('artifacts:artifact.preview')}{' '}{name}</Button>}</div>;
+    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />{preview && resources && <Button size="sm" onClick={() => preview({ source: { kind: 'artifact', id }, name, image, mimeType })}>{tx('artifacts:artifact.preview')}{' '}{name}</Button>}</div>;
+}
+
+/** Only successful committed canonical Tool messages contribute cards. */
+export function ToolDeliveries({ messageId, result }: { messageId: string; result: ToolExecutionResult }) {
+  const tx = useTranslation(), preview = useContext(PreviewContext);
+  if (result.status.type !== 'success') return null;
+  return <div className="attachment-gallery">{result.deliveries?.map((file, index) => {
+    const artifact = { source: { kind: 'session_file' as const, messageId, index, file }, name: file.name, image: file.mime_type.startsWith('image/'), mimeType: file.mime_type };
+    return <div key={index} data-delivery-card role="group" aria-label={file.name} title={file.path}>
+      <AttachmentCard name={file.name} image={artifact.image} mimeType={file.mime_type} description={file.description} actions={preview && <>
+        <Button size="sm" aria-label={`${tx('artifacts:artifact.preview')} ${file.name}`} onClick={() => preview(artifact)}>{tx('artifacts:artifact.preview')}</Button>
+        <Button size="sm" aria-label={`${tx('artifacts:attachment-card.download')} ${file.name}`} onClick={() => preview({ ...artifact, download: true })}>{tx('artifacts:attachment-card.download')}</Button>
+      </>}/>
+    </div>;
+  })}</div>;
 }
 
 /** Only typed artifact/image/file facts; arbitrary tool JSON is never interpreted. */

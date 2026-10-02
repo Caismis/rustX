@@ -243,6 +243,7 @@ impl ToolExecutor for SubagentExecutor {
                         // and the tool result is the absorbing cancellation
                         // outcome.
                         return ToolExecutionResult {
+                            deliveries: Vec::new(),
                             status: ToolExecutionStatus::Cancelled {
                                 reason: context.cancellation.reason(),
                                 phase: ToolCancellationPhase::DuringExecution,
@@ -265,6 +266,7 @@ impl ToolExecutor for SubagentExecutor {
                     // is already torn down, and the tool result is the
                     // absorbing cancellation outcome.
                     Ok(SubagentStartOutcome::RolledBack) => ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Cancelled {
                             reason: context.cancellation.reason(),
                             phase: ToolCancellationPhase::DuringExecution,

@@ -38,6 +38,40 @@ use rustx::runtime::subagent::{
 const KEY_ENV: &str = "RUSTX_ISSUE258_KEY";
 
 #[tokio::test]
+async fn present_root_inventory_remains_available_but_named_profile_and_override_refuse_it() {
+    let lab = Lab::new();
+    lab.write_config(&serde_json::json!({
+        "delivery_child": {"description": "Unsupported child delivery", "tools": {"builtin": ["present"]}},
+        "plain": {"description": "Ordinary child", "tools": {"builtin": ["read"]}}
+    }), &["present"]);
+    let product = lab.compose().await;
+    assert!(
+        product
+            .capability()
+            .current_snapshot()
+            .tool_registry()
+            .model_definitions()
+            .iter()
+            .any(|tool| tool.name == "present")
+    );
+    let resources = product.runtime().runtime_resources();
+    assert!(
+        delegate(&resources, "delivery_child", None).is_err(),
+        "explicit unsupported child profile fails admission"
+    );
+    let override_ = parse_override(serde_json::json!({"tools": {"builtin": ["present"]}}));
+    assert!(
+        delegate(&resources, "plain", Some(&override_)).is_err(),
+        "root selection cannot grant delivery to child"
+    );
+    assert!(
+        !tool_names(&delegate(&resources, "plain", None).unwrap())
+            .contains(&"builtin:present".to_owned())
+    );
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_overrides() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({

@@ -1,5 +1,5 @@
 import { archiveDownloadUrl } from '../../../protocol/app-server/download';
-import type { ArchiveDownloadDescriptor } from '../../../protocol/app-server/v30';
+import type { ArchiveDownloadDescriptor } from '../../../protocol/app-server/v32';
 
 /** Browser-native download; no archive bytes enter JavaScript. */
 export function downloadArchive(url: string, filename: string): void {

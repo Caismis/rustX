@@ -1812,6 +1812,7 @@ mod tests {
             tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
             tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
             result: crate::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
                 status: crate::tools::types::ToolExecutionStatus::Success,
                 content: Vec::new(),
                 duration_ms: 1,

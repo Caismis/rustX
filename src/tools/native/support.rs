@@ -214,6 +214,7 @@ fn create_temp_in(parent: &Path) -> Result<PathBuf, String> {
 #[must_use]
 pub fn failed_result(error: impl Into<String>) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Failed {
             error: error.into(),
         },
@@ -233,6 +234,7 @@ pub fn failed_result(error: impl Into<String>) -> ToolExecutionResult {
 #[must_use]
 pub fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Cancelled {
             reason,
             phase: ToolCancellationPhase::DuringExecution,
@@ -252,6 +254,7 @@ pub fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
 #[must_use]
 pub fn success_json(value: serde_json::Value) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Success,
         content: vec![ToolResultContent::Json { value }],
         duration_ms: 0,
@@ -270,6 +273,7 @@ pub fn success_text(
     truncation: Option<crate::tools::types::TruncationState>,
 ) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Success,
         content: vec![ToolResultContent::Text(
             crate::message::content::TextBlock { text: text.into() },

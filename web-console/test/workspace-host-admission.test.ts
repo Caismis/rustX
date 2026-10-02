@@ -9,7 +9,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceSessionNavigation } from '../src/workspaces/navigation';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
-import type { MethodResult } from '../../protocol/app-server/v30';
+import type { MethodResult } from '../../protocol/app-server/v32';
 import { Server, endpoint } from './fixture';
 
 function deferred<T>() {

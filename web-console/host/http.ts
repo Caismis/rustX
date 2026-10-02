@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
 import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
+import { NativeFileReadError } from './file-read.ts';
 /** Workspace authority only. The launcher carrier authenticates before this handler;
  * independently managed deployments supply their own browser authentication. */
 export function workspaceHandler(host?: ProductHostWorkspaces) {
@@ -24,6 +25,16 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       };
       let value: unknown;
       switch (request.url.slice('/product-host/'.length)) {
+        case 'file-read':
+          if (!host.readDelivery) throw new Error('Session file reads unavailable on this Product Host');
+          {
+            const read = new AbortController();
+            const closed = () => { if (!response.writableFinished) read.abort(); };
+            response.on('close', closed);
+            try { value = await host.readDelivery(scope(), body.read, read.signal); }
+            finally { response.off('close', closed); }
+          }
+          break;
         case 'list': value = await host.listWorkspaces(); break;
         case 'adopt': value = await host.adoptWorkspace(scope(), string('location')); break;
         case 'rename': value = await host.renameWorkspace(scope(), string('id'), string('displayName')); break;
@@ -44,7 +55,7 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       response.writeHead(400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify({
         message: String(error),
         kind: error instanceof WorkspaceHostError ? error.kind : undefined,
-        nativeError: error instanceof AppServerRequestError ? error.error : undefined,
+        nativeError: error instanceof AppServerRequestError || error instanceof NativeFileReadError ? error.error : undefined,
         uncertain: error instanceof UncertainOutcomeError,
       }));
     }

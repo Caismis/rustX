@@ -186,7 +186,8 @@ must match exactly. There is no global perceptual threshold anywhere; the
 former `threshold: 0.027` contract is gone. The only tolerance is the explicit
 exception manifest `test/fixtures/rasterizer-noise.json`: reference-local
 measured rasterizer noise (sidebar gear glyphs, the narrow Settings panel's
-rounded corners, the New Session button corner arc — at most 7 grey levels)
+rounded corners, the New Session button corner arc, and the narrow dark
+composer's focus corner)
 grouped into bounded spatial regions,
 each with a changed-pixel budget and a raw channel-delta bound derived from its
 recorded evidence pixels. A changed pixel outside every registered region fails
@@ -197,6 +198,11 @@ observed channel delta and the first unexpected coordinates, and attach the
 actual and diff PNGs under `test-results/`. `test/screenshot-comparison.test.ts`
 holds the contract to the measured noise and to out-of-region, large-area,
 whole-image, budget, delta, layout, missing-element and dimension regressions.
+The composer exception covers exactly 16 measured sites in four disjoint
+one-pixel rows, with channel bounds 14/18/11/13. Identical complete DOM/style/
+geometry/focus probes produced both the baseline and CI variant under the same
+pinned browser. The evidence and negative regressions are recorded in
+[`docs/issue-444-web-conformance.md`](../docs/issue-444-web-conformance.md).
 
 Baseline updates are an explicit intentional action. An intentional UI change
 is reviewed, then `pnpm --dir web-console test:e2e:update` — the whole browser
@@ -262,9 +268,10 @@ idle, queued, stopping, reconnect and uncertainty, alongside desktop light/dark,
 Inspector and narrow layouts. Existing four-width keyboard acceptance remains.
 
 Each Agent reference mode runs as its own test/page/context rather than sharing
-one multi-navigation capture. This keeps reference setup independent, including
-the browser's paint caches. Screenshot tolerances remain zero; no composer style
-workaround, semantic sleep or retry is introduced.
+one multi-navigation capture. This keeps reference setup independent. Global
+screenshot tolerance remains zero; measured reference-local rasterizer variance
+uses only the explicit exception manifest. No composer style workaround,
+semantic sleep or retry is introduced.
 
 ## #411 Jobs and continuable Agents
 
@@ -281,3 +288,27 @@ workaround, semantic sleep or retry is introduced.
   renders physical terminal output, desktop/mobile overflow and console checks.
 - Native Tool renderers label Job and Agent operations separately. The current
   roster comes only from the native snapshot, not historical Tool results.
+
+## Explicit file delivery and safe preview (#431)
+
+Normative ownership, limits, and historical behavior are in
+[the file-delivery contract](../docs/file-delivery.md).
+
+| Boundary | Executable evidence |
+| --- | --- |
+| Typed declaration, order/duplicates, malformed input, missing tail, cancellation | `src/tools/native/present.rs` tests |
+| Mutable original bytes, 300 KiB/512 KiB bounds, symlinks, traversal, directories/FIFOs/devices, gated leaf/ancestor replacements, revocation | `src/tools/session_files.rs` tests |
+| Ordinary unique canonical Tool commit, real host-only credential admission, browser bypass rejection, gated native revocation, exact scope, denied roots, finite admission, no model requests | `tests/boundary/app_server_file_read.rs::committed_present_reads_exact_native_scope_through_current_authorized_attachment` |
+| Clone/fork/branch and cold reopen preserve source scope; deletion never falls back to destination file | `src/local_runtime/session.rs::session_file_history_copies_preserve_original_scope_and_deleted_source_is_unavailable` |
+| Controlled Workspace reassociation after descriptor open returns no bytes | `src/local_runtime/session.rs::session_file_mapping_loss_between_open_and_read_returns_no_bytes` |
+| Registered-root policy/removal, Host close, abort and late-byte cleanup | `test/product-host-file-read.test.ts` |
+| Root/child capability selection, rejected child profile/override and forced composition | `src/runtime/agent_profile.rs`, `src/local_runtime/composition.rs`, `tests/subagent/overrides.rs` |
+| Gated stale bytes/errors, attachment/authority replacement, URL/concurrency bounds, UTF-8/image failures, retry, inert Markdown and typed-only cards | `test/session-files.test.tsx` |
+| Managed Artifact bounds and lifecycle retained; text now also has original-byte Download | `test/artifacts.test.tsx`, `test/session-files.test.tsx` |
+| Real Write/Bash/present, durable folded cards, Markdown/text/code/raster/unsupported viewers, actual downloaded bytes and Unicode/spaces names, retry/deletion/current bytes, keyboard, narrow/wide geometry, English/Chinese, zero preview model requests | `test/e2e/file-delivery.spec.ts` |
+| Managed Artifact text/Markdown/code actual browser downloads through production owner | `test/fixtures/file-preview.tsx`, `test/e2e/file-delivery.spec.ts` |
+
+The managed-download browser fixture controls protocol replies for presentation;
+real ArtifactStore identity/read authorization is separately exercised by native
+`artifact/read` conformance. The Session-file browser scenario uses the actual
+App Server, provider emulator, native Tools, and Node Product Host.

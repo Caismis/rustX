@@ -867,6 +867,7 @@ impl RecoveryEvidence {
                             tool_id: tool_id.clone(),
                             lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
                                 ToolExecutionResult {
+                                    deliveries: Vec::new(),
                                     status: ToolExecutionStatus::Failed {
                                         error: error.clone(),
                                     },
@@ -1832,6 +1833,7 @@ impl RecoveryPlan {
                         call_id: call.id.clone(),
                         tool_id: call.tool_id.clone(),
                         result: ToolExecutionResult {
+                            deliveries: Vec::new(),
                             status: ToolExecutionStatus::Cancelled {
                                 reason: CancellationReason::ParentCancelled,
                                 phase: ToolCancellationPhase::BeforeStart,
@@ -2607,6 +2609,7 @@ pub fn recover(
 /// success and never replays the ambiguous external side effect.
 fn unknown_outcome_result() -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::OutcomeUnknown {
             detail: "execution started, then the runtime restarted before a durable outcome was committed"
                 .to_owned(),

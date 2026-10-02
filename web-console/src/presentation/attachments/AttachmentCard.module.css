@@ -6,3 +6,6 @@
 .file strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file small { color: var(--dsw-alias-label-tertiary); }
 .original { display: block; max-width: 100%; max-height: 75vh; object-fit: contain; }
+
+.description { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
+.actions { display: flex; gap: 4px; flex-wrap: wrap; }

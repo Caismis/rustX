@@ -1498,6 +1498,33 @@ impl ClientInner {
         Ok(RuntimeClientResult::ModelCatalog { catalog })
     }
 
+    /// Resolve only a committed successful Tool delivery in this exact viewed
+    /// lineage. A browser supplies canonical coordinates, never a file path.
+    pub(crate) fn session_file_reference(
+        &self,
+        message_id: &crate::runtime::identity::MessageId,
+        index: usize,
+    ) -> Result<crate::tools::session_files::SessionFileReference, RuntimeClientError> {
+        let unavailable = || RuntimeClientError::InvalidState {
+            message: "committed delivery unavailable".into(),
+        };
+        let messages = self
+            .store
+            .load_messages(std::slice::from_ref(message_id))
+            .map_err(|_| unavailable())?;
+        let Some(crate::message::types::MessageBlock::Tool(tool)) = messages.first() else {
+            return Err(unavailable());
+        };
+        if tool.result.status != crate::tools::types::ToolExecutionStatus::Success {
+            return Err(unavailable());
+        }
+        tool.result
+            .deliveries
+            .get(index)
+            .cloned()
+            .ok_or_else(unavailable)
+    }
+
     /// Read a bounded conversation-owned artifact without exposing its path.
     pub(crate) fn artifact_read(
         &self,
@@ -3097,6 +3124,7 @@ mod tests {
                         .await
                         .expect("release channel stays open");
                     ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,
@@ -3514,6 +3542,7 @@ mod tests {
 
     fn durable_tool_result() -> ToolExecutionResult {
         ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::Success,
             content: vec![ToolResultContent::Text(TextBlock {
                 text: "child tool output".to_owned(),

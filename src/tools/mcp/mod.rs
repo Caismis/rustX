@@ -6964,6 +6964,7 @@ fn translate_result(
     };
     let truncation = truncation_for_capture(&capture_result);
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status,
         content: model_blocks,
         duration_ms: duration_ms(started),
@@ -6971,7 +6972,7 @@ fn translate_result(
         artifacts: Vec::new(),
         truncation,
         workflow: None,
-        managed_output: continuation,
+        managed_output: continuation.map(Box::new),
     }
 }
 
@@ -7324,6 +7325,7 @@ fn write_artifact(
 fn failed_mcp_storage(diagnostic: &str, locator: PathBuf, started: Instant) -> ToolExecutionResult {
     let diagnostic = bound_error(diagnostic);
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Failed {
             error: format!("MCP result output storage failed: {diagnostic}"),
         },
@@ -7333,10 +7335,12 @@ fn failed_mcp_storage(diagnostic: &str, locator: PathBuf, started: Instant) -> T
         artifacts: Vec::new(),
         truncation: None,
         workflow: None,
-        managed_output: Some(crate::tools::types::ManagedOutputContinuation::Partial {
-            locator,
-            diagnostic,
-        }),
+        managed_output: Some(Box::new(
+            crate::tools::types::ManagedOutputContinuation::Partial {
+                locator,
+                diagnostic,
+            },
+        )),
     }
 }
 
@@ -7398,6 +7402,7 @@ fn mcp_empty_terminal(
 ) -> ToolExecutionResult {
     let Some(execution_id) = context.execution_id else {
         return ToolExecutionResult {
+            deliveries: Vec::new(),
             status,
             content: Vec::new(),
             duration_ms: duration_ms(started),
@@ -7416,6 +7421,7 @@ fn mcp_empty_terminal(
         Ok(sink) => {
             drop(sink);
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status,
                 content: Vec::new(),
                 duration_ms: duration_ms(started),
@@ -7423,7 +7429,7 @@ fn mcp_empty_terminal(
                 artifacts: Vec::new(),
                 truncation: None,
                 workflow: None,
-                managed_output: Some(ManagedOutputContinuation::Complete { locator }),
+                managed_output: Some(Box::new(ManagedOutputContinuation::Complete { locator })),
             }
         }
         Err(error) => {
@@ -7441,6 +7447,7 @@ fn mcp_empty_terminal(
                 status => status,
             };
             ToolExecutionResult {
+                deliveries: Vec::new(),
                 status,
                 content: Vec::new(),
                 duration_ms: duration_ms(started),
@@ -7448,10 +7455,10 @@ fn mcp_empty_terminal(
                 artifacts: Vec::new(),
                 truncation: None,
                 workflow: None,
-                managed_output: Some(ManagedOutputContinuation::Partial {
+                managed_output: Some(Box::new(ManagedOutputContinuation::Partial {
                     locator,
                     diagnostic: bound_error(&diagnostic),
-                }),
+                })),
             }
         }
     }
@@ -7837,7 +7844,9 @@ mod tests {
         ));
         let projection = result.model_facing_projection();
         assert!(projection.as_text().contains("Read or Grep"));
-        let Some(ManagedOutputContinuation::Complete { locator }) = &result.managed_output else {
+        let Some(ManagedOutputContinuation::Complete { locator }) =
+            result.managed_output.as_deref()
+        else {
             panic!("overflow MCP text must remain Complete: {result:?}");
         };
         assert_eq!(
@@ -7883,7 +7892,9 @@ mod tests {
             &result.content[2],
             ToolResultContent::Text(text) if text.text == second
         ));
-        let Some(ManagedOutputContinuation::Complete { locator }) = &result.managed_output else {
+        let Some(ManagedOutputContinuation::Complete { locator }) =
+            result.managed_output.as_deref()
+        else {
             panic!("mixed overflow MCP text must remain Complete: {result:?}");
         };
         assert_eq!(
@@ -7936,7 +7947,9 @@ mod tests {
             &result.content[3],
             ToolResultContent::Image(image) if image.artifact_id.as_str() == "artifact_2"
         ));
-        let Some(ManagedOutputContinuation::Complete { locator }) = &result.managed_output else {
+        let Some(ManagedOutputContinuation::Complete { locator }) =
+            result.managed_output.as_deref()
+        else {
             panic!("mixed overflow MCP text must remain Complete: {result:?}");
         };
         assert_eq!(
@@ -8022,7 +8035,7 @@ mod tests {
         );
         assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
         assert!(matches!(
-            result.managed_output,
+            result.managed_output.as_deref(),
             Some(ManagedOutputContinuation::Unavailable { .. })
         ));
         assert!(result.content.iter().any(|content| matches!(
@@ -8043,7 +8056,9 @@ mod tests {
             &context(&runtime, None, &progress),
             Instant::now(),
         );
-        let Some(ManagedOutputContinuation::Partial { locator, .. }) = result.managed_output else {
+        let Some(ManagedOutputContinuation::Partial { locator, .. }) =
+            result.managed_output.as_deref()
+        else {
             panic!("MCP write failure must remain Partial: {result:?}");
         };
         assert!(locator.exists());
@@ -8065,11 +8080,13 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(result.status, ToolExecutionStatus::Success);
-        let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output else {
+        let Some(ManagedOutputContinuation::Complete { locator }) =
+            result.managed_output.as_deref()
+        else {
             panic!("MCP UTF-8 result must be complete in managed output: {result:?}");
         };
         assert_eq!(
-            std::fs::read_to_string(&locator).expect("UTF-8 MCP spill"),
+            std::fs::read_to_string(locator).expect("UTF-8 MCP spill"),
             expected
         );
         assert!(result.content.iter().all(|content| match content {
@@ -8106,7 +8123,7 @@ mod tests {
             ToolExecutionStatus::Cancelled { .. }
         ));
         assert_eq!(
-            result.managed_output,
+            result.managed_output.map(|value| *value),
             Some(ManagedOutputContinuation::Complete {
                 locator: advertised
             })
@@ -8153,7 +8170,7 @@ mod tests {
         let Some(ManagedOutputContinuation::Partial {
             locator,
             diagnostic,
-        }) = &result.managed_output
+        }) = result.managed_output.as_deref()
         else {
             panic!("a sink-open failure is honestly Partial: {result:?}");
         };
@@ -8191,7 +8208,7 @@ mod tests {
             "the failure gains the storage diagnostic: {error}"
         );
         assert!(matches!(
-            result.managed_output,
+            result.managed_output.as_deref(),
             Some(ManagedOutputContinuation::Partial { .. })
         ));
     }
@@ -8249,10 +8266,12 @@ mod tests {
             &context(&runtime, Some(&execution_id), &progress),
             Instant::now(),
         );
-        let Some(ManagedOutputContinuation::Partial { locator, .. }) = result.managed_output else {
+        let Some(ManagedOutputContinuation::Partial { locator, .. }) =
+            result.managed_output.as_deref()
+        else {
             panic!("background MCP write failure must remain Partial: {result:?}");
         };
-        assert_eq!(locator, advertised);
+        assert_eq!(locator, &advertised);
         assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
         assert_eq!(
             std::fs::read_dir(runtime.tool_output().root().join("results"))

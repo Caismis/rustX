@@ -1220,6 +1220,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
                 result: crate::tools::types::ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: crate::tools::types::ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 1,

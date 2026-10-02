@@ -474,6 +474,7 @@ pub(crate) fn start_tool_execution<'a>(
 
 fn execution_boundary_result(status: ToolExecutionStatus) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status,
         content: Vec::new(),
         duration_ms: 0,
@@ -1322,6 +1323,7 @@ mod tests {
         fn success() -> Self {
             Self {
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 0,
@@ -2001,6 +2003,7 @@ mod tests {
                     .push(invocation.arguments.clone());
                 super::ToolExecutionHandle::settled_by_operation(
                     Box::pin(ready(ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,

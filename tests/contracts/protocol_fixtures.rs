@@ -409,6 +409,7 @@ fn additional_event_variants_round_trip() {
         tool_call_id: rustx::runtime::identity::ToolCallId::new("call_07"),
         tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         result: ToolExecutionResult {
+            deliveries: Vec::new(),
             status: ToolExecutionStatus::OutcomeUnknown {
                 detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
             },

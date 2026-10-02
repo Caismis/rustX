@@ -5734,6 +5734,7 @@ fn parallel_group_end(slots: &[CallSlot], index: usize) -> usize {
 /// A failed tool result.
 fn failed_result(error: &str) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Failed {
             error: error.to_owned(),
         },
@@ -5750,6 +5751,7 @@ fn failed_result(error: &str) -> ToolExecutionResult {
 /// A cancelled tool result carrying the attempt cancellation reason.
 fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
     ToolExecutionResult {
+        deliveries: Vec::new(),
         status: ToolExecutionStatus::Cancelled {
             reason,
             phase: ToolCancellationPhase::BeforeStart,
@@ -6975,6 +6977,7 @@ mod tests {
             crate::tools::executor::ToolExecutionHandle::settled_by_operation(
                 Box::pin(async {
                     ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,
@@ -7043,6 +7046,7 @@ mod tests {
                     self.reported.send_replace(true);
                     self.release.notified().await;
                     ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 1,
@@ -7468,6 +7472,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-alpha"),
                 result: ToolExecutionResult {
+                    deliveries: Vec::new(),
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
                     duration_ms: 0,
@@ -9563,6 +9568,7 @@ mod tests {
                         .await
                         .expect("release channel stays open");
                     ToolExecutionResult {
+                        deliveries: Vec::new(),
                         status: ToolExecutionStatus::Success,
                         content: Vec::new(),
                         duration_ms: 0,

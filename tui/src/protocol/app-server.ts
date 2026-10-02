@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v30.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v32.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v30.schema.json
+ * protocol/app-server/v32.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v30.ts       (generated)
+ * protocol/app-server/v32.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundary,
   Success,
-} from "../../../protocol/app-server/v30.ts";
+} from "../../../protocol/app-server/v32.ts";
 
 export type {
   ConfigurationApplication,
@@ -132,7 +132,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v30.ts";
+} from "../../../protocol/app-server/v32.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -466,6 +466,8 @@ export function describeRpcError(error: RpcError): string {
     return `${error.message} (code ${error.code})`;
   }
   switch (data.kind) {
+    case "session_file_read":
+      return error.message;
     case "archive_preparation_failed":
       return error.message;
     case "request_capacity":

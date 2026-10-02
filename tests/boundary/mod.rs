@@ -70,6 +70,7 @@ pub(crate) use crate::scripted_suites::common;
 /// shared with the scripted contract suites.
 pub(crate) use crate::scripted_suites::support;
 
+mod app_server_file_read;
 mod background;
 mod durable;
 mod managed_selection;

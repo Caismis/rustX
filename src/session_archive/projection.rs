@@ -148,7 +148,7 @@ fn tool_execution_result(result: &crate::tools::types::ToolExecutionResult) -> V
         "duration_ms":result.duration_ms, "exit_code":result.exit_code,
         "artifacts":result.artifacts, "truncation":result.truncation,
         "workflow":result.workflow,
-        "managed_output":result.managed_output.as_ref().map(managed_output_continuation),
+        "managed_output":result.managed_output.as_deref().map(managed_output_continuation),
     })
 }
 
