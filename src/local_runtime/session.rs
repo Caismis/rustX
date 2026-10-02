@@ -4149,6 +4149,13 @@ model = "provider/model"
         };
         assert_eq!(frozen.turns.len(), usize::from(retained));
         if retained {
+            assert_eq!(
+                frozen.turns[0].id,
+                crate::durable::reading::ConversationTurnId {
+                    conversation_id: conversation.clone(),
+                    attempt_id: AttemptId::new("source-attempt"),
+                }
+            );
             assert_eq!(frozen.turns[0].outcome, expected);
         }
         assert_eq!(frozen.completed_responses, []);
