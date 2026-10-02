@@ -594,7 +594,10 @@ impl SessionController {
     ) -> Result<SessionSnapshot, SessionError> {
         self.catalog.lock().await.set_current_node(id, Some(node))
     }
-    /// Clone an exact committed revision into an independent Session.
+    /// Clone structure through Surface revision R into an independent Session.
+    /// `read_lineage_cut(R)` captures invocation-time native cut C for temporal
+    /// evidence. Repeating R at a newer C may inherit a newer historical outcome;
+    /// later source activity cannot alter the captured (R, C).
     /// # Errors
     /// Identity, allocation and storage failures are returned without fallback.
     pub async fn clone_session(
@@ -614,6 +617,8 @@ impl SessionController {
         .await
     }
     /// Branch an explicitly addressed Session graph at a user-message boundary.
+    /// The boundary narrows structure through R; temporal facts remain bounded
+    /// by invocation-time C captured by the native lineage read.
     /// # Errors
     /// Unknown identities/boundaries and allocation conflicts fail closed.
     pub async fn branch_session_node(
@@ -633,9 +638,11 @@ impl SessionController {
         )
         .await
     }
-    /// Copy an exact immutable Surface boundary while retaining source allocation
+    /// Copy structure through R and its boundary while retaining source allocation
     /// access. Source deletion cannot commit before destination publication.
-    /// Concurrent source appends cannot alter the supplied revision's lineage cut.
+    /// Native `read_lineage_cut(R)` captures temporal cut C; concurrent source
+    /// activity cannot alter that frozen (R, C). A later invocation at the same
+    /// R may observe newer temporal facts through its newer C.
     /// # Errors
     /// Unknown identities/boundaries, deletion conflicts and storage failures fail closed.
     pub async fn fork_session(
@@ -688,12 +695,12 @@ impl SessionController {
                 return Err(SessionError::Seed { detail: "Stale or mismatched response boundary revision; choose an exact historical cut".into() });
             }
         }
-        let canonical = store.load_canonical().map_err(SessionError::Store)?;
-        let completed_responses =
-            crate::runtime_client::response::lineage_provenance(&store, &canonical)
-                .map_err(SessionError::Store)?;
+        let source = store
+            .read_lineage_cut(revision)
+            .map_err(SessionError::Store)?;
         if side == super::session::LineageSide::After
-            && !completed_responses
+            && !source
+                .completed_responses
                 .iter()
                 .any(|response| Some(&response.closing_message_id) == boundary)
         {
@@ -701,18 +708,6 @@ impl SessionController {
                 message_id: boundary.expect("After cut checked above").clone(),
             });
         }
-        let source = super::session::HistoricalConversationSnapshot {
-            completed_responses,
-            conversation_id: access.node.conversation_id.clone(),
-            surface_revision: revision,
-            messages: store
-                .load_surface_snapshot(revision)
-                .map_err(SessionError::Store)?,
-            canonical,
-            surface_history: store
-                .load_surface_history(revision)
-                .map_err(SessionError::Store)?,
-        };
         self.copy_admitted_lineage(
             id,
             &access.node,
@@ -733,7 +728,7 @@ impl SessionController {
         id: &SessionId,
         node: &SessionNode,
         settings: &SessionPersistentState,
-        source: &super::session::HistoricalConversationSnapshot,
+        source: &super::session::LineageReadCut,
         boundary: Option<&crate::runtime::identity::MessageId>,
         tree: bool,
         side: super::session::LineageSide,

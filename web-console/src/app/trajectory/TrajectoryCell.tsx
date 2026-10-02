@@ -5,7 +5,7 @@ import type {
   TraceArtifact,
   TraceKind,
   TraceRecord,
-} from '../../../../protocol/app-server/v29';
+} from '../../../../protocol/app-server/v30';
 import { IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { InspectableDisplayItem } from './layout';

@@ -192,7 +192,7 @@ share and prematurely release the same receipt. This releases the observation
 journal frontier; later canonical reports cannot be stranded behind an unpublished
 admission fact.
 
-App Server v29 exposes separate `jobs` and `agents` snapshots and `job_updated`
+App Server v30 exposes separate `jobs` and `agents` snapshots and `job_updated`
 and `agent_updated` events. Agent rows carry `agent_id`, `parent_agent_id`, child
 ConversationId, `current_activation`, latest `activation_id`, `activation_state`
 and explicit Admitting/Active/Stopping/Inactive/Unavailable state. Replay folds activations into the
@@ -243,7 +243,7 @@ was not edited; release tracking should link #411 and this current contract.
 
 ### Private admitted authority
 
-SQLite schema 47 stores the whole executable `DurableAgentAuthority` and its
+SQLite schema 49 stores the whole executable `DurableAgentAuthority` and its
 credential capture in the parent Conversation's private `agent_authorities`
 table. Admission atomically commits that private row and a public AgentId
 reference. Event Journal ownership facts cannot serialize profiles, Tool

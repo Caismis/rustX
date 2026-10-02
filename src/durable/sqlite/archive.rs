@@ -13,8 +13,9 @@ pub struct ConversationArchiveFrontiers {
     pub surface: i64,
     pub requests: i64,
     pub publication_audits: i64,
-    /// Presence frontier of the immutable lineage bootstrap row.
-    pub inherited_responses: i64,
+    /// Presence frontier of the immutable lineage bootstrap row, shared by
+    /// completed-response and turn-reading provenance.
+    pub bootstrap: i64,
 }
 
 pub(crate) fn error(e: impl std::fmt::Display) -> io::Error {
@@ -59,7 +60,7 @@ impl SqliteConversationStore {
             surface: max("surface_ops", "revision")?,
             requests: max("request_snapshots", "rowid")?,
             publication_audits: max("publication_audits", "rowid")?,
-            inherited_responses: max("bootstrap_identity", "id")?,
+            bootstrap: max("bootstrap_identity", "id")?,
         })
     }
 
@@ -72,9 +73,13 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
-        if matches!(authority, Authority::InheritedResponses) {
+        if let Some(column) = match authority {
+            Authority::InheritedResponses => Some("response_provenance"),
+            Authority::InheritedTurns => Some("turn_provenance"),
+            _ => None,
+        } {
             return self.lock().map_err(error)?.query_row(
-                "SELECT json_each.key,json_each.value FROM bootstrap_identity,json_each(response_provenance) WHERE bootstrap_identity.id<=?2 AND json_each.key>?1 ORDER BY json_each.key LIMIT 1",
+                &format!("SELECT json_each.key,json_each.value FROM bootstrap_identity,json_each({column}) WHERE bootstrap_identity.id<=?2 AND json_each.key>?1 ORDER BY json_each.key LIMIT 1"),
                 params![after, through], |r| Ok((r.get(0)?, r.get(1)?)),
             ).optional().map_err(error);
         }
@@ -94,6 +99,7 @@ pub(crate) enum Authority {
     Requests,
     PublicationAudits,
     InheritedResponses,
+    InheritedTurns,
 }
 impl Authority {
     fn columns(self) -> (&'static str, &'static str, &'static str) {
@@ -103,7 +109,7 @@ impl Authority {
             Self::Surface => ("surface_ops", "revision", "op_json"),
             Self::Requests => ("request_snapshots", "rowid", "snapshot_json"),
             Self::PublicationAudits => ("publication_audits", "rowid", "audit_json"),
-            Self::InheritedResponses => {
+            Self::InheritedResponses | Self::InheritedTurns => {
                 unreachable!("bootstrap provenance uses its immutable presence frontier")
             }
         }

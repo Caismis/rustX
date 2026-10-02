@@ -1,4 +1,4 @@
-//! Archive v2 boundaries for native types with mixed historical/private ownership.
+//! Versioned stream projections for native types with mixed historical/private ownership.
 use crate::model::snapshot::RequestSnapshot;
 use serde::Serialize;
 use serde_json::{Value, json};

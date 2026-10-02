@@ -213,3 +213,24 @@ def web_agent_continuation() -> Scenario:
 
 
 SCENARIOS["web_agent_continuation"] = web_agent_continuation
+
+
+def web_reading_surface() -> Scenario:
+    """300 real native Attempts exceed 512 transcript entries; gates prove follow."""
+    steps = [Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                         body_contains=(f"Reading {i}",)),
+                  Stream(Text(f"Native reading answer {i}\n\n" + "Readable history paragraph."), Finish()))
+             for i in range(300)]
+    steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                             body_contains=("Stream reading",)),
+                      Stream(Text("Reading stream begins.\n\n"), Gate("reading-detached"),
+                             Text("Detached output.\n\n" + "\n\n".join(
+                                 f"Measured paragraph {i} retains position at checkpoint {i * i + 17}."
+                                 for i in range(60))), Gate("reading-latest"),
+                             Text("Following output.\n\n" + "\n\n".join(
+                                 f"Live paragraph {i} advances the reading tail through checkpoint {i * i + 29}."
+                                 for i in range(60))), Finish())))
+    return Scenario("web_reading_surface", *steps)
+
+
+SCENARIOS["web_reading_surface"] = web_reading_surface

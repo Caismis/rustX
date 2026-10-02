@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 pub use crate::durable::sqlite::archive::ConversationArchiveFrontiers;
 
 /// Logical archive version, independent of durable and transport schemas.
-pub const FORMAT: &str = "rustx-session-archive/v2";
+pub const FORMAT: &str = "rustx-session-archive/v3";
 /// Maximum queued byte chunks. ZIP metadata scales with entries, not bytes.
 pub const STREAM_CAPACITY: usize = 2;
 pub const CHUNK_BYTES: usize = 64 * 1024;
@@ -261,7 +261,7 @@ impl SessionArchiveCut {
             "session": self.session, "cwd": self.cwd, "nodes": self.nodes,
             "conversations": self.conversations.iter().map(|c| &c.manifest).collect::<Vec<_>>(),
             "artifacts": self.artifacts.iter().map(|a| &a.manifest).collect::<Vec<_>>(),
-            "schemas": {"journal":2,"messages":1,"surface":1,"requests":2,"generations":1,"publication_audits":1,"inherited_responses":1},
+            "schemas": {"journal":2,"messages":1,"surface":1,"requests":2,"generations":1,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
             "integrity": "ZIP CRC32 per entry",
             "excluded": ["provider-private continuation state", "infrastructure configuration and credentials", "opaque request parameters outside the inspection allowlist", "provider and runtime diagnostic prose/codes", "workflow recovery comparison guards"],
             "unavailable": ["historical workspace-upload bytes are not immutable durable artifacts; recorded references remain in history"]
@@ -324,7 +324,7 @@ impl SessionArchiveCut {
 }
 
 impl ConversationCut {
-    fn authorities(&self) -> [(Authority, &'static str, i64); 6] {
+    fn authorities(&self) -> [(Authority, &'static str, i64); 7] {
         let f = &self.manifest.frontiers;
         [
             (Authority::Journal, "journal", f.journal),
@@ -334,8 +334,9 @@ impl ConversationCut {
             (
                 Authority::InheritedResponses,
                 "inherited_responses",
-                f.inherited_responses,
+                f.bootstrap,
             ),
+            (Authority::InheritedTurns, "inherited_turns", f.bootstrap),
             (
                 Authority::PublicationAudits,
                 "publication_audits",
@@ -381,6 +382,7 @@ enum Record {
     Requests(Box<crate::model::snapshot::RequestSnapshot>),
     Audits(crate::publication::PublicationAudit),
     InheritedResponse(crate::durable::response::CompletedResponseProvenance),
+    InheritedTurn(crate::durable::reading::TurnReadingProvenance),
 }
 impl Record {
     fn decode(authority: Authority, body: &str) -> io::Result<Self> {
@@ -393,6 +395,9 @@ impl Record {
             }
             Authority::InheritedResponses => {
                 Self::InheritedResponse(serde_json::from_str(body).map_err(error)?)
+            }
+            Authority::InheritedTurns => {
+                Self::InheritedTurn(serde_json::from_str(body).map_err(error)?)
             }
             Authority::PublicationAudits => {
                 Self::Audits(serde_json::from_str(body).map_err(error)?)
@@ -407,6 +412,7 @@ impl Record {
             Self::Requests(v) => projection::request(v),
             Self::Audits(v) => json!(v),
             Self::InheritedResponse(v) => json!(v),
+            Self::InheritedTurn(v) => json!(v),
         }
     }
 }

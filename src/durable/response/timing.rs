@@ -11,16 +11,16 @@ struct RequestReading {
 }
 
 #[derive(Default)]
-pub(super) struct TimingFold {
+pub(crate) struct TimingFold {
     first: Option<RequestId>,
     requests: BTreeMap<RequestId, Option<RequestReading>>,
 }
 impl TimingFold {
-    pub(super) fn start(&mut self, id: RequestId) {
+    pub(crate) fn start(&mut self, id: RequestId) {
         self.first.get_or_insert_with(|| id.clone());
         self.requests.insert(id, None);
     }
-    pub(super) fn terminal(
+    pub(crate) fn terminal(
         &mut self,
         id: &RequestId,
         generation: Option<GenerationEvidence>,
@@ -33,7 +33,7 @@ impl TimingFold {
             });
         }
     }
-    pub(super) fn summary(
+    pub(crate) fn summary(
         &self,
         start: Option<DateTime<Utc>>,
         end: DateTime<Utc>,

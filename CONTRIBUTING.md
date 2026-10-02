@@ -87,6 +87,15 @@ The preferred test order is:
 
 Core correctness must not depend only on live model behavior.
 
+### Repository Rust toolchain
+
+`rust-toolchain.toml` pins Rust 1.98.1, including Cargo, Clippy and rustfmt.
+Every Cargo-bearing CI job explicitly installs that release before its Rust
+cache step. Rust toolchain upgrades are intentional repository changes, not
+automatic CI drift; an upgrade owns any resulting compiler/lint repairs.
+The action release channel `dtolnay/rust-toolchain@stable` does not select the
+compiler: its explicit `toolchain` input must match the repository file.
+
 ### Baseline Rust checks
 
 Before merge, the baseline local Rust checks are:

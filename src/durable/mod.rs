@@ -70,6 +70,7 @@
 
 pub mod inbox;
 pub mod presentation;
+pub mod reading;
 pub mod sqlite;
 
 pub use inbox::{

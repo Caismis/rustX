@@ -3510,7 +3510,129 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
         goal.origin,
         rustx::goal::GoalOrigin::HumanAttempt { .. }
     ));
+    // #430: three model requests above belong to two native Attempts. The
+    // automatic continuation is an ordered turn even before it publishes.
+    let store = tools.durable_store();
+    let cut = store.conversation_read_cut().unwrap();
+    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(outline.total, 2);
+    assert_eq!(outline.turns.len(), 2);
+    let rustx::goal::GoalOrigin::HumanAttempt { attempt_id, .. } = &goal.origin else {
+        panic!("native Human origin");
+    };
+    assert_eq!(&outline.turns[0].id.attempt_id, attempt_id);
+    assert_ne!(outline.turns[0].id, outline.turns[1].id);
+    assert_eq!(outline.turns[0].ordinal, 1);
+    assert_eq!(outline.turns[1].ordinal, 2);
+    assert!(outline.turns[0].cursor.is_some());
+    assert!(outline.turns[1].cursor.is_none());
+    assert_eq!(store.conversation_read_cut().unwrap(), cut);
+    assert_eq!(model.requests().len(), 3, "outline starts no model work");
+
     composed.runtime.shutdown().await.unwrap();
+    let settled = store.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(settled.total, 2);
+    assert_eq!(settled.turns[1].id, outline.turns[1].id);
+    let window = store
+        .conversation_window(
+            &rustx::durable::reading::ConversationWindowAt::Turn {
+                id: settled.turns[1].id.clone(),
+                cut: settled.cut,
+            },
+            1,
+        )
+        .unwrap();
+    assert!(matches!(
+        window.page.entries[0].item,
+        rustx::durable::TranscriptItem::AttemptTerminal { .. }
+    ));
+    let rustx::durable::TranscriptItem::AttemptTerminal { event } = &window.page.entries[0].item
+    else {
+        panic!("native continuation terminal");
+    };
+    assert!(matches!(
+        event.event,
+        rustx::events::RuntimeEvent::AttemptCancelled { .. }
+    ));
+    assert_eq!(
+        event.attempt_id.as_ref(),
+        Some(&settled.turns[1].id.attempt_id)
+    );
+    let canonical = store.load_canonical().unwrap();
+    let provenance = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .map(|cut| cut.turns)
+        .unwrap();
+    assert_eq!(
+        provenance
+            .iter()
+            .map(|turn| turn.id.clone())
+            .collect::<Vec<_>>(),
+        settled
+            .turns
+            .iter()
+            .map(|turn| turn.id.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        provenance[0].outcome,
+        rustx::durable::reading::InheritedTurnOutcome::Completed
+    );
+    assert_eq!(
+        provenance[1].outcome,
+        rustx::durable::reading::InheritedTurnOutcome::Cancelled
+    );
+    let child = rustx::durable::SqliteConversationStore::in_memory(
+        rustx::runtime::ConversationId::generate(),
+    )
+    .unwrap();
+    child
+        .initialize_lineage(
+            &rustx::durable::LineageSeed::replayed(
+                canonical,
+                store
+                    .load_surface_history(store.load_head().unwrap().revision)
+                    .unwrap(),
+            )
+            .unwrap()
+            .with_turns(provenance)
+            .unwrap(),
+        )
+        .unwrap();
+    let inherited = child.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(
+        inherited
+            .turns
+            .iter()
+            .map(|turn| (&turn.id, turn.ordinal))
+            .collect::<Vec<_>>(),
+        settled
+            .turns
+            .iter()
+            .map(|turn| (&turn.id, turn.ordinal))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        inherited
+            .turns
+            .iter()
+            .map(|turn| turn.cursor.unwrap().get())
+            .collect::<Vec<_>>(),
+        [2, 6]
+    );
+    for turn in &inherited.turns {
+        let located = child
+            .conversation_window(
+                &rustx::durable::reading::ConversationWindowAt::Turn {
+                    id: turn.id.clone(),
+                    cut: inherited.cut.clone(),
+                },
+                1,
+            )
+            .unwrap();
+        assert_eq!(located.target_cursor, turn.cursor);
+        assert_eq!(located.page.entries[0].cursor, turn.cursor.unwrap());
+    }
 }
 
 /// Issue #351 requirements 6, 7, 8 and 9.

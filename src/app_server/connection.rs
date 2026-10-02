@@ -905,6 +905,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::Trace { target, .. }
         | Method::TraceDetail { target, .. }
         | Method::Transcript { target, .. }
+        | Method::ConversationTurns { target, .. }
         | Method::Goal { target, .. }
         | Method::JobStatus { target, .. }
         | Method::JobList { target, .. }
@@ -1023,9 +1024,23 @@ async fn dispatch_runtime(
         } => native_result(authority.trace_detail(record_id)),
         Method::Transcript {
             target: _,
-            before,
+            at,
             limit,
-        } => native_result(authority.transcript_page(before, limit)),
+        } => Ok(MethodResult::TranscriptWindow {
+            window: authority
+                .conversation_window(&at, limit)
+                .map_err(client_error)?,
+        }),
+        Method::ConversationTurns {
+            target: _,
+            cut,
+            offset,
+            limit,
+        } => Ok(MethodResult::ConversationTurns {
+            page: authority
+                .conversation_turns(cut.as_ref(), offset, limit)
+                .map_err(client_error)?,
+        }),
         Method::Goal { target: _, control } => native_result(authority.goal_control(control)),
         Method::JobStatus { job_id, .. } => native_result(authority.job_status(&job_id)),
         Method::JobList { .. } => native_result(Ok(authority.job_list())),

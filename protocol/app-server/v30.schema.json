@@ -214,21 +214,67 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
-                "before": {
+                "at": {
+                  "$ref": "#/$defs/ConversationWindowAt"
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 64
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "at",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/turns"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "cut": {
                   "anyOf": [
                     {
-                      "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+                      "$ref": "#/$defs/ConversationReadCut"
                     },
                     {
                       "type": "null"
                     }
                   ]
                 },
-                "limit": {
-                  "type": "integer",
+                "offset": {
+                  "description": "Absent selects the newest native outline page.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
                   "format": "uint",
                   "minimum": 0,
                   "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 64
                 }
               },
               "additionalProperties": false,
@@ -1826,10 +1872,147 @@
       "description": "Opaque Trace-only exclusive boundary, valid only in its conversation.\n\nIt is not a live cursor, a transcript cursor, an Event Journal sequence,\na Request ID, or an artifact ID. Clients order by it and page with it;\nthey never parse it.",
       "type": "string"
     },
-    "RuntimeClientTranscriptCursor": {
-      "description": "The cursor domain of durable transcript paging.",
+    "ConversationWindowAt": {
+      "description": "A single transcript read vocabulary; every selector replaces a finite window.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "latest"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "before": {
+              "$ref": "#/$defs/TranscriptCursor"
+            },
+            "cut": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConversationReadCut"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "older"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "before"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/TranscriptCursor"
+            },
+            "cut": {
+              "$ref": "#/$defs/ConversationReadCut"
+            },
+            "type": {
+              "type": "string",
+              "const": "newer"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "after",
+            "cut"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ConversationTurnId"
+            },
+            "cut": {
+              "$ref": "#/$defs/ConversationReadCut"
+            },
+            "type": {
+              "type": "string",
+              "const": "turn"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "cut"
+          ]
+        }
+      ]
+    },
+    "TranscriptCursor": {
+      "description": "A durable transcript cursor.\n\nThis cursor belongs to the transcript ordering spine. It is deliberately\ndistinct from the Runtime Client observation cursor, the Event Journal\nsequence, and the inbound mailbox sequence.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "ConversationReadCut": {
+      "description": "Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "transcript": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "mutation_revision": {
+          "description": "Edits/removals of mutable transcript bodies retire unreconstructible cuts.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "journal",
+        "transcript",
+        "mutation_revision"
+      ]
+    },
+    "ConversationTurnId": {
+      "description": "Origin survives lineage copying; ordinal never participates in identity.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "attempt_id"
+      ]
+    },
+    "AttemptId": {
+      "description": "Identifies one attempt to execute an agent manifest.",
+      "type": "string"
     },
     "SessionModelConfig": {
       "description": "The authoritative mutable model configuration of one conversation\nsession.\n\nThis one type is the session's state, the `model_get` result, and the\n`model_set` parameter: an update is a whole-state replacement, never an\nambiguous JSON patch.",
@@ -2138,6 +2321,11 @@
     "AgentId": {
       "description": "Identifies an Agent independently of its finite activations.\nFor a continuable child, this is the durable Agent-domain identity of\nits child Conversation and remains unchanged across resume.",
       "type": "string"
+    },
+    "RuntimeClientTranscriptCursor": {
+      "description": "The cursor domain of durable transcript paging.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "SubagentId": {
       "description": "Identifies one finite activation owned by an Agent, or one finite\nWorkflow child execution.\n\nRepeated native Agent activations have distinct `SubagentId`s while\nretaining the same durable `AgentId`. This is not an OS pid: process\nidentity or PID reuse can never establish durable ownership or proof\nof physical settlement.",
@@ -2512,10 +2700,6 @@
         "attempt_id",
         "invocation"
       ]
-    },
-    "AttemptId": {
-      "description": "Identifies one attempt to execute an agent manifest.",
-      "type": "string"
     },
     "WorkflowDefinitionPath": {
       "description": "Static source location; never a concrete execution authority.",
@@ -5261,6 +5445,40 @@
             "type": {
               "type": "string",
               "const": "transcript"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "window": {
+              "$ref": "#/$defs/ConversationWindow"
+            },
+            "type": {
+              "type": "string",
+              "const": "transcript_window"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "window"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/ConversationTurnPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "conversation_turns"
             }
           },
           "additionalProperties": false,
@@ -10809,6 +11027,7 @@
       "type": "string",
       "enum": [
         "running",
+        "incomplete_at_cut",
         "completed",
         "cancelled",
         "failed",
@@ -12739,6 +12958,121 @@
         }
       ]
     },
+    "ConversationWindow": {
+      "type": "object",
+      "properties": {
+        "cut": {
+          "$ref": "#/$defs/ConversationReadCut"
+        },
+        "page": {
+          "$ref": "#/$defs/RuntimeClientTranscriptPage"
+        },
+        "newer_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationTurnId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cut",
+        "page"
+      ]
+    },
+    "ConversationTurnPage": {
+      "type": "object",
+      "properties": {
+        "cut": {
+          "$ref": "#/$defs/ConversationReadCut"
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationTurn"
+          },
+          "maxItems": 64
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cut",
+        "total",
+        "offset",
+        "turns"
+      ]
+    },
+    "ConversationTurn": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ConversationTurnId"
+        },
+        "ordinal": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cursor": {
+          "description": "None until native work has a visible member or terminal position.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TranscriptCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preview": {
+          "type": "string",
+          "maxLength": 240
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ordinal",
+        "preview"
+      ]
+    },
     "GoalView": {
       "description": "The current read model; observing it never starts or authorizes work.\n\nThe wrapper is retained deliberately, not to minimize a diff: an\n`Option<GoalView>` distinguishes *the Goal extension is not composed*\n(`None`) from *composed with no current Goal* (`Some` with `current:\nNone`). A bare `Option<Option<GoalSnapshot>>` cannot spell that\ndistinction on the wire. It carries durable state only — there is no\nactivation member, so `Active + inert` is unrepresentable.",
       "type": "object",
@@ -13582,7 +13916,7 @@
           ]
         },
         {
-          "description": "A copy of an exact committed source Surface revision.",
+          "description": "A clone with structure selected at source Surface revision R.\nTemporal provenance was frozen separately at invocation-time native cut C.",
           "type": "object",
           "properties": {
             "source_session": {
@@ -13594,7 +13928,7 @@
               "$ref": "#/$defs/SessionNodeId"
             },
             "source_surface_revision": {
-              "description": "Exact source Surface revision selected before materialization.",
+              "description": "Selected structural source revision R, not an execution timestamp.",
               "$ref": "#/$defs/SurfaceRevision"
             },
             "type": {
@@ -13610,7 +13944,7 @@
           ]
         },
         {
-          "description": "A lineage seeded immediately before one selected user message.",
+          "description": "A lineage structurally narrowed at one selected message boundary.\nTemporal provenance remains bounded to the captured native cut C.",
           "type": "object",
           "properties": {
             "source_session": {
@@ -13622,7 +13956,7 @@
               "$ref": "#/$defs/SessionNodeId"
             },
             "source_surface_revision": {
-              "description": "Exact source Surface revision selected before materialization.",
+              "description": "Selected structural source revision R, not an execution timestamp.",
               "$ref": "#/$defs/SurfaceRevision"
             },
             "source_message": {
@@ -13650,7 +13984,7 @@
       ]
     },
     "SessionUserMessageBoundary": {
-      "description": "One user-message boundary the native product exposes for `/fork` and\n`/tree`. The revision is part of the selection, so later source mutations\ncannot change what the selection means.",
+      "description": "One user-message boundary the native product exposes for `/fork` and\n`/tree`. The revision fixes structural selection; temporal evidence is\ncaptured separately at the copy operation's native read cut C.",
       "type": "object",
       "properties": {
         "surface_revision": {

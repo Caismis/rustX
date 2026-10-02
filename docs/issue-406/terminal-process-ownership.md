@@ -91,8 +91,10 @@ No Harness runtime or source code was imported in this correction.
 - Native `empty_terminal_uses_its_own_native_cursor`: no-content seat and counts.
 - Native `process_membership_uses_exact_attempts_across_steering_and_pages`:
   interleaved Attempt identity and successful answer ownership.
-- Native `unfinished_process_content_crosses_lineage_without_source_execution_outcome`:
-  explicit selective lineage policy, including reopened child and stable source.
+- Native `interrupted_process_content_retains_native_origin_outcome_and_destination_location`:
+  Issue #430 supersedes the original selective lineage rule. Separate native
+  turn-reading provenance retains interrupted origins and outcomes without copying
+  source execution state; see [conversation reading](../conversation-reading.md).
 - Web `turn-process.test.tsx`: all four outcomes with actual reasoning, Tool
   occurrence/result and intermediate text; native counts, exact owner attributes,
   one disabled/open control, same DOM control as earlier pages load, isolated

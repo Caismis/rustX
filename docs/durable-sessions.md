@@ -125,9 +125,13 @@ compares and advances it in the same publication. A stale edit cannot overwrite 
 winner. A committed-but-uncertain write consumes the revision. Name and graph
 metadata do not consume settings revisions.
 
-Fork/clone captures an exact Surface revision and the canonical/history cut
-through that revision. Retained source allocation access excludes deletion until
-publication. Later source appends cannot change the copied boundary. The existing
+Fork/clone authority is `(R, C)`: selected Surface revision R fixes structural
+history/canonical closure, while the first SQLite read in `read_lineage_cut(R)`
+captures invocation-time native C for execution-derived historical facts. R is
+not an execution timestamp; repeating the same R at a newer C may observe a newer
+terminal outcome. A fork/tree boundary further narrows structure without widening
+C. Retained source allocation access excludes deletion until publication. Later
+source activity cannot change a captured `(R, C)`. The existing
 lineage-cut algorithm preserves compaction provenance, historical boundaries,
 identity remapping and transient editor content. A fork prompt is not accepted
 input until explicitly submitted to the destination.
@@ -143,7 +147,7 @@ record. Recovery never rediscovers a new deletion workset.
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-App Server v29 exposes bounded public control-plane projections. Compile-fail API
+App Server v30 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Conversation identity reservation (Issue #387)
@@ -272,7 +276,7 @@ all Sessions without inventing client focus or runtime residency.
 
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
 
-## Session lifecycle (App Server v29)
+## Session lifecycle (App Server v30)
 
 Create, open/resume, switch, fork/branch, and delete operate on durable Sessions.
 Opening implicitly reuses or composes a runtime. Close view releases an attachment

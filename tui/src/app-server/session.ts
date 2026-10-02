@@ -359,10 +359,10 @@ export class AppServerSession {
   ): Promise<RuntimeClientTranscriptPage> {
     const page = await this.#client.call(
       "session/transcript",
-      { target: this.#target, before: beforeCursor ?? null, limit },
-      "transcript",
+      { target: this.#target, at: beforeCursor ? { type: 'older', before: beforeCursor, cut: null } : { type: 'latest' }, limit },
+      "transcript_window",
     );
-    return page.page;
+    return page.window.page;
   }
 
   /** A read is valid only in the exact parent attachment/presentation epoch. */

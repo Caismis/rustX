@@ -1,7 +1,7 @@
 //! Destination ownership for the managed references in an exact lineage cut.
 use super::{
-    Arc, BTreeMap, BTreeSet, ConversationId, HistoricalConversationSnapshot, LineageSeed,
-    MessageBlock, Path, SessionCatalog, SessionError, UserContentBlock,
+    Arc, BTreeMap, BTreeSet, ConversationId, LineageReadCut, LineageSeed, MessageBlock, Path,
+    SessionCatalog, SessionError, UserContentBlock,
 };
 use crate::message::types::AssistantContentBlock;
 use crate::runtime::ArtifactId;
@@ -46,7 +46,7 @@ fn references(messages: &mut [MessageBlock], mut visit: impl FnMut(&mut Artifact
 impl SessionCatalog {
     pub(super) fn lineage_artifacts(
         &self,
-        source: &HistoricalConversationSnapshot,
+        source: &LineageReadCut,
         seed: &LineageSeed,
     ) -> Result<Option<ArtifactStore>, SessionError> {
         let mut needed = false;

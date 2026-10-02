@@ -1201,6 +1201,50 @@ impl ClientInner {
         Ok(RuntimeClientResult::TranscriptPage { page })
     }
 
+    pub(crate) fn conversation_turns(
+        &self,
+        cut: Option<&crate::durable::reading::ConversationReadCut>,
+        offset: Option<usize>,
+        limit: usize,
+    ) -> Result<crate::durable::reading::ConversationTurnPage, RuntimeClientError> {
+        self.store
+            .conversation_turns(cut, offset.unwrap_or(usize::MAX), limit)
+            .map_err(|error| RuntimeClientError::InvalidState {
+                message: error.to_string(),
+            })
+    }
+
+    pub(crate) fn conversation_window(
+        &self,
+        at: &crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<crate::runtime_client::snapshot::ConversationWindow, RuntimeClientError> {
+        let failed =
+            |error: crate::durable::ConversationStoreError| RuntimeClientError::InvalidState {
+                message: error.to_string(),
+            };
+        let read = self.store.conversation_window(at, limit).map_err(failed)?;
+        let mut page = transcript_page_view(read.page)
+            .map_err(|message| RuntimeClientError::RuntimeFailure { message })?;
+        super::response::decorate_window(self.store.as_ref(), &mut page, read.cut.journal)
+            .map_err(failed)?;
+        if !read
+            .cut
+            .reconstructible_from(&self.store.conversation_read_cut().map_err(failed)?)
+        {
+            return Err(RuntimeClientError::InvalidState {
+                message: "stale conversation read cut; reload the turn outline".into(),
+            });
+        }
+        Ok(crate::runtime_client::snapshot::ConversationWindow {
+            cut: read.cut,
+            page,
+            newer_cursor: read.newer_cursor.map(Into::into),
+            target: read.target,
+            target_cursor: read.target_cursor.map(Into::into),
+        })
+    }
+
     /// Read-only child history, addressed exclusively through this parent's registry.
     pub(crate) fn subagent_transcript_page(
         &self,
@@ -4822,7 +4866,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation() {
         let (release_tx, release_rx) = model_release();
-        let (_, fixture) = host_fixture(
+        let (adapter, fixture) = host_fixture(
             vec![vec![
                 GatedStep::Emit(ModelEvent::Started),
                 GatedStep::ParkUntilReleased(release_rx),
@@ -4839,7 +4883,10 @@ mod tests {
         mailbox
             .enqueue(inbound_text("admitted", "running"))
             .unwrap();
-        await_request_history_len(&fixture.host, 1).await;
+        // Request-start publication precedes final prompt admission. Wait for
+        // the actual provider invocation so this message stays pending behind
+        // the parked Attempt instead of racing into its initial prompt.
+        await_adapter_request_count(&adapter, 1).await;
         let sequence = mailbox
             .enqueue(inbound_text("pending-repair", "old"))
             .unwrap();

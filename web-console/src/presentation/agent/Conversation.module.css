@@ -237,7 +237,8 @@
   bottom: 0;
   /* Concrete overflow content establishes z-index 1, while the sticky
      composer remains above both layers. */
-  z-index: 0;
+  z-index: 2;
+  touch-action: none;
   width: min(
     10px,
     calc((100% - var(--dsh-chat-content-width)) / 2 - 24px - 24px)
@@ -287,6 +288,8 @@
   left: 4px;
 }
 
+.widthHandle:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
+.widthHandle:focus-visible::after,
 .widthHandle:hover::after,
 .widthHandle[data-dragging]::after {
   opacity: 1;
@@ -356,10 +359,7 @@
   /* Shared width axis for the transcript, dock cards, composer, and takeover
      cards. Main width controls publish the live body width and optional user
      preference; embedded occurrences override this adaptive axis below. */
-  --dsh-chat-content-width: var(
-    --dsh-chat-user-width,
-    clamp(680px, calc(var(--dsh-conversation-column-width, 0px) * 0.64), 920px)
-  );
+  --dsh-chat-content-width: min(920px, calc(100% - 48px));
   --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 32px);
   --dsh-composer-side-clearance: 16px;
   --dsh-composer-dock-inset: 8px;

@@ -11,12 +11,17 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { HistoryAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v29';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v30';
+import { useRef, useState } from 'react';
+import { useTranslation } from '../../locale/react';
+import { TurnNavigator } from './TurnNavigator';
+import { turnAnchor } from '../../client/transcript';
 
 export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
   onHistorical: (id: HistoryAction, response: CompletedResponseView) => void;
 }) {
+  const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const view = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
     if (!view?.snapshot) return undefined;
@@ -30,8 +35,21 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   if (!view) return null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})} latest={() => client.latestTrace(view.id)}/>
-    : <ChatViewport key={`${view.id}:${view.target?.attachment_id}`}>
-      <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} latest={() => client.latestTranscript(view.id)} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
+    : <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} historical={view.history?.mode==='historical'} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+      overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
+        const intent=viewport.current?.beginNavigation();
+        if(intent){
+          const work=client.navigateTurn(view.id,turn,intent.current);
+          const clientIntent=client.getSnapshot().views[view.id]?.turnNavigation?.intent;
+          void work.then(committed=>{if(committed)intent.commit(turnAnchor(turn.id),()=>{
+            const current=client.getSnapshot().views[view.id];
+            return current?.target===view.target && current.attachment==='attached' && current.turnNavigation?.intent===clientIntent;
+          });});
+        }
+      }}/>}
+      latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
+      onLatest={()=>client.latestTranscript(view.id)} onUserIntent={()=>client.userScrolled(view.id)} onActiveTurn={setActive}>
+      <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} loadNewer={()=>void client.loadNewer(view.id).catch(()=>{})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
       <ConversationActivity client={client} sessionId={view.id}/>
     </ChatViewport>;
 }

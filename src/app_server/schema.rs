@@ -31,6 +31,16 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         runtime_incarnation: serde_json::from_str("9007199254740993").expect("incarnation fixture"),
         attachment_id: crate::runtime_client::types::AttachmentId::new("attachment-fixture"),
     };
+    let reading_cut = crate::durable::reading::ConversationReadCut {
+        conversation_id: target.conversation_id.clone(),
+        journal: EXACT,
+        transcript: EXACT,
+        mutation_revision: EXACT,
+    };
+    let reading_id = crate::durable::reading::ConversationTurnId {
+        conversation_id: target.conversation_id.clone(),
+        attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+    };
     let mut fixtures = vec![
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
@@ -263,10 +273,25 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         Method::Transcript {
             target: target.clone(),
-            before: Some(
-                crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT),
-            ),
+            at: crate::durable::reading::ConversationWindowAt::Older {
+                before: crate::durable::TranscriptCursor::new(EXACT),
+                cut: None,
+            },
             limit: 32,
+        },
+        Method::ConversationTurns {
+            target: target.clone(),
+            cut: Some(reading_cut.clone()),
+            offset: Some(64),
+            limit: 64,
+        },
+        Method::Transcript {
+            target: target.clone(),
+            at: crate::durable::reading::ConversationWindowAt::Turn {
+                id: reading_id.clone(),
+                cut: reading_cut.clone(),
+            },
+            limit: 64,
         },
         Method::SessionFork {
             session_id: target.session_id.clone(),
@@ -349,6 +374,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     eligibility: crate::local_runtime::configuration::application::AdoptionEligibility::Unavailable,
                 },
         },
+        MethodResult::ConversationTurns { page: crate::durable::reading::ConversationTurnPage {
+            cut: reading_cut.clone(), total: 1, offset: 0, turns: vec![crate::durable::reading::ConversationTurn { id: reading_id.clone(), ordinal: 1, cursor: Some(crate::durable::TranscriptCursor::new(EXACT)), preview: "Native preview".into() }],
+        } },
+        MethodResult::TranscriptWindow { window: crate::runtime_client::snapshot::ConversationWindow { cut: reading_cut, page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage { entries: Vec::new(), next_cursor: None, statistics: None }, target: Some(reading_id), target_cursor: Some(crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT)), newer_cursor: None } },
         MethodResult::InboundAccepted {
             message_id: crate::runtime::identity::MessageId::new("message-fixture"),
             inbound_sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
@@ -688,9 +717,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v29.schema.json", "v29.ts"]);
+        assert_eq!(generations, ["v30.schema.json", "v30.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v29.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v30.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -5,7 +5,9 @@ Read-only reference inspected: `477b4f420553e8a52c2fbccc464d7561b239c443`,
 use-scroll-follow.ts,use-chat-viewport.ts}`. Existing pinned lineage is unchanged.
 ChatViewport retains its attributed source lineage and adopts the semantic anchor,
 follow-intent and browser-clamp attribution patterns. rustX owns the single RAF
-commit rule and native message identity adapter. Smooth native scrolling and
+commit rule and native message identity adapter. PR #443 repairs active reading
+with native start intervals rather than marker heights; the viewport remains the
+sole geometry reader and automatic scroll writer. Smooth native scrolling and
 Harness runtime/store authority were not imported: they do not satisfy the required
 single frame writer or rustX native authority boundary. Generated imports advance
 with the mandatory protocol; local hashes/dependency closure are refreshed.
@@ -1085,7 +1087,7 @@ New `TrajectoryLedger.tsx` and `TrajectoryRow.tsx` are bounded descendants with
 separate viewport and semantic/chrome responsibilities. No Harness runtime,
 request inference, manual resize system, subtool authority or canonical history
 is imported. Earlier per-file baselines remain; additional-source hashes identify
-this exact approved source and local hashes/import closure reflect App Server v29.
+this exact approved source. Its implementation-time import closure used App Server v29.
 
 The PR #424 contract repair keeps the pinned Harness revision above. Exact
 record membership repairs JSON-null Step ownership in the shared projection;
@@ -1094,8 +1096,8 @@ The #409/#411 v27 descriptions above are historical audit records. The full
 pinned-container browser acceptance passed without screenshot baseline changes.
 
 PR #425 integrates image/Bash presentation into those same native abstractions.
-The current import closure and local source hashes use App Server v29; upstream
-revisions, licenses, and semantic ledger ownership remain unchanged.
+Its implementation-time import closure used App Server v29; upstream revisions,
+licenses, and semantic ledger ownership remain unchanged.
 
 The #433 review repair updates the local WorkspaceNavigation hash for consuming
 current-demand status from the existing display owner, and the Settings dictionary
@@ -1106,3 +1108,32 @@ The #436 contract hardening updates the local WorkspaceNavigation hash so Sideba
 metadata intent capture requires the same display catalog that rendered the action,
 matching the Composer. The upstream source, license, and import closure are unchanged;
 no additional upstream code or dependency is used.
+
+## Issue #430 conversation reading surface
+
+The approved reference is `deepseek-ai/deepseek-harness@639ed015397290b3745d163aafe02ffee4aa3f84`.
+The suggested `/home/caismis/Documents/codes/deepseek-harness` checkout was absent;
+a separate clean, detached reference at `/workspace/deepseek-harness-reference`
+was inspected without modification. Its newer per-file pins do not change the
+inventory's existing baseline or license artifact.
+
+Materially adapted interaction patterns:
+
+- `packages/client/ui-conversation/src/client/skeleton/ConversationWidthControls.tsx`:
+  measured column, pointer capture, symmetric handles, frame-coalesced drag,
+  explicit commit/cancel. The implementation publishes local CSS and persists
+  only deliberate browser preferences.
+- `packages/client/ui-chat/src/client/chat/TurnNavigator.tsx`:
+  fixed pitch, active/pending marks, bounded hover/focus preview and keyboard
+  focus. The implementation consumes rustX's bounded native Attempt outline.
+- `packages/client/ui-chat/src/client/chat/turn-rail-items.ts` was inspected for
+  outline/loaded-anchor reconciliation; no source was copied. Loaded anchors
+  are reused only with the same native cut and exact origin/cursor.
+- `TurnNavigator.module.css` was inspected for rail geometry. The local rail
+  stylesheet is independently authored with rustX tokens.
+
+No Harness runtime, Session store, semantic turn derivation, scroll coordinator
+or shell was imported. Native Attempt origins own turn identity; display ordinal
+only selects a native page. Existing derived ChatViewport and conversation CSS
+retain their original provenance with updated local hashes and dependency closure.
+The current generated imports and local dependency closure use mandatory App Server v30.

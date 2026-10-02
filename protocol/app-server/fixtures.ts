@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v29.js';
+import type {ProtocolMessage} from './v30.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -100,7 +100,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 29,
+      "protocol_version": 30,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -118,7 +118,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 29,
+      "protocol_version": 30,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -371,8 +371,60 @@ export const fixtures = [
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
-      "before": "9007199254740993",
+      "at": {
+        "type": "older",
+        "before": "9007199254740993",
+        "cut": null
+      },
       "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/turns",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "cut": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "journal": "9007199254740993",
+        "transcript": "9007199254740993",
+        "mutation_revision": "9007199254740993"
+      },
+      "offset": 64,
+      "limit": 64
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/transcript",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "at": {
+        "type": "turn",
+        "id": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "attempt_id": "attempt-fixture"
+        },
+        "cut": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "journal": "9007199254740993",
+          "transcript": "9007199254740993",
+          "mutation_revision": "9007199254740993"
+        }
+      },
+      "limit": 64
     }
   },
   {
@@ -511,6 +563,58 @@ export const fixtures = [
         "eligibility": {
           "status": "unavailable"
         }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "conversation_turns",
+      "page": {
+        "cut": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "journal": "9007199254740993",
+          "transcript": "9007199254740993",
+          "mutation_revision": "9007199254740993"
+        },
+        "total": 1,
+        "offset": 0,
+        "turns": [
+          {
+            "id": {
+              "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+              "attempt_id": "attempt-fixture"
+            },
+            "ordinal": 1,
+            "cursor": "9007199254740993",
+            "preview": "Native preview"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "transcript_window",
+      "window": {
+        "cut": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "journal": "9007199254740993",
+          "transcript": "9007199254740993",
+          "mutation_revision": "9007199254740993"
+        },
+        "page": {
+          "entries": []
+        },
+        "newer_cursor": null,
+        "target": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "attempt_id": "attempt-fixture"
+        },
+        "target_cursor": "9007199254740993"
       }
     }
   },

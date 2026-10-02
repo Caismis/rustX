@@ -176,7 +176,8 @@ fn page_message_ids(page: &rustx::durable::TranscriptPage) -> Vec<String> {
             TranscriptItem::PublicationAudit { .. }
             | TranscriptItem::InteractionRequested { .. }
             | TranscriptItem::InteractionSettled { .. }
-            | TranscriptItem::AttemptTerminal { .. } => None,
+            | TranscriptItem::AttemptTerminal { .. }
+            | TranscriptItem::InheritedTurn { .. } => None,
         })
         .collect()
 }
@@ -878,7 +879,8 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             TranscriptItem::Message { .. }
             | TranscriptItem::InteractionRequested { .. }
             | TranscriptItem::InteractionSettled { .. }
-            | TranscriptItem::AttemptTerminal { .. } => None,
+            | TranscriptItem::AttemptTerminal { .. }
+            | TranscriptItem::InheritedTurn { .. } => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -1390,7 +1392,8 @@ fn requirement_16_read_tool_result_is_pageable_after_source_disappears() {
         | TranscriptItem::PublicationAudit { .. }
         | TranscriptItem::InteractionRequested { .. }
         | TranscriptItem::InteractionSettled { .. }
-        | TranscriptItem::AttemptTerminal { .. } => None,
+        | TranscriptItem::AttemptTerminal { .. }
+        | TranscriptItem::InheritedTurn { .. } => None,
     });
     let result = result.expect("ToolResult remains in transcript");
     assert!(result.result.content.iter().any(|content| {

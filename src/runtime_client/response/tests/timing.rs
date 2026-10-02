@@ -1,6 +1,7 @@
 use super::*;
 use crate::durable::response::CompletedResponseTiming;
 use crate::model::generation_evidence::GenerationEvidence;
+use crate::runtime::identity::RequestId;
 
 fn timing_case(
     requests: &[(Option<GenerationEvidence>, Option<ModelUsage>, bool)],

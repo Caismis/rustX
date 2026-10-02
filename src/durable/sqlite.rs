@@ -307,7 +307,9 @@ fn count_conversation_store_open() {
 /// Older development stores are rejected; secrets never enter execution facts.
 /// Version 47 retains finite Workflow physical-settlement evidence independently
 /// of terminal publication. Older development stores lack the required proof.
-pub const SQLITE_SCHEMA_VERSION: i64 = 47;
+/// Version 48 retains native turn-reading provenance and the semantic read-mutation epoch.
+/// Version 49 separates immutable inherited outcomes from live execution state.
+pub const SQLITE_SCHEMA_VERSION: i64 = 49;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1345,6 +1347,8 @@ impl SqliteConversationStore {
             transaction.execute("DELETE FROM transcript_order WHERE reference_kind='message' AND reference_id=?1", [item.message_id.as_str()])
                 .map_err(|error| storage(format!("pending transcript remove: {error}")))?;
         }
+        transaction.execute("UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1", [])
+            .map_err(|error| storage(format!("reading mutation: {error}")))?;
         transaction
             .commit()
             .map_err(|error| storage(format!("pending mutation commit: {error}")))?;
@@ -1353,6 +1357,115 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn transcript_attempts(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<AttemptId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT DISTINCT attempt_id FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='assistant_message_committed' AND json_extract(event_json,'$.event.message_id') IN (SELECT value FROM json_each(?1))").map_err(|error| storage(error.to_string()))?;
+        let rows = statement
+            .query_map(
+                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        rows.map(|row| {
+            row.map(AttemptId::new)
+                .map_err(|error| storage(error.to_string()))
+        })
+        .collect()
+    }
+
+    fn inherited_responses_for(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT p.value FROM bootstrap_identity b,json_each(b.response_provenance) p WHERE EXISTS(SELECT 1 FROM json_each(p.value,'$.process_message_ids') m WHERE m.value IN (SELECT value FROM json_each(?1)))").map_err(|error| storage(error.to_string()))?;
+        let rows = statement
+            .query_map(
+                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        rows.map(|row| {
+            decode(
+                &row.map_err(|error| storage(error.to_string()))?,
+                "selected inherited response",
+            )
+        })
+        .collect()
+    }
+    fn load_inherited_turns(
+        &self,
+    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        reading::inherited_turns(&connection)
+    }
+    fn inherited_turns_for(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT p.value FROM bootstrap_identity b,json_each(b.turn_provenance) p WHERE EXISTS(SELECT 1 FROM json_each(p.value,'$.process_message_ids') m WHERE m.value IN (SELECT value FROM json_each(?1)))").map_err(|error| storage(error.to_string()))?;
+        let rows = statement
+            .query_map(
+                [serde_json::to_string(messages).map_err(|error| storage(error.to_string()))?],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        rows.map(|row| {
+            decode(
+                &row.map_err(|error| storage(error.to_string()))?,
+                "selected inherited turn",
+            )
+        })
+        .collect()
+    }
+    fn read_lineage_cut(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        lineage::read(&transaction, &self.conversation_id, revision)
+    }
+    fn conversation_read_cut(
+        &self,
+    ) -> Result<super::reading::ConversationReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        reading::cut(&transaction, &self.conversation_id)
+    }
+
+    fn conversation_turns(
+        &self,
+        expected: Option<&super::reading::ConversationReadCut>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<super::reading::ConversationTurnPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        reading::turns(&transaction, &self.conversation_id, expected, offset, limit)
+    }
+
+    fn conversation_window(
+        &self,
+        at: &super::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<super::reading::DurableConversationWindow, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        reading::window(&transaction, &self.conversation_id, at, limit)
+    }
     fn load_agent_authority(
         &self,
         agent_id: &crate::runtime::identity::AgentId,
@@ -1841,15 +1954,15 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("initialize transaction: {error}")))?;
-        let bootstrap: Option<(i64, String, String)> = transaction
+        let bootstrap: Option<(i64, String, String, String)> = transaction
             .query_row(
-                "SELECT message_count,history_digest,response_provenance FROM bootstrap_identity WHERE id=1",
+                "SELECT message_count,history_digest,response_provenance,turn_provenance FROM bootstrap_identity WHERE id=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
-        if let Some((count, digest, responses)) = bootstrap {
+        if let Some((count, digest, responses, turns)) = bootstrap {
             let supplied_count = i64::try_from(messages.len())
                 .map_err(|_| storage("initial message count is not representable"))?;
             if count != supplied_count
@@ -1858,6 +1971,8 @@ impl ConversationStore for SqliteConversationStore {
                     &responses,
                     "bootstrap responses",
                 )? != seed.completed_responses()
+                || decode::<Vec<super::reading::TurnReadingProvenance>>(&turns, "bootstrap turns")?
+                    != seed.turns()
             {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
             }
@@ -1877,8 +1992,25 @@ impl ConversationStore for SqliteConversationStore {
             // compaction summary the source produced *last* is the fact its
             // Surface shows *first*. Fusing the passes would force one order
             // on both and reproduce neither.
+            let append_terminals =
+                |predecessor: Option<&MessageId>| -> Result<(), ConversationStoreError> {
+                    for (index, turn) in seed.turns().iter().enumerate() {
+                        if turn.process_message_ids.is_empty()
+                            && turn.preceding_message_id.as_ref() == predecessor
+                        {
+                            append_transcript_reference(
+                                &transaction,
+                                "inherited_turn",
+                                &index.to_string(),
+                            )?;
+                        }
+                    }
+                    Ok(())
+                };
+            append_terminals(None)?;
             for message in messages {
                 append_seeded_ledger_message(&transaction, message)?;
+                append_terminals(Some(&crate::conversation::message_id_of(message)))?;
             }
             // The seed's Surface history becomes this lineage's own retained
             // operation log, replayed from revision 1. Flattening it into one
@@ -1906,11 +2038,12 @@ impl ConversationStore for SqliteConversationStore {
             }
             transaction
                 .execute(
-                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,response_provenance) VALUES(1,?1,?2,?3)",
+                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,response_provenance,turn_provenance) VALUES(1,?1,?2,?3,?4)",
                     params![
                         i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
                         initial_history_digest(messages)?,
-                        encode(&seed.completed_responses(), "bootstrap responses")?
+                        encode(&seed.completed_responses(), "bootstrap responses")?,
+                        encode(&seed.turns(), "bootstrap turns")?
                     ],
                 )
                 .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
@@ -2363,6 +2496,7 @@ impl ConversationStore for SqliteConversationStore {
                AND (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?2))))
              OR (t.reference_kind='publication_audit' AND
                (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
+             OR (t.reference_kind='inherited_turn' AND t.position<=?1)
              OR (t.reference_kind IN ('interaction_event','attempt_terminal') AND EXISTS
                (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
              ORDER BY t.position DESC LIMIT ?5",
@@ -2602,62 +2736,10 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         request_id: &RequestId,
     ) -> Result<RequestSnapshot, ConversationStoreError> {
-        let connection = self.lock()?;
-        let (stored_surface_revision, json, started_sequence): (i64, String, Option<i64>) = connection
-            .query_row(
-                "SELECT surface_revision,snapshot_json,started_sequence FROM request_snapshots WHERE request_id = ?1",
-                [request_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(|error| storage(format!("request snapshot lookup: {error}")))?
-            .ok_or_else(|| {
-                ConversationStoreError::RequestNotFound(request_id.clone())
-            })?;
-        let started_sequence = started_sequence.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} has no durable start sequence"
-            ))
-        })?;
-        let sequence = sequence_from_i64(started_sequence)?;
-        let event_json: String = connection
-            .query_row(
-                "SELECT event_json FROM events WHERE sequence=?1",
-                [started_sequence],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(format!("request start event lookup: {error}")))?
-            .ok_or_else(|| {
-                ConversationStoreError::InvalidReference(format!(
-                    "request snapshot {request_id} start event is unavailable"
-                ))
-            })?;
-        let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
-        validate_snapshot_identity(&snapshot)?;
-        if stored_surface_revision != seq_to_i64(snapshot.surface_revision.get())? {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} Surface column disagrees with its frozen snapshot"
-            )));
+        {
+            let connection = self.lock()?;
+            load_request_snapshot(&connection, &self.conversation_id, request_id)
         }
-        if snapshot.request_id != *request_id {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot row {request_id} contains a different RequestId"
-            )));
-        }
-        let event: RuntimeEventEnvelope = decode(&event_json, "request start event")?;
-        if event.sequence != sequence {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} start event sequence disagrees"
-            )));
-        }
-        if event.conversation_id != self.conversation_id {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} start event belongs to a foreign conversation"
-            )));
-        }
-        validate_request_start_metadata(&snapshot, &event)?;
-        Ok(snapshot)
     }
 
     fn reconstruct_model_request(
@@ -5256,6 +5338,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 next_inbound_sequence INTEGER NOT NULL CHECK(next_inbound_sequence >= 0),
                 next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0),
                 next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
+                reading_mutation_revision INTEGER NOT NULL DEFAULT 0 CHECK(reading_mutation_revision >= 0),
                 logical_step_sequence INTEGER NOT NULL CHECK(logical_step_sequence >= 0),
                 pending_unresolved_output_stream_id TEXT
             );
@@ -5299,7 +5382,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 message_count INTEGER NOT NULL,
                 history_digest TEXT NOT NULL,
-                response_provenance TEXT NOT NULL
+                response_provenance TEXT NOT NULL,
+                turn_provenance TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
@@ -5444,6 +5528,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "next_inbound_sequence",
                 "next_event_sequence",
                 "next_transcript_position",
+                "reading_mutation_revision",
                 "logical_step_sequence",
                 "pending_unresolved_output_stream_id",
             ] as &[&str],
@@ -5476,7 +5561,12 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "bootstrap_identity",
-            &["message_count", "history_digest", "response_provenance"],
+            &[
+                "message_count",
+                "history_digest",
+                "response_provenance",
+                "turn_provenance",
+            ],
         ),
         (
             "surface_ops",
@@ -6333,6 +6423,68 @@ fn load_pending_until(
         .collect())
 }
 
+fn load_request_snapshot(
+    connection: &Connection,
+    conversation: &ConversationId,
+    request_id: &RequestId,
+) -> Result<RequestSnapshot, ConversationStoreError> {
+    let (stored_surface_revision, json, started_sequence): (i64, String, Option<i64>) = connection
+            .query_row(
+                "SELECT surface_revision,snapshot_json,started_sequence FROM request_snapshots WHERE request_id = ?1",
+                [request_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("request snapshot lookup: {error}")))?
+            .ok_or_else(|| {
+                ConversationStoreError::RequestNotFound(request_id.clone())
+            })?;
+    let started_sequence = started_sequence.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} has no durable start sequence"
+        ))
+    })?;
+    let sequence = sequence_from_i64(started_sequence)?;
+    let event_json: String = connection
+        .query_row(
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [started_sequence],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("request start event lookup: {error}")))?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "request snapshot {request_id} start event is unavailable"
+            ))
+        })?;
+    let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
+    validate_snapshot_identity(&snapshot)?;
+    if stored_surface_revision != seq_to_i64(snapshot.surface_revision.get())? {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} Surface column disagrees with its frozen snapshot"
+        )));
+    }
+    if snapshot.request_id != *request_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot row {request_id} contains a different RequestId"
+        )));
+    }
+    let event: RuntimeEventEnvelope = decode(&event_json, "request start event")?;
+    if event.sequence != sequence {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} start event sequence disagrees"
+        )));
+    }
+    if event.conversation_id != *conversation {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} start event belongs to a foreign conversation"
+        )));
+    }
+    validate_request_start_metadata(&snapshot, &event)?;
+    Ok(snapshot)
+}
+
 fn load_canonical_rows(
     connection: &Connection,
 ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
@@ -6509,6 +6661,20 @@ fn load_transcript_item(
     reference_id: &str,
 ) -> Result<TranscriptItem, ConversationStoreError> {
     match reference_kind {
+        "inherited_turn" => {
+            let json: String = connection
+                .query_row(
+                    "SELECT value FROM bootstrap_identity,json_each(turn_provenance) WHERE key=?1",
+                    [reference_id
+                        .parse::<i64>()
+                        .map_err(|error| storage(error.to_string()))?],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(error.to_string()))?;
+            Ok(TranscriptItem::InheritedTurn {
+                provenance: decode(&json, "inherited turn")?,
+            })
+        }
         "message" => {
             let ledger_json: Option<String> = connection
                 .query_row(
@@ -14623,7 +14789,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 47);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 49);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14692,7 +14858,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 47);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 49);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -15334,6 +15500,10 @@ mod tests {
 
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
+mod lineage;
+mod reading;
+#[cfg(test)]
+mod reading_tests;
 
 #[cfg(test)]
 mod presentation_cancellation_tests {

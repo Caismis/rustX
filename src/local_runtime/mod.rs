@@ -69,11 +69,10 @@ pub use config::{
 pub use launch::{HostEnvironment, LaunchRequest, resolve};
 pub use process::run_process;
 pub use session::{
-    CatalogCommitError, HistoricalConversationSnapshot, SESSION_CATALOG_SCHEMA_VERSION,
-    SESSION_LIST_PAGE_LIMIT, SESSION_NAME_LIMIT, SESSION_TREE_PAGE_LIMIT, SessionCatalog,
-    SessionError, SessionId, SessionListPage, SessionNode, SessionNodeId, SessionNodeOrigin,
-    SessionNodePage, SessionSnapshot, SessionSummary, SessionUserMessageBoundary,
-    SessionUserMessageBoundaryPage,
+    CatalogCommitError, LineageReadCut, SESSION_CATALOG_SCHEMA_VERSION, SESSION_LIST_PAGE_LIMIT,
+    SESSION_NAME_LIMIT, SESSION_TREE_PAGE_LIMIT, SessionCatalog, SessionError, SessionId,
+    SessionListPage, SessionNode, SessionNodeId, SessionNodeOrigin, SessionNodePage,
+    SessionSnapshot, SessionSummary, SessionUserMessageBoundary, SessionUserMessageBoundaryPage,
 };
 pub use session_controller::SessionTransitionResult;
 

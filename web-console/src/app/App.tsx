@@ -4,6 +4,7 @@ import { useTranslation, useNotice } from '../locale/react';
 import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
 import { ConversationHeader } from './agent/ConversationHeader';
 import { useClientSelector, selectShell, sameValue } from '../client/selectors';
+import { ConversationWidthControls } from './agent/ConversationWidthControls';
 import { ConversationLive } from './agent/ConversationLive';
 import { ConversationSeat, ConversationStatus } from './agent/ConversationSeat';
 import { readTheme, applyTheme } from './appearance';
@@ -17,7 +18,7 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v29';
+import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v30';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
@@ -270,6 +271,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       }} />}
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
+      <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <PreviewContext value={artifact => { if (artifacts) { setArtifactPreview({ artifact, resources: artifacts }); setInspectorOpen(false); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}

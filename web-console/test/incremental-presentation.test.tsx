@@ -4,7 +4,7 @@ import { act, cleanup, render, fireEvent } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v29';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v30';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const s of servers) s.client.disconnect(); servers.length = 0; });
 const emit = (s: Server, event: RuntimeClientEvent) => {
@@ -43,7 +43,7 @@ it('Trace, summary and Goal updates preserve transcript references and React com
   const s = new Server(); servers.push(s); await s.attached('A');
   s.handlers.set('session/trace', () => ({ type: 'trace', page: { records: [] } }));
   let commits = 0;
-  render(<Profiler id="chat" onRender={() => commits++}><ConversationLive client={s.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></Profiler>);
+  await act(async () => { render(<Profiler id="chat" onRender={() => commits++}><ConversationLive client={s.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></Profiler>); });
   const before = s.client.getSnapshot().views.A.snapshot!, count = commits;
   await act(async () => { emit(s, { type: 'trace_changed' }); emit(s, { type: 'goal_changed', view: { current: null } }); await s.client.readSessionSummary('A'); });
   const after = s.client.getSnapshot().views.A.snapshot!;

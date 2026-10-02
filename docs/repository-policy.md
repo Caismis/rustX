@@ -60,6 +60,9 @@ Draft pull requests are acceptable for early architectural review, but merge-rea
 
 ## 6. Review requirements
 
+The Rust toolchain is an explicit repository-owned build input and is pinned;
+upgrades are intentional repository changes that own resulting compiler/lint repairs.
+
 Review should prioritize, in order:
 
 1. correctness of runtime semantics;

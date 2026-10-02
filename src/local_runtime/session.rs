@@ -279,22 +279,24 @@ pub use crate::runtime::identity::{SessionId, SessionNodeId};
 pub enum SessionNodeOrigin {
     /// A new empty conversation lineage.
     New,
-    /// A copy of an exact committed source Surface revision.
+    /// A clone with structure selected at source Surface revision R.
+    /// Temporal provenance was frozen separately at invocation-time native cut C.
     Clone {
         /// Source Session identity.
         source_session: SessionId,
         /// Source node identity.
         source_node: SessionNodeId,
-        /// Exact source Surface revision selected before materialization.
+        /// Selected structural source revision R, not an execution timestamp.
         source_surface_revision: SurfaceRevision,
     },
-    /// A lineage seeded immediately before one selected user message.
+    /// A lineage structurally narrowed at one selected message boundary.
+    /// Temporal provenance remains bounded to the captured native cut C.
     Fork {
         /// Source Session identity.
         source_session: SessionId,
         /// Source node identity.
         source_node: SessionNodeId,
-        /// Exact source Surface revision selected before materialization.
+        /// Selected structural source revision R, not an execution timestamp.
         source_surface_revision: SurfaceRevision,
         /// Exact selected source message; `side` determines the retained prefix.
         source_message: MessageId,
@@ -547,8 +549,8 @@ pub struct SessionSummary {
 }
 
 /// One user-message boundary the native product exposes for `/fork` and
-/// `/tree`. The revision is part of the selection, so later source mutations
-/// cannot change what the selection means.
+/// `/tree`. The revision fixes structural selection; temporal evidence is
+/// captured separately at the copy operation's native read cut C.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionUserMessageBoundary {
     /// The exact retained Surface revision containing the message.
@@ -557,10 +559,9 @@ pub struct SessionUserMessageBoundary {
     pub message: UserMessageBlock,
 }
 
-/// A source lineage selected at one immutable durable Surface revision.
+/// A source lineage captured at native authority (Surface revision R, read cut C).
 ///
-/// A lineage copy needs all three of what the source conversation is at the
-/// selected cut, because they are not the same set of facts:
+/// Its structural selection needs three views, which are not the same set of facts:
 ///
 /// ```text
 /// messages         what the model sees there  -- the Surface at that revision
@@ -583,29 +584,14 @@ pub struct SessionUserMessageBoundary {
 /// Ledger order disagree, so a copy that kept only the final projection
 /// would present branch points the source never had — see [`lineage_cut`].
 ///
-/// `canonical` is the source Ledger as read; the *cut* is taken by the
-/// `prepare_*` that uses this snapshot, from the boundary it selected, so a
-/// fact committed after the selected revision is never inherited.
+/// Native `read_lineage_cut(R)` freezes authority (R, C): R selects structural
+/// history/canonical closure, C selects temporal execution-derived meaning.
+/// `prepare_*` may narrow the structural prefix at a boundary, but cannot widen
+/// C. The same R read later at a newer C may retain newer terminal facts.
 /// This is a lineage input, not a complete execution snapshot: it excludes
 /// executable Attempt/request state, Event Journal facts, `RequestSnapshots`,
 /// Pending Inbound, and execution-derived Todo reminder progress or heads.
-#[derive(Debug, Clone, PartialEq)]
-pub struct HistoricalConversationSnapshot {
-    /// Source `ConversationId`.
-    pub conversation_id: ConversationId,
-    /// The exact selected Surface revision.
-    pub surface_revision: SurfaceRevision,
-    /// Canonical messages active at that revision, in Surface order.
-    pub messages: Vec<MessageBlock>,
-    /// The source's durable canonical history, in Ledger commit order. A
-    /// superset of `messages`.
-    pub canonical: Vec<MessageBlock>,
-    /// The source's retained Surface operations through `surface_revision`,
-    /// in revision order. Replaying them yields `messages`.
-    pub surface_history: Vec<SurfaceOp>,
-    /// Finalized response meaning, including inherited origins; never execution state.
-    pub completed_responses: Vec<crate::durable::response::CompletedResponseProvenance>,
-}
+pub use crate::durable::reading::LineageReadCut;
 
 /// A private, already-seeded destination waiting for catalog publication.
 ///
@@ -1815,20 +1801,20 @@ impl SessionCatalog {
         )
     }
 
-    /// Prepares a clone from the exact source revision selected by the
-    /// caller. The source revision and source message bodies are immutable
-    /// inputs to this preparation.
+    /// Prepares a clone from captured native authority (R, C). Structural
+    /// revision, message bodies and temporal provenance are immutable inputs
+    /// to this preparation; a later read of R may capture a different C.
     ///
     /// The clone preserves the canonical conversation/domain state in effect
     /// at that cut and the Surface provenance needed for later lineage
     /// operations. It creates a new `ConversationId` and therefore a fresh
     /// execution epoch: attempt-, request-, Event-Journal-, and
     /// execution-derived reminder/cooldown state are not inherited. See
-    /// [`HistoricalConversationSnapshot`] and [`lineage_cut`].
+    /// [`LineageReadCut`] and [`lineage_cut`].
     pub(crate) fn prepare_clone_session(
         &self,
         template: &SessionPersistentState,
-        source: &HistoricalConversationSnapshot,
+        source: &LineageReadCut,
     ) -> Result<PreparedLineage, SessionError> {
         let (session_id, node_id, conversation_id) = self.allocate_ids()?;
         let seed = lineage_cut(
@@ -1852,7 +1838,7 @@ impl SessionCatalog {
     pub(crate) fn prepare_fork_session(
         &self,
         template: &SessionPersistentState,
-        source: &HistoricalConversationSnapshot,
+        source: &LineageReadCut,
         message_id: &MessageId,
         side: LineageSide,
     ) -> Result<
@@ -1892,7 +1878,7 @@ impl SessionCatalog {
         &self,
         session_id: &SessionId,
         template: &SessionPersistentState,
-        source: &HistoricalConversationSnapshot,
+        source: &LineageReadCut,
         message_id: &MessageId,
         side: LineageSide,
     ) -> Result<
@@ -2495,7 +2481,7 @@ fn next_ordinal(current: u64) -> Result<u64, SessionError> {
 /// a branch point the user could have chosen, and a message the Ledger
 /// carries but the selected revision predates is not one either.
 fn active_user_boundary<'a>(
-    source: &'a HistoricalConversationSnapshot,
+    source: &'a LineageReadCut,
     message_id: &MessageId,
 ) -> Result<&'a UserMessageBlock, SessionError> {
     source
@@ -2577,7 +2563,7 @@ fn restorable_editor_content(
 /// exactly the fresh conversation such a fork means.
 fn lineage_cut(
     destination: &ConversationId,
-    source: &HistoricalConversationSnapshot,
+    source: &LineageReadCut,
     boundary: Option<&MessageId>,
     side: LineageSide,
 ) -> Result<LineageSeed, SessionError> {
@@ -2650,6 +2636,19 @@ fn lineage_cut(
         &canonical,
         &retained,
         &source.completed_responses,
+        &source
+            .turns
+            .iter()
+            .filter(|turn| {
+                !turn.process_message_ids.is_empty()
+                    || boundary.is_none()
+                    || turn
+                        .preceding_message_id
+                        .as_ref()
+                        .is_some_and(|id| referenced.contains(id))
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
     )
 }
 
@@ -2693,6 +2692,7 @@ pub(crate) fn remap_seed(
     canonical: &[MessageBlock],
     surface_history: &[SurfaceOp],
     completed_responses: &[crate::durable::response::CompletedResponseProvenance],
+    turns: &[crate::durable::reading::TurnReadingProvenance],
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
@@ -2755,8 +2755,28 @@ pub(crate) fn remap_seed(
             Some(response)
         })
         .collect();
+    let turns = turns
+        .iter()
+        .filter_map(|turn| {
+            let mut copied = turn.clone();
+            copied.process_message_ids = turn
+                .process_message_ids
+                .iter()
+                .filter_map(|id| message_ids.get(id).cloned())
+                .collect();
+            if !turn.process_message_ids.is_empty() && copied.process_message_ids.is_empty() {
+                return None;
+            }
+            copied.preceding_message_id = turn
+                .preceding_message_id
+                .as_ref()
+                .and_then(|id| message_ids.get(id).cloned());
+            Some(copied)
+        })
+        .collect();
     LineageSeed::replayed(canonical, surface_history)
         .and_then(|seed| seed.with_completed_responses(responses))
+        .and_then(|seed| seed.with_turns(turns))
         .map_err(|error| SessionError::Seed {
             detail: error.to_string(),
         })
@@ -3421,8 +3441,8 @@ pub(crate) mod tests {
     use std::fs;
 
     use super::{
-        CatalogCommitError, HistoricalConversationSnapshot, PreparedLineage, SessionCatalog,
-        SessionError, SessionId, SessionNodeOrigin, SessionPersistentState,
+        CatalogCommitError, LineageReadCut, PreparedLineage, SessionCatalog, SessionError,
+        SessionId, SessionNodeOrigin, SessionPersistentState,
     };
     use crate::context::assembly::ContextGeneration;
     use crate::conversation::{SurfaceRevision, SurfaceSpan};
@@ -3911,29 +3931,17 @@ model = "provider/model"
         .expect("conversation store")
     }
 
-    /// The source lineage as the copy owner reads it: the Surface at the
-    /// selected revision *and* the canonical history it was projected from.
+    /// Native lineage authority: structural Surface/history at R and temporal
+    /// provenance at the invocation-time C captured by this read.
     fn lineage_at(
         store: &SqliteConversationStore,
         conversation_id: &ConversationId,
         revision: SurfaceRevision,
-    ) -> HistoricalConversationSnapshot {
-        HistoricalConversationSnapshot {
-            completed_responses: crate::runtime_client::response::lineage_provenance(
-                store,
-                &store.load_canonical().unwrap(),
-            )
-            .unwrap(),
-            conversation_id: conversation_id.clone(),
-            surface_revision: revision,
-            messages: store
-                .load_surface_snapshot(revision)
-                .expect("historical Surface"),
-            canonical: store.load_canonical().expect("source canonical history"),
-            surface_history: store
-                .load_surface_history(revision)
-                .expect("source Surface operation history"),
-        }
+    ) -> LineageReadCut {
+        assert_eq!(store.conversation_id(), conversation_id);
+        store
+            .read_lineage_cut(revision)
+            .expect("coherent native lineage cut")
     }
 
     #[test]
@@ -4012,6 +4020,605 @@ model = "provider/model"
         .unwrap();
         assert_eq!(retried.load_canonical().unwrap().len(), 2);
         assert_eq!(store.load_canonical().unwrap(), history);
+    }
+
+    #[test]
+    fn running_lineage_cut_retains_incomplete_origin_without_execution() {
+        lineage_copy_race(true, false);
+    }
+
+    #[test]
+    fn terminal_only_publication_loses_frozen_lineage_copy_race() {
+        lineage_copy_race(false, false);
+    }
+
+    #[test]
+    fn terminal_only_publication_wins_frozen_lineage_copy_race() {
+        lineage_copy_race(false, true);
+    }
+
+    #[test]
+    fn same_surface_revision_newer_native_cut_changes_inherited_running_outcome() {
+        same_revision_different_temporal_cuts(true);
+    }
+
+    #[test]
+    fn same_surface_revision_newer_native_cut_admits_terminal_only_turn() {
+        same_revision_different_temporal_cuts(false);
+    }
+
+    #[allow(clippy::too_many_lines)] // One R, two ordered native cuts and immutable reopened/repeated copies.
+    fn same_revision_different_temporal_cuts(member: bool) {
+        use crate::durable::reading::{
+            ConversationTurnId, InheritedTurnOutcome, TurnProcessOutcome,
+        };
+        use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+        use crate::runtime::identity::{AttemptId, EventId};
+        let (_directory, catalog, _config) = open_catalog();
+        let (conversation, session, _) = append_history(&catalog, &[]);
+        let store = store_for(&catalog, &session, &conversation);
+        let origin = ConversationTurnId {
+            conversation_id: conversation.clone(),
+            attempt_id: AttemptId::new("same-r-attempt"),
+        };
+        let event = |kind| RuntimeEventEnvelope {
+            schema_version: 1,
+            event_id: EventId::new(format!(
+                "same-r-event-{}",
+                store.presentation_frontier().unwrap() + 1
+            )),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(origin.attempt_id.clone()),
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: kind,
+        };
+        store.append_canonical(&user("input", "input")).unwrap();
+        store
+            .append_event(event(RuntimeEvent::AttemptStarted {
+                attempt_id: origin.attempt_id.clone(),
+            }))
+            .unwrap();
+        if member {
+            store
+                .append_canonical_with_event(
+                    &MessageBlock::Assistant(AssistantMessageBlock {
+                        id: MessageId::new("retained"),
+                        content: vec![AssistantContentBlock::Text(TextBlock {
+                            text: "retained output at R".into(),
+                        })],
+                    }),
+                    event(RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("retained"),
+                    }),
+                )
+                .unwrap();
+        }
+        let revision = store.load_head().unwrap().revision;
+        let c1 = store.read_lineage_cut(revision).unwrap();
+        assert_eq!(c1.read_cut.journal, if member { 2 } else { 1 });
+        if member {
+            assert_eq!(c1.turns[0].id, origin);
+            assert_eq!(c1.turns[0].outcome, InheritedTurnOutcome::IncompleteAtCut);
+            assert!(c1.turns[0].ended_at.is_none());
+        } else {
+            assert!(c1.turns.is_empty(), "a start alone is not inherited output");
+        }
+        // Destination one exists before settlement. No scheduler or elapsed time
+        // determines the interleaving: each native commit/read returns in order.
+        let first = catalog.prepare_clone_session(&state(), &c1).unwrap();
+        let first_store = SqliteConversationStore::open_existing(
+            first.conversation_id.clone(),
+            &first.database_path,
+        )
+        .unwrap();
+        let first_frozen = first_store
+            .read_lineage_cut(first_store.load_head().unwrap().revision)
+            .unwrap();
+        drop(first_store);
+        let terminal = store
+            .append_event(event(RuntimeEvent::AttemptCancelled {
+                attempt_id: origin.attempt_id.clone(),
+                reason: crate::runtime::types::CancellationReason::UserRequested,
+            }))
+            .unwrap();
+        assert!(terminal.sequence > c1.read_cut.journal);
+        assert_eq!(store.load_head().unwrap().revision, revision);
+        let c2 = store.read_lineage_cut(revision).unwrap();
+        assert_eq!(c2.surface_revision, c1.surface_revision, "same exact R");
+        assert_eq!(c2.surface_history, c1.surface_history);
+        assert_eq!(c2.canonical, c1.canonical);
+        assert_eq!(c2.messages, c1.messages);
+        assert_eq!(c2.read_cut.journal, terminal.sequence);
+        assert!(c2.read_cut.journal > c1.read_cut.journal, "different C");
+        assert_eq!(c2.turns.len(), 1);
+        assert_eq!(c2.turns[0].id, origin);
+        assert_eq!(c2.turns[0].outcome, InheritedTurnOutcome::Cancelled);
+        assert_eq!(c2.turns[0].ended_at, Some(terminal.timestamp));
+        assert_ne!(c1.turns, c2.turns, "different temporal meaning by contract");
+        let second = catalog.prepare_clone_session(&state(), &c2).unwrap();
+        let after_terminal = store.conversation_read_cut().unwrap();
+        let source_events = store.read_events(None, 64).unwrap().events;
+        assert!(
+            store
+                .read_request_snapshots(None, 64)
+                .unwrap()
+                .snapshots
+                .is_empty()
+        );
+        for (index, prepared) in [first, second].into_iter().enumerate() {
+            let destination = SqliteConversationStore::open_existing(
+                prepared.conversation_id.clone(),
+                &prepared.database_path,
+            )
+            .unwrap();
+            let cut = destination
+                .read_lineage_cut(destination.load_head().unwrap().revision)
+                .unwrap();
+            if index == 0 {
+                assert_eq!(
+                    cut, first_frozen,
+                    "source settlement did not mutate C1's copy"
+                );
+            }
+            let retained = member || index == 1;
+            let expected = if index == 0 {
+                InheritedTurnOutcome::IncompleteAtCut
+            } else {
+                InheritedTurnOutcome::Cancelled
+            };
+            assert_eq!(cut.turns.len(), usize::from(retained));
+            assert_eq!(cut.canonical.len(), if member { 2 } else { 1 });
+            let predecessor = (index == 1)
+                .then(|| crate::conversation::message_id_of(cut.canonical.last().unwrap()));
+            if retained {
+                let turn = &cut.turns[0];
+                assert_eq!(turn.id, origin);
+                assert_eq!(turn.outcome, expected);
+                assert_eq!(turn.preceding_message_id, predecessor);
+                assert_eq!(
+                    turn.process_message_ids,
+                    if member {
+                        vec![crate::conversation::message_id_of(&cut.canonical[1])]
+                    } else {
+                        vec![]
+                    }
+                );
+                assert_eq!(turn.ended_at, (index == 1).then_some(terminal.timestamp));
+            }
+            // Repeated lineage must retain the outcome captured by each C,
+            // rather than consulting the now-terminal original Conversation.
+            let repeated = catalog.prepare_clone_session(&state(), &cut).unwrap();
+            let repeated_store = SqliteConversationStore::open_existing(
+                repeated.conversation_id,
+                &repeated.database_path,
+            )
+            .unwrap();
+            for copied_store in [&destination, &repeated_store] {
+                assert_eq!(copied_store.presentation_frontier().unwrap(), 0);
+                assert!(
+                    copied_store
+                        .read_events(None, 64)
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                assert!(
+                    copied_store
+                        .read_request_snapshots(None, 64)
+                        .unwrap()
+                        .snapshots
+                        .is_empty()
+                );
+                let outline = copied_store.conversation_turns(None, 0, 64).unwrap();
+                assert_eq!(
+                    outline
+                        .turns
+                        .iter()
+                        .map(|turn| (&turn.id, turn.ordinal, turn.cursor.unwrap().get()))
+                        .collect::<Vec<_>>(),
+                    if retained {
+                        vec![(&origin, 1, 2)]
+                    } else {
+                        vec![]
+                    },
+                    "equivalent destination position: member or inherited spine after U"
+                );
+                if retained {
+                    let selected_cut = outline.cut.clone();
+                    let window = copied_store
+                        .conversation_window(
+                            &crate::durable::reading::ConversationWindowAt::Turn {
+                                id: origin.clone(),
+                                cut: outline.cut,
+                            },
+                            1,
+                        )
+                        .unwrap();
+                    assert_eq!(window.cut, selected_cut);
+                    assert_eq!(window.target.as_ref(), Some(&origin));
+                    assert_eq!(window.target_cursor.unwrap().get(), 2);
+                    let mut page =
+                        crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+                    crate::runtime_client::response::decorate(copied_store, &mut page).unwrap();
+                    let process = page.entries[0].turn_process.as_ref().unwrap();
+                    assert_eq!(process.outcome, TurnProcessOutcome::from(expected.clone()));
+                    assert!(process.event_id.is_none(), "no destination execution owner");
+                    assert_eq!(process.ended_at, (index == 1).then_some(terminal.timestamp));
+                }
+            }
+        }
+        assert_eq!(store.conversation_read_cut().unwrap(), after_terminal);
+        assert_eq!(store.read_events(None, 64).unwrap().events, source_events);
+        assert!(
+            store
+                .read_request_snapshots(None, 64)
+                .unwrap()
+                .snapshots
+                .is_empty(),
+            "zero model/Tool work"
+        );
+    }
+
+    #[allow(clippy::too_many_lines)] // Exact cut gate, all three Session copies and reopen/repeated lineage.
+    fn lineage_copy_race(member: bool, terminal_wins: bool) {
+        use crate::durable::reading::{InheritedTurnOutcome, TurnProcessOutcome};
+        use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+        use crate::runtime::identity::{AttemptId, EventId};
+        let (_directory, catalog, _config) = open_catalog();
+        let (conversation, session, _) = append_history(&catalog, &[]);
+        let store = store_for(&catalog, &session, &conversation);
+        let append = |kind| RuntimeEventEnvelope {
+            schema_version: 1,
+            event_id: EventId::new(format!(
+                "cut-event-{}",
+                store.presentation_frontier().unwrap() + 1
+            )),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(AttemptId::new("source-attempt")),
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: kind,
+        };
+        let terminal = || {
+            append(RuntimeEvent::AttemptCancelled {
+                attempt_id: AttemptId::new("source-attempt"),
+                reason: crate::runtime::types::CancellationReason::UserRequested,
+            })
+        };
+        store.append_canonical(&user("input", "input")).unwrap();
+        store
+            .append_event(append(RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("source-attempt"),
+            }))
+            .unwrap();
+        if member {
+            store
+                .append_canonical_with_event(
+                    &MessageBlock::Assistant(AssistantMessageBlock {
+                        id: MessageId::new("retained"),
+                        content: vec![AssistantContentBlock::Text(TextBlock {
+                            text: "retained running output".into(),
+                        })],
+                    }),
+                    append(RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("retained"),
+                    }),
+                )
+                .unwrap();
+        }
+        if terminal_wins {
+            store.append_event(terminal()).unwrap();
+        }
+        store
+            .append_canonical(&user("boundary", "next input"))
+            .unwrap();
+        let revision = store.load_head().unwrap().revision;
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker_catalog = catalog.clone();
+        let worker_conversation = conversation.clone();
+        let worker_session = session.clone();
+        let worker = std::thread::spawn(move || {
+            let source_store = store_for(&worker_catalog, &worker_session, &worker_conversation);
+            let source = source_store.read_lineage_cut(revision).unwrap();
+            captured_tx.send(source.clone()).unwrap();
+            release_rx.recv().unwrap(); // Copy is parked AFTER the exact native read linearization point.
+            let clone = worker_catalog
+                .prepare_clone_session(&state(), &source)
+                .unwrap();
+            let (fork, _) = worker_catalog
+                .prepare_fork_session(
+                    &state(),
+                    &source,
+                    &MessageId::new("boundary"),
+                    super::LineageSide::Before,
+                )
+                .unwrap();
+            let (branch, _) = worker_catalog
+                .prepare_tree_node(
+                    &worker_session,
+                    &state(),
+                    &source,
+                    &MessageId::new("boundary"),
+                    super::LineageSide::Before,
+                )
+                .unwrap();
+            [clone, fork, branch]
+        });
+        let frozen = captured_rx.recv().unwrap();
+        assert_eq!(frozen.surface_revision, revision);
+        assert_eq!(
+            frozen.read_cut.journal,
+            if member || terminal_wins { 2 } else { 1 }
+        );
+        if !terminal_wins && !member {
+            let published = store.append_event(terminal()).unwrap();
+            assert!(published.sequence > frozen.read_cut.journal);
+        }
+        release_tx.send(()).unwrap();
+        let copies = worker.join().unwrap();
+        // The member-backed case creates every destination while the source
+        // still runs. Later source settlement cannot change any copied meaning.
+        if member {
+            let published = store.append_event(terminal()).unwrap();
+            assert!(published.sequence > frozen.read_cut.journal);
+        }
+        let after_publication = store.conversation_read_cut().unwrap();
+        let retained = member || terminal_wins;
+        let expected = if terminal_wins {
+            InheritedTurnOutcome::Cancelled
+        } else {
+            InheritedTurnOutcome::IncompleteAtCut
+        };
+        assert_eq!(frozen.turns.len(), usize::from(retained));
+        if retained {
+            assert_eq!(
+                frozen.turns[0].id,
+                crate::durable::reading::ConversationTurnId {
+                    conversation_id: conversation.clone(),
+                    attempt_id: AttemptId::new("source-attempt"),
+                }
+            );
+            assert_eq!(frozen.turns[0].outcome, expected);
+        }
+        assert_eq!(frozen.completed_responses, []);
+        for prepared in copies {
+            let destination = SqliteConversationStore::open_existing(
+                prepared.conversation_id.clone(),
+                &prepared.database_path,
+            )
+            .unwrap();
+            let cut = destination
+                .read_lineage_cut(destination.load_head().unwrap().revision)
+                .unwrap();
+            assert_eq!(cut.turns.len(), usize::from(retained));
+            assert_eq!(destination.presentation_frontier().unwrap(), 0);
+            assert_eq!(destination.read_events(None, 64).unwrap().events, []);
+            assert_eq!(
+                destination
+                    .read_request_snapshots(None, 64)
+                    .unwrap()
+                    .snapshots,
+                []
+            );
+            if retained {
+                assert_eq!(cut.turns[0].id, frozen.turns[0].id);
+                assert_eq!(cut.turns[0].outcome, expected);
+                let outline = destination.conversation_turns(None, 0, 64).unwrap();
+                assert_eq!(outline.turns[0].ordinal, 1);
+                assert_eq!(outline.turns[0].cursor.unwrap().get(), 2);
+                let window = destination
+                    .conversation_window(
+                        &crate::durable::reading::ConversationWindowAt::Turn {
+                            id: outline.turns[0].id.clone(),
+                            cut: outline.cut,
+                        },
+                        1,
+                    )
+                    .unwrap();
+                let mut page =
+                    crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+                crate::runtime_client::response::decorate(&destination, &mut page).unwrap();
+                let process = page.entries[0].turn_process.as_ref().unwrap();
+                assert_eq!(process.outcome, TurnProcessOutcome::from(expected.clone()));
+                assert!(process.event_id.is_none());
+                assert_ne!(process.outcome, TurnProcessOutcome::Running);
+                if member {
+                    assert!(process.ended_at.is_none());
+                }
+            }
+            drop(destination);
+            let reopened = SqliteConversationStore::open_existing(
+                prepared.conversation_id.clone(),
+                &prepared.database_path,
+            )
+            .unwrap();
+            assert_eq!(
+                reopened
+                    .read_lineage_cut(reopened.load_head().unwrap().revision)
+                    .unwrap(),
+                cut
+            );
+            let again = catalog.prepare_clone_session(&state(), &cut).unwrap();
+            let again =
+                SqliteConversationStore::open_existing(again.conversation_id, &again.database_path)
+                    .unwrap();
+            let repeated = again
+                .read_lineage_cut(again.load_head().unwrap().revision)
+                .unwrap();
+            assert_eq!(
+                repeated
+                    .turns
+                    .iter()
+                    .map(|turn| (&turn.id, &turn.outcome))
+                    .collect::<Vec<_>>(),
+                cut.turns
+                    .iter()
+                    .map(|turn| (&turn.id, &turn.outcome))
+                    .collect::<Vec<_>>()
+            );
+            let outline = again.conversation_turns(None, 0, 64).unwrap();
+            assert_eq!(
+                outline
+                    .turns
+                    .iter()
+                    .map(|turn| (turn.ordinal, turn.cursor.unwrap().get()))
+                    .collect::<Vec<_>>(),
+                if retained { vec![(1, 2)] } else { vec![] }
+            );
+        }
+        assert_eq!(
+            store.conversation_read_cut().unwrap(),
+            after_publication,
+            "copies perform zero source execution/writes"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One shared source and exact locations across every Session lineage operation.
+    fn clone_fork_and_branch_share_native_unsuccessful_turn_provenance() {
+        use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+        use crate::runtime::identity::{AttemptId, EventId};
+        let (_directory, catalog, _config) = open_catalog();
+        let (conversation, session, _) = append_history(&catalog, &[]);
+        let store = store_for(&catalog, &session, &conversation);
+        let event = |name: &str, kind| RuntimeEventEnvelope {
+            schema_version: 1,
+            event_id: EventId::new(format!(
+                "reading-event-{}",
+                store.presentation_frontier().unwrap() + 1
+            )),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(AttemptId::new(name)),
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: kind,
+        };
+        store.append_canonical(&user("input", "input")).unwrap();
+        store
+            .append_event(event(
+                "interrupted",
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("interrupted"),
+                },
+            ))
+            .unwrap();
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("partial"),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: "partial".into(),
+                    })],
+                }),
+                event(
+                    "interrupted",
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("partial"),
+                    },
+                ),
+            )
+            .unwrap();
+        store
+            .append_event(event(
+                "interrupted",
+                RuntimeEvent::AttemptCancelled {
+                    attempt_id: AttemptId::new("interrupted"),
+                    reason: crate::runtime::types::CancellationReason::UserRequested,
+                },
+            ))
+            .unwrap();
+        store
+            .append_event(event(
+                "empty",
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("empty"),
+                },
+            ))
+            .unwrap();
+        store
+            .append_event(event(
+                "empty",
+                RuntimeEvent::AttemptTimedOut {
+                    attempt_id: AttemptId::new("empty"),
+                },
+            ))
+            .unwrap();
+        store
+            .append_canonical(&user("boundary", "next input"))
+            .unwrap();
+        let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+        let clone = catalog.prepare_clone_session(&state(), &source).unwrap();
+        let (fork, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("boundary"),
+                super::LineageSide::Before,
+            )
+            .unwrap();
+        let (branch, _) = catalog
+            .prepare_tree_node(
+                &session,
+                &state(),
+                &source,
+                &MessageId::new("boundary"),
+                super::LineageSide::Before,
+            )
+            .unwrap();
+        for prepared in [&clone, &fork, &branch] {
+            let copied = SqliteConversationStore::open_existing(
+                prepared.conversation_id.clone(),
+                &prepared.database_path,
+            )
+            .unwrap();
+            let outline = copied.conversation_turns(None, 0, 64).unwrap();
+            assert_eq!(
+                outline
+                    .turns
+                    .iter()
+                    .map(|turn| (
+                        &turn.id.conversation_id,
+                        turn.id.attempt_id.as_str(),
+                        turn.ordinal,
+                        turn.cursor.unwrap().get()
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    (&conversation, "interrupted", 1, 2),
+                    (&conversation, "empty", 2, 3)
+                ]
+            );
+            for turn in &outline.turns {
+                let window = copied
+                    .conversation_window(
+                        &crate::durable::reading::ConversationWindowAt::Turn {
+                            id: turn.id.clone(),
+                            cut: outline.cut.clone(),
+                        },
+                        1,
+                    )
+                    .unwrap();
+                assert_eq!(window.page.entries[0].cursor, turn.cursor.unwrap());
+            }
+            assert_eq!(copied.presentation_frontier().unwrap(), 0);
+        }
+        let (empty, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("input"),
+                super::LineageSide::Before,
+            )
+            .unwrap();
+        let empty =
+            SqliteConversationStore::open_existing(empty.conversation_id, &empty.database_path)
+                .unwrap();
+        assert_eq!(empty.conversation_turns(None, 0, 64).unwrap().turns, []);
     }
 
     /// The one Session lifecycle classification every product path shares:

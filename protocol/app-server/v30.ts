@@ -58,7 +58,19 @@ export type Request1 =
       method: 'session/transcript';
       params: {
         target: AttachmentTarget;
-        before?: RuntimeClientTranscriptCursor | null;
+        at: ConversationWindowAt;
+        limit: number;
+      };
+    }
+  | {
+      method: 'session/turns';
+      params: {
+        target: AttachmentTarget;
+        cut?: ConversationReadCut | null;
+        /**
+         * Absent selects the newest native outline page.
+         */
+        offset?: number | null;
         limit: number;
       };
     }
@@ -444,9 +456,39 @@ export type SessionNodeId = string;
  */
 export type TraceCursor = string;
 /**
- * The cursor domain of durable transcript paging.
+ * A single transcript read vocabulary; every selector replaces a finite window.
  */
-export type RuntimeClientTranscriptCursor = string;
+export type ConversationWindowAt =
+  | {
+      type: 'latest';
+    }
+  | {
+      before: TranscriptCursor;
+      cut?: ConversationReadCut | null;
+      type: 'older';
+    }
+  | {
+      after: TranscriptCursor;
+      cut: ConversationReadCut;
+      type: 'newer';
+    }
+  | {
+      id: ConversationTurnId;
+      cut: ConversationReadCut;
+      type: 'turn';
+    };
+/**
+ * A durable transcript cursor.
+ *
+ * This cursor belongs to the transcript ordering spine. It is deliberately
+ * distinct from the Runtime Client observation cursor, the Event Journal
+ * sequence, and the inbound mailbox sequence.
+ */
+export type TranscriptCursor = string;
+/**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -504,6 +546,10 @@ export type ToolExecutionId = string;
  * its child Conversation and remains unchanged across resume.
  */
 export type AgentId = string;
+/**
+ * The cursor domain of durable transcript paging.
+ */
+export type RuntimeClientTranscriptCursor = string;
 /**
  * Identifies one finite activation owned by an Agent, or one finite
  * Workflow child execution.
@@ -990,6 +1036,14 @@ export type MethodResult =
       type: 'transcript';
     }
   | {
+      window: ConversationWindow;
+      type: 'transcript_window';
+    }
+  | {
+      page: ConversationTurnPage;
+      type: 'conversation_turns';
+    }
+  | {
       view: GoalView;
       type: 'goal';
     }
@@ -1221,10 +1275,6 @@ export type ModelErrorKind =
  */
 export type TraceToolOutcome =
   'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
 /**
  * Identifies one turn within an attempt.
  */
@@ -1628,7 +1678,13 @@ export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
  */
 export type EventId = string;
 export type TurnProcessOutcome =
-  'running' | 'completed' | 'cancelled' | 'failed' | 'timed_out' | 'limit_exceeded';
+  | 'running'
+  | 'incomplete_at_cut'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+  | 'timed_out'
+  | 'limit_exceeded';
 /**
  * A content block inside a `UserMessageBlock`.
  */
@@ -3448,6 +3504,25 @@ export interface UploadBytes {
   data: string;
 }
 /**
+ * Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
+ */
+export interface ConversationReadCut {
+  conversation_id: ConversationId;
+  journal: string;
+  transcript: string;
+  /**
+   * Edits/removals of mutable transcript bodies retire unreconstructible cuts.
+   */
+  mutation_revision: string;
+}
+/**
+ * Origin survives lineage copying; ordinal never participates in identity.
+ */
+export interface ConversationTurnId {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+}
+/**
  * The authoritative mutable model configuration of one conversation
  * session.
  *
@@ -3605,7 +3680,7 @@ export interface WorkflowRunId {
    */
   conversation_id: string;
   /**
-   * Native admitted attempt, unique across process recovery.
+   * Identifies one attempt to execute an agent manifest.
    */
   attempt_id: string;
   /**
@@ -6866,6 +6941,31 @@ export interface QuestionnaireSubmission1 {
    */
   answers: QuestionnaireAnswerEntry[];
 }
+export interface ConversationWindow {
+  cut: ConversationReadCut;
+  page: RuntimeClientTranscriptPage;
+  newer_cursor?: RuntimeClientTranscriptCursor | null;
+  target?: ConversationTurnId | null;
+  target_cursor?: RuntimeClientTranscriptCursor | null;
+}
+export interface ConversationTurnPage {
+  cut: ConversationReadCut;
+  total: number;
+  offset: number;
+  /**
+   * @maxItems 64
+   */
+  turns: ConversationTurn[];
+}
+export interface ConversationTurn {
+  id: ConversationTurnId;
+  ordinal: number;
+  /**
+   * None until native work has a visible member or terminal position.
+   */
+  cursor?: TranscriptCursor | null;
+  preview: string;
+}
 /**
  * The current read model; observing it never starts or authorizes work.
  *
@@ -7422,8 +7522,8 @@ export interface SessionNode {
 }
 /**
  * One user-message boundary the native product exposes for `/fork` and
- * `/tree`. The revision is part of the selection, so later source mutations
- * cannot change what the selection means.
+ * `/tree`. The revision fixes structural selection; temporal evidence is
+ * captured separately at the copy operation's native read cut C.
  */
 export interface SessionUserMessageBoundary {
   /**
