@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v30';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { turnProcesses } from '../src/bindings/turn-process';
@@ -138,4 +138,12 @@ it.each(['failed', 'cancelled', 'timed_out', 'limit_exceeded'] as const)('native
   ui.unmount();
   render(<AgentTranscript snapshot={{ ...state, transcript: { entries: reconstructed } }}/>);
   expect(screen.getByRole('button', { name: label }).getAttribute('data-turn-process')).toBe(identity);
+});
+
+it('incomplete inherited process is historical, has no running timer and is not reported failed',()=>{
+ const owner:TurnProcessView={conversation_id:'origin',attempt_id:'copied-live',outcome:'incomplete_at_cut',control_cursor:'1',message_count:1,tool_call_count:0,started_at:'2026-09-25T00:00:00Z'};
+ const timer=vi.spyOn(globalThis,'setInterval');
+ const ui=render(<AgentTranscript snapshot={{...snapshot(),transcript:{entries:[{...row('retained',owner),cursor:'1'}]}}}/>);
+ expect(ui.getByRole('button',{name:'Incomplete'})).toBeTruthy();expect(ui.queryByText('Failed')).toBeNull();expect(timer).not.toHaveBeenCalled();
+ timer.mockRestore();
 });

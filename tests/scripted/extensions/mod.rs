@@ -3559,7 +3559,10 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
         Some(&settled.turns[1].id.attempt_id)
     );
     let canonical = store.load_canonical().unwrap();
-    let provenance = store.load_turn_provenance().unwrap();
+    let provenance = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .map(|cut| cut.turns)
+        .unwrap();
     assert_eq!(
         provenance
             .iter()
@@ -3573,11 +3576,11 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
     );
     assert_eq!(
         provenance[0].outcome,
-        rustx::durable::reading::TurnProcessOutcome::Completed
+        rustx::durable::reading::InheritedTurnOutcome::Completed
     );
     assert_eq!(
         provenance[1].outcome,
-        rustx::durable::reading::TurnProcessOutcome::Cancelled
+        rustx::durable::reading::InheritedTurnOutcome::Cancelled
     );
     let child = rustx::durable::SqliteConversationStore::in_memory(
         rustx::runtime::ConversationId::generate(),

@@ -1678,7 +1678,13 @@ export type TraceToolLifecycle = 'proposed' | 'started' | 'settled';
  */
 export type EventId = string;
 export type TurnProcessOutcome =
-  'running' | 'completed' | 'cancelled' | 'failed' | 'timed_out' | 'limit_exceeded';
+  | 'running'
+  | 'incomplete_at_cut'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+  | 'timed_out'
+  | 'limit_exceeded';
 /**
  * A content block inside a `UserMessageBlock`.
  */

@@ -688,12 +688,12 @@ impl SessionController {
                 return Err(SessionError::Seed { detail: "Stale or mismatched response boundary revision; choose an exact historical cut".into() });
             }
         }
-        let canonical = store.load_canonical().map_err(SessionError::Store)?;
-        let completed_responses =
-            crate::runtime_client::response::lineage_provenance(&store, &canonical)
-                .map_err(SessionError::Store)?;
+        let source = store
+            .read_lineage_cut(revision)
+            .map_err(SessionError::Store)?;
         if side == super::session::LineageSide::After
-            && !completed_responses
+            && !source
+                .completed_responses
                 .iter()
                 .any(|response| Some(&response.closing_message_id) == boundary)
         {
@@ -701,19 +701,6 @@ impl SessionController {
                 message_id: boundary.expect("After cut checked above").clone(),
             });
         }
-        let source = super::session::HistoricalConversationSnapshot {
-            turns: store.load_turn_provenance().map_err(SessionError::Store)?,
-            completed_responses,
-            conversation_id: access.node.conversation_id.clone(),
-            surface_revision: revision,
-            messages: store
-                .load_surface_snapshot(revision)
-                .map_err(SessionError::Store)?,
-            canonical,
-            surface_history: store
-                .load_surface_history(revision)
-                .map_err(SessionError::Store)?,
-        };
         self.copy_admitted_lineage(
             id,
             &access.node,
@@ -734,7 +721,7 @@ impl SessionController {
         id: &SessionId,
         node: &SessionNode,
         settings: &SessionPersistentState,
-        source: &super::session::HistoricalConversationSnapshot,
+        source: &super::session::LineageReadCut,
         boundary: Option<&crate::runtime::identity::MessageId>,
         tree: bool,
         side: super::session::LineageSide,

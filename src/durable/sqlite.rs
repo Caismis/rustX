@@ -308,7 +308,8 @@ fn count_conversation_store_open() {
 /// Version 47 retains finite Workflow physical-settlement evidence independently
 /// of terminal publication. Older development stores lack the required proof.
 /// Version 48 retains native turn-reading provenance and the semantic read-mutation epoch.
-pub const SQLITE_SCHEMA_VERSION: i64 = 48;
+/// Version 49 separates immutable inherited outcomes from live execution state.
+pub const SQLITE_SCHEMA_VERSION: i64 = 49;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1421,14 +1422,15 @@ impl ConversationStore for SqliteConversationStore {
         })
         .collect()
     }
-    fn load_turn_provenance(
+    fn read_lineage_cut(
         &self,
-    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
+        revision: SurfaceRevision,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
         let connection = self.lock()?;
         let transaction = connection
             .unchecked_transaction()
             .map_err(|error| storage(error.to_string()))?;
-        reading::lineage_turns(&transaction, &self.conversation_id)
+        lineage::read(&transaction, &self.conversation_id, revision)
     }
     fn conversation_read_cut(
         &self,
@@ -2734,62 +2736,10 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         request_id: &RequestId,
     ) -> Result<RequestSnapshot, ConversationStoreError> {
-        let connection = self.lock()?;
-        let (stored_surface_revision, json, started_sequence): (i64, String, Option<i64>) = connection
-            .query_row(
-                "SELECT surface_revision,snapshot_json,started_sequence FROM request_snapshots WHERE request_id = ?1",
-                [request_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(|error| storage(format!("request snapshot lookup: {error}")))?
-            .ok_or_else(|| {
-                ConversationStoreError::RequestNotFound(request_id.clone())
-            })?;
-        let started_sequence = started_sequence.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} has no durable start sequence"
-            ))
-        })?;
-        let sequence = sequence_from_i64(started_sequence)?;
-        let event_json: String = connection
-            .query_row(
-                "SELECT event_json FROM events WHERE sequence=?1",
-                [started_sequence],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(format!("request start event lookup: {error}")))?
-            .ok_or_else(|| {
-                ConversationStoreError::InvalidReference(format!(
-                    "request snapshot {request_id} start event is unavailable"
-                ))
-            })?;
-        let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
-        validate_snapshot_identity(&snapshot)?;
-        if stored_surface_revision != seq_to_i64(snapshot.surface_revision.get())? {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} Surface column disagrees with its frozen snapshot"
-            )));
+        {
+            let connection = self.lock()?;
+            load_request_snapshot(&connection, &self.conversation_id, request_id)
         }
-        if snapshot.request_id != *request_id {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot row {request_id} contains a different RequestId"
-            )));
-        }
-        let event: RuntimeEventEnvelope = decode(&event_json, "request start event")?;
-        if event.sequence != sequence {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} start event sequence disagrees"
-            )));
-        }
-        if event.conversation_id != self.conversation_id {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} start event belongs to a foreign conversation"
-            )));
-        }
-        validate_request_start_metadata(&snapshot, &event)?;
-        Ok(snapshot)
     }
 
     fn reconstruct_model_request(
@@ -6471,6 +6421,68 @@ fn load_pending_until(
         .into_iter()
         .filter(|item| item.sequence <= watermark)
         .collect())
+}
+
+fn load_request_snapshot(
+    connection: &Connection,
+    conversation: &ConversationId,
+    request_id: &RequestId,
+) -> Result<RequestSnapshot, ConversationStoreError> {
+    let (stored_surface_revision, json, started_sequence): (i64, String, Option<i64>) = connection
+            .query_row(
+                "SELECT surface_revision,snapshot_json,started_sequence FROM request_snapshots WHERE request_id = ?1",
+                [request_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("request snapshot lookup: {error}")))?
+            .ok_or_else(|| {
+                ConversationStoreError::RequestNotFound(request_id.clone())
+            })?;
+    let started_sequence = started_sequence.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} has no durable start sequence"
+        ))
+    })?;
+    let sequence = sequence_from_i64(started_sequence)?;
+    let event_json: String = connection
+        .query_row(
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [started_sequence],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("request start event lookup: {error}")))?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "request snapshot {request_id} start event is unavailable"
+            ))
+        })?;
+    let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
+    validate_snapshot_identity(&snapshot)?;
+    if stored_surface_revision != seq_to_i64(snapshot.surface_revision.get())? {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} Surface column disagrees with its frozen snapshot"
+        )));
+    }
+    if snapshot.request_id != *request_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot row {request_id} contains a different RequestId"
+        )));
+    }
+    let event: RuntimeEventEnvelope = decode(&event_json, "request start event")?;
+    if event.sequence != sequence {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} start event sequence disagrees"
+        )));
+    }
+    if event.conversation_id != *conversation {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} start event belongs to a foreign conversation"
+        )));
+    }
+    validate_request_start_metadata(&snapshot, &event)?;
+    Ok(snapshot)
 }
 
 fn load_canonical_rows(
@@ -14777,7 +14789,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 48);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 49);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14846,7 +14858,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 48);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 49);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -15488,6 +15500,7 @@ mod tests {
 
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
+mod lineage;
 mod reading;
 #[cfg(test)]
 mod reading_tests;

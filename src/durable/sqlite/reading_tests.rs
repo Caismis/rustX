@@ -208,7 +208,7 @@ fn copied_turns_preserve_origin_and_use_destination_locations() {
                 },
                 process_message_ids: provenance.process_message_ids.clone(),
                 preceding_message_id: None,
-                outcome: TurnProcessOutcome::Completed,
+                outcome: InheritedTurnOutcome::Completed,
                 started_at: None,
                 ended_at: Some(provenance.completed_at),
             }])

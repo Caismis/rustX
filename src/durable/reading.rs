@@ -94,7 +94,7 @@ pub struct TurnReadingProvenance {
     pub process_message_ids: Vec<crate::runtime::identity::MessageId>,
     /// Canonical predecessor of a terminal-only location; None precedes all content.
     pub preceding_message_id: Option<crate::runtime::identity::MessageId>,
-    pub outcome: TurnProcessOutcome,
+    pub outcome: InheritedTurnOutcome,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -103,9 +103,49 @@ pub struct TurnReadingProvenance {
 #[serde(rename_all = "snake_case")]
 pub enum TurnProcessOutcome {
     Running,
+    IncompleteAtCut,
     Completed,
     Cancelled,
     Failed,
     TimedOut,
     LimitExceeded,
+}
+
+/// Immutable inherited reading meaning; source execution can never remain live here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InheritedTurnOutcome {
+    IncompleteAtCut,
+    Completed,
+    Cancelled,
+    Failed,
+    TimedOut,
+    LimitExceeded,
+}
+
+impl From<InheritedTurnOutcome> for TurnProcessOutcome {
+    fn from(outcome: InheritedTurnOutcome) -> Self {
+        match outcome {
+            InheritedTurnOutcome::IncompleteAtCut => Self::IncompleteAtCut,
+            InheritedTurnOutcome::Completed => Self::Completed,
+            InheritedTurnOutcome::Cancelled => Self::Cancelled,
+            InheritedTurnOutcome::Failed => Self::Failed,
+            InheritedTurnOutcome::TimedOut => Self::TimedOut,
+            InheritedTurnOutcome::LimitExceeded => Self::LimitExceeded,
+        }
+    }
+}
+
+/// One durable lineage read. Surface selection and all retained native meaning
+/// are frozen at `read_cut`, acquired in one backend snapshot transaction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineageReadCut {
+    pub read_cut: ConversationReadCut,
+    pub conversation_id: ConversationId,
+    pub surface_revision: crate::conversation::SurfaceRevision,
+    pub messages: Vec<crate::message::types::MessageBlock>,
+    pub canonical: Vec<crate::message::types::MessageBlock>,
+    pub surface_history: Vec<crate::conversation::SurfaceOp>,
+    pub completed_responses: Vec<super::response::CompletedResponseProvenance>,
+    pub turns: Vec<TurnReadingProvenance>,
 }

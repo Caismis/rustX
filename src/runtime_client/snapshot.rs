@@ -526,7 +526,7 @@ fn inherited_terminal(
         final_message_id: None,
         message_count: 0,
         tool_call_count: 0,
-        outcome: provenance.outcome,
+        outcome: provenance.outcome.into(),
         started_at: provenance.started_at,
         ended_at: provenance.ended_at,
     }

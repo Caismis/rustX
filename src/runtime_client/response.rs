@@ -14,10 +14,10 @@ use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock};
 use crate::model::finish::ModelFinishReason;
-use crate::model::types::{ModelUsage, UsageDetails};
-use crate::runtime::identity::{AttemptId, MessageId, RequestId};
+use crate::model::types::ModelUsage;
+use crate::runtime::identity::{AttemptId, MessageId};
 
-mod timing;
+use crate::durable::response::{AttemptEvidence, add_usage, timing};
 
 use super::snapshot::{RuntimeClientTranscriptItem, RuntimeClientTranscriptPage};
 
@@ -123,37 +123,6 @@ pub struct ConversationTurnClock {
     pub started_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Default)]
-struct AttemptEvidence {
-    started_at: Option<chrono::DateTime<chrono::Utc>>,
-    timing: timing::TimingFold,
-    closing: Option<MessageId>,
-    members: BTreeSet<MessageId>,
-    last_request: Option<RequestId>,
-    requests: u64,
-    reports: u64,
-    usage: Option<ModelUsage>,
-}
-
-fn add_usage(total: &mut Option<ModelUsage>, usage: &ModelUsage) {
-    let Some(total) = total.as_mut() else {
-        *total = Some(usage.clone());
-        return;
-    };
-    total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
-    total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
-    total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
-    let sum = |a: Option<u64>, b: Option<u64>| a.zip(b).map(|(a, b)| a.saturating_add(b));
-    total.details = total
-        .details
-        .as_ref()
-        .zip(usage.details.as_ref())
-        .map(|(a, b)| UsageDetails {
-            reasoning_tokens: sum(a.reasoning_tokens, b.reasoning_tokens),
-            cached_input_tokens: sum(a.cached_input_tokens, b.cached_input_tokens),
-        });
 }
 
 /// Reads a finite Journal prefix and decorates only exact canonical identities.
@@ -314,38 +283,6 @@ struct ResponseProjection {
     statistics: ConversationStatistics,
 }
 
-/// Derive the lineage-safe historical facts in one native evidence fold.
-/// Only canonical Assistant identities supplied by the lineage owner are selected.
-/// # Errors
-/// Propagates durable read failures rather than dropping historical facts.
-pub(crate) fn lineage_provenance(
-    store: &dyn ConversationStore,
-    canonical: &[MessageBlock],
-) -> Result<Vec<CompletedResponseProvenance>, ConversationStoreError> {
-    let wanted = canonical
-        .iter()
-        .filter_map(|message| match message {
-            MessageBlock::Assistant(assistant) => Some(assistant.id.clone()),
-            _ => None,
-        })
-        .collect();
-    let mut projection = project(
-        store,
-        &wanted,
-        &BTreeSet::new(),
-        store.presentation_frontier()?,
-        None,
-    )?;
-    Ok(canonical
-        .iter()
-        .filter_map(|message| {
-            projection
-                .completed
-                .remove(&crate::conversation::message_id_of(message))
-        })
-        .collect())
-}
-
 #[allow(clippy::too_many_lines)] // One shared finite fold; no second Journal scan for lineage provenance.
 fn project(
     store: &dyn ConversationStore,
@@ -388,7 +325,7 @@ fn project(
             completed_response.map(|response| response.closing_message_id.clone()),
             turn.started_at,
             turn.ended_at,
-            turn.outcome,
+            turn.outcome.into(),
             None,
         )? {
             owner.conversation_id = turn.id.conversation_id;

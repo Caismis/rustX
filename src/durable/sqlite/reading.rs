@@ -309,14 +309,15 @@ pub(super) fn inherited_turns(
 pub(super) fn lineage_turns(
     connection: &Connection,
     conversation: &ConversationId,
+    through: u64,
 ) -> Result<Vec<crate::durable::reading::TurnReadingProvenance>, ConversationStoreError> {
-    use crate::durable::reading::{TurnProcessOutcome, TurnReadingProvenance};
+    use crate::durable::reading::{InheritedTurnOutcome, TurnReadingProvenance};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::runtime::identity::MessageId;
     let mut turns = inherited_turns(connection)?;
-    let mut statement = connection.prepare("SELECT event_json FROM events WHERE json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
     let starts = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([seq_to_i64(through)?], |row| row.get::<_, String>(0))
         .map_err(|error| storage(error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
@@ -332,13 +333,15 @@ pub(super) fn lineage_turns(
             },
             process_message_ids: Vec::new(),
             preceding_message_id: None,
-            outcome: TurnProcessOutcome::Running,
+            outcome: InheritedTurnOutcome::IncompleteAtCut,
             started_at: Some(start.timestamp),
             ended_at: None,
         };
-        let mut facts = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type') IN ('assistant_message_committed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+        let mut facts = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('assistant_message_committed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
         let events = facts
-            .query_map([id.as_str()], |row| row.get::<_, String>(0))
+            .query_map(params![id.as_str(), seq_to_i64(through)?], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|error| storage(error.to_string()))?;
         for json in events {
             let event: RuntimeEventEnvelope = super::decode(
@@ -350,19 +353,21 @@ pub(super) fn lineage_turns(
                     turn.process_message_ids.push(message_id);
                 }
                 RuntimeEvent::AttemptCompleted { .. } => {
-                    turn.outcome = TurnProcessOutcome::Completed;
+                    turn.outcome = InheritedTurnOutcome::Completed;
                 }
                 RuntimeEvent::AttemptCancelled { .. } => {
-                    turn.outcome = TurnProcessOutcome::Cancelled;
+                    turn.outcome = InheritedTurnOutcome::Cancelled;
                 }
-                RuntimeEvent::AttemptFailed { .. } => turn.outcome = TurnProcessOutcome::Failed,
-                RuntimeEvent::AttemptTimedOut { .. } => turn.outcome = TurnProcessOutcome::TimedOut,
+                RuntimeEvent::AttemptFailed { .. } => turn.outcome = InheritedTurnOutcome::Failed,
+                RuntimeEvent::AttemptTimedOut { .. } => {
+                    turn.outcome = InheritedTurnOutcome::TimedOut;
+                }
                 RuntimeEvent::AttemptLimitExceeded { .. } => {
-                    turn.outcome = TurnProcessOutcome::LimitExceeded;
+                    turn.outcome = InheritedTurnOutcome::LimitExceeded;
                 }
                 _ => continue,
             }
-            if !matches!(turn.outcome, TurnProcessOutcome::Running) {
+            if !matches!(turn.outcome, InheritedTurnOutcome::IncompleteAtCut) {
                 turn.ended_at = Some(event.timestamp);
                 turn.preceding_message_id = connection.query_row("SELECT t.reference_id FROM transcript_order t JOIN message_ledger m ON m.message_id=t.reference_id WHERE t.reference_kind='message' AND t.position<(SELECT position FROM transcript_order WHERE reference_kind='attempt_terminal' AND reference_id=?1) ORDER BY t.position DESC LIMIT 1", [event.event_id.as_str()], |row| row.get::<_,String>(0)).optional().map_err(|error| storage(error.to_string()))?.map(MessageId::new);
             }
@@ -370,7 +375,7 @@ pub(super) fn lineage_turns(
         if !turn.process_message_ids.is_empty()
             || !matches!(
                 turn.outcome,
-                TurnProcessOutcome::Running | TurnProcessOutcome::Completed
+                InheritedTurnOutcome::IncompleteAtCut | InheritedTurnOutcome::Completed
             )
         {
             turns.push(turn);

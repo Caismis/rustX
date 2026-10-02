@@ -35,13 +35,19 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         let history = store
             .load_surface_history(store.load_head().unwrap().revision)
             .unwrap();
-        let provenance = lineage_provenance(&store, &canonical).unwrap();
+        let provenance = store
+            .read_lineage_cut(store.load_head().unwrap().revision)
+            .map(|cut| cut.completed_responses)
+            .unwrap();
         let seed = remap_seed(
             &id,
             &canonical,
             &history,
             &provenance,
-            &store.load_turn_provenance().unwrap(),
+            &store
+                .read_lineage_cut(store.load_head().unwrap().revision)
+                .map(|cut| cut.turns)
+                .unwrap(),
         )
         .unwrap();
         let child = SqliteConversationStore::open(id.clone(), &path).unwrap();
@@ -170,7 +176,10 @@ fn remapping_drops_missing_retry_input_and_bootstrap_rejects_invalid_response_ad
     assistant(&source, "attempt", "response");
     finish(&source, "attempt");
     let canonical = source.load_canonical().unwrap();
-    let provenance = lineage_provenance(&source, &canonical).unwrap();
+    let provenance = source
+        .read_lineage_cut(source.load_head().unwrap().revision)
+        .map(|cut| cut.completed_responses)
+        .unwrap();
     let id = ConversationId::generate();
     let seed = remap_seed(
         &id,
@@ -179,7 +188,10 @@ fn remapping_drops_missing_retry_input_and_bootstrap_rejects_invalid_response_ad
             message_id: MessageId::new("response"),
         }],
         &provenance,
-        &source.load_turn_provenance().unwrap(),
+        &source
+            .read_lineage_cut(source.load_head().unwrap().revision)
+            .map(|cut| cut.turns)
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(seed.completed_responses()[0].retry_message_id, None);
@@ -231,7 +243,10 @@ fn interrupted_process_content_retains_native_origin_outcome_and_destination_loc
         4
     );
     let canonical = source.load_canonical().unwrap();
-    let provenance = lineage_provenance(&source, &canonical).unwrap();
+    let provenance = source
+        .read_lineage_cut(source.load_head().unwrap().revision)
+        .map(|cut| cut.completed_responses)
+        .unwrap();
     assert!(provenance.is_empty());
     let history = source
         .load_surface_history(source.load_head().unwrap().revision)
@@ -242,7 +257,10 @@ fn interrupted_process_content_retains_native_origin_outcome_and_destination_loc
         &canonical,
         &history,
         &provenance,
-        &source.load_turn_provenance().unwrap(),
+        &source
+            .read_lineage_cut(source.load_head().unwrap().revision)
+            .map(|cut| cut.turns)
+            .unwrap(),
     )
     .unwrap();
     let directory = tempfile::tempdir().unwrap();
@@ -347,8 +365,14 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
             &ConversationId::generate(),
             &canonical,
             &history,
-            &lineage_provenance(&store, &canonical).unwrap(),
-            &store.load_turn_provenance().unwrap(),
+            &store
+                .read_lineage_cut(store.load_head().unwrap().revision)
+                .map(|cut| cut.completed_responses)
+                .unwrap(),
+            &store
+                .read_lineage_cut(store.load_head().unwrap().revision)
+                .map(|cut| cut.turns)
+                .unwrap(),
         )
         .unwrap();
         let id = ConversationId::generate();

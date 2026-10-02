@@ -515,8 +515,8 @@ impl LineageSeed {
             let valid_location = !turn.process_message_ids.is_empty()
                 || !matches!(
                     turn.outcome,
-                    super::reading::TurnProcessOutcome::Running
-                        | super::reading::TurnProcessOutcome::Completed
+                    super::reading::InheritedTurnOutcome::IncompleteAtCut
+                        | super::reading::InheritedTurnOutcome::Completed
                 );
             if !unique_owner || !valid_members || !valid_predecessor || !valid_location {
                 return Err(ConversationStoreError::InvalidReference(
@@ -1480,10 +1480,11 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         messages: &[MessageId],
     ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError>;
-    /// Native reading origins in immutable inherited/local start order, for lineage only.
-    fn load_turn_provenance(
+    /// Linearizes Surface selection, Ledger members and immutable provenance together.
+    fn read_lineage_cut(
         &self,
-    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError>;
+        revision: SurfaceRevision,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError>;
     fn load_inherited_turns(
         &self,
     ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError>;

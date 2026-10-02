@@ -2848,7 +2848,7 @@
       "destination": "web-console/src/presentation/agent/TurnProcess.tsx",
       "upstream_sha256": "d397f1e92f76585fa49b924b3d43d829ad503a4ffa821660234d4b51e5cc743f",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Turn-local clock, duration and terminal vocabulary adapted to native Attempt timestamps and outcomes. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Turn-local clock, duration and terminal vocabulary adapted to native Attempt timestamps and outcomes. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Repair: immutable incomplete-at-cut historical process has no live timer.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -2861,7 +2861,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "055ba24677610916fac354ff47e9eb4a51ee8b32268710aec32037b8debd09bd",
+      "local_sha256": "bc6fa34d2164335ebe2c97603d8369058581a9c174316ad84f7efcee69f51e66",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
@@ -3182,7 +3182,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3193,7 +3193,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "805ab9a4236eb2e055480ea2eca9740b7119b231c39443d25032068e29286892"
+      "local_sha256": "bd2d74dab2d51efeb729583817b5ca4aaa189c8e8d9ff5e9c71d38e1a6add32c"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

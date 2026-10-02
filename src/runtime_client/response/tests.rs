@@ -8,7 +8,7 @@ use crate::message::types::{
 };
 use crate::model::invocation::{ModelInvocationConfig, RequestParams};
 use crate::model::{
-    ModelCapabilities, ModelCompat, ModelProtocol, RequestIdentity, RequestSnapshot,
+    ModelCapabilities, ModelCompat, ModelProtocol, RequestIdentity, RequestSnapshot, UsageDetails,
 };
 use crate::runtime::identity::{CapabilityRevision, ConversationId, EventId, TurnId};
 use crate::runtime_client::snapshot::transcript_page_view;
@@ -522,8 +522,14 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
         &store
             .load_surface_history(store.load_head().unwrap().revision)
             .unwrap(),
-        &lineage_provenance(&store, &canonical).unwrap(),
-        &store.load_turn_provenance().unwrap(),
+        &store
+            .read_lineage_cut(store.load_head().unwrap().revision)
+            .map(|cut| cut.completed_responses)
+            .unwrap(),
+        &store
+            .read_lineage_cut(store.load_head().unwrap().revision)
+            .map(|cut| cut.turns)
+            .unwrap(),
     )
     .unwrap();
     let child = SqliteConversationStore::in_memory(child_id).unwrap();
@@ -546,11 +552,11 @@ fn is_completed_response(
     store: &dyn ConversationStore,
     message: &MessageId,
 ) -> Result<bool, ConversationStoreError> {
-    Ok(
-        lineage_provenance(store, &store.load_messages(std::slice::from_ref(message))?)?
-            .iter()
-            .any(|response| response.closing_message_id == *message),
-    )
+    Ok(store
+        .read_lineage_cut(store.load_head()?.revision)?
+        .completed_responses
+        .iter()
+        .any(|response| response.closing_message_id == *message))
 }
 
 mod timing;

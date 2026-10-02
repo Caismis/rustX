@@ -59,3 +59,40 @@ pub struct CompletedResponseTiming {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens_per_second: Option<f64>,
 }
+
+pub(crate) mod timing;
+
+use crate::model::types::UsageDetails;
+use crate::runtime::identity::RequestId;
+use std::collections::BTreeSet;
+
+#[derive(Default)]
+pub(crate) struct AttemptEvidence {
+    pub(crate) started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) timing: timing::TimingFold,
+    pub(crate) closing: Option<MessageId>,
+    pub(crate) members: BTreeSet<MessageId>,
+    pub(crate) last_request: Option<RequestId>,
+    pub(crate) requests: u64,
+    pub(crate) reports: u64,
+    pub(crate) usage: Option<ModelUsage>,
+}
+
+pub(crate) fn add_usage(total: &mut Option<ModelUsage>, usage: &ModelUsage) {
+    let Some(total) = total.as_mut() else {
+        *total = Some(usage.clone());
+        return;
+    };
+    total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+    total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
+    let sum = |a: Option<u64>, b: Option<u64>| a.zip(b).map(|(a, b)| a.saturating_add(b));
+    total.details = total
+        .details
+        .as_ref()
+        .zip(usage.details.as_ref())
+        .map(|(a, b)| UsageDetails {
+            reasoning_tokens: sum(a.reasoning_tokens, b.reasoning_tokens),
+            cached_input_tokens: sum(a.cached_input_tokens, b.cached_input_tokens),
+        });
+}
