@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DesktopAdapter, desktopEnvironment, launchDesktop, type DesktopProcess, type DesktopSystem } from '../host/desktop';
+import { DesktopAdapter, macOSDesktop, desktopEnvironment, launchDesktop, type DesktopProcess, type DesktopSystem } from '../host/desktop';
 import { LocalWorkspaceHost } from '../host/workspaces';
 import type { DesktopTarget } from '../src/workspaces/desktop';
 const directories: string[] = [];
@@ -15,7 +15,7 @@ function fixture(read?: (endpoint: string, token: string, target: DesktopTarget)
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'desktop-'))); directories.push(directory);
   const a = join(directory, '- 工作区 "quotes" ; $(false)\nnext'), b = join(directory, 'other'); mkdirSync(a); mkdirSync(b);
   const launch = vi.fn(async (_spec: DesktopProcess) => ({ status: 'spawned' as const }));
-  const executable = vi.fn((path: string) => path === '/bin/xdg-open' ? path : undefined);
+  const executable = vi.fn((path: string): string | undefined => path === '/bin/xdg-open' ? path : undefined);
   const system: DesktopSystem = { platform: 'linux', env: { PATH: '/bin', DISPLAY: ':0', RUSTX_TOKEN: 'secret', API_KEY: 'secret' }, executable, launch };
   const adapter = new DesktopAdapter(system);
   const config = { nativeFilesystem: 'shared' as const, endpoint: 'ws://localhost:8080/', transportToken: 'private', picker: true, metadataFile: join(directory, 'registrations.json'), roots: [{ id: 'a', cwd: a, displayName: 'A' }, { id: 'b', cwd: b, displayName: 'B' }] };
@@ -102,11 +102,10 @@ it.each([
   ['linux', 'code', '/bin/code', ['--new-window', '--', '/tmp/-汉字 "quotes";$(x)\nline']],
   ['darwin', 'files', '/usr/bin/open', ['--', '/tmp/-汉字 "quotes";$(x)\nline']],
   ['darwin', 'terminal', '/usr/bin/open', ['-a', '/System/Applications/Utilities/Terminal.app', '--', '/tmp/-汉字 "quotes";$(x)\nline']],
-  ['win32', 'files', 'C:\\Windows\\explorer.exe', ['C:\\工作区 space\\-folder']],
 ] as const)('builds literal safe argv for %s %s', async (platform, id, command, args) => {
   const launch = vi.fn(async () => ({ status: 'spawned' as const }));
-  const adapter = new DesktopAdapter({ platform, env: { PATH: '/bin', DISPLAY: ':0', SystemRoot: 'C:\\Windows' }, executable: path => path, launch });
-  const cwd = platform === 'win32' ? 'C:\\工作区 space\\-folder' : '/tmp/-汉字 "quotes";$(x)\nline';
+  const adapter = new DesktopAdapter({ platform, env: { PATH: '/bin', DISPLAY: ':0' }, macOSDesktop: () => true, executable: path => path, launch });
+  const cwd = '/tmp/-汉字 "quotes";$(x)\nline';
   await adapter.prepare(id)(cwd);
   expect(launch).toHaveBeenCalledWith(expect.objectContaining({ command, args: [...args], cwd }));
 });
@@ -120,7 +119,7 @@ it('spawn acknowledgement detaches user app lifetime; spawn errors surface witho
   const spawn = vi.fn(() => child);
   const spec = { command: '/bin/opener', args: ['/a b'], cwd: '/a b', env: { DISPLAY: ':0' } };
   const opening = launchDesktop(spec, spawn as unknown as typeof import('node:child_process').spawn);
-  expect(spawn).toHaveBeenCalledWith(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, shell: false, detached: true, stdio: 'ignore', windowsHide: false });
+  expect(spawn).toHaveBeenCalledWith(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, shell: false, detached: true, stdio: 'ignore' });
   child.emit('spawn'); child.emit('exit', 0, null); expect(await opening).toEqual({ status: 'spawned' });
   expect(child.unref).toHaveBeenCalledOnce(); expect(child.kill).not.toHaveBeenCalled();
   const failed = launchDesktop(spec, spawn as unknown as typeof import('node:child_process').spawn);
@@ -180,10 +179,130 @@ it('early launcher nonzero exits surface; the observation bound never kills a ru
 });
 it('macOS discovery retires Terminal when its verified bundle executable disappears', () => {
   let installed = true;
-  const system: DesktopSystem = { platform: 'darwin', env: {}, executable: path => path === '/usr/bin/open' || (installed && path.endsWith('/MacOS/Terminal')) ? path : undefined, launch: vi.fn() };
+  const system: DesktopSystem = { platform: 'darwin', env: {}, macOSDesktop: () => true, executable: path => path === '/usr/bin/open' || (installed && path.endsWith('/MacOS/Terminal')) ? path : undefined, launch: vi.fn() };
   const adapter = new DesktopAdapter(system);
   expect(adapter.catalog()).toMatchObject({ applications: [{ id: 'files' }, { id: 'terminal' }] });
   const launch = adapter.prepare('terminal'); installed = false;
   expect(() => launch('/workspace')).toThrow('disappeared');
   expect(adapter.catalog()).toMatchObject({ applications: [{ id: 'files' }] }); expect(system.launch).not.toHaveBeenCalled();
+});
+
+it('explicit refresh discovers an installed application exactly once; cached reads never scan for it', async () => {
+  const f = fixture(), scope = await f.host.listWorkspaces();
+  expect(await f.host.desktopCatalog(scope)).toMatchObject({ applications: [{ id: 'files' }] });
+  expect(f.executable).toHaveBeenCalledTimes(4); // three candidates, one verification
+  f.executable.mockImplementation(path => ['/bin/xdg-open', '/bin/code'].includes(path) ? path : undefined);
+  expect(await f.host.desktopCatalog(scope)).toMatchObject({ applications: [{ id: 'files' }] });
+  expect(f.executable).toHaveBeenCalledTimes(5);
+  expect(await f.host.desktopCatalog(scope, true)).toMatchObject({ applications: [{ id: 'files' }, { id: 'code' }] });
+  expect(f.executable).toHaveBeenCalledTimes(10); // one scan, two verifications
+  await f.host.desktopCatalog(scope);
+  expect(f.executable).toHaveBeenCalledTimes(12);
+  expect(f.executable.mock.calls.filter(([path]) => path === '/bin/code')).toHaveLength(4); // two discovery + two verification
+  expect(f.readSession).not.toHaveBeenCalled(); expect(f.launch).not.toHaveBeenCalled();
+});
+it('an executable removed from the cache returns only after one explicit rediscovery', () => {
+  const f = fixture(); f.adapter.catalog(); expect(f.executable).toHaveBeenCalledTimes(4);
+  f.executable.mockReturnValue(undefined);
+  expect(f.adapter.catalog()).toEqual({ available: false, reason: 'applications' });
+  expect(f.executable).toHaveBeenCalledTimes(5);
+  f.executable.mockImplementation(path => path === '/bin/xdg-open' ? path : undefined);
+  expect(f.adapter.catalog()).toEqual({ available: false, reason: 'applications' });
+  expect(f.executable).toHaveBeenCalledTimes(5);
+  expect(f.adapter.catalog(true)).toMatchObject({ applications: [{ id: 'files' }] });
+  expect(f.executable).toHaveBeenCalledTimes(9);
+  f.adapter.catalog(); expect(f.executable).toHaveBeenCalledTimes(10);
+  expect(f.launch).not.toHaveBeenCalled();
+});
+it.each(['win32', 'freebsd'] as const)('unsupported platform %s does no discovery or launch', platform => {
+  const f = fixture(); f.system.platform = platform;
+  expect(f.adapter.catalog(true)).toEqual({ available: false, reason: 'platform' });
+  expect(() => f.adapter.prepare('files')).toThrow('unavailable');
+  expect(f.executable).not.toHaveBeenCalled(); expect(f.launch).not.toHaveBeenCalled();
+});
+it('macOS requires the non-root console owner and Aqua bootstrap; unknown evidence fails closed', () => {
+  const owner = vi.fn(() => 501), manager = vi.fn(() => 'Aqua\n');
+  expect(macOSDesktop(0, owner, manager)).toBe(false);
+  expect(owner).not.toHaveBeenCalled(); expect(manager).not.toHaveBeenCalled();
+  expect(macOSDesktop(502, owner, manager)).toBe(false); expect(manager).not.toHaveBeenCalled();
+  expect(macOSDesktop(501, owner, manager)).toBe(true); expect(manager).toHaveBeenCalledTimes(1);
+  for (const context of ['Background', 'LoginWindow', 'System', '', 'unknown']) {
+    expect(macOSDesktop(501, owner, () => context)).toBe(false);
+  }
+  expect(macOSDesktop(501, () => { throw new Error('no console'); }, manager)).toBe(false);
+  expect(macOSDesktop(501, owner, () => { throw new Error('query failed'); })).toBe(false);
+  expect(manager).toHaveBeenCalledTimes(1);
+});
+it('macOS opener existence cannot override unknown, headless or SSH availability', () => {
+  const f = fixture(); f.system.platform = 'darwin'; f.executable.mockImplementation(path => path);
+  expect(f.adapter.catalog()).toEqual({ available: false, reason: 'headless' });
+  const session = vi.fn(() => false); f.system.macOSDesktop = session;
+  expect(f.adapter.catalog(true)).toEqual({ available: false, reason: 'headless' });
+  expect(f.executable).not.toHaveBeenCalled();
+  session.mockReturnValue(true); f.system.env.SSH_CONNECTION = 'remote';
+  expect(f.adapter.catalog(true)).toEqual({ available: false, reason: 'headless' });
+  expect(session).toHaveBeenCalledTimes(1); expect(f.executable).not.toHaveBeenCalled();
+  delete f.system.env.SSH_CONNECTION;
+  expect(f.adapter.catalog(true)).toMatchObject({ available: true });
+});
+it('real Node child receives literal argv, canonical cwd and only filtered environment without a GUI', async () => {
+  const { spawn } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+  const f = fixture(), output = join(f.directory, 'child.json'), closed = gate<void>();
+  const literal = '- quotes " 汉字 ; $(false)\nnext';
+  const spec = { command: process.execPath, cwd: f.a,
+    args: ['-e', 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({cwd:process.cwd(),arg:process.argv[2],env:process.env}))', '--', output, literal],
+    env: desktopEnvironment({ HOME: f.directory, NODE_OPTIONS: '--invalid', API_KEY: 'secret', RUSTX_TRANSPORT_TOKEN: 'secret' }) };
+  expect(await launchDesktop(spec, ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args); child.once('close', () => closed.resolve()); return child;
+  }) as typeof spawn)).toEqual({ status: 'spawned' });
+  await closed.promise;
+  expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual({ cwd: f.a, arg: literal, env: { HOME: f.directory } });
+  await expect(launchDesktop({ ...spec, command: join(f.directory, 'missing-opener') })).rejects.toThrow('could not be started');
+});
+it('executes native eligibility checks fail-closed without opening a GUI', () => {
+  expect(typeof macOSDesktop()).toBe('boolean');
+  // Exercise the real bounded launchctl query even on a headless macOS runner.
+  // Linux has no launchctl and must fail closed. Neither case launches a GUI.
+  const result = macOSDesktop(501, () => 501);
+  if (process.platform === 'darwin') expect(typeof result).toBe('boolean');
+  else expect(result).toBe(false);
+  expect(macOSDesktop(0)).toBe(false);
+});
+
+it('HTTP catalog refresh reaches the adapter exactly once and rejects malformed refresh inputs', async () => {
+  const { createServer } = await import('node:http');
+  const { workspaceHandler } = await import('../host/http');
+  const { HttpWorkspaceHost } = await import('../src/workspaces/http-host');
+  const f = fixture(), scope = await f.host.listWorkspaces(), server = createServer(workspaceHandler(f.host));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('No address');
+  const base = `http://127.0.0.1:${address.port}/product-host`;
+  vi.stubGlobal('location', new URL(base));
+  try {
+    const client = new HttpWorkspaceHost(base);
+    await client.desktopCatalog(scope); expect(f.executable).toHaveBeenCalledTimes(4);
+    f.executable.mockImplementation(path => ['/bin/xdg-open', '/bin/code'].includes(path) ? path : undefined);
+    expect(await client.desktopCatalog(scope)).toMatchObject({ applications: [{ id: 'files' }] });
+    expect(f.executable).toHaveBeenCalledTimes(5);
+    expect(await client.desktopCatalog(scope, true)).toMatchObject({ applications: [{ id: 'files' }, { id: 'code' }] });
+    expect(f.executable).toHaveBeenCalledTimes(10);
+    for (const refresh of [undefined, 'true', 1, {}, null]) {
+      const response = await fetch(`${base}/desktop-catalog`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, refresh }) });
+      expect(response.status).toBe(400);
+    }
+    expect(f.executable).toHaveBeenCalledTimes(10);
+    expect(f.readSession).not.toHaveBeenCalled(); expect(f.launch).not.toHaveBeenCalled();
+  } finally { vi.unstubAllGlobals(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+it('each requested discovery probes at most three fixed names in 32 eligible PATH directories', () => {
+  const f = fixture(); f.executable.mockReturnValue(undefined);
+  f.system.env.PATH = ['relative', '/' + 'x'.repeat(4096), ...Array.from({ length: 40 }, (_, i) => `/dir${i}`)].join(':');
+  expect(f.adapter.catalog()).toEqual({ available: false, reason: 'applications' });
+  expect(f.executable).toHaveBeenCalledTimes(96);
+  f.adapter.catalog(); expect(f.executable).toHaveBeenCalledTimes(96);
+  f.adapter.catalog(true); expect(f.executable).toHaveBeenCalledTimes(192);
+  expect(f.executable.mock.calls.every(([path]) => /^\/dir(?:[0-9]|[12][0-9]|3[01])\/(xdg-open|gnome-terminal|code)$/.test(path))).toBe(true);
+  expect(f.launch).not.toHaveBeenCalled();
 });

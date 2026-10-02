@@ -21,16 +21,30 @@ Supported discovery catalog:
 | --- | --- | --- | --- |
 | Linux desktop | `xdg-open` on PATH | `gnome-terminal` on PATH | `code` on PATH |
 | macOS | `/usr/bin/open` (Finder) | system Terminal bundle via `open -a` | standard `/Applications/Visual Studio Code.app` CLI |
-| Windows | `explorer.exe` under SystemRoot | — | — |
 
-SSH sessions, Linux without DISPLAY/WAYLAND_DISPLAY, Windows service sessions,
-unsupported platforms and missing mapping report unavailable. These checks and
-verified executables establish eligibility, not proof of a usable GUI. Install a
-missing application and restart the Host to rebuild its lifetime catalog. Checking
-applications again is explicit; failures never trigger automatic discovery loops
-or replay a launch. Discovery executes no subprocesses, visits at most 32 absolute
-PATH directories for a closed set of names, and does not recursively scan disks.
-Cached executable paths are reverified before every launch and removed when gone.
+SSH sessions and Linux without DISPLAY/WAYLAND_DISPLAY report unavailable.
+On macOS, the Host must run as the non-root owner of `/dev/console` **and** its
+current launchd bootstrap must report `Aqua`. The adapter reads console ownership
+and invokes only `/bin/launchctl managername` (no shell, empty environment, 1 KiB
+output bound, one-second execution bound). Missing/inaccessible console state,
+root, another console user, non-Aqua context or a failed query reports `headless`.
+This deliberately excludes background/remote Hosts even when `/usr/bin/open`
+exists. It can reject working custom launch arrangements; run the Host from the
+logged-in desktop session. The checks establish desktop-session eligibility, not
+proof that a particular GUI application will display a window. The launchd rule
+uses Apple's documented [current bootstrap manager name](https://github.com/apple-oss-distributions/launchd/blob/main/man/launchctl.1).
+Unsupported platforms (including Windows) and missing mapping report unavailable.
+
+Ordinary primary/menu reads reuse the application catalog and reverify retained
+executables. **Check applications again**, in the menu or unavailable/failure
+feedback, invalidates that cache and performs exactly one bounded rediscovery.
+Newly installed or recovered applications can therefore appear without restarting
+the Host. Refresh never launches an application. Application discovery executes no
+subprocesses, visits at most 32 absolute PATH directories for a closed set of names,
+and does not recursively scan disks. The separate macOS eligibility query runs
+once per catalog request. There are no discovery timers, polling, watchers or
+automatic retry loops. Cached executable paths are reverified before every launch
+and removed when gone. Failures never automatically replay a launch.
 
 “Launcher started” means the operating system acknowledged spawning the launcher;
 it does not assert that the external application displayed a window or that a
@@ -42,7 +56,7 @@ Navigation, disconnect and closing the menu never kill a handed-off application.
 
 ## Ownership and admission
 
-`ProductHostWorkspaces` exposes `desktopCatalog(scope)` and
+`ProductHostWorkspaces` exposes `desktopCatalog(scope, refresh)` and
 `openWorkspace(scope, { session_id, active_node }, application)`. The browser
 supplies identities, never a path, command or argument array. Existing carrier
 browser authentication and Host/Origin protection cover both JSON POST routes.
@@ -69,8 +83,9 @@ Filesystem mutations by other processes remain outside that JavaScript boundary.
 `host/desktop.ts` owns platform discovery, safe argv and a small injectable process
 boundary. Only an allowlist of desktop environment variables reaches the child;
 provider credentials, transport tokens and NODE_OPTIONS are excluded. The child
-is detached with ignored stdio and unreferenced after spawn. There are no discovery
-children to clean up; native metadata connections have handshake/request bounds
+is detached with ignored stdio and unreferenced after spawn. Application discovery
+creates no children; the short macOS eligibility query is bounded and reaped.
+Native metadata connections have handshake/request bounds
 and close after every operation. No desktop API enters Rust, and no new Session
 or Workspace owner, storage, protocol schema, feature flag or compatibility path
 is introduced.
@@ -78,4 +93,10 @@ is introduced.
 Deterministic tests gate native reads, catalog responses and launch responses;
 they assert zero launch before admission, exact target/path/argv, authority
 replacement, missing paths/apps, errors, filtered environment and no replay.
-Mocked platform boundaries do not constitute actual macOS/Windows GUI smoke tests.
+The `Desktop adapter and Host (macOS Node)` CI job on `macos-latest` executes
+`test/desktop-host.test.ts` using Node 24 and the pinned dependencies. These exercise actual macOS filesystem,
+canonicalization, HTTP and harmless Node child-process launch boundaries, plus the
+native console/bootstrap eligibility check. Deterministic fakes cover GUI argv,
+missing apps and session evidence. The full Linux Web job runs the same tests and
+browser acceptance. Neither lane opens Finder/Terminal or proves GUI completion;
+real interactive GUI smoke remains a separate, unexecuted check.

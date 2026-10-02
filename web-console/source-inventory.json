@@ -3204,7 +3204,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "f6f366d49e504eb3a42762c777b6df077b6570503cf100f4c339f29538d733ce"
+      "local_sha256": "3bf3e3fc0850ec3dc55f187128432a6a26c612946ca6d374779485b772fa4279"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

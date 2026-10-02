@@ -24,6 +24,7 @@ it('primary and application menu send exact targets without paths or native brow
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open workspace' })));
   expect(f.host.openWorkspace).toHaveBeenCalledExactlyOnceWith({ authorityId: 'host-one', endpoint: 'ws://localhost:8080/' }, f.props.target, 'files');
   expect(screen.getByRole('status').textContent).toContain('Launcher started');
+  expect(f.host.desktopCatalog).toHaveBeenLastCalledWith(expect.anything(), false);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose workspace application' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Visual Studio Code' })));
   expect(f.host.openWorkspace).toHaveBeenLastCalledWith(expect.anything(), f.props.target, 'code');
@@ -57,8 +58,10 @@ it('unavailable, explicit retry, localized failure and lost acknowledgement are 
   const f = await fixture(); f.host.desktopCatalog.mockResolvedValueOnce({ available: false, reason: 'headless' });
   render(<OpenWorkspace {...f.props}/>);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open workspace' })));
-  expect(screen.getByRole('status').textContent).toContain('no local desktop'); expect(f.host.openWorkspace).not.toHaveBeenCalled();
+  expect(screen.getByRole('status').textContent).toContain('cannot verify a local desktop'); expect(f.host.openWorkspace).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Check applications again' })));
+  expect(f.host.desktopCatalog).toHaveBeenLastCalledWith(expect.anything(), true);
+  expect(f.host.openWorkspace).not.toHaveBeenCalled();
   f.host.openWorkspace.mockRejectedValueOnce(new Error('adapter failure'));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'File manager' })));
   expect(screen.getByRole('alert').textContent).toContain('adapter failure');
@@ -67,4 +70,14 @@ it('unavailable, explicit retry, localized failure and lost acknowledgement are 
   f.host.openWorkspace.mockRejectedValueOnce(new WorkspaceHostError('lost', undefined, true));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: '打开工作区' })));
   expect(screen.getByRole('alert').textContent).toContain('未收到启动确认'); expect(f.host.openWorkspace).toHaveBeenCalledTimes(2);
+});
+
+it('available application menus can explicitly refresh without launching an application', async () => {
+  const f = await fixture(); render(<OpenWorkspace {...f.props}/>);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose workspace application' })));
+  expect(f.host.desktopCatalog).toHaveBeenLastCalledWith(expect.anything(), false);
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Check applications again' })));
+  expect(f.host.desktopCatalog).toHaveBeenLastCalledWith(expect.anything(), true);
+  expect(f.host.desktopCatalog).toHaveBeenCalledTimes(2);
+  expect(f.host.openWorkspace).not.toHaveBeenCalled();
 });

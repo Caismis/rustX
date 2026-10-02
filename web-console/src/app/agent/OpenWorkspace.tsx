@@ -22,7 +22,7 @@ function WorkspaceAction({ client, host, authority, target, disabled }: Paramete
   const [detail, setDetail] = useState<string>();
   const live = useRef(true), pending = useRef(false);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
-  const perform = async (application?: DesktopAppId, menuOnly = false) => {
+  const perform = async (application?: DesktopAppId, menuOnly = false, refresh = false) => {
     if (pending.current || disabled) return;
     pending.current = true;
     const before = client.getSnapshot();
@@ -34,7 +34,7 @@ function WorkspaceAction({ client, host, authority, target, disabled }: Paramete
       if (!host.desktopCatalog || !host.openWorkspace || !observation || !before.endpoint || !sameEndpoint(before.endpoint, observation.scope.endpoint)) {
         setCatalog({ available: false, reason: 'mapping' }); setPhase('idle'); return;
       }
-      const apps = await host.desktopCatalog(observation.scope);
+      const apps = await host.desktopCatalog(observation.scope, refresh);
       if (!current()) return;
       setCatalog(apps);
       if (!apps.available) { setPhase('idle'); return; }
@@ -59,13 +59,13 @@ function WorkspaceAction({ client, host, authority, target, disabled }: Paramete
       <Menu open={menu} onClose={() => setMenu(false)} align="end" autoFocus
         anchor={<Button size="sm" disabled={disabled || !!unavailable} aria-disabled={disabled || busy || !!unavailable} aria-label={tx('agent:desktop.choose')} aria-haspopup="menu" aria-expanded={menu}
           onClick={() => menu ? setMenu(false) : void perform(undefined, true)}>▾</Button>}
-        items={catalog?.available ? catalog.applications.map(app => ({ id: app.id, label: app.id === 'files' ? tx('agent:desktop.files') : app.label })) : []}
-        onSelect={id => { setMenu(false); void perform(id as DesktopAppId); }}/>
+        items={catalog?.available ? [...catalog.applications.map(app => ({ id: app.id, label: app.id === 'files' ? tx('agent:desktop.files') : app.label })), { id: 'refresh', label: tx('agent:desktop.retry') }] : []}
+        onSelect={id => { setMenu(false); if (id === 'refresh') void perform(undefined, true, true); else void perform(id as DesktopAppId); }}/>
     </div>
     {unavailable && <p role="status">{reason}</p>}
     {phase === 'spawned' && <p role="status">{tx('agent:desktop.spawned')}</p>}
     {(phase === 'failed' || phase === 'uncertain') && <div role="alert"><p>{phase === 'uncertain' ? tx('agent:desktop.uncertain') : tx('agent:desktop.failed')}</p>
       <details><summary>{tx('agent:desktop.details')}</summary><p>{detail}</p></details></div>}
-    {(unavailable || phase === 'failed') && <Button size="sm" disabled={busy || disabled} onClick={() => void perform(undefined, true)}>{tx('agent:desktop.retry')}</Button>}
+    {(unavailable || phase === 'failed') && <Button size="sm" disabled={busy || disabled} onClick={() => void perform(undefined, true, true)}>{tx('agent:desktop.retry')}</Button>}
   </div>;
 }

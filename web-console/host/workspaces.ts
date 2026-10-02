@@ -109,10 +109,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return bytes;
     } finally { signal?.removeEventListener('abort', abort); this.fileReads.delete(operation); }
   }
-  async desktopCatalog(scope: WorkspaceAuthorityScope): Promise<DesktopCatalog> {
+  async desktopCatalog(scope: WorkspaceAuthorityScope, refresh = false): Promise<DesktopCatalog> {
     this.mutationScope(scope);
     if (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken) return { available: false, reason: 'mapping' };
-    return this.desktop.catalog();
+    return this.desktop.catalog(refresh);
   }
   private desktopPending = false;
   async openWorkspace(scope: WorkspaceAuthorityScope, target: DesktopTarget, application: DesktopAppId) {

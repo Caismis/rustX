@@ -18,7 +18,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     }
     return response.json();
   }
-  desktopCatalog = (scope: WorkspaceAuthorityScope) => this.call<import('./desktop.ts').DesktopCatalog>('desktop-catalog', { scope });
+  desktopCatalog = (scope: WorkspaceAuthorityScope, refresh = false) => this.call<import('./desktop.ts').DesktopCatalog>('desktop-catalog', { scope, refresh });
   openWorkspace = async (scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId) => {
     try { return await this.call<import('./desktop.ts').DesktopLaunch>('desktop-open', { scope, target, application }); }
     catch (cause) {

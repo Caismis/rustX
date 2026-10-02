@@ -31,8 +31,8 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       switch (request.url.slice('/product-host/'.length)) {
         case 'desktop-catalog':
           if (!host.desktopCatalog) throw new Error('Desktop unavailable on this Product Host');
-          if (Object.keys(body).some(key => key !== 'scope')) throw new Error('Invalid desktop request');
-          value = await host.desktopCatalog(scope()); break;
+          if (Object.keys(body).some(key => !['scope', 'refresh'].includes(key)) || typeof body.refresh !== 'boolean') throw new Error('Invalid desktop request');
+          value = await host.desktopCatalog(scope(), body.refresh); break;
         case 'desktop-open':
           if (!host.openWorkspace) throw new Error('Desktop unavailable on this Product Host');
           if (Object.keys(body).some(key => !['scope', 'target', 'application'].includes(key))) throw new Error('Invalid desktop request');

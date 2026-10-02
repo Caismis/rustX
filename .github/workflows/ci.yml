@@ -229,8 +229,8 @@ jobs:
       - name: Check test lane coverage
         run: cargo run --example check_test_lanes -- --job rust-boundaries
 
-  # Platform coverage is intentional, not duplicated by habit. macOS runs
-  # exactly the classes where OS semantics matter:
+  # Rust platform coverage is intentional, not duplicated by habit. This macOS
+  # job runs the classes below; desktop-macos separately executes Node boundaries:
   #
   # - from the lib test binary: the source-module unit tests plus the
   #   in-crate boundary conformance suites (`boundary_suites::` — real
@@ -505,6 +505,27 @@ jobs:
       - name: Typecheck Rust fixtures and reference intersections
         working-directory: protocol/app-server
         run: pnpm typecheck
+
+  desktop-macos:
+    name: Desktop adapter and Host (macOS Node)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install pinned Node dependencies
+        run: |
+          corepack enable
+          (cd web-console && corepack install && pnpm install --frozen-lockfile)
+          (cd tui && pnpm install --frozen-lockfile)
+      # Real macOS Node/filesystem/process execution, including a harmless Node
+      # child through launchDesktop. Fakes cover GUI argv and unavailable sessions;
+      # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
+      - name: Desktop adapter and Host boundaries
+        working-directory: web-console
+        run: pnpm exec vitest run test/desktop-host.test.ts
 
   web-console:
     name: Full Web conformance

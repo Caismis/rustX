@@ -17,8 +17,8 @@ import '../../src/app/console.css';
 const mode = new URLSearchParams(location.search).get('mode') ?? 'settled';
 const server = new Server();
 if (mode === 'desktop') {
-  const desktop = { launches: [] as unknown[], unavailable: false, failure: false, requests: () => server.requests.map(row => row.request.method) };
-  server.workspaceHost.desktopCatalog = async () => desktop.unavailable ? { available: false, reason: 'headless' } : { available: true, applications: [{ id: 'files', label: 'File manager' }, { id: 'code', label: 'Visual Studio Code' }] };
+  const desktop = { catalogs: [] as boolean[], launches: [] as unknown[], unavailable: false, failure: false, requests: () => server.requests.map(row => row.request.method) };
+  server.workspaceHost.desktopCatalog = async (_scope, refresh = false) => { desktop.catalogs.push(refresh); return desktop.unavailable ? { available: false, reason: 'headless' } : { available: true, applications: [{ id: 'files', label: 'File manager' }, { id: 'code', label: 'Visual Studio Code' }] }; };
   server.workspaceHost.openWorkspace = async (scope, target, application) => {
     desktop.launches.push({ scope, target, application });
     if (desktop.failure) throw new Error('Desktop adapter refused the launch');
