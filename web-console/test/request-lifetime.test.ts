@@ -5,14 +5,16 @@ import { Server, snapshot } from './fixture';
 const servers: Server[] = [];
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); vi.useRealTimers(); });
 async function connected() { const s = new Server(); servers.push(s); await s.attached('A'); return s; }
-type DomainMethod = 'agent/wait' | 'job/wait' | 'agent/interrupt' | 'job/cancel' | 'agent/sendMessage';
+type DomainMethod = 'turn/cancel' | 'agent/wait' | 'job/wait' | 'agent/interrupt' | 'job/cancel' | 'agent/sendMessage';
 function operation(s: Server, method: DomainMethod): Request1 {
   const target = s.client.target('A');
+  if (method === 'turn/cancel') return { method, params: { target } };
   return method === 'job/wait' || method === 'job/cancel' ? { method, params: { target, job_id: 'job-a' } }
     : method === 'agent/sendMessage' ? { method, params: { target, agent_id: 'agent-a', message: 'input' } }
     : { method, params: { target, agent_id: 'agent-a' } };
 }
 function result(method: DomainMethod): MethodResult {
+  if (method === 'turn/cancel') return { type: 'cancellation_accepted', attempt_id: 'attempt-A' };
   if (method === 'job/wait' || method === 'job/cancel') return { type: 'job', job: { job_id: 'job-a', tool_id: 'bash', tool_name: 'bash', state: 'cancelled' } };
   if (method === 'agent/sendMessage') return { type: 'agent_message', agent_id: 'agent-a', activation_id: 'activation-b', resumed: true };
   return { type: 'agent_wait', agent_id: 'agent-a', activation_id: 'activation-b', outcome: null, agent: {
@@ -24,7 +26,7 @@ function result(method: DomainMethod): MethodResult {
   } };
 }
 const methods: DomainMethod[] = ['agent/wait', 'job/wait', 'agent/sendMessage', 'agent/interrupt', 'job/cancel'];
-it.each(methods)('%s owns its lifetime without incidental traffic', async method => {
+it.each([...methods, 'turn/cancel'] as const)('%s owns its lifetime without incidental traffic', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
   const settled = vi.fn(); const response = result(method);
   const work = s.client.request(operation(s, method), response.type).then(settled);
@@ -45,7 +47,7 @@ it.each(['agent/wait', 'job/wait'] as const)('%s at full capacity stays healthy 
   await expect(s.client.request(operation(s, method), response.type)).rejects.toThrow('wait capacity');
   for (let i = 0; i < 4; i++) { await s.update('A', snapshot()); await vi.advanceTimersByTimeAsync(30_001); }
   expect(settled).not.toHaveBeenCalled(); expect(s.client.getSnapshot().connection).toBe('connected');
-  for (const control of ['agent/interrupt', 'job/cancel'] as const) {
+  for (const control of ['agent/interrupt', 'job/cancel', 'turn/cancel'] as const) {
     s.handlers.set(control, () => result(control));
     await expect(s.client.request(operation(s, control), result(control).type)).resolves.toEqual(result(control));
   }
@@ -89,7 +91,7 @@ it('full wait and RPC lanes preserve controls and retired startup dispatch owner
   const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
   const rejected = expect(admission).rejects.toThrow('before dispatch');
   await expect(s.client.request(operation(s, 'agent/wait'), 'agent_wait')).rejects.toThrow('wait capacity');
-  for (const control of ['agent/interrupt', 'job/cancel'] as const) {
+  for (const control of ['agent/interrupt', 'job/cancel', 'turn/cancel'] as const) {
     s.handlers.set(control, () => result(control));
     await expect(s.client.request(operation(s, control), result(control).type)).resolves.toEqual(result(control));
   }

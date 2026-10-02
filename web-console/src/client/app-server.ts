@@ -190,7 +190,7 @@ function requestLane(method: Request1['method']): 'wait' | 'admission' | 'contro
   switch (method) {
     case 'agent/wait': case 'job/wait': return 'wait';
     case 'agent/sendMessage': return 'admission';
-    case 'agent/interrupt': case 'job/cancel': return 'control';
+    case 'agent/interrupt': case 'job/cancel': case 'turn/cancel': return 'control';
     default: return 'rpc';
   }
 }
@@ -1430,7 +1430,7 @@ export class AppServerClient {
     this.setSession(id, { cancellation: operation });
     try {
       await this.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted', undefined, () => {
-        // RPC capacity can defer send. Revalidate beside the actual socket dispatch.
+        // Exact lifecycle control: revalidate beside the actual socket dispatch.
         const view = this.state.views[id];
         return current() && this.initialized && this.state.connection === 'connected' && view?.attachmentIntent === 'wanted'
           && view.attachment === 'attached' && !view.deleting && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure

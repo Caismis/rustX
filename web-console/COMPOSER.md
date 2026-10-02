@@ -240,7 +240,9 @@ The Stop button and double Escape converge on `ConversationSeat` →
 `AppServerClient.cancelTurn(expected)` → native `turn/cancel`. The internal expected
 target captures generation, native target and Attempt ID. The client refuses an
 obsolete expected target and revalidates eligibility again beside actual socket
-dispatch, including when RPC capacity deferred it. No protocol change is involved.
+dispatch. `turn/cancel` is an exact lifecycle control operation in the existing
+bounded two-request control lane. Ordinary RPC capacity cannot queue it; a full
+control lane refuses it locally, definitely unsent. No protocol change is involved.
 The exact local cancellation operation owns its in-flight/stopping marker. A
 failure known to precede transmission removes only that operation's marker,
 even if its transport/generation has been retired. An older continuation cannot
@@ -248,8 +250,8 @@ clear a successor marker. A transmitted request with a lost reply stays uncertai
 an acknowledged request stays acknowledged even if its subsequent refresh fails.
 Only authoritative Attempt projection determines
 settlement. A lost reply follows existing refresh/reconnect repair; it is never
-blindly replayed. Further gestures while cancellation is pending create no duplicate
-request. Escape never consumes text, selection, receipts, queued input or attachments.
+replayed or retried, and there is no browser cancellation queue. Further gestures
+while cancellation is pending create no duplicate request. Escape never consumes text, selection, receipts, queued input or attachments.
 
 The browser recognizes a gesture and chooses an existing operation; it does not
 prove, own, retry or settle execution. Native/App Server cancellation and native
