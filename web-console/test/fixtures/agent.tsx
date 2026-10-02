@@ -16,6 +16,17 @@ import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const mode = new URLSearchParams(location.search).get('mode') ?? 'settled';
 const server = new Server();
+if (mode === 'desktop') {
+  const desktop = { launches: [] as unknown[], unavailable: false, failure: false, requests: () => server.requests.map(row => row.request.method) };
+  server.workspaceHost.desktopCatalog = async () => desktop.unavailable ? { available: false, reason: 'headless' } : { available: true, applications: [{ id: 'files', label: 'File manager' }, { id: 'code', label: 'Visual Studio Code' }] };
+  server.workspaceHost.openWorkspace = async (scope, target, application) => {
+    desktop.launches.push({ scope, target, application });
+    if (desktop.failure) throw new Error('Desktop adapter refused the launch');
+    return { status: 'spawned' };
+  };
+  Object.assign(window, { desktop });
+}
+
 server.handlers.set('session/effectiveConfiguration', () => { throw new RpcFailure({ code: -32000, message: 'Appearance fixture' }); });
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true };
 const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, reasoningEnabled: true, reasoningProfile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };

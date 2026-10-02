@@ -18,6 +18,14 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     }
     return response.json();
   }
+  desktopCatalog = (scope: WorkspaceAuthorityScope) => this.call<import('./desktop.ts').DesktopCatalog>('desktop-catalog', { scope });
+  openWorkspace = async (scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId) => {
+    try { return await this.call<import('./desktop.ts').DesktopLaunch>('desktop-open', { scope, target, application }); }
+    catch (cause) {
+      if (cause instanceof WorkspaceHostError) throw cause;
+      throw new WorkspaceHostError('Launch acknowledgement lost; the application may have started. Check the Host desktop before trying again.', undefined, true);
+    }
+  };
   listWorkspaces = (signal?: AbortSignal) => this.call<WorkspaceCatalog>('list', {}, signal);
   readDelivery = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal) => this.call<DeliveryBytes>('file-read', { scope, read }, signal);
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
