@@ -136,3 +136,20 @@ it('an existing outline survives same-Attempt durable streaming progress and ins
  expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(1);
  server.client.latestTranscript('A');expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['700','701']);
 });
+
+it('loaded semantic ownership without its exact control cursor still requires a direct native turn read', async () => {
+ await ready();
+ const seed=server.client.navigateTurn('A',turn(120)),first=await server.waitFor('session/transcript',1);
+ server.socket.success(first,{type:'transcript_window',window:window(turn(120))});expect(await seed).toBe(true);
+ const older=server.client.loadEarlier('A'),read=await server.waitFor('session/transcript',2);
+ const a=turn(90),owner={...a.id,control_cursor:'90',message_count:2,tool_call_count:0,outcome:'completed' as const};
+ server.socket.success(read,{type:'transcript_window',window:{cut,page:{entries:[100,101].map(n=>({...entry(n),turn_process:owner})),next_cursor:'100'},newer_cursor:'101',target:null,target_cursor:null}});
+ await older;
+ expect(server.client.getSnapshot().views.A.history?.page.entries?.every(row=>row.turn_process?.attempt_id===a.id.attempt_id)).toBe(true);
+ const locate=server.client.navigateTurn('A',a),request=await server.waitFor('session/transcript',3);
+ expect(request.params).toMatchObject({at:{type:'turn',id:a.id,cut},limit:64});
+ expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['100','101']);
+ server.socket.success(request,{type:'transcript_window',window:window(a)});expect(await locate).toBe(true);
+ expect(server.client.getSnapshot().views.A.history?.page.entries?.[0].cursor).toBe('90');
+ expect(server.requests.filter(row=>row.request.method==='session/transcript')).toHaveLength(3);
+});

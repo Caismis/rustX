@@ -10,8 +10,10 @@ interface ViewportProps {
   historical?: boolean;
   onLatest?: () => void;
   onUserIntent?: () => void;
-  latestAnchor?: string;
-  onActiveAnchor?: (key: string | undefined) => void;
+  latestTurn?: string;
+  /** null means observed detached reading with no native owner; undefined is
+   * unobserved/follow mode, where the rail may use current native state. */
+  onActiveTurn?: (key: string | null | undefined) => void;
 }
 /** One frame owns every automatic Chat correction. Native user scrolling
  * changes intent synchronously, including while a layout frame is pending. */
@@ -27,7 +29,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   private mounted = false;
   private intent = 0;
   private navigation?: { intent: number; anchor: string; current: () => boolean };
-  private active?: string;
+  private active?: string | null;
   private explicitLatest = false;
   private rows() { return [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-anchor-key]') ?? [])].filter(row => !row.closest('[hidden]')); }
   private position(): ReadingPosition | undefined {
@@ -72,13 +74,15 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   private publishActive = () => {
     const el = this.viewport.current;
     if (!el) return;
-    const turns = this.rows().filter(row => row.dataset.chatAnchorKey?.startsWith('turn:'));
+    const regions = [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-turn-owner], [data-chat-anchor-key]') ?? [])].filter(row => !row.closest('[hidden]'));
     const top = el.getBoundingClientRect().top;
-    // Native location markers start half-open turn regions. Their visual height
-    // is not the semantic extent: body, Tool output and tails follow separately.
-    // The final region stays open through the remaining transcript.
-    const key = this.following && this.props.latestAnchor ? this.props.latestAnchor : turns.reverse().find(row => row.getBoundingClientRect().top <= top)?.dataset.chatAnchorKey;
-    if (key !== this.active) { this.active = key; this.props.onActiveAnchor?.(key); }
+    // Each rendered native-owned region carries identity even when its exact
+    // start is outside this finite window. Unowned rows end ownership; an owned
+    // final region stays active through its tail. Locate anchors are not owners.
+    const owner = regions.reverse().find(row => row.getBoundingClientRect().top <= top)?.dataset.chatTurnOwner;
+    const key = this.following && !this.props.historical && this.props.latestTurn ? this.props.latestTurn
+      : owner ?? (!this.following || this.props.historical ? null : undefined);
+    if (key !== this.active) { this.active = key; this.props.onActiveTurn?.(key); }
   };
   private onScroll = () => {
     const el = this.viewport.current!;

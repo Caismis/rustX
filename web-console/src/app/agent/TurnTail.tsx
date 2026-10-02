@@ -8,6 +8,7 @@ import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Modal } from '../../presentation/primitives/Modal';
 import { IconClockOutline16, IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconDatabaseOutline16 } from '../../presentation/primitives/icons';
 import type { HistoryAction } from '../commands/native';
+import { turnAnchor } from '../../client/transcript';
 import css from './TurnTail.module.css';
 
 export function MessageTime({ time }: { time?: string | null }) {
@@ -58,7 +59,7 @@ function Timing({ timing }: { timing: CompletedResponseTiming }) {
 }
 export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false }: { text: string; response: CompletedResponseView; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean }) {
   const tx = useTranslation();
-  return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={JSON.stringify([response.origin.conversation_id, response.origin.attempt_id])}>
+  return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={JSON.stringify([response.origin.conversation_id, response.origin.attempt_id])}>
     <CopyMessage text={text}/>
     {onHistorical && <>
       <Tooltip label={tx('agent:turn-tail.fork-to-new-session')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.fork-to-new-session')} disabled={disabled} onClick={() => onHistorical('fork', response)}><IconBranchOutline16/></button></Tooltip>

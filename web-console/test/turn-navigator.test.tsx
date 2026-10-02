@@ -131,3 +131,21 @@ async function pagingRail(initial:number){
   offsets:()=>server.requests.filter(row=>row.request.method==='session/turns').map(row=>row.request.method==='session/turns'?row.request.params.offset:undefined),
   start:async(n:number)=>{total=n;location=undefined;await update(n,false,true);},locate:async(n:number)=>{location=n;await update(n);},settle:async(n:number)=>{await update(n,true,true);}};
 }
+
+it('observed unknown detached ownership suppresses both stale navigation and unrelated live fallback', async () => {
+ server=new Server();await server.attached('A');
+ const id={conversation_id:'conversation-A',attempt_id:'live'},cut={conversation_id:'conversation-A',journal:'1',transcript:'1',mutation_revision:'0'};
+ const s=server.snapshots.get('A')!;
+ server.snapshots.set('A',{...s,attempt:{attempt_id:'live',phase:{type:'running'},turn:1}});await server.client.refresh('A');
+ const turn={id,ordinal:1,cursor:'1',preview:''};
+ server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:1,turns:[turn]}}));
+ const ui=await act(async()=>render(<TurnNavigator client={server.client} sessionId="A" active={null} onNavigate={()=>{}}/>));
+ expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(0);
+ server.held.add('session/transcript');
+ const work=server.client.navigateTurn('A',turn),read=await server.waitFor('session/transcript',1);
+ await act(async()=>{server.socket.success(read,{type:'transcript_window',window:{cut,page:{entries:[]},target:id,target_cursor:'1',newer_cursor:null}});expect(await work).toBe(true);});
+ expect(server.client.getSnapshot().views.A.turnNavigation?.active).toBe('["conversation-A","live"]');
+ expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(0);
+ ui.rerender(<TurnNavigator client={server.client} sessionId="A" onNavigate={()=>{}}/>);
+ expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(1);
+});

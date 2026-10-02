@@ -1251,7 +1251,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c7bc98331961b583ca1797696fde0523283eac32b32a82eef636fb9e1e6623be",
+      "local_sha256": "9082a4850de7d5ab5e5dcefbea2de59cb0b2f3158bf30958c20f2caa3a9e44f6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -2582,6 +2582,7 @@
       ],
       "retained_dependencies": [
         "../../../../protocol/app-server/v30",
+        "../../client/transcript",
         "../../locale/react",
         "../../locale/translation",
         "../../presentation/primitives/Modal",
@@ -2599,7 +2600,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "47094452afaf2ca56a5e9cccf46ca4397106b27474229e0d3425c8b9a8ff42e2"
+      "local_sha256": "75744ea359d994148be22b0ad0a4fb31b7c3a2db021e4fb804fa190904509469"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -3452,7 +3453,7 @@
         "Cordis runtime",
         "Harness scroll ownership"
       ],
-      "local_sha256": "78f914d6e208a82150cce3433f650343872606e40c0385a9ed1c821c2b5a773a"
+      "local_sha256": "bef809974d1402393114a4c625eaa848154be87ce8a08c0351f6cc37d54b9153"
     }
   ],
   "inspected_only": [

@@ -210,7 +210,7 @@ optional usage. The same identity map remaps messages, Surface operations, and
 these addresses; a missing retained Retry input removes Retry. The origin remains
 unchanged across deeper copies and is never a destination execution identity.
 No source events, requests, recovery pointers, or live execution state are copied.
-SQLite schema 42 stores this provenance atomically in the existing bootstrap row,
+SQLite stores this provenance atomically in the existing bootstrap row,
 checks it on repeated initialization, and refuses obsolete stores without migration.
 The native `After` validator accepts local evidence and inherited provenance through
 one shared projection, while still requiring the exact destination append revision.

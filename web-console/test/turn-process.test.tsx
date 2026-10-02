@@ -111,6 +111,8 @@ it.each(['failed', 'cancelled', 'timed_out', 'limit_exceeded'] as const)('native
   const ui = render(<AgentTranscript snapshot={{ ...state, transcript: { entries: [terminal] } }}/>);
   const control = screen.getByRole('button', { name: label });
   const identity = control.getAttribute('data-turn-process');
+  expect(control.closest('[data-chat-turn-owner]')?.getAttribute('data-chat-turn-owner')).toBe(`turn:${identity}`);
+  expect(control.closest('[data-chat-anchor-key]')).toBeNull(); // Native cursor 2 is outside this terminal-only page.
   expect(identity).toBe(JSON.stringify(['c', 'failed-native']));
   expect(control.getAttribute('data-turn-process-messages')).toBe('2');
   expect(control.getAttribute('data-turn-process-tool-calls')).toBe('1');
@@ -125,6 +127,8 @@ it.each(['failed', 'cancelled', 'timed_out', 'limit_exceeded'] as const)('native
     expect(control.compareDocumentPosition(screen.getByText('Answer intermediate')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
   expect(screen.getByText('Answer reasoning-and-call').closest('[hidden]')).toBeNull();
+  expect(control.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key')).toBe(`turn:${identity}`);
+  expect(screen.getByText('Answer reasoning-and-call').closest('[data-chat-turn-owner]')?.getAttribute('data-chat-turn-owner')).toBe(`turn:${identity}`);
   fireEvent.click(control);
   expect(screen.getByText('Answer intermediate').closest('[hidden]')).toBeNull();
   const reconstructed = JSON.parse(JSON.stringify([first, result, intermediate, terminal])) as RuntimeClientTranscriptEntry[];
@@ -145,5 +149,6 @@ it('incomplete inherited process is historical, has no running timer and is not 
  const timer=vi.spyOn(globalThis,'setInterval');
  const ui=render(<AgentTranscript snapshot={{...snapshot(),transcript:{entries:[{...row('retained',owner),cursor:'1'}]}}}/>);
  expect(ui.getByRole('button',{name:'Incomplete'})).toBeTruthy();expect(ui.queryByText('Failed')).toBeNull();expect(timer).not.toHaveBeenCalled();
+ expect(ui.getByRole('button',{name:'Incomplete'}).closest('[data-chat-turn-owner]')?.getAttribute('data-chat-turn-owner')).toBe('turn:["origin","copied-live"]');
  timer.mockRestore();
 });

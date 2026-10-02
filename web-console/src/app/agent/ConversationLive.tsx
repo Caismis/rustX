@@ -21,7 +21,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
   onHistorical: (id: HistoryAction, response: CompletedResponseView) => void;
 }) {
-  const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string>();
+  const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const view = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
     if (!view?.snapshot) return undefined;
@@ -47,8 +47,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
           });});
         }
       }}/>}
-      latestAnchor={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
-      onLatest={()=>client.latestTranscript(view.id)} onUserIntent={()=>client.userScrolled(view.id)} onActiveAnchor={setActive}>
+      latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
+      onLatest={()=>client.latestTranscript(view.id)} onUserIntent={()=>client.userScrolled(view.id)} onActiveTurn={setActive}>
       <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} loadNewer={()=>void client.loadNewer(view.id).catch(()=>{})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
       <ConversationActivity client={client} sessionId={view.id}/>
     </ChatViewport>;

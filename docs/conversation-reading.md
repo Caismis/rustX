@@ -149,13 +149,17 @@ Loaded transcript/process anchors remain a separate presentation capability.
 The first native process `control_cursor` absent from the outline cut triggers
 one refresh to make the current turn locatable before settlement. Subsequent
 same-Attempt appends/text deltas do not refresh the outline. A current mark is
-active in follow mode even before a durable anchor exists; detached reading
-publishes the nearest preceding loaded native turn start. Native starts define
-half-open reading regions: a turn remains active through its separate body, Tool
-output and tail until the next native start reaches the viewport reading position.
-The final region remains active beyond its start marker. Marker height never
-defines a turn end. Return to latest restores the current live
-identity and follow mode through ChatViewport. Paging and an
+active in follow mode even before a durable anchor exists. Detached reading
+publishes the native semantic owner of the rendered region at the reading position.
+`data-chat-turn-owner` carries Conversation/Attempt identity independently of the
+exact `data-chat-anchor-key`: a finite window beginning inside A retains A ownership
+without fabricating its missing `control_cursor` location. Owned regions remain
+active through separate body, Tool output and tail until another rendered boundary
+reaches the reading position. The final owned region stays active beyond its start
+marker. Genuinely unowned rows publish explicitly unknown detached ownership;
+the rail cannot substitute a stale navigation target or unrelated live Attempt.
+Only an exact native anchor satisfies a navigation scroll. Return to latest
+restores the current live identity and follow mode through ChatViewport. Paging and an
 ordinal input reach distant pages without accumulating outline history. Transcript
 cache limits remain 512 entries / 8 MiB; ordinary prepend reads are 64 entries.
 Historical jumps and adjacent pages replace a finite window. Two outstanding

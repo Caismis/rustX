@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
+import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';
 import { turnAnchor } from '../src/client/transcript';
 import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v30';
@@ -104,7 +105,7 @@ it('short-history prepend retains reading ownership through disappearing anchors
   ui.rerender(<ChatViewport><div>No anchored rows</div></ChatViewport>); flush(); expect(top).toBe(150); // Bounded absolute fallback, never tail.
 });
 
-function coordinatedViewport(historical = false, latestAnchor?: string) {
+function coordinatedViewport(historical = false, latestTurn?: string) {
   let frame: FrameRequestCallback | undefined, height = 1000, top = 0;
   const positions: Record<string, number> = { a: 0, b: 200, 'turn:target': 500 };
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
@@ -112,8 +113,8 @@ function coordinatedViewport(historical = false, latestAnchor?: string) {
   vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
   let owner: ChatViewport | null = null;
   const latest = vi.fn(), user = vi.fn(), active=vi.fn();
-  const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id}>{id}</div>);
-  const element = (ids: string[], past = historical) => <ChatViewport ref={value => { owner = value; }} historical={past} latestAnchor={latestAnchor} onActiveAnchor={active} latestLabel="Return to latest" onLatest={latest} onUserIntent={user}>{content(ids)}</ChatViewport>;
+  const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id} data-chat-turn-owner={id.startsWith('turn:') ? id : undefined}>{id}</div>);
+  const element = (ids: string[], past = historical) => <ChatViewport ref={value => { owner = value; }} historical={past} latestTurn={latestTurn} onActiveTurn={active} latestLabel="Return to latest" onLatest={latest} onUserIntent={user}>{content(ids)}</ChatViewport>;
   const ui = render(element(['a', 'b', 'turn:target']));
   const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
   Object.defineProperties(el, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 }, scrollTop: { get: () => top, set: value => { top = value; } } });
@@ -206,8 +207,8 @@ for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome}
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
   const active = vi.fn();
   function Reading() {
-    const [current, setCurrent] = useState<string>();
-    return <ChatViewport historical onActiveAnchor={key => { active(key); setCurrent(key); }}
+    const [current, setCurrent] = useState<string | null>();
+    return <ChatViewport historical onActiveTurn={key => { active(key); setCurrent(key); }}
       overlay={<TurnNavigator client={server.client} sessionId="A" active={current} onNavigate={() => {}}/>}>
       <AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>
     </ChatViewport>;
@@ -256,4 +257,133 @@ it('the final native turn remains active beyond its location marker', () => {
   v.grow(200); v.flush();
   expect(v.top()).toBe(750);
   expect(v.active).toHaveBeenLastCalledWith('turn:target');
+});
+
+async function clippedReading(outcome: 'completed' | 'timed_out', later = true) {
+  const server = new Server();
+  await server.attached('A');
+  const owner = (attempt: string, cursor: string): TurnProcessView => ({
+    conversation_id: 'conversation-A', attempt_id: attempt, control_cursor: cursor,
+    outcome, message_count: 2, tool_call_count: 1, final_message_id: `${attempt}-body`,
+  });
+  const a = owner('A', '90'), b = owner('B', '120');
+  const row = (cursor: string, id: string, turn_process: TurnProcessView): RuntimeClientTranscriptEntry => ({
+    cursor, turn_process, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text: id }] } },
+  });
+  const entries = [row('100', 'A-prefix', a), row('101', 'A-body', a), ...(later ? [row('120', 'B-start', b), row('121', 'B-body', b)] : [])];
+  const cut = { conversation_id: 'conversation-A', journal: '130', transcript: '121', mutation_revision: '0' };
+  const turns = [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, preview: '' }));
+  server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut, offset: 0, total: 2, turns } }));
+  let frame: FrameRequestCallback | undefined, height = 2200;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  const active = vi.fn();
+  function Reading() {
+    const [current, setCurrent] = useState<string | null>();
+    return <ChatViewport historical onActiveTurn={key => { active(key); setCurrent(key); }}
+      overlay={<TurnNavigator client={server.client} sessionId="A" active={current} onNavigate={() => {}}/>}>
+      <AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>
+    </ChatViewport>;
+  }
+  const ui = await act(async () => render(<Reading/>));
+  const viewport = ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
+  const positions: Record<string, number> = { 'message:A-prefix': 0, 'message:A-body': 100,
+    'message:B-start': 1000, 'message:B-body': 1100, [turnAnchor(a)]: 0, [turnAnchor(b)]: 1000 };
+  Object.defineProperties(viewport, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 } });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+    const key = this.dataset.chatAnchorKey ?? this.dataset.chatTurnOwner;
+    const top = key ? positions[key] - viewport.scrollTop : 0;
+    const size = key?.endsWith('-body') ? 900 : 20;
+    return { top, bottom: top + size, left: 0, right: 500, width: 500, height: size, x: 0, y: top, toJSON() {} };
+  });
+  const flush = () => act(() => { const callback = frame; frame = undefined; callback?.(0); });
+  const scroll = (top: number) => { viewport.scrollTop = top; fireEvent.scroll(viewport); flush(); };
+  const expectActive = (turn: TurnProcessView) => {
+    expect(active).toHaveBeenLastCalledWith(turnAnchor(turn));
+    expect([...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark => mark.getAttribute('data-turn-id'))).toEqual([turnAnchor(turn).slice(5)]);
+  };
+  const expectClipped = () => {
+    for (const id of ['message:A-prefix', 'message:A-body']) {
+      expect(ui.container.querySelector(`[data-chat-anchor-key="${id}"]`)?.getAttribute('data-chat-turn-owner')).toBe(turnAnchor(a));
+    }
+    expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].some(row => row.getAttribute('data-chat-anchor-key') === turnAnchor(a))).toBe(false);
+  };
+  return { server, a, b, ui, viewport, positions, turns, cut, entries, flush, scroll, expectActive, expectClipped,
+    grow(amount: number) { positions['message:A-body'] += amount; positions['message:B-start'] += amount; positions['message:B-body'] += amount; positions[turnAnchor(b)] += amount; height += amount; resize(); flush(); } };
+}
+
+for (const outcome of ['completed', 'timed_out'] as const) {
+  it(`clipped ${outcome} first Attempt owns reading before the exact B boundary through disclosure and reflow`, async () => {
+    const v = await clippedReading(outcome);
+    try {
+      v.flush(); v.scroll(400); v.expectActive(v.a); v.expectClipped();
+      if (outcome === 'completed') fireEvent.click(v.ui.getAllByRole('button', { name: 'Worked' })[0]);
+      for (const growth of [80, 150]) {
+        v.grow(growth); expect(v.viewport.scrollTop).toBe(v.positions['message:A-body'] + 300); v.expectActive(v.a); v.expectClipped();
+      }
+      v.scroll(v.positions['message:B-start'] - 1); v.expectActive(v.a);
+      v.scroll(v.positions['message:B-start']); v.expectActive(v.b);
+      v.scroll(v.positions['message:B-body'] + 500); v.expectActive(v.b);
+    } finally { v.ui.unmount(); v.server.client.disconnect(); }
+  });
+  it(`final clipped ${outcome} Attempt owns the whole loaded tail without a fabricated locate anchor`, async () => {
+    const v = await clippedReading(outcome, false);
+    try {
+      v.flush();
+      for (const top of [1, 400, 800, 1600]) { v.scroll(top); v.expectActive(v.a); v.expectClipped(); }
+      v.grow(100); expect(v.viewport.scrollTop).toBe(1600); v.expectActive(v.a); v.expectClipped();
+    } finally { v.ui.unmount(); v.server.client.disconnect(); }
+  });
+}
+
+it('real older historical replacement derives clipped ownership from the installed projection instead of the prior B navigation', async () => {
+  const v = await clippedReading('completed');
+  v.ui.unmount();
+  try {
+    await v.server.client.readTurns('A');
+    v.server.held.add('session/transcript');
+    const navigate = v.server.client.navigateTurn('A', v.turns[1]);
+    const request = await v.server.waitFor('session/transcript', 1);
+    v.server.socket.success(request, { type: 'transcript_window', window: { cut: v.cut, page: { entries: v.entries.slice(2), next_cursor: '120' }, newer_cursor: '121', target: v.b, target_cursor: '120' } });
+    expect(await navigate).toBe(true);
+    const ui = await act(async () => render(<ConversationLive client={v.server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/>));
+    const viewport = ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
+    Object.defineProperties(viewport, { scrollHeight: { value: 2200 }, clientHeight: { value: 200 } });
+    // Geometry belongs to the installed page, just as native ownership does.
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function(this: HTMLElement) {
+      const key = this.dataset.chatAnchorKey ?? this.dataset.chatTurnOwner;
+      const offset = v.server.client.getSnapshot().views.A.history?.page.entries?.[0].cursor === '120' ? 1000 : 0;
+      const top = key ? v.positions[key] - offset - viewport.scrollTop : 0;
+      return { top, bottom: top + 900, left: 0, right: 500, width: 500, height: 900, x: 0, y: top, toJSON() {} };
+    });
+    v.flush(); viewport.scrollTop = 400; fireEvent.scroll(viewport); v.flush();
+    const current = () => [...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark => mark.getAttribute('data-turn-id'));
+    expect(current()).toEqual([turnAnchor(v.b).slice(5)]);
+    const older = v.server.client.loadEarlier('A'), read = await v.server.waitFor('session/transcript', 2);
+    expect(read.params).toMatchObject({ at: { type: 'older', before: '120', cut: v.cut }, limit: 64 });
+    await act(async () => {
+      v.server.socket.success(read, { type: 'transcript_window', window: { cut: v.cut, page: { entries: v.entries.slice(0, 2), next_cursor: '100' }, newer_cursor: '101', target: null, target_cursor: null } });
+      await older;
+    });
+    v.flush();
+    expect(v.server.client.getSnapshot().views.A.turnNavigation?.active).toBe(turnAnchor(v.b).slice(5));
+    expect(v.server.client.getSnapshot().views.A.history?.page.entries?.[0].cursor).toBe('100');
+    expect(viewport.scrollTop).toBe(400); expect(current()).toEqual([turnAnchor(v.a).slice(5)]);
+    expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].some(row => row.getAttribute('data-chat-anchor-key') === turnAnchor(v.a))).toBe(false);
+    ui.unmount();
+  } finally { v.server.client.disconnect(); }
+});
+
+it('detached unowned reading publishes unknown and semantic ownership cannot satisfy an exact locate', () => {
+  const v = coordinatedViewport(true, 'turn:live');
+  v.scroll(750); expect(v.active).toHaveBeenLastCalledWith('turn:target');
+  v.positions.unowned = 700; v.replace(['turn:target', 'unowned'], true); v.flush();
+  expect(v.active).toHaveBeenLastCalledWith(null);
+  const owner = v.owner();
+  v.ui.rerender(<ChatViewport historical onActiveTurn={v.active}><div data-chat-anchor-key="b" data-chat-turn-owner="turn:clipped">clipped</div></ChatViewport>);
+  v.flush(); expect(v.active).toHaveBeenLastCalledWith('turn:clipped');
+  const top = v.top(), intent = owner.beginNavigation();
+  expect(intent.commit('turn:clipped')).toBe(true); v.flush();
+  expect(v.top()).toBe(top); // The owner exists, but no exact location is loaded.
 });

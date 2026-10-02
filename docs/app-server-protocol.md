@@ -1250,7 +1250,7 @@ short-lived, single-use native download descriptor. All clients consume the same
 `rustx-session-archive/v3` stream. The request has no output-path field. Remote
 HTTP(S) downloads share the App Server listener; owned stdio children advertise a
 loopback stream port. See [Session archive](session-archive.md) for cut semantics,
-authentication, resource bounds and cancellation. Durable SQLite remains v41.
+authentication, resource bounds and cancellation.
 
 Archive preparation failures preserve a closed safe reason through
 `archive_preparation_failed`, plus the fixed native diagnostic in `message`.

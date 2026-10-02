@@ -362,3 +362,108 @@ detached/latest follow, streaming, measured width and both locales. The previous
 local focus-corner variation did not reproduce. No screenshot references, noise
 regions, tolerances or product geometry changed. The rail, width implementation,
 ChatViewport scroll ownership and IncompleteAtCut Web/TUI behavior remain unchanged.
+
+## Clipped transcript presentation ownership repair
+
+The fetched PR head was `166cdcc54fca13a010257fd031188698aeb8902b`;
+base and `origin/main` were `93915c2265746c7c94d07146a51829470f9c4084`.
+The existing Issue #430 worktree was clean and the PR was mergeable. No rebase
+was needed. The primary checkout was not modified.
+
+A finite entry window can begin at cursor 100 owned by A while A's native
+`control_cursor` is 90. Exact `turn:` anchors alone therefore cannot identify
+historical reading. Rendered native owners now carry `data-chat-turn-owner`
+independently of `data-chat-anchor-key`. Assistant/Tool-associated seats, process
+controls (including terminal-only inherited controls), completed-response tails,
+and native live/streaming regions expose their own native identity. Unowned rows
+remain unowned. A synthetic clipped control or pre-location live control never
+becomes an exact locate anchor. Existing exact completed locations and native
+navigation reads retain their contracts.
+
+ChatViewport alone resolves the owner at the reading position and writes automatic
+Chat scroll corrections. Detached unknown ownership publishes `null`, distinct
+from unobserved/follow `undefined`, so TurnNavigator cannot substitute stale
+navigation or an unrelated live Attempt. Follow may still select a live native
+Attempt before it has a cursor.
+
+Deterministic regressions, without sleeps:
+
+- `clipped completed first Attempt owns reading before the exact B boundary through disclosure and reflow`
+- `clipped timed_out first Attempt owns reading before the exact B boundary through disclosure and reflow`
+- `final clipped completed Attempt owns the whole loaded tail without a fabricated locate anchor`
+- `final clipped timed_out Attempt owns the whole loaded tail without a fabricated locate anchor`
+- `real older historical replacement derives clipped ownership from the installed projection instead of the prior B navigation`
+- `detached unowned reading publishes unknown and semantic ownership cannot satisfy an exact locate`
+- `observed unknown detached ownership suppresses both stale navigation and unrelated live fallback`
+- `loaded semantic ownership without its exact control cursor still requires a direct native turn read`
+
+The first four use A.control_cursor=90, loaded A members 100/101, and optional
+B.control_cursor=120 with B members 120/121. They assert absent exact A anchors,
+explicit A owner metadata, exactly one current rail mark, A before B, B at its
+real boundary and through later content, final clipped tails, and disclosure /
+ResizeObserver growth without losing the reading position. The real older read
+installs A members while client navigation deliberately still identifies B.
+Existing terminal-only, Tool-associated and inherited incomplete process tests
+also assert the separate metadata. The streaming/status test now checks semantic
+live ownership and absence of a fabricated pre-location native anchor.
+
+All five clipped/replacement fixtures failed with the five modified production
+components temporarily restored from the reviewed head. Only the test callback
+prop names were adapted to the old interface. Completed A lost identity;
+non-successful controls lacked semantic metadata and fabricated an exact anchor;
+the older replacement incorrectly kept B selected. Repaired sources were restored
+before validation. The four focused suites passed 60 tests; Agent Status passed
+19 tests after replacing its obsolete pre-location exact-anchor expectation.
+
+Documentation deletes the obsolete archive Base integration chronology, removes
+redundant SQLite version facts from the protocol/archive-adjacent Chat docs, and
+states the semantic-owner/exact-location contract in conversation-reading.md.
+A search of touched PR files found no remaining obsolete archive or SQLite
+version statements. Native mapping, (R,C), frozen IncompleteAtCut, archive v3, protocol v30,
+schema 49, 64-entry / 64-turn pages, 512-entry / 8 MiB browser bounds, two replacement
+reads, width behavior and Rust 1.98.1 are unchanged.
+
+The initial native command exited 101 at
+`end_to_end::running_child_inspection_is_execution_independent` with
+“the running child owns an inspection socket”. The chosen TMPDIR produced a
+108-byte native-shaped Unix socket pathname. A direct bind probe failed with
+`AF_UNIX path too long`; the same shape under the fresh short root
+`/home/caismis/.r443-yb848mti` is 71 bytes and binds successfully. The final native
+command uses that short clean root outside the contaminated `/tmp` ancestry.
+No runtime, assertions, timeouts or test selectors changed for this correction.
+CARGO_PROFILE_DEV_DEBUG=0 and CARGO_PROFILE_TEST_DEBUG=0 match the prior validation
+profile and affect debug metadata only. Emulator-dependent checks require
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1.
+
+The pinned Podman browser suite ran once: 145 passed, one failed. The sole failure
+is `composer primary seat, uploads and context stack light 390`, reference
+`composer-running-draft-light-390-linux.png`: expected/actual 334×174, 15 changed
+pixels outside approved noise regions, maximum channel delta 13. Visual inspection
+places the differences at the upper-left rounded focus border. The strict policy
+has no registered noise regions for this reference. No reference, tolerance,
+retry, skip or screenshot policy changed. Native distant reading/detached-follow /
+width in both locales and the authenticated archive browser/TUI comparison passed.
+
+Final command results (Linux x86_64; native/TUI emulator required; native tests use
+the short TMPDIR above). No macOS execution was available locally.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console exec vitest run test/scroll.test.tsx test/turn-navigator.test.tsx test/reading-navigation.test.ts test/turn-process.test.tsx` | 60 passed, 4 files |
+| `pnpm --dir web-console exec vitest run test/agent-status.test.tsx` | 19 passed |
+| `cargo fmt --all -- --check` | Exit 0 |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit 0 |
+| `cargo build --bins --all-features --locked` | Exit 0 |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | Exit 0: 4,074 passed, 8 existing ignored, 19 targets |
+| `uv sync --frozen` (test-support/fake-provider) | Exit 0 |
+| `uv run --frozen pytest` (test-support/fake-provider) | 51 passed |
+| `pnpm --dir protocol/app-server check` | Exit 0; no generated drift |
+| `pnpm --dir protocol/app-server typecheck` | Exit 0 |
+| `pnpm --dir web-console typecheck` | Exit 0 |
+| `pnpm --dir web-console test` | Exit 0: 1,334 passed, 71 files |
+| `pnpm --dir web-console check:i18n` | Exit 0 |
+| `pnpm --dir web-console check:provenance` | Exit 0: 147 source records, 131 package notices |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | Exit 1: 145 passed, one strict composer screenshot failure detailed above |
+| `pnpm --dir tui typecheck` | Exit 0 |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | Exit 0: 895 passed, no skips |
+| `git diff --check` | Exit 0 |

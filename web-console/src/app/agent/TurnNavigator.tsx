@@ -9,7 +9,7 @@ import css from './TurnNavigator.module.css';
 import { currentTurnLocation, turnRailItems } from './turn-rail-items';
 
 /** One bounded native page, with direct ordinal access to any distant page. */
-export function TurnNavigator({ client, sessionId, onNavigate, active }: { client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn) => void; active?: string }) {
+export function TurnNavigator({ client, sessionId, onNavigate, active }: { client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn) => void; active?: string | null }) {
   const tx=useTranslation(), previewId=useId(), [preview,setPreview]=useState<string>(), [ordinal,setOrdinal]=useState('');
   const view=useClientSelector(client,state=>{
     const view=state.views[sessionId];
@@ -31,7 +31,7 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
     <button type="button" aria-label={tx('agent:reading.older-turns')} disabled={!page || page.offset===0 || view.outline?.loading} onClick={()=>void client.readTurns(sessionId,Math.max(0,page!.offset-64))}>↑</button>
     <div className={css.marks} aria-busy={view.outline?.loading || undefined} onPointerLeave={event=>setPreview(event.currentTarget.querySelector<HTMLElement>(':focus')?.dataset.turnId)}>
       {turns.map(turn=>{
-        const key=turnKey(turn.id), current=active ? active===`turn:${key}` : view.navigation?.active===key || !view.navigation?.active && turnKey(currentId ?? {conversation_id:'',attempt_id:''})===key;
+        const key=turnKey(turn.id), current=active !== undefined ? active===`turn:${key}` : view.navigation?.active===key || !view.navigation?.active && turnKey(currentId ?? {conversation_id:'',attempt_id:''})===key;
         return <button key={key} type="button" className={css.mark} data-turn-id={key} data-turn-ordinal={turn.ordinal}
           aria-label={turn.ordinal ? tx('agent:reading.jump-turn',{n:turn.ordinal}) : tx('agent:reading.current-turn')} aria-current={current?'true':undefined}
           aria-busy={view.navigation?.pending===key || undefined} aria-describedby={selected===turn?previewId:undefined}

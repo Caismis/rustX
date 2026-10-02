@@ -300,15 +300,6 @@ cut before streaming. Authenticated RPC mints one scoped capability instead of
 independent HEAD/GET preparation, preserving the exact prepared cut and supporting
 headless App Server/TUI consumers. There is no compression setting or new UI screen.
 
-## Base integration
-
-PR #369 merged while these review repairs were in progress. Its main commit
-`908399021b649ab7603498f43bdc5673f94c9352` already uses App Server v10,
-SQLite 42 and catalog 12. The rebased archive PR therefore advances the complete
-mandatory App Server vocabulary to v11, without a compatibility alias. This is
-not an archive-format change: archive v1 remains unpublished and is corrected in
-place. No SQLite/catalog schema increment is introduced by archive export.
-
 ## Validation
 
 Native archive fixtures live in `src/local_runtime/session/tests/archive_tests.rs`
