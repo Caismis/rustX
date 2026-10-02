@@ -75,11 +75,21 @@ if (mode === 'composer') {
       next.inbound = { pending: value ? [{ sequence: '1', revision: '0', message: { id: 'queued', source: 'human', content: [{ type: 'text', text: 'Verify the native queue controls' }] } }] : [] };
       await server.update('A', next);
     },
+    holdCancellation: () => { server.held.add('turn/cancel'); },
+    cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/cancel' ? [row.request.params.target] : []),
+    acknowledgeCancellation: async () => {
+      const request = server.requests.find(row => row.request.method === 'turn/cancel')?.request;
+      if (!request) throw new Error('No cancellation requested');
+      server.reply(request);
+      const next = structuredClone(server.snapshots.get('A')!);
+      next.attempt!.phase = { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } };
+      server.snapshots.set('A', next); await server.client.refresh('A');
+    },
     submissions: () => server.requests.flatMap(row => row.request.method === 'turn/start' || row.request.method === 'turn/steer' ? [row.request.method] : []),
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; cancellations(): import('../../../protocol/app-server/v32').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

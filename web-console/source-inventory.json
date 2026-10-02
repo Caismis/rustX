@@ -19,7 +19,7 @@
       "destination": "web-console/src/app/agent/AgentComposer.tsx",
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
-      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. No local delivery preference, runtime or slot/store authority. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. Issue #406: Resident input/editor and launcher interaction adapted to native textarea, native first-submit transactions and upload receipts. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
+      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. Runtime and slot/store authority excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. Issue #406: Resident input/editor and launcher interaction adapted to native textarea, native first-submit transactions and upload receipts. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. #439: compact browser preference and focused-editor Escape arbitration reuse the submission policy and native cancellation owner.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v32",
@@ -30,11 +30,14 @@
         "../../presentation/agent/Composer.module.css",
         "../../presentation/attachments/AttachmentCard",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/Menu",
         "../commands/CommandMenu",
         "../commands/matching",
         "../commands/registry",
         "../composer/editor-content",
         "../composer/input-trigger",
+        "../composer/preferences",
+        "../composer/stop-sequence",
         "../composer/submission-policy",
         "../composer/useTextareaAutosize",
         "../new-conversation/first-submit",
@@ -46,7 +49,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "2ef42214c99c09a4d4df4dc640d73871b6cb25acc31967d3cce638c94ad7f6e8",
+      "local_sha256": "f34a835778598c41e5a2cef5d152836007f5a0db2272e8aea9fe315649a86424",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -332,25 +335,32 @@
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "62b24a76365530ced9d3590d076aa7960ab1ac355451ceb9a1aa7fcd28578768",
-      "treatment": "Busy Enter/button Queue default and accelerated Steer mapping adapted as a pure rustX function; native readiness and command labels added. Host settings, stores, queue steering and transport authority excluded. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "Busy Enter/button Queue default and accelerated Steer mapping adapted as a pure rustX function; native readiness and command labels added. Host settings, stores, queue steering and transport authority excluded. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. #439: explicit queue/steer preference chooses the running Enter/button operation; accelerated Enter chooses its complement.",
       "destination": "web-console/src/app/composer/submission-policy.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../locale/translation"
+        "../../locale/translation",
+        "./preferences"
       ],
       "excluded_dependencies": [
         "Harness snapshot store and Host settings",
         "Cordis/plugin runtime",
         "Harness delivery-window and queue authority"
       ],
-      "local_sha256": "e3da08064412b9977bbb37b1940d6db28c1adb714f58218ec82367a4d0cdc478",
+      "local_sha256": "1181ab87db5d94891ce015fb03f6bb38d000137c712b4be4f98aa3e885086a06",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
           "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
           "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
           "treatment": "State-derived root primary seat and truthful ordinary-message labels adapted to native readiness and typed command grammar."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
+          "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+          "upstream_sha256": "fd64ed49cf98558345033d75d17de97048d9bc947d17f85963890221583164bd",
+          "treatment": "#439: preferred/complementary Busy Enter mapping only; rustX browser preference, native mailbox admission and acknowledgment consumption remain local."
         }
       ]
     },
@@ -902,7 +912,7 @@
       "destination": "web-console/src/presentation/agent/Composer.module.css",
       "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
       "classification": "A",
-      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups.",
+      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups. #439: quiet 24px preference footer and keyboard focus treatment using existing visual primitives.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -911,7 +921,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "f0a91242712b6afee3e7bb2cc96a53c0fb96a44961d83c3c7c4b45b80d7f1d24"
+      "local_sha256": "79192ae363a86b3599dc3a4bba0827dfb653ab297de50d91b50c7795f9b90bf3"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3183,7 +3193,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3194,7 +3204,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "bd2d74dab2d51efeb729583817b5ca4aaa189c8e8d9ff5e9c71d38e1a6add32c"
+      "local_sha256": "577015f67f6d922dae3abae5a90f2f7f6e4724a6875e2c2daa3f6c217916620f"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3454,6 +3464,18 @@
         "Harness scroll ownership"
       ],
       "local_sha256": "8848709bdc717602ef33cee43f026a60e7e8a617b1d6128a8c6dbbd983975227"
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "6f6805d1ca29a93f0cd12c4da7eda161ee41b479b89af480818e593ed8d46fe0",
+      "treatment": "#439: fixed 500 ms two-state gesture only; client/attachment/binding/Attempt identity and native cancel owner supplied by rustX. No shortcut registry.",
+      "destination": "web-console/src/app/composer/stop-sequence.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "842e307b418941ca6605aeba1d6ad586290bbf0d9c99b1152a754b4bf2562b22",
+      "classification": "B"
     }
   ],
   "inspected_only": [
@@ -4164,6 +4186,30 @@
       "upstream": "packages/client/ui-chat/src/client/chat/turn-rail-items.ts",
       "upstream_sha256": "55021e6b0f0fa1cf93abd84fd41e3403be23ee27905390366e6a3d2e87a0eadf",
       "treatment": "Inspected native-outline/loaded-anchor merge pattern. No source copied; rustX durable Attempt origin and read cut replace Harness assumptions."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/submission-settings.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "d3975f454930090642bf9a64c641587138ae6e09d3db1121ce63ab4c8e8b8a29",
+      "treatment": "#439 behavioral reference only; no copied source, Host settings authority, Cordis or generic shortcuts."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/stop-shortcut.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "0317b2d29713d3deb13dd3f85e6710b7b07016d699644f593e28eebbb36915cd",
+      "treatment": "#439 behavioral reference only; no copied source, Host settings authority, Cordis or generic shortcuts."
+    },
+    {
+      "upstream": "packages/client/shortcuts/README.md",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "20413353dcaf10bb2dad166eff292024e0bac9fe30745a084a86e94839f337c2",
+      "treatment": "#439 behavioral reference only; no copied source, Host settings authority, Cordis or generic shortcuts."
+    },
+    {
+      "upstream": "packages/client/ui-conversation/README.md",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "20aa1d17603d415652b26a5afe47bde175d45838689642e17ef4262a8ae1eda2",
+      "treatment": "#439 behavioral reference only; no copied source, Host settings authority, Cordis or generic shortcuts."
     }
   ],
   "historical_inspection": {

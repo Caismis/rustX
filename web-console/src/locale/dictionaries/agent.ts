@@ -1,5 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "submission.stop-double-escape": "Stop — press Escape twice within 500 ms in the message editor",
+  "submission.steer-enter-ctrl-cmd-enter-to-queue": "Steer · Enter (Ctrl/Cmd+Enter to Queue)",
+  "submission.enter-while-running": "Enter while running",
+  "submission.enter-preference": "Enter while running: {behavior}",
+
   "reading.width-left": "Resize conversation from the left",
   "reading.width-right": "Resize conversation from the right",
   "reading.current-turn": "Current turn",
@@ -225,6 +230,11 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "submission.stop-double-escape": "停止 — 在消息编辑框内 500 毫秒内连按两次 Escape",
+  "submission.steer-enter-ctrl-cmd-enter-to-queue": "插话 · Enter（Ctrl/Cmd+Enter 排队）",
+  "submission.enter-while-running": "运行时 Enter 的行为",
+  "submission.enter-preference": "运行时 Enter：{behavior}",
+
   "reading.width-left": "从左侧调整对话宽度",
   "reading.width-right": "从右侧调整对话宽度",
   "reading.current-turn": "当前轮次",

@@ -39,7 +39,11 @@ it('streaming publications update the transcript but do not render AppFrame or c
   const message = input(), seat = message.closest('[data-composer-seat]'), header = screen.getByLabelText('Session title').closest('header');
   fireEvent.change(message, { target: { value: 'untouched draft' } }); message.focus(); message.setSelectionRange(4, 7);
   const frameCalls = vi.mocked(AppFrame).mock.calls.length, composerCalls = vi.mocked(AgentComposer).mock.calls.length;
-  for (let index = 0; index < 5; index++) await act(async () => server.update('A', live('token ' + index)));
+  // Pure streaming snapshot replacement preserves the exact Attempt. The fixture's
+  // lifecycle update helper emits attempt_started and is not a streaming event.
+  for (let index = 0; index < 5; index++) await act(async () => {
+    server.snapshots.set('A', live('token ' + index)); await server.client.refresh('A');
+  });
   expect(screen.getByText('token 4')).toBeTruthy();
   expect(input()).toBe(message); expect(message.closest('[data-composer-seat]')).toBe(seat);
   expect(screen.getByLabelText('Session title').closest('header')).toBe(header);

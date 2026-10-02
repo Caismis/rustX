@@ -13,6 +13,12 @@ import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, installTranscriptWindow, prependTrans
 import type { ConversationTurn, ConversationTurnPage, ConversationWindowAt } from '../../../protocol/app-server/v32';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
+/** Expected observed cancellation identity; never substituted with a successor Attempt. */
+export interface CancellationTarget {
+  readonly generation: number;
+  readonly target: AttachmentTarget;
+  readonly attemptId: string;
+}
 export type InboundControlOutcome =
   | { status: 'known'; outcome: PendingMutationOutcome; observed: boolean }
   | { status: 'uncertain' }
@@ -1408,16 +1414,29 @@ export class AppServerClient {
     await this.refresh(id);
     if (this.current(generation) && sameTarget(this.state.views[id]?.target, target) && this.state.views[id].modelMutation?.status !== 'in-flight') this.setSession(id, { modelMutation: undefined });
   }
-  async cancelTurn(id: string) {
-    const target = this.target(id), generation = this.state.generation;
-    const view = this.state.views[id], attempt = view.snapshot?.attempt;
-    if (view.cancellation || !attempt || attempt.phase.type === 'settled') return;
-    const attemptId = attempt.attempt_id;
+  cancellationTarget(id: string): CancellationTarget | undefined {
+    const view = this.state.views[id], attempt = view?.snapshot?.attempt;
+    if (!this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
+      || !view.target || view.deleting || view.cancellation || !attempt || attempt.phase.type === 'settled'
+      || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length) return;
+    return { generation: this.state.generation, target: view.target, attemptId: attempt.attempt_id };
+  }
+  async cancelTurn(expected: CancellationTarget) {
+    const { target, generation, attemptId } = expected, id = target.session_id;
+    const live = this.cancellationTarget(id);
+    if (!live || live.generation !== generation || !sameTarget(live.target, target) || live.attemptId !== attemptId) return;
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     const operation = { attemptId, status: 'in-flight' as const };
     this.setSession(id, { cancellation: operation });
     try {
-      await this.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted');
+      await this.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted', undefined, () => {
+        // RPC capacity can defer send. Revalidate beside the actual socket dispatch.
+        const view = this.state.views[id];
+        return current() && this.initialized && this.state.connection === 'connected' && view?.attachmentIntent === 'wanted'
+          && view.attachment === 'attached' && !view.deleting && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure
+          && !view.snapshot?.pending_interactions?.length && view.snapshot?.attempt?.attempt_id === attemptId
+          && view.snapshot.attempt.phase.type !== 'settled' && view.cancellation === operation;
+      });
       if (current() && this.state.views[id].cancellation?.attemptId === attemptId) {
         this.setSession(id, { cancellation: { attemptId, status: 'acknowledged' } });
         await this.refresh(id);

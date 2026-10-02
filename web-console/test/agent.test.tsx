@@ -88,13 +88,14 @@ it('Session controls never expose source-authoring permission controls', async (
 });
 it('one Stop gesture issues one request, and only native snapshot settlement releases the cancellation guard', async () => {
  server.snapshots.set('A', running()); await server.attached('A'); server.held.add('turn/cancel');
- const stopped = server.client.cancelTurn('A'); await server.client.cancelTurn('A');
+ const expected = server.client.cancellationTarget('A')!;
+ const stopped = server.client.cancelTurn(expected); await server.client.cancelTurn(expected);
  const request = await server.waitFor('turn/cancel', 1);
  expect(count('turn/cancel')).toBe(1);
  server.reply(request); await stopped;
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
  expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('acknowledged');
- await server.client.cancelTurn('A'); expect(count('turn/cancel')).toBe(1);
+ await server.client.cancelTurn(expected); expect(count('turn/cancel')).toBe(1);
  const settled = running(); settled.attempt!.phase = { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } };
  await server.update('A', settled);
  expect(server.client.getSnapshot().views.A.cancellation).toBeUndefined();
@@ -142,11 +143,12 @@ it('reasoning and Tool rows remain at native canonical positions while live stat
 it('an acknowledged Stop remains fenced when its authoritative reread fails', async () => {
  server.snapshots.set('A', running()); await server.attached('A');
  server.handlers.set('session/snapshot', () => { throw new RpcFailure({ code: -32000, message: 'Read unavailable' }); });
- await expect(server.client.cancelTurn('A')).rejects.toThrow('Read unavailable');
+ const expected = server.client.cancellationTarget('A')!;
+ await expect(server.client.cancelTurn(expected)).rejects.toThrow('Read unavailable');
  expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('acknowledged');
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
  server.handlers.delete('session/snapshot'); await server.client.refresh('A');
- await server.client.cancelTurn('A'); expect(count('turn/cancel')).toBe(1);
+ await server.client.cancelTurn(expected); expect(count('turn/cancel')).toBe(1);
 });
 
 it('live foreground overlays only its exact canonical occurrence when historical Attempts reuse a provider call ID', () => {
