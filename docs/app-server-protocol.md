@@ -371,7 +371,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `initialize`, `server/info` | Connection negotiation and server capabilities |
 | `session/list`, `session/read`, `session/summary`, `session/name`, `session/tree` | Durable controller; bounded pages / exact identity reads; no runtime composition |
 | `session/create` | Durable creation from explicit Session selections |
-| `session/fork`, `session/branch` | Exact native Surface revision, message boundary, and explicit `side`: `before` restores ordinary User input; `after` includes a durably completed Assistant response with an empty editor. Fork without a boundary clones the revision into an independent Session |
+| `session/fork`, `session/branch` | Selected SurfaceRevision R fixes structure; invocation-time native read cut C fixes temporal facts. A message boundary further narrows structure, with explicit `side`: `before` restores ordinary User input; `after` includes a durably completed Assistant response with an empty editor. Fork without a boundary clones structure through R into an independent Session |
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
 | `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |
@@ -1420,7 +1420,15 @@ cursor exists; first native location enables locate without settlement.
 `TurnProcessOutcome::IncompleteAtCut` is the immutable presentation of inherited
 output whose source Attempt was live at its lineage cut. It grants no execution
 ownership, live timer or destination settlement obligation. Bootstrap
-`InheritedTurnOutcome` cannot serialize Running. The durable lineage read cuts
-selected Surface/Ledger identities and both provenance domains in one transaction.
+`InheritedTurnOutcome` cannot serialize Running. Lineage copy authority is
+`(SurfaceRevision R, native read cut C)`. R selects Surface history and its canonical
+identity closure; C selects Attempt visibility/outcome, completed responses and
+terminal-only settlement. The first SELECT in `read_lineage_cut(R)`'s SQLite read
+transaction captures C. A clone repeated with the same R may inherit a different
+outcome at a newer C; R alone is not an execution timestamp. Once captured, later
+activity cannot change `(R, C)`. Fork/tree message boundaries only narrow the
+structural prefix. Message-backed turns require members through C retained in
+that structure; terminal-only turns require a terminal through C AND a retained
+predecessor. No predecessor can authorize a terminal after C.
 Web outline paging records latest versus explicit offset intent independently of
 the returned page offset; an omitted offset always means native latest.

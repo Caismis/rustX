@@ -262,9 +262,13 @@ cancelled/timed-out/limited work. Automatic continuation admits another Attempt;
 model retries, Loop steps and Tool calls do not. Origins survive lineage in
 native bootstrap order, followed by local Attempt-start order. Retained
 unsuccessful turns cannot become unowned merely for lacking a completed response.
-One native SQLite lineage snapshot cuts Surface/Ledger identities and both
-provenance domains together. Terminal-only membership requires a terminal at or
-before its Journal bound; a retained predecessor cannot admit later settlement.
+Lineage copy authority is `(R, C)`: selected SurfaceRevision R fixes structural
+history and canonical identity closure; invocation-time native read cut C fixes
+execution-derived facts in one SQLite snapshot. R is not an execution timestamp.
+The same R at a newer C may inherit a newer outcome, but a captured `(R, C)` is
+immutable. Terminal-only membership requires a terminal at or before C's Journal
+bound AND a retained structural predecessor; that predecessor cannot admit
+later settlement.
 Inherited outcomes exclude Running. Retained live-at-cut output is immutable
 IncompleteAtCut, never destination execution ownership or an invented terminal.
 
@@ -7004,8 +7008,8 @@ would drop exactly those retired facts, so cloning a conversation before a
 compaction and cloning it after would produce destinations that mean different
 things, with no user-visible cause. The first invariant is the negative one:
 
-> **A compaction changes the context projection, never what copying the
-> conversation means.**
+> **A compaction changes the context projection, never the canonical structural
+> meaning retained by a lineage copy.**
 
 The second half of the seed is the *history*, not merely the final active set,
 and it is what makes copying survive the operations that follow it. A copy is
@@ -7020,10 +7024,10 @@ So the invariant is stated on the composition:
 
 > **Copying a lineage is closed under the lineage operations that follow it: a
 > fork or branch taken on the copy, at a boundary the copy itself reports,
-> means what the same operation taken on the source means.**
+> preserves the source's captured structural prefix and historical meaning.**
 
-The cut is taken over that history. One forward replay of the source's
-operations through the selected revision decides two things at once:
+The structural cut R is taken over that history. One forward replay of the
+source's operations through the selected Surface revision decides two things:
 
 - which operations the destination inherits. An operation is dropped when it
   introduces an excluded identity: an `Append` of a message committed at or
@@ -7039,12 +7043,22 @@ operations through the selected revision decides two things at once:
   compaction that retired a `todo` result carries the result into the
   destination while leaving it off the destination's Surface.
 
-Both properties a copy needs fall out of that. Retired facts are inherited,
-and everything committed after the selected revision is excluded, because the
-bound comes from the selected history rather than from the current Ledger end
-— a turn that commits while a fork is being prepared is not silently inherited
-by it. A boundary that excludes everything (a fork at the very first user
-message) retains no operation and cuts to the empty lineage, which is what
+Retired canonical facts are inherited, and canonical identities introduced after
+R are excluded: structural membership comes from the selected history rather
+than from the current Ledger end. Execution-derived historical meaning has a
+separate bound C, captured by the first read in `read_lineage_cut(R)`'s SQLite
+transaction. Attempt starts, outcomes, completed-response provenance and
+terminal-only settlement must exist through C and satisfy the retained structural
+closure/prefix. A terminal-only predecessor in R cannot replace that temporal check.
+
+A clone selects structure through R and temporal evidence through invocation-time
+C. A fork or tree branch additionally narrows the structural prefix at its message
+boundary; it cannot widen C. Concurrent source activity cannot change an already
+captured `(R, C)` seed. Repeating a copy later with the same R and newer C may
+intentionally observe a terminal where the earlier copy retained `IncompleteAtCut`,
+or admit a terminal-only turn absent at the earlier C. SurfaceRevision is not a
+complete execution-history timestamp. A boundary that excludes everything
+(a fork at the very first user message) retains no operation and cuts to the empty lineage, which is what
 such a fork means.
 
 Inherited canonical facts are inherited as the source holds them: durable,
@@ -7065,9 +7079,10 @@ branch points would then be artefacts of the copy rather than facts of the
 source. Reopening re-supplies the canonical part alone, which is the bootstrap
 identity the store verifies; the history is durable state the store already
 holds, not an input a reopen could contradict.
-`ConversationStore::load_surface_history` is the matching read: it is the
-provenance half a `prepare_*` selects, alongside the Surface snapshot and the
-canonical history.
+`ConversationStore::read_lineage_cut(R)` is the matching native read owner: one
+snapshot supplies selected Surface history, canonical closure and both completed-
+response and turn-reading provenance through C. Session `prepare_*` only trims
+and remaps that frozen authority; it does not assemble independent current reads.
 
 `LineageSeed` is the public durable authority both halves are admitted
 through, so it is checked against what durable transitions can *reach*, not

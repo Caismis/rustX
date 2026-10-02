@@ -13916,7 +13916,7 @@
           ]
         },
         {
-          "description": "A copy of an exact committed source Surface revision.",
+          "description": "A clone with structure selected at source Surface revision R.\nTemporal provenance was frozen separately at invocation-time native cut C.",
           "type": "object",
           "properties": {
             "source_session": {
@@ -13928,7 +13928,7 @@
               "$ref": "#/$defs/SessionNodeId"
             },
             "source_surface_revision": {
-              "description": "Exact source Surface revision selected before materialization.",
+              "description": "Selected structural source revision R, not an execution timestamp.",
               "$ref": "#/$defs/SurfaceRevision"
             },
             "type": {
@@ -13944,7 +13944,7 @@
           ]
         },
         {
-          "description": "A lineage seeded immediately before one selected user message.",
+          "description": "A lineage structurally narrowed at one selected message boundary.\nTemporal provenance remains bounded to the captured native cut C.",
           "type": "object",
           "properties": {
             "source_session": {
@@ -13956,7 +13956,7 @@
               "$ref": "#/$defs/SessionNodeId"
             },
             "source_surface_revision": {
-              "description": "Exact source Surface revision selected before materialization.",
+              "description": "Selected structural source revision R, not an execution timestamp.",
               "$ref": "#/$defs/SurfaceRevision"
             },
             "source_message": {
@@ -13984,7 +13984,7 @@
       ]
     },
     "SessionUserMessageBoundary": {
-      "description": "One user-message boundary the native product exposes for `/fork` and\n`/tree`. The revision is part of the selection, so later source mutations\ncannot change what the selection means.",
+      "description": "One user-message boundary the native product exposes for `/fork` and\n`/tree`. The revision fixes structural selection; temporal evidence is\ncaptured separately at the copy operation's native read cut C.",
       "type": "object",
       "properties": {
         "surface_revision": {

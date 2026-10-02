@@ -16,7 +16,9 @@ pub(super) fn read(
     conversation: &ConversationId,
     revision: SurfaceRevision,
 ) -> Result<LineageReadCut, ConversationStoreError> {
-    // This first SELECT acquires the SQLite transaction's read snapshot.
+    // This first SELECT linearizes temporal cut C. Selected revision R below
+    // owns structure, not execution time; the same R at a newer C may observe
+    // newer outcomes. Later commits cannot alter this captured (R, C).
     let read_cut = super::reading::cut(connection, conversation)?;
     let (ids, surface_history) = super::replay_surface_history(connection, revision)?;
     let referenced: BTreeSet<_> = surface_history

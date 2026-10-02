@@ -27,11 +27,14 @@ terminal-only predecessor/outcome/clocks, without copying Journal events or
 execution state. Genuinely unowned content creates no turn. Destination-local
 Attempts follow inherited origins.
 
-`ConversationStore::read_lineage_cut` is the sole native lineage-read authority.
-The first SELECT in one SQLite read transaction freezes C. Selected Surface
-history, its Ledger identity closure, completed responses and turn-reading facts
-all come from that transaction. Surface revision selects structure; Journal C
-selects time. A terminal-only predecessor controls placement only after the
+`ConversationStore::read_lineage_cut(R)` is the sole native lineage-read authority
+for `(R, C)`. R is the structural Surface cut; C is the invocation-time temporal
+native read cut, frozen by the first SELECT in one SQLite read transaction.
+Selected Surface history, its Ledger identity closure, completed responses and
+turn-reading facts all come from that transaction. Same R at a newer C may
+intentionally retain a newer outcome or terminal-only turn. R alone is not an
+execution timestamp. Once `(R, C)` is captured, its meaning is immutable.
+A terminal-only predecessor controls placement only after the
 terminal has passed the Journal bound. Publication after C cannot enter a parked
 copy. Live retained output is `InheritedTurnOutcome::IncompleteAtCut`; that enum
 cannot represent Running. Projection has no live timer, invented end timestamp,
@@ -91,6 +94,26 @@ reopen equality and repeated-copy mapping. The terminal loser has no visible
 member and is excluded despite its retained predecessor. The running member
 is copied while the source remains running, and stays incomplete after later
 source settlement.
+
+Two additional native regressions hold one exact R constant across ordered native
+commits/reads, without sleeps:
+
+- `local_runtime::session::tests::same_surface_revision_newer_native_cut_changes_inherited_running_outcome`:
+  identical Surface history, canonical closure and active messages at C1/C2;
+  Journal bounds 2/3; exact source origin `same-r-attempt`; C1's destination exists
+  before cancellation and stays `IncompleteAtCut` without an end clock; C2's
+  destination is genuinely `Cancelled` with the native terminal timestamp.
+- `local_runtime::session::tests::same_surface_revision_newer_native_cut_admits_terminal_only_turn`:
+  identical User predecessor/structure at R; Journal bounds 1/2; terminal-only
+  origin absent at C1 and present/cancelled at C2, located by a synthetic inherited
+  spine immediately after the remapped User.
+
+Both assert exact origin, ordinal 1 / destination cursor 2, returned target/cut,
+member/predecessor identity mapping, reopened C1 equality after source settlement,
+repeated-lineage outcome/location, empty destination Journal/request history and
+zero source read/copy writes or model/Tool work. They prove newer invocations may
+capture newer C for the same R; the three existing channel-gated tests continue
+to prove that later publication cannot mutate an already captured C.
 
 Web regressions:
 
@@ -208,14 +231,25 @@ including the unchanged dark 390px composer focus-corner reference.
 | [workspace-session-browser-linux.png](../web-console/test/e2e/shell.spec.ts-snapshots/workspace-session-browser-linux.png) | Conversation width/rail/current state; sidebar, header and Inspector bounds unchanged. |
 
 
-## Current CI and pinned compiler
+## Hosted CI evidence and pinned compiler
 
-The starting head `12eedc911c978035d3295085c671ec1584627331` completed
-[36947507874](https://github.com/Caismis/rustX/actions/runs/36947507874): quality
-failed; Linux contracts/boundaries, macOS boundaries, protocol, TUI and full Web
-passed. The macOS run includes the previously failing unchanged Bash test. This
-is evidence of that run passing, not proof that compiler pinning fixed Bash.
-Native macOS is unavailable locally; the final pinned commit has not run there yet.
+The final contract pass started at clean head
+`871970ca2f4d791ed66d31771c5fb29552e9df61`, with main/merge base
+`93915c2265746c7c94d07146a51829470f9c4084` (7 ahead / 0 behind).
+[36955707850](https://github.com/Caismis/rustX/actions/runs/36955707850) passed
+quality, Linux contracts/boundaries, protocol, TUI and full Web under the pinned
+compiler. macOS failed only
+`tools::native::bash::tests::stopped_anchor_supervisor_is_contained_by_the_outer`:
+containment reached AnchorStopObserved → AnchorUnwedgeKillAttempt → TerminateSent
+→ AnchorTerminalObserved → InnerExited → FallbackContainment → SIGKILL →
+GroupChildrenReaped → ControlFailure, then timed out awaiting invocation settlement.
+There is no Bash/native-tool source diff in #443. That exact test passed in prior
+PR run [36947507874](https://github.com/Caismis/rustX/actions/runs/36947507874)
+and main run [36854600526](https://github.com/Caismis/rustX/actions/runs/36854600526).
+This is independent intermittent boundary evidence, not proven #443 causality.
+No Bash source, timeout, assertion, platform conditional, retry or skip changed.
+Native macOS is unavailable locally; final-head hosted results are recorded in
+[PR #443](https://github.com/Caismis/rustX/pull/443) after its one normal CI run.
 
 Quality resolved floating stable to rustc 1.99.0 / Clippy 0.1.99. Exact main had
 passed under 1.98.1 and had reproduced the same new diagnostic classes under 1.99.
@@ -230,7 +264,7 @@ Resolved versions: rustc 1.98.1 (48a229cea, 2026-09-01), Cargo 1.98.1
 (797e8a9bc, 2026-08-05), Clippy 0.1.98 (48a229ceae, 2026-09-01), rustfmt
 1.9.0-stable (48a229ceae, 2026-09-01).
 
-## Follow-up acceptance observations
+## Previous repair acceptance observations
 
 No references, tolerances, noise regions or screenshot policy changed in this
 follow-up. Strict normal acceptance found 15 light / 16 dark changed pixels at the
@@ -253,72 +287,78 @@ full Web then passed all 1,323. The earlier runs overlapped native compilation
 and tests. Resource contention is a plausible explanation, not a proved provider
 contract defect; no gate, timeout, assertion or runtime behavior was changed.
 
-## Executed follow-up validation
+## Executed final (R, C) contract validation
 
-Commands use the independent Issue #430 worktree, Rust 1.98.1, Node 24.21.0 and
-pnpm 11.13.1. CARGO_PROFILE_DEV_DEBUG=0 / CARGO_PROFILE_TEST_DEBUG=0 reduce debug
-metadata only. Native/provider/TUI tests require the emulator and use isolated
-TMPDIR=/home/caismis/.cache/rustx-443-tests-tmp to avoid pre-existing ancestor
-workspace files under /tmp. Ambient files and the primary checkout stay untouched.
+All commands ran in the existing independent Issue #430 worktree. Rust remained
+1.98.1; Node 24.21.0 and pnpm 11.13.1 were unchanged. Native/provider/TUI checks
+required the emulator. CARGO_PROFILE_DEV_DEBUG=0 / CARGO_PROFILE_TEST_DEBUG=0
+reduce debug metadata only; assertions, optimization and overflow checks retain
+Cargo defaults. Isolated TMPDIR=/home/caismis/.cache/rustx-443-tests-tmp avoids
+pre-existing ancestor workspace files under /tmp, which were left untouched.
 
-The strengthened live-copy gate was checked again after the full native run.
-Every focused selector discovered at least one test; none was a zero-test pass.
+The first full native and contract-selector runs exited 101 solely because the
+clarified public boundary comment had not yet been regenerated into the checked-in
+schema description. Rust-owned generation corrected five schema descriptions and
+the matching TypeScript boundary comment; no wire shape or fixture changed.
+The focused artifact test and both full commands then passed without assertion,
+timeout, selector or runtime changes. Every focused selector discovered tests.
 
-| Command | Result (exit) |
+Resolved commands (each exit 0): `rustc --version` → 1.98.1 (48a229cea,
+2026-09-01); `cargo --version` → 1.98.1 (797e8a9bc, 2026-08-05);
+`cargo clippy --version` → 0.1.98 (48a229ceae, 2026-09-01);
+`rustfmt --version` → 1.9.0-stable (48a229ceae, 2026-09-01).
+`pnpm --dir protocol/app-server generate` exited 0; generated comments were
+reviewed and staged before the clean drift check.
+
+| Command | Final result (exit) |
 | --- | --- |
-| `rustc --version` / `cargo --version` / `cargo clippy --version` / `rustfmt --version` | Versions above; all 0 |
 | `cargo fmt --all -- --check` | Pass (0) |
-| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Pass (0), 1.98.1 |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Pass (0) |
 | `cargo build --bins --all-features --locked` | Pass (0) |
-| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | Pass (0): 4,070 passed, 8 ignored |
-| `pnpm --dir protocol/app-server generate` | Pass (0), v30 schema/types/fixtures |
-| `pnpm --dir protocol/app-server check` | Pass (0), no artifact drift |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | Pass (0): 4,072 passed, 8 existing ignored |
+| `pnpm --dir protocol/app-server check` | Pass (0) |
 | `pnpm --dir protocol/app-server typecheck` | Pass (0) |
 | `pnpm --dir web-console typecheck` | Pass (0) |
-| `pnpm --dir web-console test` | Final pass (0): 71 files, 1,323 tests; earlier concurrent run had 1 existing timeout |
+| `pnpm --dir web-console test` | Pass (0): 1,323 tests / 71 files |
 | `pnpm --dir web-console check:i18n` | Pass (0) |
-| `pnpm --dir web-console check:provenance` | Pass (0): 147 source records, 131 package notices |
-| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | Fail (1): 144 passed, 2 strict existing focus-corner mismatches, 10.7 minutes; byte-identical reviewed-head reproduction above |
+| `pnpm --dir web-console check:provenance` | Pass (0): 147 source records / 131 notices |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | Pass (0): 146 tests, strict pinned image; no reference updates |
 | `pnpm --dir tui typecheck` | Pass (0) |
-| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | Final pass (0): 895 tests, 96 suites; earlier concurrent run 894 pass / 1 gate failure |
-| `git diff --check` / `git diff --cached --check` | Pass (0) |
-
-Exact current Linux CI selectors and prerequisites (same pinned compiler and
-provider-required environment where the workflow specifies it):
-
-| Command | Result (exit) |
-| --- | --- |
-| `cargo build --bins` | Pass (0), default-feature executable prerequisite |
-| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | Pass (0): 3,261 passed, 3 ignored |
-| `cargo test --test contracts --test provider --all-features` | Pass (0): 196 passed, 5 ignored |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | Pass (0): 895 tests / 96 suites |
+| `git diff --check` | Pass (0) |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass (0) |
+| `cargo build --bins` | Pass (0) |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | Pass (0): 3,263 passed, 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features` | Pass (0): 196 passed, 5 existing ignored |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::` | Pass (0): 194 passed |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | Pass (0): 419 passed |
-| `cargo run --example check_test_lanes -- --job rust-contracts` | Pass (0), actual workflow/Cargo discovery |
-| `cargo run --example check_test_lanes -- --job rust-boundaries` | Pass (0), actual workflow/Cargo discovery |
-| `cargo build --bin rustx` | Pass (0), actual TUI prerequisite |
-| `uv sync --frozen` / `uv run --frozen pytest` in `test-support/fake-provider` | Pass (0): 51 tests |
-| `pnpm --dir dev typecheck` / `pnpm --dir dev test` | Pass (0): 38 tests |
+| `cargo run --example check_test_lanes -- --job rust-contracts` | Pass (0) |
+| `cargo run --example check_test_lanes -- --job rust-boundaries` | Pass (0) |
+| `cargo build --bin rustx` | Pass (0) |
+| `uv sync --frozen` | Pass (0) |
+| `uv run --frozen pytest` | Pass (0): 51 tests |
+| `pnpm --dir dev typecheck` | Pass (0) |
+| `pnpm --dir dev test` | Pass (0): 38 tests |
+| `cargo test --lib --all-features --locked same_surface_revision_newer_native_cut_changes_inherited_running_outcome` | Pass (0): 1 passed |
+| `cargo test --lib --all-features --locked same_surface_revision_newer_native_cut_admits_terminal_only_turn` | Pass (0): 1 passed |
+| `cargo test --lib --all-features --locked running_lineage_cut_retains_incomplete_origin_without_execution` | Pass (0): 1 passed |
+| `cargo test --lib --all-features --locked terminal_only_publication_loses_frozen_lineage_copy_race` | Pass (0): 1 passed |
+| `cargo test --lib --all-features --locked terminal_only_publication_wins_frozen_lineage_copy_race` | Pass (0): 1 passed |
+| `cargo test --lib --all-features --locked local_runtime::session::tests` | Pass (0): 139 passed, 1 existing ignored |
+| `cargo test --lib --all-features --locked durable::sqlite::reading_tests` | Pass (0): 6 passed |
+| `cargo test --lib --all-features --locked runtime_client::response::tests` | Pass (0): 20 passed |
+| `cargo test --lib --all-features --locked goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_settlement` | Pass (0): 1 passed |
+| `cargo test --lib --all-features --locked app_server::schema::tests::committed_rust_artifacts_are_current` | Pass (0): 1 passed |
+| `pnpm --dir web-console exec vitest run test/reading-navigation.test.ts test/turn-navigator.test.tsx test/scroll.test.tsx test/turn-process.test.tsx test/conversation-width.test.tsx` | Pass (0): 65 tests / 5 files |
 
-Native macOS selectors cannot execute as macOS on this Linux host. The existing
-reviewed-head macOS lane passed all of its exact selectors and its discovery
-audit; final pinned-head macOS results are not claimed.
+Both frozen provider commands run in `test-support/fake-provider`. Exact Linux
+lane selectors and their executable prerequisites appear above; the normal
+hosted CI uses the unchanged native macOS selectors/discovery audit. Linux local
+results are not claimed as macOS evidence. Final-head hosted conclusions are
+recorded in PR #443 after one normal run.
 
-Focused discovery and execution:
-
-| Command | Result (exit) |
-| --- | --- |
-| `cargo test --lib --all-features --locked local_runtime::session::tests` | Pass (0): 137 passed, 1 ignored |
-| `cargo test --lib --all-features --locked running_lineage_cut_retains_incomplete_origin_without_execution` | Pass (0): 1 discovered test, strengthened pre-settlement copy gate |
-| `cargo test --lib --all-features --locked terminal_only_publication_loses_frozen_lineage_copy_race` | Pass (0): 1 discovered test |
-| `cargo test --lib --all-features --locked terminal_only_publication_wins_frozen_lineage_copy_race` | Pass (0): 1 discovered test |
-| `cargo test --lib --all-features --locked durable::sqlite::reading_tests` | Pass (0): 6 discovered tests |
-| `cargo test --lib --all-features --locked runtime_client::response::tests` | Pass (0): 20 discovered tests |
-| `cargo test --lib --all-features --locked goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_settlement` | Pass (0): 1 discovered real continuation test |
-| `pnpm --dir web-console exec vitest run test/reading-navigation.test.ts test/turn-navigator.test.tsx test/scroll.test.tsx test/turn-process.test.tsx test/conversation-width.test.tsx` | Pass (0): 65 tests, 5 files |
-| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui exec node --test --test-name-pattern='native child transcript websocket' test/integration.test.ts` | Pass (0): 1 discovered test |
-
-The export-only screenshot comparison used the exact reviewed source and the
-same image, with alternate fixture/preview ports. The isolated two composer tests
-passed; the preceding-Agent-state comparison reproduced both PNGs byte-for-byte.
-Its four accessibility failures were missing archive-native binary prerequisites,
-not executions used to certify this worktree. No screenshot baseline was written.
+All 146 strict browser tests passed in this pass, including distant reading,
+detached/latest follow, streaming, measured width and both locales. The previous
+local focus-corner variation did not reproduce. No screenshot references, noise
+regions, tolerances or product geometry changed. The rail, width implementation,
+ChatViewport scroll ownership and IncompleteAtCut Web/TUI behavior remain unchanged.

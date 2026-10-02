@@ -594,7 +594,10 @@ impl SessionController {
     ) -> Result<SessionSnapshot, SessionError> {
         self.catalog.lock().await.set_current_node(id, Some(node))
     }
-    /// Clone an exact committed revision into an independent Session.
+    /// Clone structure through Surface revision R into an independent Session.
+    /// `read_lineage_cut(R)` captures invocation-time native cut C for temporal
+    /// evidence. Repeating R at a newer C may inherit a newer historical outcome;
+    /// later source activity cannot alter the captured (R, C).
     /// # Errors
     /// Identity, allocation and storage failures are returned without fallback.
     pub async fn clone_session(
@@ -614,6 +617,8 @@ impl SessionController {
         .await
     }
     /// Branch an explicitly addressed Session graph at a user-message boundary.
+    /// The boundary narrows structure through R; temporal facts remain bounded
+    /// by invocation-time C captured by the native lineage read.
     /// # Errors
     /// Unknown identities/boundaries and allocation conflicts fail closed.
     pub async fn branch_session_node(
@@ -633,9 +638,11 @@ impl SessionController {
         )
         .await
     }
-    /// Copy an exact immutable Surface boundary while retaining source allocation
+    /// Copy structure through R and its boundary while retaining source allocation
     /// access. Source deletion cannot commit before destination publication.
-    /// Concurrent source appends cannot alter the supplied revision's lineage cut.
+    /// Native `read_lineage_cut(R)` captures temporal cut C; concurrent source
+    /// activity cannot alter that frozen (R, C). A later invocation at the same
+    /// R may observe newer temporal facts through its newer C.
     /// # Errors
     /// Unknown identities/boundaries, deletion conflicts and storage failures fail closed.
     pub async fn fork_session(

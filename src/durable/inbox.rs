@@ -1480,7 +1480,9 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         messages: &[MessageId],
     ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError>;
-    /// Linearizes Surface selection, Ledger members and immutable provenance together.
+    /// Captures lineage authority (R, C) in one native snapshot: revision R owns
+    /// structure, invocation-time read cut C owns temporal provenance. The same
+    /// R at a newer C may observe newer outcomes; captured (R, C) is immutable.
     fn read_lineage_cut(
         &self,
         revision: SurfaceRevision,

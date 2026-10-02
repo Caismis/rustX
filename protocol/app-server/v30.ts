@@ -7522,8 +7522,8 @@ export interface SessionNode {
 }
 /**
  * One user-message boundary the native product exposes for `/fork` and
- * `/tree`. The revision is part of the selection, so later source mutations
- * cannot change what the selection means.
+ * `/tree`. The revision fixes structural selection; temporal evidence is
+ * captured separately at the copy operation's native read cut C.
  */
 export interface SessionUserMessageBoundary {
   /**

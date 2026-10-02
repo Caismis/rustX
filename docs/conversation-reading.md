@@ -28,19 +28,30 @@ requests or executable state are copied. An interrupted retained process is a
 turn even when it has no finalized response; genuinely unowned content remains
 unowned and creates no turn.
 
-`ConversationStore::read_lineage_cut(selected_surface_revision)` returns one
-`LineageReadCut`. Its first SELECT in one SQLite read transaction is the
-linearization point C. The transaction captures the Journal/transcript upper
-bounds and reads the selected Surface operation history, its canonical Ledger
-identity closure, completed-response provenance and turn-reading provenance from
-that same source snapshot. Session never assembles this authority from independent
-current-state reads. A requested Surface revision selects structure, rather than
-encoding a Journal timestamp; C supplies the temporal bound. Fork/tree selection
-can further trim that frozen structure but cannot widen C.
+## Lineage copy authority: (R, C)
 
-Message-backed turns retain only members in that canonical closure. Terminal-only
-turns require a native terminal committed at or before C's Journal bound; their
-canonical predecessor then decides structural prefix membership and placement.
+R is the selected `SurfaceRevision`, the structural Surface cut. C is the
+invocation-time native `ConversationReadCut`, the temporal read cut.
+`ConversationStore::read_lineage_cut(R)` returns one `LineageReadCut`; its first
+SELECT in one SQLite read transaction is the linearization point that captures C.
+R fixes Surface operation history, the canonical Ledger identity closure reachable
+from that history, and retained canonical messages. C fixes Attempt start
+visibility, historical outcomes, completed-response provenance and terminal-only
+settlement known at that point. Both are read in that same snapshot. Session never
+assembles this authority from independent current-state reads.
+
+A SurfaceRevision is not a complete execution-history timestamp. Copying the same
+R while retained Attempt A is running at C1 inherits A as `IncompleteAtCut`;
+copying R after A terminalizes at C2 inherits the genuine terminal outcome.
+Similarly, a terminal-only Attempt absent at C1 may be present at C2 even if its
+predecessor already belonged to R. Same R, different C, different inherited
+temporal meaning is intentional. Once `(R, C)` is captured, later source activity
+cannot change that copy, including while copy preparation is parked.
+
+Message-backed turns require a native member through C AND at least one retained
+member in the structural closure. Terminal-only turns require terminal sequence
+`<= C.journal` AND a predecessor in the retained structural prefix (or the native
+before-all-content position); their predecessor then decides placement.
 A predecessor existing before C never admits a terminal committed after C.
 Terminal publication winning the first SELECT is visible; publication losing it
 is excluded even if copy preparation is parked and resumes after settlement.
@@ -54,7 +65,11 @@ It projects as `TurnProcessOutcome::IncompleteAtCut`, with no live timer or
 failure/cancellation claim. Destination execution owns no inherited Attempt,
 request, Tool or settlement. Genuine terminal outcomes before C remain unchanged.
 
-Clone, fork and tree branch all call `lineage_cut` / `remap_seed` and initialize
+Clone copies all selected structure through R and temporal evidence through C.
+A later clone of the same R may differ because it captures a newer C. Fork and
+same-Session tree branch additionally narrow that frozen structure at their
+message boundary; a turn must satisfy both temporal and structural membership.
+They cannot widen C. All three call `lineage_cut` / `remap_seed` and initialize
 one `LineageSeed`. Retained turns keep immutable origin identity in bootstrap
 array order; local destination Attempts follow every inherited turn in local
 `AttemptStarted` order. Retained members map to destination MessageIds and exact

@@ -125,9 +125,13 @@ compares and advances it in the same publication. A stale edit cannot overwrite 
 winner. A committed-but-uncertain write consumes the revision. Name and graph
 metadata do not consume settings revisions.
 
-Fork/clone captures an exact Surface revision and the canonical/history cut
-through that revision. Retained source allocation access excludes deletion until
-publication. Later source appends cannot change the copied boundary. The existing
+Fork/clone authority is `(R, C)`: selected Surface revision R fixes structural
+history/canonical closure, while the first SQLite read in `read_lineage_cut(R)`
+captures invocation-time native C for execution-derived historical facts. R is
+not an execution timestamp; repeating the same R at a newer C may observe a newer
+terminal outcome. A fork/tree boundary further narrows structure without widening
+C. Retained source allocation access excludes deletion until publication. Later
+source activity cannot change a captured `(R, C)`. The existing
 lineage-cut algorithm preserves compaction provenance, historical boundaries,
 identity remapping and transient editor content. A fork prompt is not accepted
 input until explicitly submitted to the destination.

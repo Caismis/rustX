@@ -12,8 +12,12 @@ ConversationStore owns Attempt turn identity/order/location and finite outline/
 window reads. Journal and transcript read-cut coordinates are frozen inclusive
 upper bounds; append-only execution and compaction preserve old addresses.
 Only unreconstructible semantic mutations retire their native mutation epoch.
-ConversationStore reads one transactional `LineageReadCut`: selected Surface
-history/Ledger closure and both provenance domains at one Journal boundary.
+ConversationStore reads one transactional `LineageReadCut` with authority `(R, C)`:
+selected SurfaceRevision R owns structural history/Ledger closure; invocation-time
+native read cut C owns execution-derived historical facts. The first SELECT
+captures C in one SQLite read transaction. R is not an execution timestamp: a
+later copy of the same R may observe newer terminal/response facts at a newer C.
+Once captured, `(R, C)` is immutable. Fork/tree boundaries only narrow its structure.
 Session remaps separate `TurnReadingProvenance`, preserving retained origins and
 member/terminal destination references without copying execution events. Its
 immutable outcome cannot be Running; live-at-cut output becomes IncompleteAtCut.

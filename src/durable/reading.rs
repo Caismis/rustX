@@ -136,8 +136,10 @@ impl From<InheritedTurnOutcome> for TurnProcessOutcome {
     }
 }
 
-/// One durable lineage read. Surface selection and all retained native meaning
-/// are frozen at `read_cut`, acquired in one backend snapshot transaction.
+/// One durable lineage authority (R, C). `surface_revision` R selects structure;
+/// invocation-time `read_cut` C selects temporal execution-derived facts, acquired
+/// by the first read in one backend snapshot transaction. The same R at a newer C
+/// may retain a newer outcome; later source activity cannot change captured (R, C).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageReadCut {
     pub read_cut: ConversationReadCut,
