@@ -262,6 +262,11 @@ cancelled/timed-out/limited work. Automatic continuation admits another Attempt;
 model retries, Loop steps and Tool calls do not. Origins survive lineage in
 native bootstrap order, followed by local Attempt-start order. Retained
 unsuccessful turns cannot become unowned merely for lacking a completed response.
+One native SQLite lineage snapshot cuts Surface/Ledger identities and both
+provenance domains together. Terminal-only membership requires a terminal at or
+before its Journal bound; a retained predecessor cannot admit later settlement.
+Inherited outcomes exclude Running. Retained live-at-cut output is immutable
+IncompleteAtCut, never destination execution ownership or an invented terminal.
 
 A historical outline/window at C remains usable after later append-only facts.
 All entries, response/process decorations and Tool results stay inside C's
@@ -271,6 +276,8 @@ Attachment/runtime replacement cannot authorize an old browser commit. Current
 Attempt identity, historical locate capability and loaded anchor are distinct.
 ChatViewport alone writes automatic Chat scroll positions; a later user intent
 retires older jumps. Presentation width never writes native Session state.
+Outline refresh preserves explicit latest versus historical offset intent;
+returned page offsets cannot silently change that intent at a 64-turn boundary.
 See [conversation reading](conversation-reading.md) for the normative contract.
 
 ## Derived transcript history (FND-05 / Issue #110)

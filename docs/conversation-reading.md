@@ -20,13 +20,39 @@ limited to 240 Unicode characters; no preview is fabricated for a terminal.
 
 `TurnReadingProvenance` is a separate immutable lineage/bootstrap domain from
 `CompletedResponseProvenance` (finalized response, Retry, timing and usage).
-The Session lineage owner captures native Attempt origins in start order and
+The durable owner captures native Attempt origins in start order; Session
 remaps only retained Assistant members and the canonical predecessor of a
-terminal-only location. It preserves outcome and native clock information,
+terminal-only location. It preserves historical outcome and native clock information,
 including failed/interrupted/cancelled/timed-out/limited work. No Journal events,
 requests or executable state are copied. An interrupted retained process is a
 turn even when it has no finalized response; genuinely unowned content remains
 unowned and creates no turn.
+
+`ConversationStore::read_lineage_cut(selected_surface_revision)` returns one
+`LineageReadCut`. Its first SELECT in one SQLite read transaction is the
+linearization point C. The transaction captures the Journal/transcript upper
+bounds and reads the selected Surface operation history, its canonical Ledger
+identity closure, completed-response provenance and turn-reading provenance from
+that same source snapshot. Session never assembles this authority from independent
+current-state reads. A requested Surface revision selects structure, rather than
+encoding a Journal timestamp; C supplies the temporal bound. Fork/tree selection
+can further trim that frozen structure but cannot widen C.
+
+Message-backed turns retain only members in that canonical closure. Terminal-only
+turns require a native terminal committed at or before C's Journal bound; their
+canonical predecessor then decides structural prefix membership and placement.
+A predecessor existing before C never admits a terminal committed after C.
+Terminal publication winning the first SELECT is visible; publication losing it
+is excluded even if copy preparation is parked and resumes after settlement.
+No later Journal or Ledger append can enter the frozen seed.
+
+`InheritedTurnOutcome` has no `Running` variant. Durable output from a source
+Attempt still running at C retains its origin and mapped location with
+`IncompleteAtCut`, without an invented terminal or end timestamp. That immutable
+state remains incomplete after source settlement, reopen and repeated lineage.
+It projects as `TurnProcessOutcome::IncompleteAtCut`, with no live timer or
+failure/cancellation claim. Destination execution owns no inherited Attempt,
+request, Tool or settlement. Genuine terminal outcomes before C remain unchanged.
 
 Clone, fork and tree branch all call `lineage_cut` / `remap_seed` and initialize
 one `LineageSeed`. Retained turns keep immutable origin identity in bootstrap
@@ -116,6 +142,15 @@ cache limits remain 512 entries / 8 MiB; ordinary prepend reads are 64 entries.
 Historical jumps and adjacent pages replace a finite window. Two outstanding
 window reads per Session are permitted; further intents retire older work without
 queuing another read. A same-cut loaded exact anchor avoids another locate read.
+
+Outline paging intent is explicitly `latest` or `page(offset)`, independently of
+the native response's offset. Initial load and automatic start/location/settlement
+refreshes in latest mode omit the offset, so 64→65 and 128→129 select the new final
+page. Older, intermediate newer and ordinal selections establish an explicit
+page; automatic refresh preserves it as live turns arrive. Selecting the newest
+page explicitly restores latest intent. One refresh demand arriving during an
+in-flight outline read is retained and serviced after its reply; streaming text
+deltas create no demand. The cache still holds only one outline page.
 
 Every window read captures the attachment target, connection generation,
 attachment epoch, resync authority, cache epoch and monotonic user reading intent.

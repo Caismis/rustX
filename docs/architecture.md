@@ -12,11 +12,15 @@ ConversationStore owns Attempt turn identity/order/location and finite outline/
 window reads. Journal and transcript read-cut coordinates are frozen inclusive
 upper bounds; append-only execution and compaction preserve old addresses.
 Only unreconstructible semantic mutations retire their native mutation epoch.
-Session lineage owns separate `TurnReadingProvenance`, preserving retained
-successful and unsuccessful origins and member/terminal destination references
-without copying execution events. Runtime Client supplies the live Attempt;
+ConversationStore reads one transactional `LineageReadCut`: selected Surface
+history/Ledger closure and both provenance domains at one Journal boundary.
+Session remaps separate `TurnReadingProvenance`, preserving retained origins and
+member/terminal destination references without copying execution events. Its
+immutable outcome cannot be Running; live-at-cut output becomes IncompleteAtCut.
+Runtime Client supplies the live Attempt;
 Web merges it with bounded outline and loaded anchors. ChatViewport is the sole
 automatic Chat scroll writer. Width remains local presentation state.
+Outline paging records latest versus explicit offset intent, retaining one page.
 See [the reading contract](conversation-reading.md) for exact cut, paging,
 lineage retention, current/locatable distinctions and authority rejection rules.
 

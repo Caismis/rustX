@@ -1416,3 +1416,11 @@ into that window. Surface revision and pending population/aggregate revision are
 removed from this contract. `AttachmentTarget` retains independent runtime/
 attachment authority. The current Attempt may be displayed before a historical
 cursor exists; first native location enables locate without settlement.
+
+`TurnProcessOutcome::IncompleteAtCut` is the immutable presentation of inherited
+output whose source Attempt was live at its lineage cut. It grants no execution
+ownership, live timer or destination settlement obligation. Bootstrap
+`InheritedTurnOutcome` cannot serialize Running. The durable lineage read cuts
+selected Surface/Ledger identities and both provenance domains in one transaction.
+Web outline paging records latest versus explicit offset intent independently of
+the returned page offset; an omitted offset always means native latest.

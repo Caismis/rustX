@@ -24,6 +24,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.98.1"
           components: rustfmt, clippy
 
       # The one Rust cache policy, applied identically to every Rust-bearing
@@ -104,6 +105,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
 
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
@@ -167,6 +170,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
 
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
@@ -263,6 +268,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
 
       # One lineage per lane; see the policy note in the `quality` job. This is
       # the macOS lineage: it shares nothing with any Linux lane, because the
@@ -386,6 +393,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+
       # The real-child integration suite drives the shared provider emulator,
       # so this job needs the same Python 3.12 + uv toolchain as the Rust one.
       - name: Install Python 3.12
@@ -442,9 +454,8 @@ jobs:
         run: pnpm typecheck
 
       # One lineage per lane; see the policy note in the `quality` job. This
-      # lane has no toolchain action of its own — it uses the runner's
-      # preinstalled Rust, which the cache key still identifies by `rustc -vV`
-      # — so the cache step sits immediately before the one cargo command.
+      # pinned toolchain is installed before this cache step, just as in every
+      # other Cargo-bearing lane; the resolved compiler remains part of its key.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -469,6 +480,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
       # One lineage per lane; see the policy note in the `quality` job. This
       # lane is Rust-bearing despite its Node surface: `pnpm check` shells out
       # to `cargo run --example generate_app_server_protocol`.
@@ -534,6 +547,8 @@ jobs:
       # These tools serve only the browser integration fixture. Rust-only jobs
       # above remain independent of Node and of this frontend package.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

@@ -243,7 +243,7 @@ was not edited; release tracking should link #411 and this current contract.
 
 ### Private admitted authority
 
-SQLite schema 48 stores the whole executable `DurableAgentAuthority` and its
+SQLite schema 49 stores the whole executable `DurableAgentAuthority` and its
 credential capture in the parent Conversation's private `agent_authorities`
 table. Admission atomically commits that private row and a public AgentId
 reference. Event Journal ownership facts cannot serialize profiles, Tool
