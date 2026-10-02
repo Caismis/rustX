@@ -1161,7 +1161,7 @@ export class AppServerClient {
   private readingAuthority(id: string, windowBound = true) {
     const target = this.target(id), generation = this.state.generation;
     const authority = this.readingAuthorities.get(id), epoch = this.attachmentEpochs.get(id), historyEpoch = this.state.views[id]?.history?.epoch, navigation = this.navigation.capture();
-    return () => this.current(generation) && navigation() && this.readingAuthorities.get(id) === authority && (!windowBound || this.state.views[id]?.history?.epoch === historyEpoch) && this.attachmentEpochs.get(id) === epoch
+    return () => this.current(generation) && (!windowBound || navigation()) && this.readingAuthorities.get(id) === authority && (!windowBound || this.state.views[id]?.history?.epoch === historyEpoch) && this.attachmentEpochs.get(id) === epoch
       && this.state.views[id]?.attachment === 'attached' && this.state.views[id]?.attachmentIntent === 'wanted'
       && sameTarget(this.state.views[id]?.target, target);
   }
@@ -1484,5 +1484,5 @@ export class AppServerClient {
 }
 
 function sameReadCut(a: ConversationTurnPage['cut'], b: ConversationTurnPage['cut']) {
-  return a.conversation_id === b.conversation_id && a.journal === b.journal && a.transcript === b.transcript && a.surface_revision === b.surface_revision && a.pending_count === b.pending_count && a.pending_revision === b.pending_revision;
+  return a.conversation_id === b.conversation_id && a.journal === b.journal && a.transcript === b.transcript && a.mutation_revision === b.mutation_revision;
 }

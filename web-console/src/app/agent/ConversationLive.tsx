@@ -35,8 +35,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
   if (!view) return null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})} latest={() => client.latestTrace(view.id)}/>
-    : <div style={{position:'relative',display:'flex',flexDirection:'column',flex:1,minHeight:0,minWidth:0}}>
-      <TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
+    : <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} historical={view.history?.mode==='historical'} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+      overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         const intent=viewport.current?.beginNavigation();
         if(intent){
           const work=client.navigateTurn(view.id,turn,intent.current);
@@ -46,12 +46,12 @@ export function ConversationLive({ client, sessionId, mode, disabled, onHistoric
             return current?.target===view.target && current.attachment==='attached' && current.turnNavigation?.intent===clientIntent;
           });});
         }
-      }}/>
-      <ChatViewport ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} historical={view.history?.mode==='historical'} latestLabel={tx('agent:agent-transcript.return-to-latest')}
-        onLatest={()=>client.latestTranscript(view.id)} onUserIntent={()=>client.userScrolled(view.id)} onActiveAnchor={setActive}>
+      }}/>}
+      latestAnchor={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
+      onLatest={()=>client.latestTranscript(view.id)} onUserIntent={()=>client.userScrolled(view.id)} onActiveAnchor={setActive}>
       <AgentTranscript snapshot={view} history={view.history} loadEarlier={() => void client.loadEarlier(view.id).catch(() => {})} loadNewer={()=>void client.loadNewer(view.id).catch(()=>{})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled} onHistorical={onHistorical}/>
       <ConversationActivity client={client} sessionId={view.id}/>
-    </ChatViewport></div>;
+    </ChatViewport>;
 }
 function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const snapshot = useClientSelector(client, state => {

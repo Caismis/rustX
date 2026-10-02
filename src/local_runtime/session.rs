@@ -605,6 +605,7 @@ pub struct HistoricalConversationSnapshot {
     pub surface_history: Vec<SurfaceOp>,
     /// Finalized response meaning, including inherited origins; never execution state.
     pub completed_responses: Vec<crate::durable::response::CompletedResponseProvenance>,
+    pub turns: Vec<crate::durable::reading::TurnReadingProvenance>,
 }
 
 /// A private, already-seeded destination waiting for catalog publication.
@@ -2650,6 +2651,19 @@ fn lineage_cut(
         &canonical,
         &retained,
         &source.completed_responses,
+        &source
+            .turns
+            .iter()
+            .filter(|turn| {
+                !turn.process_message_ids.is_empty()
+                    || boundary.is_none()
+                    || turn
+                        .preceding_message_id
+                        .as_ref()
+                        .is_some_and(|id| referenced.contains(id))
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
     )
 }
 
@@ -2693,6 +2707,7 @@ pub(crate) fn remap_seed(
     canonical: &[MessageBlock],
     surface_history: &[SurfaceOp],
     completed_responses: &[crate::durable::response::CompletedResponseProvenance],
+    turns: &[crate::durable::reading::TurnReadingProvenance],
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
@@ -2755,8 +2770,28 @@ pub(crate) fn remap_seed(
             Some(response)
         })
         .collect();
+    let turns = turns
+        .iter()
+        .filter_map(|turn| {
+            let mut copied = turn.clone();
+            copied.process_message_ids = turn
+                .process_message_ids
+                .iter()
+                .filter_map(|id| message_ids.get(id).cloned())
+                .collect();
+            if !turn.process_message_ids.is_empty() && copied.process_message_ids.is_empty() {
+                return None;
+            }
+            copied.preceding_message_id = turn
+                .preceding_message_id
+                .as_ref()
+                .and_then(|id| message_ids.get(id).cloned());
+            Some(copied)
+        })
+        .collect();
     LineageSeed::replayed(canonical, surface_history)
         .and_then(|seed| seed.with_completed_responses(responses))
+        .and_then(|seed| seed.with_turns(turns))
         .map_err(|error| SessionError::Seed {
             detail: error.to_string(),
         })
@@ -3919,6 +3954,7 @@ model = "provider/model"
         revision: SurfaceRevision,
     ) -> HistoricalConversationSnapshot {
         HistoricalConversationSnapshot {
+            turns: store.load_turn_provenance().unwrap(),
             completed_responses: crate::runtime_client::response::lineage_provenance(
                 store,
                 &store.load_canonical().unwrap(),
@@ -4012,6 +4048,150 @@ model = "provider/model"
         .unwrap();
         assert_eq!(retried.load_canonical().unwrap().len(), 2);
         assert_eq!(store.load_canonical().unwrap(), history);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One shared source and exact locations across every Session lineage operation.
+    fn clone_fork_and_branch_share_native_unsuccessful_turn_provenance() {
+        use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+        use crate::runtime::identity::{AttemptId, EventId};
+        let (_directory, catalog, _config) = open_catalog();
+        let (conversation, session, _) = append_history(&catalog, &[]);
+        let store = store_for(&catalog, &session, &conversation);
+        let event = |name: &str, kind| RuntimeEventEnvelope {
+            schema_version: 1,
+            event_id: EventId::new(format!(
+                "reading-event-{}",
+                store.presentation_frontier().unwrap() + 1
+            )),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(AttemptId::new(name)),
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: kind,
+        };
+        store.append_canonical(&user("input", "input")).unwrap();
+        store
+            .append_event(event(
+                "interrupted",
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("interrupted"),
+                },
+            ))
+            .unwrap();
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("partial"),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: "partial".into(),
+                    })],
+                }),
+                event(
+                    "interrupted",
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("partial"),
+                    },
+                ),
+            )
+            .unwrap();
+        store
+            .append_event(event(
+                "interrupted",
+                RuntimeEvent::AttemptCancelled {
+                    attempt_id: AttemptId::new("interrupted"),
+                    reason: crate::runtime::types::CancellationReason::UserRequested,
+                },
+            ))
+            .unwrap();
+        store
+            .append_event(event(
+                "empty",
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("empty"),
+                },
+            ))
+            .unwrap();
+        store
+            .append_event(event(
+                "empty",
+                RuntimeEvent::AttemptTimedOut {
+                    attempt_id: AttemptId::new("empty"),
+                },
+            ))
+            .unwrap();
+        store
+            .append_canonical(&user("boundary", "next input"))
+            .unwrap();
+        let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+        let clone = catalog.prepare_clone_session(&state(), &source).unwrap();
+        let (fork, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("boundary"),
+                super::LineageSide::Before,
+            )
+            .unwrap();
+        let (branch, _) = catalog
+            .prepare_tree_node(
+                &session,
+                &state(),
+                &source,
+                &MessageId::new("boundary"),
+                super::LineageSide::Before,
+            )
+            .unwrap();
+        for prepared in [&clone, &fork, &branch] {
+            let copied = SqliteConversationStore::open_existing(
+                prepared.conversation_id.clone(),
+                &prepared.database_path,
+            )
+            .unwrap();
+            let outline = copied.conversation_turns(None, 0, 64).unwrap();
+            assert_eq!(
+                outline
+                    .turns
+                    .iter()
+                    .map(|turn| (
+                        &turn.id.conversation_id,
+                        turn.id.attempt_id.as_str(),
+                        turn.ordinal,
+                        turn.cursor.unwrap().get()
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    (&conversation, "interrupted", 1, 2),
+                    (&conversation, "empty", 2, 3)
+                ]
+            );
+            for turn in &outline.turns {
+                let window = copied
+                    .conversation_window(
+                        &crate::durable::reading::ConversationWindowAt::Turn {
+                            id: turn.id.clone(),
+                            cut: outline.cut.clone(),
+                        },
+                        1,
+                    )
+                    .unwrap();
+                assert_eq!(window.page.entries[0].cursor, turn.cursor.unwrap());
+            }
+            assert_eq!(copied.presentation_frontier().unwrap(), 0);
+        }
+        let (empty, _) = catalog
+            .prepare_fork_session(
+                &state(),
+                &source,
+                &MessageId::new("input"),
+                super::LineageSide::Before,
+            )
+            .unwrap();
+        let empty =
+            SqliteConversationStore::open_existing(empty.conversation_id, &empty.database_path)
+                .unwrap();
+        assert_eq!(empty.conversation_turns(None, 0, 64).unwrap().turns, []);
     }
 
     /// The one Session lifecycle classification every product path shares:

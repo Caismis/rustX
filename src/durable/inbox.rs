@@ -302,7 +302,7 @@ pub(crate) fn inbound_adoption_event(
 /// order is the ordinary case ([`LineageSeed::history`]), and it is what
 /// every conversation that has never been compacted produces. The seed is
 /// intentionally limited to canonical/domain messages, Surface history, and
-/// immutable completed-response provenance. Execution facts remain owned by the source `ConversationId`
+/// immutable completed-response and turn-reading provenance. Execution facts remain owned by the source `ConversationId`
 /// and are not copied into the destination. In particular, the pending
 /// unresolved-output carryover pointer is execution-recovery residue, not
 /// lineage meaning: it is never a seed field, and a destination starts with
@@ -313,6 +313,7 @@ pub struct LineageSeed {
     surface_history: Vec<SurfaceOp>,
     surface: Vec<MessageId>,
     completed_responses: Vec<super::response::CompletedResponseProvenance>,
+    turns: Vec<super::reading::TurnReadingProvenance>,
 }
 
 impl LineageSeed {
@@ -336,6 +337,7 @@ impl LineageSeed {
             surface_history,
             surface,
             completed_responses: Vec::new(),
+            turns: Vec::new(),
         }
     }
 
@@ -440,6 +442,7 @@ impl LineageSeed {
             surface_history,
             surface,
             completed_responses: Vec::new(),
+            turns: Vec::new(),
         })
     }
 
@@ -485,6 +488,49 @@ impl LineageSeed {
         }
         self.completed_responses = responses;
         Ok(self)
+    }
+
+    /// Attach native reading ownership; unowned canonical content creates no turn.
+    /// # Errors
+    /// Rejects duplicate owners, foreign/duplicate members and invalid terminal locations.
+    pub fn with_turns(
+        mut self,
+        turns: Vec<super::reading::TurnReadingProvenance>,
+    ) -> Result<Self, ConversationStoreError> {
+        let mut owners = std::collections::BTreeSet::new();
+        let mut members = std::collections::BTreeSet::new();
+        for turn in &turns {
+            let unique_owner =
+                owners.insert((turn.id.conversation_id.clone(), turn.id.attempt_id.clone()));
+            let valid_members = turn.process_message_ids.iter().all(|id| {
+                members.insert(id.clone()) && self.canonical.iter().any(|message| {
+                    matches!(message, MessageBlock::Assistant(message) if &message.id == id)
+                })
+            });
+            let valid_predecessor = turn.preceding_message_id.as_ref().is_none_or(|id| {
+                self.canonical
+                    .iter()
+                    .any(|message| crate::conversation::message_id_of(message) == *id)
+            });
+            let valid_location = !turn.process_message_ids.is_empty()
+                || !matches!(
+                    turn.outcome,
+                    super::reading::TurnProcessOutcome::Running
+                        | super::reading::TurnProcessOutcome::Completed
+                );
+            if !unique_owner || !valid_members || !valid_predecessor || !valid_location {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid inherited turn provenance".into(),
+                ));
+            }
+        }
+        self.turns = turns;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn turns(&self) -> &[super::reading::TurnReadingProvenance] {
+        &self.turns
     }
 
     /// Finalized historical responses; not destination execution evidence.
@@ -657,6 +703,10 @@ pub struct RequestSnapshotPage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TranscriptItem {
+    /// Minimal retained lineage terminal, not a copied Event Journal.
+    InheritedTurn {
+        provenance: super::reading::TurnReadingProvenance,
+    },
     /// Terminal execution fact, resolved from its Event Journal owner.
     AttemptTerminal { event: RuntimeEventEnvelope },
     /// A user, Assistant, or Tool message resolved from the canonical owner.
@@ -1430,6 +1480,17 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         messages: &[MessageId],
     ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError>;
+    /// Native reading origins in immutable inherited/local start order, for lineage only.
+    fn load_turn_provenance(
+        &self,
+    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError>;
+    fn load_inherited_turns(
+        &self,
+    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError>;
+    fn inherited_turns_for(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError>;
     /// Private executable Agent authority, never copied into public history or events.
     fn load_agent_authority(
         &self,
@@ -1641,7 +1702,8 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
         self.initialize_lineage(
             &LineageSeed::history(messages.to_vec())
-                .with_completed_responses(self.load_inherited_responses()?)?,
+                .with_completed_responses(self.load_inherited_responses()?)?
+                .with_turns(self.load_inherited_turns()?)?,
         )
     }
 

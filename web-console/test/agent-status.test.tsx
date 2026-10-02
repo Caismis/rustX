@@ -143,7 +143,7 @@ describe('single-anchor Agent Status placement', () => {
     const ui = render(<AgentTranscript snapshot={live} history={replaceTranscript({ entries: CONVERSATION(), next_cursor: '0' })} loadEarlier={() => {}} />);
     expect(screen.getByRole('button', { name: 'Load earlier' })).toBeTruthy();
     expect(screen.getByLabelText('Streaming response').textContent).toContain('Still answering');
-    expect(anchorKeys(ui.container)).toEqual(['message:u1', 'message:a1', 'message:t1', 'message:live']);
+    expect(anchorKeys(ui.container)).toEqual(['message:u1', 'message:a1', 'message:t1', 'turn:["conversation-A","attempt-A"]', 'message:live']);
     expect(annotations(ui.container)).toEqual([['s2', 'message:t1']]);
   });
 });

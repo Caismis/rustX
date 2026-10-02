@@ -67,16 +67,7 @@ pub struct TurnProcessView {
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnProcessOutcome {
-    Running,
-    Completed,
-    Cancelled,
-    Failed,
-    TimedOut,
-    LimitExceeded,
-}
+pub use crate::durable::reading::TurnProcessOutcome;
 
 pub(crate) fn terminal_turn(
     event: crate::events::types::RuntimeEventEnvelope,
@@ -254,7 +245,9 @@ fn decorate_projection(
     } = project(store, &wanted, &terminal_attempts, through, scopes)?;
     for entry in &mut page.entries {
         if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item {
-            if let Some(owner) = terminals.get(&turn.attempt_id) {
+            if turn.conversation_id == *store.conversation_id()
+                && let Some(owner) = terminals.get(&turn.attempt_id)
+            {
                 *turn = owner.clone();
             }
             entry.turn_process = Some(turn.clone());
@@ -376,22 +369,32 @@ fn project(
         .map(|response| (response.closing_message_id.clone(), response))
         .collect();
     let mut processes = BTreeMap::new();
-    for response in completed.values() {
-        let owner = process_view(
+    for turn in store.inherited_turns_for(&wanted.iter().cloned().collect::<Vec<_>>())? {
+        if turn
+            .process_message_ids
+            .iter()
+            .all(|id| !wanted.contains(id))
+        {
+            continue;
+        }
+        let completed_response = completed.values().find(|response| {
+            response.origin.conversation_id == turn.id.conversation_id
+                && response.origin.attempt_id == turn.id.attempt_id
+        });
+        if let Some(mut owner) = process_view(
             store,
-            &response.origin.attempt_id,
-            &response.process_message_ids.iter().cloned().collect(),
-            Some(response.closing_message_id.clone()),
+            &turn.id.attempt_id,
+            &turn.process_message_ids.iter().cloned().collect(),
+            completed_response.map(|response| response.closing_message_id.clone()),
+            turn.started_at,
+            turn.ended_at,
+            turn.outcome,
             None,
-            Some(response.completed_at),
-            TurnProcessOutcome::Completed,
-            None,
-        )?;
-        if let Some(mut owner) = owner {
-            owner.conversation_id = response.origin.conversation_id.clone();
-            for id in &response.process_message_ids {
-                if wanted.contains(id) {
-                    processes.insert(id.clone(), owner.clone());
+        )? {
+            owner.conversation_id = turn.id.conversation_id;
+            for id in turn.process_message_ids {
+                if wanted.contains(&id) {
+                    processes.insert(id, owner.clone());
                 }
             }
         }

@@ -5,10 +5,12 @@ interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
 interface ViewportProps {
   children: ReactNode;
+  overlay?: ReactNode;
   latestLabel?: string;
   historical?: boolean;
   onLatest?: () => void;
   onUserIntent?: () => void;
+  latestAnchor?: string;
   onActiveAnchor?: (key: string | undefined) => void;
 }
 /** One frame owns every automatic Chat correction. Native user scrolling
@@ -72,7 +74,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     if (!el) return;
     const turns = this.rows().filter(row => row.dataset.chatAnchorKey?.startsWith('turn:'));
     const top = el.getBoundingClientRect().top;
-    const key = turns.find(row => row.getBoundingClientRect().bottom > top)?.dataset.chatAnchorKey;
+    const key = this.following && this.props.latestAnchor ? this.props.latestAnchor : turns.find(row => row.getBoundingClientRect().bottom > top)?.dataset.chatAnchorKey;
     if (key !== this.active) { this.active = key; this.props.onActiveAnchor?.(key); }
   };
   private onScroll = () => {
@@ -136,7 +138,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     this.frame = undefined;
   }
   render() {
-    return <div className="chat-reading-surface" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}><div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}
+    return <div className="chat-reading-surface" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>{this.props.overlay}<div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}
       onClickCapture={event => { if ((event.target as HTMLElement).closest('[data-chat-latest]')) this.returnToBottom(); }}>
       <div ref={this.content}>{this.props.children}</div>
     </div>{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" onClick={this.returnToBottom}>{this.props.latestLabel}</button>}</div>;

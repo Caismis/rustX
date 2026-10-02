@@ -162,7 +162,7 @@ export class Server {
       }
       case 'session/configuration': result = { type: 'session_configuration', application: null }; break;
       case 'configuration/sourcesRead': result = { type: 'source_settings', projection: cfg3Source() }; break;
-      case 'session/turns': result = { type: 'conversation_turns', page: { cut: { conversation_id: this.target(id, socket).conversation_id, journal: '0', transcript: '0', surface_revision: '0', pending_count: '0', pending_revision: '0' }, offset: 0, total: 0, turns: [] } }; break;
+      case 'session/turns': result = { type: 'conversation_turns', page: { cut: { conversation_id: this.target(id, socket).conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, offset: 0, total: 0, turns: [] } }; break;
       case 'session/settings': result = { type: 'settings', revision: '0', settings: { cwd: `/workspace/${id}` } }; break;
       case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)!, cursor: String(this.cursor) }; break;
       case 'session/subscribe': result = { type: 'subscribed', after_cursor: request.params.after_cursor }; break;
@@ -214,6 +214,11 @@ export class Server {
   invalidateSummary(id: string, socket = this.socket, catalog_changed = false) {
     socket.deliver({ jsonrpc: '2.0', method: 'session/summaryInvalidated', params: { session_id: id, catalog_changed } });
   }
+  /** A real read-domain append preserves the currently admitted Attempt identity/phase. */
+  durableUpdate(id: string, next: RuntimeClientSnapshot) {
+    this.snapshots.set(id,next);this.cursor++;
+    this.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:this.target(id),cursor:String(this.cursor),event:{type:'read_domains_updated',transcript:next.transcript,todos:next.todos}}});
+  }
   async update(id: string, next: RuntimeClientSnapshot) {
     this.snapshots.set(id, next); this.cursor++;
     this.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: this.target(id), cursor: String(this.cursor), event: { type: 'attempt_started', attempt_id: 'attempt-A' } } });
@@ -221,4 +226,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v30').RuntimeClientTranscriptPage, conversation_id = 'conv-A') { return { page, cut: { conversation_id, journal: '0', transcript: '0', surface_revision: '0', pending_count: '0', pending_revision: '0' }, newer_cursor: null, target: null, target_cursor: null }; }
+export function readingWindow(page: import('../../protocol/app-server/v30').RuntimeClientTranscriptPage, conversation_id = 'conv-A') { return { page, cut: { conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, newer_cursor: null, target: null, target_cursor: null }; }

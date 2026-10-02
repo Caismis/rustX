@@ -1251,7 +1251,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "24b01f94c926e4683d23288ea8395b82f650083fa960ecb50d732d23a8160cd5",
+      "local_sha256": "0806728ce1b4b600e832ca6ab8a9de5f7684b52b81a4cd683e786bac5b60ee49",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -3193,7 +3193,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "582923b7647671891a524dc22177d8519e13414d85b01f1af10e2dd424bfa732"
+      "local_sha256": "805ab9a4236eb2e055480ea2eca9740b7119b231c39443d25032068e29286892"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3444,6 +3444,7 @@
         "../../client/transcript",
         "../../locale/react",
         "./TurnNavigator.module.css",
+        "./turn-rail-items",
         "react"
       ],
       "excluded_dependencies": [
@@ -3451,7 +3452,7 @@
         "Cordis runtime",
         "Harness scroll ownership"
       ],
-      "local_sha256": "c9a9b232e9587946dcc09fc09c42aa567dd8a6209ba6f6213ae0f4324a1a3f49"
+      "local_sha256": "e4604a839c633b8d4d6317881590314b7e1755d96e92e5b7b49cbb809d0226e6"
     }
   ],
   "inspected_only": [

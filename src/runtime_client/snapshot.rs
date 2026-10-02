@@ -414,6 +414,11 @@ fn transcript_entry_view(
     entry: crate::durable::TranscriptEntry,
 ) -> Result<RuntimeClientTranscriptEntry, String> {
     let item = match entry.item {
+        crate::durable::TranscriptItem::InheritedTurn { provenance } => {
+            RuntimeClientTranscriptItem::AttemptTerminal {
+                turn: inherited_terminal(provenance, entry.cursor.into()),
+            }
+        }
         crate::durable::TranscriptItem::AttemptTerminal { event } => {
             RuntimeClientTranscriptItem::AttemptTerminal {
                 turn: super::response::terminal_turn(event, entry.cursor.into())?,
@@ -507,6 +512,24 @@ fn transcript_entry_view(
             .collect(),
         item,
     })
+}
+
+fn inherited_terminal(
+    provenance: crate::durable::reading::TurnReadingProvenance,
+    cursor: RuntimeClientTranscriptCursor,
+) -> super::response::TurnProcessView {
+    super::response::TurnProcessView {
+        conversation_id: provenance.id.conversation_id,
+        attempt_id: provenance.id.attempt_id,
+        event_id: None,
+        control_cursor: cursor,
+        final_message_id: None,
+        message_count: 0,
+        tool_call_count: 0,
+        outcome: provenance.outcome,
+        started_at: provenance.started_at,
+        ended_at: provenance.ended_at,
+    }
 }
 
 /// Converts one live requested interaction audit envelope into its client

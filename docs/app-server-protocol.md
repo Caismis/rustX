@@ -1408,3 +1408,11 @@ Root `session/transcript` uses `ConversationWindowAt` (`latest`, `older`, `newer
 `session/turns` supplies the ordered, paged native Attempt outline. See
 [conversation-reading.md](conversation-reading.md) for normative identity, lineage,
 read-cut validation, exact location, bounds and stale-target semantics.
+
+The v30 `ConversationReadCut` fields are `conversation_id`, inclusive `journal`
+and `transcript` bounds, and `mutation_revision`. Append-only growth accepts and
+returns the requested cut unchanged; it never splices newer Tool/response facts
+into that window. Surface revision and pending population/aggregate revision are
+removed from this contract. `AttachmentTarget` retains independent runtime/
+attachment authority. The current Attempt may be displayed before a historical
+cursor exists; first native location enables locate without settlement.

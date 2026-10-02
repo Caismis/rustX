@@ -2,6 +2,7 @@
 export const en = {
   "reading.width-left": "Resize conversation from the left",
   "reading.width-right": "Resize conversation from the right",
+  "reading.current-turn": "Current turn",
   "reading.turn-navigation": "Turn navigation",
   "reading.older-turns": "Earlier turns",
   "reading.newer-turns": "Later turns",
@@ -225,6 +226,7 @@ export type AgentKey = keyof typeof en;
 export const zh = {
   "reading.width-left": "从左侧调整对话宽度",
   "reading.width-right": "从右侧调整对话宽度",
+  "reading.current-turn": "当前轮次",
   "reading.turn-navigation": "轮次导航",
   "reading.older-turns": "更早的轮次",
   "reading.newer-turns": "后续轮次",

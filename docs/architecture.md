@@ -6,6 +6,20 @@ Terminal Attempt journal facts have ordered native transcript references;
 execution subscribers live below the typed shell boundary. See the
 [review corrections and feedback audit](issue-406/conversation-surface.md#pr-409-review-corrections).
 
+## Native conversation reading (#430)
+
+ConversationStore owns Attempt turn identity/order/location and finite outline/
+window reads. Journal and transcript read-cut coordinates are frozen inclusive
+upper bounds; append-only execution and compaction preserve old addresses.
+Only unreconstructible semantic mutations retire their native mutation epoch.
+Session lineage owns separate `TurnReadingProvenance`, preserving retained
+successful and unsuccessful origins and member/terminal destination references
+without copying execution events. Runtime Client supplies the live Attempt;
+Web merges it with bounded outline and loaded anchors. ChatViewport is the sole
+automatic Chat scroll writer. Width remains local presentation state.
+See [the reading contract](conversation-reading.md) for exact cut, paging,
+lineage retention, current/locatable distinctions and authority rejection rules.
+
 ## App Server product topology
 
 In externally managed deployments, one authenticated user maps to one rustX
@@ -164,7 +178,10 @@ transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
 The current SQLite development schema is defined by `SQLITE_SCHEMA_VERSION`.
-Version 34 adds native revisioned Goal state and atomic Goal/inbound accounting.
+Version 48 adds immutable native turn-reading bootstrap provenance and the
+semantic mutation epoch for historical read cuts. Older stores are rejected
+without migration or a compatibility path. Version 34 adds native revisioned
+Goal state and atomic Goal/inbound accounting.
 Version 32 freezes Issue #258’s durable
 `profile_digest` for the effective admitted child execution profile. Version 33 establishes
 non-creating rollback-journal management reads and separated workspace storage.

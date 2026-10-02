@@ -6,19 +6,40 @@ existing TurnProcess and conversation-statistics vocabulary. Its identity is
 `(origin ConversationId, AttemptId)`. Ordinals are one-based presentation indexes
 at a read cut, never identity. Model retries, logical steps and Tool calls do not
 create turns. Automatic continuation creates a distinct native Attempt and turn.
+The existing statistics fold counts `AttemptStarted` as a turn and `TurnStarted`
+as a logical step; TurnProcess groups members by Attempt. Lineage reading
+provenance preserves origin turns without inventing destination execution facts.
 
 Local order is indexed `AttemptStarted` Journal order. Failed, cancelled,
 interrupted, timed-out and limited Attempts retain that identity. A location is
 the first committed assistant process member, or the exact Attempt terminal when
 there is no assistant member. A just-started Attempt with neither has no location;
-clients show a disabled mark. Preview is the first text/refusal block at that
-location, limited to 240 Unicode characters; no preview is fabricated for a terminal.
+the live Runtime Client still supplies its current identity; historical locate
+remains disabled. Preview is the first text/refusal block at that location,
+limited to 240 Unicode characters; no preview is fabricated for a terminal.
 
-Completed-response provenance copied by lineage precedes local Attempts in its
-immutable bootstrap order. It retains the source origin identity while mapping
-process MessageIds to destination transcript positions. A source unsuccessful
-message copied without Attempt provenance remains unowned content, not an invented
-turn. Compaction changes the canonical Surface, not these durable origins/order.
+`TurnReadingProvenance` is a separate immutable lineage/bootstrap domain from
+`CompletedResponseProvenance` (finalized response, Retry, timing and usage).
+The Session lineage owner captures native Attempt origins in start order and
+remaps only retained Assistant members and the canonical predecessor of a
+terminal-only location. It preserves outcome and native clock information,
+including failed/interrupted/cancelled/timed-out/limited work. No Journal events,
+requests or executable state are copied. An interrupted retained process is a
+turn even when it has no finalized response; genuinely unowned content remains
+unowned and creates no turn.
+
+Clone, fork and tree branch all call `lineage_cut` / `remap_seed` and initialize
+one `LineageSeed`. Retained turns keep immutable origin identity in bootstrap
+array order; local destination Attempts follow every inherited turn in local
+`AttemptStarted` order. Retained members map to destination MessageIds and exact
+transcript positions. For a terminal-only turn, a native `inherited_turn` spine
+reference is inserted after its retained canonical predecessor (before all
+content if none). Clone retains all such native terminals; a prefix fork/branch
+retains one only when its predecessor belongs to that prefix. A fork before the
+first input retains no turns. References resolve the minimal bootstrap summary,
+never fabricated execution events or copied message bodies. Repeated lineage
+and reopen retain these same origins, ordering and destination mapping.
+Compaction changes the canonical Surface, not these durable origins/order.
 `session/boundaries` stays specific to user-message lineage/fork/retry cuts.
 
 ## Typed native reads
@@ -41,19 +62,55 @@ older/newer cursors and optional exact target identity/cursor. A direct locate
 reads no intervening transcript pages. Agent/internal transcript APIs retain their
 separate registry and read-model ownership.
 
-The read cut is `(ConversationId, Journal sequence, allocated transcript position,
-Surface revision, pending population and aggregate native CAS revision)`.
-The two pending coordinates retire edits/removals that do not append Journal
-facts; new visible admissions advance the transcript frontier. Selection occurs in one SQLite transaction. Response/Tool
-annotation uses only the window's named native Attempts through the cut; final
-cut validation rejects a concurrent mutation. A later Journal/Surface/transcript
-change retires a cut. Stale or foreign targets fail explicitly; clients reload the
-outline rather than navigating to a nearby turn. Reads execute no model or Tool
-work and do not create request snapshots or durable writes.
+A read cut C is `(ConversationId, journal, transcript, mutation_revision)`.
+`journal` and `transcript` are inclusive historical upper bounds: only Attempt
+starts/locations and projection facts at or below C may be read. They are not
+requirements that today's frontiers equal C. `mutation_revision` is the native
+monotonic epoch of successful pending-body edits/removals. Pending adoption
+preserves its accepted body and position; new admissions and ordinary execution
+append facts. Surface compaction preserves immutable Ledger/Journal meaning.
+These append-only transitions do not invalidate C, even during a running Attempt.
+
+SQLite accepts C when its Conversation matches, its upper bounds are no later
+than current frontiers and its mutation epoch equals the current epoch. The
+store cannot reconstruct an edited/removed pending body after a mutation, so
+that semantic change rejects the old cut rather than silently substituting a
+new body. Future/foreign cuts, a target absent at C, a target whose first native
+location did not yet exist at C, and unavailable/corrupt native references fail
+explicitly without nearest-target fallback. Attachment/runtime replacement is
+separately rejected by App Server's `AttachmentTarget` and browser authority
+fences; a read cut never grants control authority.
+
+Target and outline reads can be reconstructed after later appends. Selection
+happens in one SQLite transaction, bounded to `transcript`; Tool results are
+included only if their own canonical transcript position belongs to C. Runtime
+Client folds only the selected native Attempts through `journal` for response,
+process, terminal, timing and usage decorations. A final compatibility check
+rejects a concurrent semantic mutation while accepting concurrent appends.
+The result returns C exactly. Neither current response settlement nor later
+Tool results can leak backward into that window.
+
+`older` and `newer` with C page exclusively inside that same frozen prefix;
+older/newer availability also excludes appended positions above C. Reaching
+C's tail ends newer paging even if current execution has advanced. `latest`
+and `older` without a cut capture fresh bounds. A fresh outline is required to
+see new identities/locations or recover from an invalid mutation epoch or
+replacement authority, not to navigate a known historical address after each
+streamed event. Reads execute no model/Tool work and create no request snapshots
+or durable writes.
 
 ## Browser reading and scrolling
 
-The browser retains one outline page of at most 64 marks/previews. Paging and an
+The browser retains one outline page of at most 64 marks/previews, plus at most
+one pinned current identity from live Runtime Client state. `turn-rail-items.ts`
+merges these native sources; a current identity can have no historical cursor.
+Loaded transcript/process anchors remain a separate presentation capability.
+The first native process `control_cursor` absent from the outline cut triggers
+one refresh to make the current turn locatable before settlement. Subsequent
+same-Attempt appends/text deltas do not refresh the outline. A current mark is
+active in follow mode even before a durable anchor exists; detached reading
+publishes its loaded turn anchor. Return to latest restores the current live
+identity and follow mode through ChatViewport. Paging and an
 ordinal input reach distant pages without accumulating outline history. Transcript
 cache limits remain 512 entries / 8 MiB; ordinary prepend reads are 64 entries.
 Historical jumps and adjacent pages replace a finite window. Two outstanding
@@ -69,7 +126,9 @@ native rows while ChatViewport preserves the newer reading position. A new
 navigation/action still retires that prepend. Outline reads have independent paging intent and survive window changes;
 resync retires both domains.
 
-ChatViewport is the sole automatic Chat scroll writer. It coalesces React and
+ChatViewport is the sole automatic Chat scroll writer. The rail and Return to
+latest share its existing overlay surface, without a second flex wrapper or
+scroll coordinator. It coalesces React and
 ResizeObserver changes into one animation-frame commit. Explicit navigation
 receives an intent ticket and resolves an exact native anchor in that frame.
 Later native scrolling synchronously retires the ticket. Detached reading retains

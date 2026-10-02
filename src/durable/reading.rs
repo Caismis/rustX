@@ -1,5 +1,4 @@
 //! Bounded reading projections over existing native Attempt and transcript owners.
-use crate::conversation::SurfaceRevision;
 use crate::runtime::identity::{AttemptId, ConversationId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,18 +14,26 @@ pub struct ConversationTurnId {
     pub attempt_id: AttemptId,
 }
 
-/// Exact native read authority. Appends, compaction and pending mutations retire it.
+/// Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationReadCut {
     pub conversation_id: ConversationId,
     pub journal: u64,
     pub transcript: u64,
-    pub surface_revision: SurfaceRevision,
-    /// Pending population changes on removal; an admission also advances the
-    /// transcript frontier. Existing native CAS revisions increase on edits.
-    pub pending_count: u64,
-    pub pending_revision: u64,
+    /// Edits/removals of mutable transcript bodies retire unreconstructible cuts.
+    pub mutation_revision: u64,
+}
+
+impl ConversationReadCut {
+    /// Append-only growth preserves a cut; foreign, future or mutated cuts fail.
+    #[must_use]
+    pub fn reconstructible_from(&self, current: &Self) -> bool {
+        self.conversation_id == current.conversation_id
+            && self.journal <= current.journal
+            && self.transcript <= current.transcript
+            && self.mutation_revision == current.mutation_revision
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -76,4 +83,29 @@ pub struct DurableConversationWindow {
     pub newer_cursor: Option<super::TranscriptCursor>,
     pub target: Option<ConversationTurnId>,
     pub target_cursor: Option<super::TranscriptCursor>,
+}
+
+/// Immutable reading provenance in native start order, separate from finalized responses.
+/// Members and predecessor use destination identities after lineage remapping.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnReadingProvenance {
+    pub id: ConversationTurnId,
+    pub process_message_ids: Vec<crate::runtime::identity::MessageId>,
+    /// Canonical predecessor of a terminal-only location; None precedes all content.
+    pub preceding_message_id: Option<crate::runtime::identity::MessageId>,
+    pub outcome: TurnProcessOutcome,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnProcessOutcome {
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+    TimedOut,
+    LimitExceeded,
 }

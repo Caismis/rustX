@@ -98,16 +98,16 @@ it('short-history prepend retains reading ownership through disappearing anchors
   ui.rerender(<ChatViewport><div>No anchored rows</div></ChatViewport>); flush(); expect(top).toBe(150); // Bounded absolute fallback, never tail.
 });
 
-function coordinatedViewport(historical = false) {
+function coordinatedViewport(historical = false, latestAnchor?: string) {
   let frame: FrameRequestCallback | undefined, height = 1000, top = 0;
   const positions: Record<string, number> = { a: 0, b: 200, 'turn:target': 500 };
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
   vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
   let owner: ChatViewport | null = null;
-  const latest = vi.fn(), user = vi.fn();
+  const latest = vi.fn(), user = vi.fn(), active=vi.fn();
   const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id}>{id}</div>);
-  const element = (ids: string[], past = historical) => <ChatViewport ref={value => { owner = value; }} historical={past} latestLabel="Return to latest" onLatest={latest} onUserIntent={user}>{content(ids)}</ChatViewport>;
+  const element = (ids: string[], past = historical) => <ChatViewport ref={value => { owner = value; }} historical={past} latestAnchor={latestAnchor} onActiveAnchor={active} latestLabel="Return to latest" onLatest={latest} onUserIntent={user}>{content(ids)}</ChatViewport>;
   const ui = render(element(['a', 'b', 'turn:target']));
   const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
   Object.defineProperties(el, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 }, scrollTop: { get: () => top, set: value => { top = value; } } });
@@ -117,7 +117,7 @@ function coordinatedViewport(historical = false) {
   });
   const flush = () => { const cb = frame; frame = undefined; cb?.(0); };
   flush();
-  return { ui, el, owner: () => owner!, latest, user, positions, flush, top: () => top,
+  return { ui, el, owner: () => owner!, latest, user, active, positions, flush, top: () => top,
     scroll(value: number) { top = value; fireEvent.scroll(el); },
     grow(value: number) { height += value; resize(); },
     replace(ids: string[], past = historical) { ui.rerender(element(ids, past)); } };
@@ -166,4 +166,14 @@ it('authority replacement after native installation still retires the scheduled 
   const ticket = v.owner().beginNavigation(); let authority = true;
   expect(ticket.commit('turn:target', () => authority)).toBe(true);
   authority = false; v.flush(); expect(v.top()).toBe(210);
+});
+
+it('follow publishes the live native turn without a locate cursor; historical anchors and Return to latest own active reading',()=>{
+ const v=coordinatedViewport(false,'turn:live');
+ expect(v.active).toHaveBeenLastCalledWith('turn:live');
+ const ticket=v.owner().beginNavigation();v.replace(['turn:target'],true);ticket.commit('turn:target');v.flush();
+ expect(v.top()).toBe(500);expect(v.active).toHaveBeenLastCalledWith('turn:target');
+ v.grow(300);v.flush();expect(v.top()).toBe(500);
+ fireEvent.click(v.ui.getByRole('button',{name:'Return to latest'}));v.replace(['a','b','turn:target'],false);v.flush();
+ expect(v.active).toHaveBeenLastCalledWith('turn:live');const bottom=v.top();v.grow(100);v.flush();expect(v.top()).toBe(bottom+100);
 });

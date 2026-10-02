@@ -1228,7 +1228,10 @@ impl ClientInner {
             .map_err(|message| RuntimeClientError::RuntimeFailure { message })?;
         super::response::decorate_window(self.store.as_ref(), &mut page, read.cut.journal)
             .map_err(failed)?;
-        if self.store.conversation_read_cut().map_err(failed)? != read.cut {
+        if !read
+            .cut
+            .reconstructible_from(&self.store.conversation_read_cut().map_err(failed)?)
+        {
             return Err(RuntimeClientError::InvalidState {
                 message: "stale conversation read cut; reload the turn outline".into(),
             });

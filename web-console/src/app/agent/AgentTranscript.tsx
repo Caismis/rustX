@@ -1,5 +1,5 @@
 import { useTranslation } from '../../locale/react';
-import { Fragment, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { turnProcesses } from '../../bindings/turn-process';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
@@ -64,7 +64,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadNewer, onH
     {history?.window?.newer_cursor != null && <Button disabled={history.loading} onClick={loadNewer}>{tx('agent:reading.load-newer')}</Button>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {[...turnPresentation(entries), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
-      if (node.kind === 'live-process') return <Fragment key="live-process">{liveProcess}</Fragment>;
+      if (node.kind === 'live-process') return <div key="live-process" data-chat-anchor-key={turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt!.attempt_id})}>{liveProcess}</div>;
       if (node.kind === 'streaming') return <div key={`message:${node.streaming.message_id}`}><MessageSeat id={`message:${node.streaming.message_id}`}
         message={{ role: 'assistant', id: node.streaming.message_id, content: [] }} blocks={node.streaming.blocks ?? []} streaming
         tools={snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id)}/></div>;

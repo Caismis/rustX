@@ -702,6 +702,7 @@ impl SessionController {
             });
         }
         let source = super::session::HistoricalConversationSnapshot {
+            turns: store.load_turn_provenance().map_err(SessionError::Store)?,
             completed_responses,
             conversation_id: access.node.conversation_id.clone(),
             surface_revision: revision,

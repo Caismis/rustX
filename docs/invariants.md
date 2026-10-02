@@ -170,7 +170,8 @@ canonical-message-coupled Agent Status emission facts, bounded latest-emission
 heads, and the Todo-specific durable progress sequence. Schema 46
 replaces these with producer-scoped contribution receipts, generic logical-step
 progress, and typed accepted RequestSnapshot contributions; no old reader remains.
-Current schema 47 additionally requires finite Workflow terminal physical proof;
+Schema 48 additionally persists native turn-reading provenance and the reading
+mutation epoch. Schema 47 requires finite Workflow terminal physical proof;
 older stores are rejected without migration. Version 14 freezes
 the typed `ToolCancellationPhase` carried by canonical cancelled tool
 results. Version 15 adds the one-shot unresolved-output carryover pointer and
@@ -253,6 +254,24 @@ A committed-message event must never precede the durable MessageBlock it
 references. In the SQLite backend, the canonical body and its committed
 message event share one transaction; the same applies to compaction summary /
 Surface revision and request snapshot / request-start fact.
+
+## Native turn reading (#430)
+
+One user-facing turn is one native Attempt, including failed/interrupted,
+cancelled/timed-out/limited work. Automatic continuation admits another Attempt;
+model retries, Loop steps and Tool calls do not. Origins survive lineage in
+native bootstrap order, followed by local Attempt-start order. Retained
+unsuccessful turns cannot become unowned merely for lacking a completed response.
+
+A historical outline/window at C remains usable after later append-only facts.
+All entries, response/process decorations and Tool results stay inside C's
+Journal/transcript upper bounds. Pending body mutation advances a native epoch;
+foreign/future/unreconstructible cuts and absent-at-C targets fail explicitly.
+Attachment/runtime replacement cannot authorize an old browser commit. Current
+Attempt identity, historical locate capability and loaded anchor are distinct.
+ChatViewport alone writes automatic Chat scroll positions; a later user intent
+retires older jumps. Presentation width never writes native Session state.
+See [conversation reading](conversation-reading.md) for the normative contract.
 
 ## Derived transcript history (FND-05 / Issue #110)
 

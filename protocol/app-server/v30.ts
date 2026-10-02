@@ -486,20 +486,6 @@ export type ConversationWindowAt =
  */
 export type TranscriptCursor = string;
 /**
- * The identity of one exact historical Conversation Surface state.
- *
- * A revision is a monotonic counter in its own identity domain. The empty
- * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
- * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
- * is precisely "the Surface after the first `n` accepted operations".
- *
- * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
- * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
- * or a `CapabilityRevision`: none of those identify a Surface state, and
- * none of them may be substituted for one.
- */
-export type SurfaceRevision = string;
-/**
  * Identifies one attempt to execute an agent manifest.
  */
 export type AttemptId = string;
@@ -574,6 +560,20 @@ export type RuntimeClientTranscriptCursor = string;
  * of physical settlement.
  */
 export type SubagentId = string;
+/**
+ * The identity of one exact historical Conversation Surface state.
+ *
+ * A revision is a monotonic counter in its own identity domain. The empty
+ * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+ * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+ * is precisely "the Surface after the first `n` accepted operations".
+ *
+ * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+ * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+ * or a `CapabilityRevision`: none of those identify a Surface state, and
+ * none of them may be substituted for one.
+ */
+export type SurfaceRevision = string;
 /**
  * Identifies a committed canonical message block.
  */
@@ -3498,19 +3498,16 @@ export interface UploadBytes {
   data: string;
 }
 /**
- * Exact native read authority. Appends, compaction and pending mutations retire it.
+ * Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
  */
 export interface ConversationReadCut {
   conversation_id: ConversationId;
   journal: string;
   transcript: string;
-  surface_revision: SurfaceRevision;
   /**
-   * Pending population changes on removal; an admission also advances the
-   * transcript frontier. Existing native CAS revisions increase on edits.
+   * Edits/removals of mutable transcript bodies retire unreconstructible cuts.
    */
-  pending_count: string;
-  pending_revision: string;
+  mutation_revision: string;
 }
 /**
  * Origin survives lineage copying; ordinal never participates in identity.

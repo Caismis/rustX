@@ -4,7 +4,7 @@ import { Server, snapshot } from './fixture';
 import { HISTORY_LIMIT, HISTORY_MAX_BYTES, turnKey } from '../src/client/transcript';
 const entry=(n:number):RuntimeClientTranscriptEntry=>({cursor:String(n),item:{type:'message',message:{role:'assistant',id:`m${n}`,content:[{type:'text',text:`answer-${n}`}]}}});
 const turn=(n:number):ConversationTurn=>({id:{conversation_id:'conversation-A',attempt_id:`attempt-${n}`},ordinal:n,cursor:String(n),preview:`preview-${n}`});
-const cut={conversation_id:'conversation-A',journal:'600',transcript:'600',surface_revision: '600', pending_count: '0', pending_revision: '0'};
+const cut={conversation_id:'conversation-A',journal:'600',transcript:'600',mutation_revision: '0'};
 const outline:ConversationTurnPage={cut,offset:0,total:600,turns:Array.from({length:64},(_,i)=>turn(i+1))};
 const window=(target:ConversationTurn):ConversationWindow=>({cut,page:{entries:Array.from({length:64},(_,i)=>({...entry(Number(target.cursor)+i),...(i===0?{turn_process:{...target.id,control_cursor:target.cursor!,message_count:1,tool_call_count:0,outcome:'completed' as const}}:{})})),next_cursor:target.cursor},newer_cursor:String(Number(target.cursor)+63),target:target.id,target_cursor:target.cursor});
 let server:Server;
@@ -61,7 +61,7 @@ it('a loaded exact native anchor at the same cut commits without a second read',
  expect(await server.client.navigateTurn('A',turn(1))).toBe(true);
  expect(server.requests.filter(row=>row.request.method==='session/transcript')).toHaveLength(1);
 });
-for (const mismatch of ['journal', 'pending_count', 'pending_revision', 'target'] as const) it(`a mismatched native ${mismatch} cannot install or leave pending navigation stuck`, async () => {
+for (const mismatch of ['journal', 'mutation_revision', 'target'] as const) it(`a mismatched native ${mismatch} cannot install or leave pending navigation stuck`, async () => {
  await ready(); const before=server.client.getSnapshot().views.A.history;
  const work=server.client.navigateTurn('A',turn(1)), request=await server.waitFor('session/transcript',1);
  const invalid=window(turn(1));
@@ -99,4 +99,21 @@ it('an ordinary prepend read survives user detachment without claiming a replace
  await work;
  expect(server.client.getSnapshot().views.A.history?.page.entries?.[0].cursor).toBe('536');
  expect(server.client.getSnapshot().views.A.turnNavigation?.active).toBeUndefined();
+});
+
+it('an existing outline survives same-Attempt durable streaming progress and installs only its original cut', async()=>{
+ await ready();
+ const running={attempt_id:'live-attempt',phase:{type:'running' as const},turn:1};
+ server.snapshots.set('A',{...snapshot(),attempt:running,transcript:{entries:[entry(700)]}});await server.client.refresh('A');
+ const oldOutline=server.client.getSnapshot().views.A.turnOutline?.page;
+ server.durableUpdate('A',{...snapshot(),attempt:running,transcript:{entries:[entry(700),entry(701)]}});
+ expect(server.client.getSnapshot().views.A.turnOutline?.page).toBe(oldOutline);
+ const work=server.client.navigateTurn('A',turn(1)),request=await server.waitFor('session/transcript',1);
+ expect(request.params).toMatchObject({at:{type:'turn',id:turn(1).id,cut}});
+ server.socket.success(request,{type:'transcript_window',window:window(turn(1))});expect(await work).toBe(true);
+ const history=server.client.getSnapshot().views.A.history!;
+ expect(history.window?.cut).toEqual(cut);expect(history.mode).toBe('historical');
+ expect(history.page.entries?.map(row=>row.cursor)).toEqual(Array.from({length:64},(_,i)=>String(i+1)));
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(1);
+ server.client.latestTranscript('A');expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['700','701']);
 });

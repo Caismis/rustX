@@ -35,9 +35,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         conversation_id: target.conversation_id.clone(),
         journal: EXACT,
         transcript: EXACT,
-        pending_count: EXACT,
-        pending_revision: EXACT,
-        surface_revision: crate::conversation::SurfaceRevision::new(EXACT),
+        mutation_revision: EXACT,
     };
     let reading_id = crate::durable::reading::ConversationTurnId {
         conversation_id: target.conversation_id.clone(),

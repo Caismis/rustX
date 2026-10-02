@@ -394,9 +394,7 @@ export const fixtures = [
         "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
         "journal": "9007199254740993",
         "transcript": "9007199254740993",
-        "surface_revision": "9007199254740993",
-        "pending_count": "9007199254740993",
-        "pending_revision": "9007199254740993"
+        "mutation_revision": "9007199254740993"
       },
       "offset": 64,
       "limit": 64
@@ -423,9 +421,7 @@ export const fixtures = [
           "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
           "journal": "9007199254740993",
           "transcript": "9007199254740993",
-          "surface_revision": "9007199254740993",
-          "pending_count": "9007199254740993",
-          "pending_revision": "9007199254740993"
+          "mutation_revision": "9007199254740993"
         }
       },
       "limit": 64
@@ -580,9 +576,7 @@ export const fixtures = [
           "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
           "journal": "9007199254740993",
           "transcript": "9007199254740993",
-          "surface_revision": "9007199254740993",
-          "pending_count": "9007199254740993",
-          "pending_revision": "9007199254740993"
+          "mutation_revision": "9007199254740993"
         },
         "total": 1,
         "offset": 0,
@@ -610,9 +604,7 @@ export const fixtures = [
           "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
           "journal": "9007199254740993",
           "transcript": "9007199254740993",
-          "surface_revision": "9007199254740993",
-          "pending_count": "9007199254740993",
-          "pending_revision": "9007199254740993"
+          "mutation_revision": "9007199254740993"
         },
         "page": {
           "entries": []

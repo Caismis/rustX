@@ -11,6 +11,7 @@ use crate::model::{
     ModelCapabilities, ModelCompat, ModelProtocol, RequestIdentity, RequestSnapshot,
 };
 use crate::runtime::identity::{CapabilityRevision, ConversationId, EventId, TurnId};
+use crate::runtime_client::snapshot::transcript_page_view;
 use chrono::{TimeZone, Utc};
 
 fn event(
@@ -493,10 +494,11 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     let outline_after = store.conversation_turns(None, 0, 64).unwrap();
     assert_eq!(outline_before.turns, outline_after.turns);
     assert_ne!(outline_before.cut, outline_after.cut);
-    assert!(
+    assert_eq!(
         store
             .conversation_turns(Some(&outline_before.cut), 0, 64)
-            .is_err()
+            .unwrap(),
+        outline_before
     );
     let after = page(&store, None, 64);
     assert_eq!(tails(&after)[0], &tail);
@@ -521,6 +523,7 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             .load_surface_history(store.load_head().unwrap().revision)
             .unwrap(),
         &lineage_provenance(&store, &canonical).unwrap(),
+        &store.load_turn_provenance().unwrap(),
     )
     .unwrap();
     let child = SqliteConversationStore::in_memory(child_id).unwrap();
@@ -859,4 +862,118 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
     );
     assert!(window.statistics.is_none());
     assert_eq!(store.conversation_read_cut().unwrap(), outline.cut);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One exact before/after cut, including mutable Tool and response decorations.
+fn historical_window_cut_survives_live_appends_and_bounds_tool_and_response_decorations() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    for name in ["old-a", "old-b"] {
+        append(
+            &store,
+            name,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new(name),
+            },
+        );
+        assistant(&store, name, name);
+        finish(&store, name);
+    }
+    append(
+        &store,
+        "live",
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("live"),
+        },
+    );
+    // Split the fixture's exact canonical Tool transition at C; no execution.
+    let fixture = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    process_content(&fixture, "live");
+    let facts = fixture.load_canonical().unwrap();
+    let first = &facts[0];
+    store
+        .append_canonical_with_event(
+            first,
+            event(
+                &store,
+                "live",
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: crate::conversation::message_id_of(first),
+                },
+            ),
+        )
+        .unwrap();
+    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    let before = store
+        .conversation_window(
+            &crate::durable::reading::ConversationWindowAt::Turn {
+                id: outline.turns[0].id.clone(),
+                cut: outline.cut.clone(),
+            },
+            64,
+        )
+        .unwrap();
+    let mut frozen = transcript_page_view(before.page).unwrap();
+    decorate_window(&store, &mut frozen, outline.cut.journal).unwrap();
+    store.append_canonical(&facts[1]).unwrap();
+    assistant(&store, "live", "later-assistant");
+    append(&store, "live", RuntimeEvent::TurnStarted);
+    let after = store.conversation_read_cut().unwrap();
+    assert!(after.journal > outline.cut.journal && after.transcript > outline.cut.transcript);
+    let read = store
+        .conversation_window(
+            &crate::durable::reading::ConversationWindowAt::Turn {
+                id: outline.turns[0].id.clone(),
+                cut: outline.cut.clone(),
+            },
+            64,
+        )
+        .unwrap();
+    assert_eq!(read.cut, outline.cut);
+    let mut page = transcript_page_view(read.page).unwrap();
+    decorate_window(&store, &mut page, read.cut.journal).unwrap();
+    assert_eq!(
+        page, frozen,
+        "no later Tool result, Assistant or native fact is spliced into C"
+    );
+    let live = page.entries.last().unwrap();
+    assert_eq!(
+        live.turn_process.as_ref().unwrap().outcome,
+        TurnProcessOutcome::Running
+    );
+    assert!(live.completed_response.is_none());
+    assert!(!matches!(
+        live.tool_calls[0].state,
+        crate::runtime_client::snapshot::ForegroundToolState::Settled { .. }
+    ));
+    assert_eq!(store.conversation_read_cut().unwrap(), after);
+    assert_eq!(store.read_request_snapshots(None, 1).unwrap().snapshots, []);
+    // Newer and older stay inside C even after live growth.
+    let window = store
+        .conversation_window(
+            &crate::durable::reading::ConversationWindowAt::Turn {
+                id: outline.turns[0].id.clone(),
+                cut: outline.cut.clone(),
+            },
+            1,
+        )
+        .unwrap();
+    let newer = store
+        .conversation_window(
+            &crate::durable::reading::ConversationWindowAt::Newer {
+                after: window.newer_cursor.unwrap(),
+                cut: outline.cut.clone(),
+            },
+            64,
+        )
+        .unwrap();
+    assert_eq!(newer.cut, outline.cut);
+    assert!(newer.newer_cursor.is_none());
+    assert!(
+        newer
+            .page
+            .entries
+            .iter()
+            .all(|row| row.cursor.get() <= outline.cut.transcript)
+    );
 }
