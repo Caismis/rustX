@@ -271,3 +271,15 @@ print(json.dumps({'deliveries':[{'path':'a/report.md'}]}))
 
 
 SCENARIOS['web_file_delivery'] = web_file_delivery
+
+
+def web_compaction() -> Scenario:
+    """Manual maintenance uses one gated summary request, without a model turn."""
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                      body_contains=("compaction-evidence-435",))
+    return Scenario("web_compaction",
+                    Step(expected, Stream(Text("Original context ready."), Finish(), Usage(32000, 20))),
+                    Step(expected, Stream(Gate("manual-summary"), Text("The user supplied compaction-evidence-435. Preserve that fact."), Finish())))
+
+
+SCENARIOS["web_compaction"] = web_compaction

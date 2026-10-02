@@ -442,7 +442,7 @@ export class AppServerSession {
   async compactContext(): Promise<RuntimeClientContextView> {
     const compacted = await this.#client.call(
       "context/compact",
-      { target: this.#target },
+      { target: this.#target, request_id: globalThis.crypto.randomUUID() },
       "context",
     );
     return compacted.context;

@@ -253,7 +253,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// `SessionController`. Version 54 clients are rejected without fallback.
 /// Version 56 adds runtime-owned typed Session-file delivery facts to Tool results.
 /// Version 55 peers are rejected; arbitrary Tool JSON retains no delivery authority.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 56;
+/// Version 57 adds bounded manual-compaction correlation and released outcome
+/// evidence to the context read model and lifecycle events (#435).
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 57;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1063,7 +1065,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 56);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 57);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -434,6 +434,23 @@ fn context_measurement_is_native_and_is_invalidated_by_compaction() {
     assert_eq!(read.input_tokens, 100);
     assert_eq!(read.context_window_tokens, 4096);
     assert_eq!(read.model, "historical-model");
+    request(&store, "a", 1, None);
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
+        None,
+        "a newer unmeasured request cannot inherit the previous reading"
+    );
+    let mut zero = usage(None);
+    zero.input_tokens = 0;
+    request(&store, "a", 2, Some(zero));
+    assert_eq!(
+        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
+            .unwrap()
+            .unwrap()
+            .input_tokens,
+        0,
+        "a genuine measured zero remains available"
+    );
     let totals = page(&store, None, 64).statistics;
     append(&store, "a", RuntimeEvent::CompactionStarted);
     assert_eq!(

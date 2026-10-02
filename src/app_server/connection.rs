@@ -1075,7 +1075,10 @@ async fn dispatch_runtime(
             target: _,
             subagent_id,
         } => native_result(authority.subagent_workspace_dispose(&subagent_id).await),
-        Method::CompactContext { target: _ } => native_result(authority.compact_context().await),
+        Method::CompactContext {
+            target: _,
+            request_id,
+        } => native_result(authority.compact_context(Some(request_id)).await),
         Method::SessionBoundaries {
             target: _,
             offset,

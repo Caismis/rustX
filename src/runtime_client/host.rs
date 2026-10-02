@@ -916,12 +916,15 @@ impl ClientInner {
 
     /// Runs one manual idle context compaction to its terminal result and
     /// returns the authoritative context projection after success.
-    pub(crate) async fn compact_context(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+    pub(crate) async fn compact_context(
+        &self,
+        request_id: Option<String>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         self.runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .compact_context()
+            .compact_context(request_id)
             .await
             .map_err(|error| match error {
                 ManualCompactionError::Inactive | ManualCompactionError::Busy => {
@@ -2388,8 +2391,11 @@ impl RuntimeClientHost {
     ///
     /// Returns a typed lifecycle, busy, context, or durability error. A
     /// successful response means the canonical compaction already committed.
-    pub async fn compact_context(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.compact_context().await
+    pub async fn compact_context(
+        &self,
+        request_id: Option<String>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.compact_context(request_id).await
     }
 
     /// Responds to one live native interaction through Runtime Client

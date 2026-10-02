@@ -405,11 +405,15 @@
               "properties": {
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
+                },
+                "request_id": {
+                  "type": "string"
                 }
               },
               "additionalProperties": false,
               "required": [
-                "target"
+                "target",
+                "request_id"
               ]
             }
           },
@@ -7418,6 +7422,24 @@
       "description": "The context diagnostics carried by the Runtime Client snapshot.",
       "type": "object",
       "properties": {
+        "manual_compaction": {
+          "description": "Latest manual operation admitted in this runtime incarnation. Never inferred\nfrom a newer canonical checkpoint. Absence is insufficient evidence.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientManualCompaction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compaction_error": {
+          "description": "Latest pre-commit diagnostic; cleared when the next compaction starts.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "last_request_occupancy": {
           "description": "Last prepared request occupancy from the Context owner; absent after compaction until measured again.",
           "anyOf": [
@@ -7456,6 +7478,34 @@
       "required": [
         "compaction_in_progress",
         "compaction_count"
+      ]
+    },
+    "RuntimeClientManualCompaction": {
+      "description": "Bounded read evidence for the most recently admitted manual compaction.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "Caller correlation; absent for an uncorrelated native caller.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "released": {
+          "description": "False until coordinator state is restored and maintenance released.",
+          "type": "boolean"
+        },
+        "error": {
+          "description": "Exact pre-commit failure diagnostic, if released unsuccessfully.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "released"
       ]
     },
     "ContextOccupancy": {
@@ -20181,6 +20231,10 @@
           "description": "A context compaction operation began.",
           "type": "object",
           "properties": {
+            "context": {
+              "description": "Authoritative context state at this lifecycle boundary.",
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
             "attempt_id": {
               "description": "The owning attempt for automatic compaction; absent for manual\nidle maintenance.",
               "anyOf": [
@@ -20199,13 +20253,18 @@
           },
           "additionalProperties": false,
           "required": [
-            "type"
+            "type",
+            "context"
           ]
         },
         {
           "description": "A context compaction operation failed before a semantic commit.",
           "type": "object",
           "properties": {
+            "context": {
+              "description": "Authoritative context state at this lifecycle boundary.",
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
             "attempt_id": {
               "description": "The owning attempt for automatic compaction; absent for manual\nidle maintenance.",
               "anyOf": [
@@ -20229,6 +20288,7 @@
           "additionalProperties": false,
           "required": [
             "type",
+            "context",
             "error"
           ]
         },

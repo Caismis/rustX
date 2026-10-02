@@ -726,9 +726,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v32.schema.json", "v32.ts"]);
+        assert_eq!(generations, ["v33.schema.json", "v33.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v32.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v33.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

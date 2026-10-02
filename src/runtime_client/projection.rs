@@ -324,7 +324,7 @@ fn invalidates_read_domains(observation: &ConversationObservation) -> bool {
         ConversationObservation::InteractionPending { audit, .. }
         | ConversationObservation::InteractionSettled { audit, .. } => audit.is_some(),
         ConversationObservation::Event { event, .. }
-        | ConversationObservation::ManualCompactionEvent { event } => matches!(
+        | ConversationObservation::ManualCompactionEvent { event, .. } => matches!(
             event,
             RuntimeEvent::AttemptStarted { .. }
                 | RuntimeEvent::AttemptCompleted { .. }
@@ -748,7 +748,17 @@ impl RuntimeClientProjection {
             ConversationObservation::Event { attempt_id, event } => {
                 self.fold_event(&attempt_id, &event)
             }
-            ConversationObservation::ManualCompactionEvent { event } => {
+            ConversationObservation::ManualCompactionEvent { event, request_id } => {
+                self.snapshot.context.manual_compaction =
+                    Some(super::snapshot::RuntimeClientManualCompaction {
+                        request_id,
+                        released: !matches!(event, RuntimeEvent::CompactionStarted),
+                        error: if let RuntimeEvent::CompactionFailed { error } = &event {
+                            Some(error.clone())
+                        } else {
+                            None
+                        },
+                    });
                 self.fold_compaction_event(None, &event)
             }
             // The adopted turn reaches a client as the committed `UserMessage`
@@ -1649,14 +1659,19 @@ impl RuntimeClientProjection {
     ) -> Vec<RuntimeClientEvent> {
         match event {
             RuntimeEvent::CompactionStarted => {
+                self.snapshot.context.last_request_occupancy = None;
+                self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
+                    context: self.snapshot.context.clone(),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
             RuntimeEvent::CompactionFailed { error } => {
+                self.snapshot.context.compaction_error = Some(error.clone());
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionFailed {
+                    context: self.snapshot.context.clone(),
                     attempt_id: attempt_id.cloned(),
                     error: error.clone(),
                 }]
@@ -4929,9 +4944,19 @@ mod tests {
     fn manual_compaction_projects_without_fabricating_an_attempt_identity() {
         let mut projection = projection();
         projection.apply(ConversationObservation::ManualCompactionEvent {
+            request_id: Some("test-request".to_owned()),
             event: RuntimeEvent::CompactionStarted,
         });
+        let admitted = projection
+            .snapshot_ref()
+            .context
+            .manual_compaction
+            .as_ref()
+            .unwrap();
+        assert_eq!(admitted.request_id.as_deref(), Some("test-request"));
+        assert!(!admitted.released);
         projection.apply(ConversationObservation::ManualCompactionEvent {
+            request_id: Some("test-request".to_owned()),
             event: RuntimeEvent::CompactionCompleted {
                 generation: 1,
                 summary_message_id: MessageId::new(
@@ -4946,10 +4971,22 @@ mod tests {
             },
         });
 
+        let released = projection
+            .snapshot_ref()
+            .context
+            .manual_compaction
+            .as_ref()
+            .unwrap();
+        assert_eq!(released.request_id.as_deref(), Some("test-request"));
+        assert!(released.released);
+        assert!(released.error.is_none());
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
         assert!(matches!(
             &events[0].event,
-            RuntimeClientEvent::ContextCompactionStarted { attempt_id: None }
+            RuntimeClientEvent::ContextCompactionStarted {
+                attempt_id: None,
+                ..
+            }
         ));
         assert!(matches!(
             &events[1].event,

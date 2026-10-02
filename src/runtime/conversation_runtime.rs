@@ -2566,6 +2566,7 @@ impl RuntimeInner {
         self: &Arc<Self>,
         task: ManualCompactionTaskResult,
         completion: &ManualCompactionCompletion,
+        request_id: Option<String>,
     ) {
         let ManualCompactionTaskResult {
             conversation,
@@ -2602,6 +2603,7 @@ impl RuntimeInner {
                     self.observe(ConversationObservation::Published {
                         journal_sequence: success.completed.persisted_event.sequence,
                         observation: Box::new(ConversationObservation::ManualCompactionEvent {
+                            request_id,
                             event: success.completed.persisted_event.event,
                         }),
                     });
@@ -2609,6 +2611,7 @@ impl RuntimeInner {
                 }
                 Err(error) => {
                     self.observe(ConversationObservation::ManualCompactionEvent {
+                        request_id,
                         event: RuntimeEvent::CompactionFailed {
                             error: error.to_string(),
                         },
@@ -4714,7 +4717,10 @@ impl ConversationRuntime {
     /// conversation state, which would violate the runtime ownership
     /// invariant, or if the configured executor rejects the spawned task.
     #[allow(clippy::too_many_lines)] // Admission and terminal settlement remain visible in one transaction.
-    pub async fn compact_context(&self) -> Result<ManualCompactionOutcome, ManualCompactionError> {
+    pub async fn compact_context(
+        &self,
+        request_id: Option<String>,
+    ) -> Result<ManualCompactionOutcome, ManualCompactionError> {
         let completion = {
             let mut state = self.inner.lock_state();
             match self.inner.lifecycle.state() {
@@ -4781,6 +4787,7 @@ impl ConversationRuntime {
             });
             self.inner
                 .observe(ConversationObservation::ManualCompactionEvent {
+                    request_id: request_id.clone(),
                     event: RuntimeEvent::CompactionStarted,
                 });
             let admission = self
@@ -4814,7 +4821,7 @@ impl ConversationRuntime {
                         gate.enter();
                     }
                 }
-                inner.finish_manual_compaction(task, &completion_for_task);
+                inner.finish_manual_compaction(task, &completion_for_task, request_id);
                 drop(admission);
             });
             completion
@@ -8323,9 +8330,8 @@ mod tests {
             .install_observation_bridge(pending.clone())
             .expect("bridge");
         runtime.activate();
-        runtime
-            .submit_inbound(text_content(&"important history ".repeat(512)))
-            .expect("accepted");
+        let history = text_content(&"important history ".repeat(512));
+        runtime.submit_inbound(history).expect("accepted");
         let _ = await_observation(&pending, |observation| {
             matches!(
                 observation,
@@ -8335,7 +8341,45 @@ mod tests {
         .await;
         let _ = await_settled_ledger(&runtime).await;
 
-        let outcome = runtime.compact_context().await.expect("manual compaction");
+        let release_gate = Arc::new(Gate::default());
+        let _release_guard = release_gate.arm_scoped();
+        runtime
+            .inner
+            .probe
+            .lock()
+            .unwrap()
+            .get_or_insert_with(CoordinatorProbe::default)
+            .manual_compaction_settlement_gate = Some(release_gate.clone());
+        let requester = runtime.clone();
+        let request = tokio::spawn(async move {
+            requester
+                .compact_context(Some("manual-request-435".to_owned()))
+                .await
+        });
+        release_gate.wait_entered();
+        assert!(runtime.has_manual_compaction());
+        assert!(!runtime.has_current_attempt());
+        assert!(
+            !request.is_finished(),
+            "response cannot precede ownership return"
+        );
+        assert_eq!(
+            runtime
+                .inner
+                .store
+                .load_head()
+                .unwrap()
+                .compaction_generation,
+            1
+        );
+        let before_release = pending.drain();
+        assert!(
+            matches!(before_release.as_slice(), [ConversationObservation::ManualCompactionEvent {
+            request_id: Some(id), event: RuntimeEvent::CompactionStarted,
+        }] if id == "manual-request-435")
+        );
+        release_gate.release();
+        let outcome = request.await.unwrap().expect("manual compaction");
         assert_eq!(outcome.generation, 1);
         assert!(outcome.estimated_tokens_after < outcome.tokens_before.input_tokens);
         assert!(!runtime.has_current_attempt());
@@ -8355,12 +8399,6 @@ mod tests {
         assert_eq!(model.requests().len(), 2, "turn plus summary request");
 
         let observations = pending.drain();
-        assert!(matches!(
-            observations.first(),
-            Some(ConversationObservation::ManualCompactionEvent {
-                event: RuntimeEvent::CompactionStarted
-            })
-        ));
         assert!(observations.iter().any(|observation| {
             matches!(
                 observation,
@@ -8374,8 +8412,9 @@ mod tests {
         assert!(matches!(
             observations.last(),
             Some(ConversationObservation::ManualCompactionEvent {
+                request_id: Some(id),
                 event: RuntimeEvent::CompactionCompleted { generation: 1, .. }
-            })
+            }) if id == "manual-request-435"
         ));
     }
 
@@ -8441,7 +8480,7 @@ mod tests {
         .await;
         runtime_without_skill.activate();
         let without_outcome = runtime_without_skill
-            .compact_context()
+            .compact_context(None)
             .await
             .expect("one-message retirement fits without Skill guidance");
         assert_eq!(without_outcome.tokens_before.input_tokens, 1_050_000);
@@ -8490,7 +8529,7 @@ mod tests {
         .await;
         runtime_with_skill.activate();
         let with_outcome = runtime_with_skill
-            .compact_context()
+            .compact_context(None)
             .await
             .expect("a larger retirement span fits with frozen Skill guidance");
         assert_eq!(with_outcome.tokens_before.input_tokens, 1_450_000);
@@ -8516,7 +8555,7 @@ mod tests {
         let (runtime, _model) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
         runtime.activate();
         let error = runtime
-            .compact_context()
+            .compact_context(None)
             .await
             .expect_err("empty context cannot compact");
         assert!(matches!(
@@ -8569,7 +8608,7 @@ mod tests {
         .expect("model park watch remains open");
 
         assert_eq!(
-            runtime.compact_context().await,
+            runtime.compact_context(None).await,
             Err(ManualCompactionError::Busy)
         );
         assert!(runtime.has_current_attempt());
@@ -9089,7 +9128,7 @@ mod tests {
         let snapshot_a_bytes = serde_json::to_vec(&snapshots_a[0]).expect("snapshot A bytes");
 
         let outcome = runtime_a
-            .compact_context()
+            .compact_context(None)
             .await
             .expect("compaction under resource generation A");
         let ledger_a = runtime_a.coordinator_ledger().expect("generation A ledger");
@@ -10607,7 +10646,7 @@ mod tests {
             .inner
             .fence_mcp_settlement_failure("compaction MCP failure".to_owned());
         assert_eq!(
-            fixture.runtime.compact_context().await,
+            fixture.runtime.compact_context(None).await,
             Err(super::ManualCompactionError::Shutdown)
         );
         assert!(!fixture.runtime.has_manual_compaction());

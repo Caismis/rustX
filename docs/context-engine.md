@@ -949,3 +949,43 @@ Conversation Surface @ revision X
 
 There is no second canonical transcript and no compatibility path for the
 superseded model-request semantic attachment architecture.
+
+### Web observation and manual request correlation (#435)
+
+The Web `/compact` command claims local duplicate-submission ownership synchronously,
+consumes its exact invoking draft, and submits one `context/compact` request directly.
+The resident Composer context seat observes execution without a command modal.
+Pending inbound remains permitted; manual compaction creates no Attempt.
+
+App Server v33 requires a caller-generated `request_id` for `context/compact`.
+Runtime Client v57 carries the latest admitted manual compaction's correlation,
+`released` boundary, and exact pre-commit diagnostic in `context.manual_compaction`.
+The runtime-owned maintenance task carries that correlation even when its RPC
+waiter disappears. This is one bounded live read record, not a durable operation
+log or another admission owner. Another manual admission replaces it. Automatic
+compaction does not claim that correlation. `context.compaction_error` retains
+the most recent native pre-commit diagnostic until the next start.
+
+Admission publishes start after checking out ConversationState. The Context engine
+commits summary and Surface atomically inside the task. Only after the coordinator
+restores ConversationState and clears maintenance does it publish manual completion
+(or failure), mark the correlated record released, and resolve the request waiter.
+The deterministic maintenance gate exercises the interval after durable commit and
+before ownership return. Automatic compaction remains Attempt-owned; its completion
+is a context result, not settlement of its containing Attempt.
+
+Reconnect reattaches and reads the current native snapshot; it never repeats the
+mutation. Only matching native correlation can resolve an uncertain request. A false
+progress flag, another client's result, or a newer checkpoint cannot do so. Missing
+or overwritten correlation remains explicitly uncertain. Native authority and runtime
+incarnation replacement retire old scope; generation and exact attachment fences
+prevent obsolete callbacks from changing a replacement view. A confirmed successful
+RPC remains successful if the following read repair fails.
+
+The separate context meter reads `last_request_occupancy`: input tokens, capacity,
+and provider-facing model frozen in the same native RequestSnapshot. Desired model
+selection cannot change its denominator. The latest prepared request must have its
+own reported usage; a newer unmeasured request invalidates the previous value.
+Compaction invalidates occupancy until a later request measurement. Zero is a real
+measurement; absence or invalid capacity is unavailable, never zero. Paging does
+not change measurement authority and navigation does not generate requests.

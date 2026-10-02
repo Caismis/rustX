@@ -597,6 +597,13 @@ pub(crate) fn interaction_settled_view(
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientContextView {
+    /// Latest manual operation admitted in this runtime incarnation. Never inferred
+    /// from a newer canonical checkpoint. Absence is insufficient evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_compaction: Option<RuntimeClientManualCompaction>,
+    /// Latest pre-commit diagnostic; cleared when the next compaction starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_error: Option<String>,
     /// Last prepared request occupancy from the Context owner; absent after compaction until measured again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_request_occupancy: Option<crate::context::occupancy::ContextOccupancy>,
@@ -1364,4 +1371,16 @@ pub struct ConversationWindow {
     pub newer_cursor: Option<RuntimeClientTranscriptCursor>,
     pub target: Option<crate::durable::reading::ConversationTurnId>,
     pub target_cursor: Option<RuntimeClientTranscriptCursor>,
+}
+
+/// Bounded read evidence for the most recently admitted manual compaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientManualCompaction {
+    /// Caller correlation; absent for an uncorrelated native caller.
+    pub request_id: Option<String>,
+    /// False until coordinator state is restored and maintenance released.
+    pub released: bool,
+    /// Exact pre-commit failure diagnostic, if released unsuccessfully.
+    pub error: Option<String>,
 }

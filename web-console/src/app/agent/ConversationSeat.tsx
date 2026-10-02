@@ -5,13 +5,14 @@ import { useClientSelector, sameValue, transportSelection } from '../../client/s
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v32';
+import type { UserInputBlock } from '../../../../protocol/app-server/v33';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
 import { SessionStatus } from '../SessionStatus';
 import { ConversationComposer } from '../new-conversation/ConversationComposer';
 import { ConversationDocks, ConversationTotals } from './ConversationLive';
+import { ContextSeat } from './ContextSeat';
 import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
 import css from '../../presentation/agent/Conversation.module.css';
@@ -41,7 +42,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   return <div className={css.composerSeat} data-composer-seat="">
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
       <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
-        context={view && <ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/>}
+        context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
           initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,
           submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),

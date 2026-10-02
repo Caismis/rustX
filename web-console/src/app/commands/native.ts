@@ -1,7 +1,7 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v32';
+import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v33';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { selectSessionModel } from '../model-preference';
-import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
+import { lineageSwitchSafe } from '../../bindings/projection';
 
 export interface HistoricalSelection {
   target: AttachmentTarget;
@@ -106,14 +106,6 @@ export class CommandSession {
     await this.client.listSessions();
     if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
     return { session, content: action === 'retry' ? [] : result.editor_content ?? [] };
-  }
-  async compact() {
-    this.requireCurrent();
-    // Native manual maintenance may own the Conversation before pending inbound
-    // is adopted. Pending input is not a compaction rejection condition.
-    if (activeAttempt(this.client.getSnapshot().views[this.sessionId]?.snapshot)) throw new Error('Wait for the current attempt before compacting.');
-    await this.client.request({ method: 'context/compact', params: { target: this.target } }, 'context');
-    if (this.current()) await this.client.refresh(this.sessionId);
   }
   async tools() {
     this.requireCurrent();

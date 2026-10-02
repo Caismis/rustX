@@ -138,8 +138,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await page.getByRole('button', { name: 'Remove review.txt' }).click();
     await expect(input).toHaveValue('Review these notes.');
     await page.evaluate(() => window.composerFixture.docks(true));
-    const order = await stack.locator(':scope > *').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label') ?? 'Composer'));
-    expect(order).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
+    const order = await stack.locator(':scope > *').evaluateAll(nodes => nodes.map(node => (node.hasAttribute('data-context-seat') ? 'Context' : node.getAttribute('aria-label')) ?? 'Composer'));
+    expect(order).toEqual(['Context', 'To-dos', 'Goal', 'Queue', 'Composer']);
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');

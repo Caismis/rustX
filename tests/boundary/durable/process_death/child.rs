@@ -1313,7 +1313,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.log.wait_settled(1).await;
             rendezvous("settled");
             let runtime = child.runtime().clone();
-            let compaction = tokio::spawn(async move { runtime.compact_context().await });
+            let compaction = tokio::spawn(async move { runtime.compact_context(None).await });
             child.wait_model_parked().await;
             rendezvous("summary-in-flight");
             release.send_replace(true);

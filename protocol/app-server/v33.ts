@@ -103,6 +103,7 @@ export type Request1 =
       method: 'context/compact';
       params: {
         target: AttachmentTarget;
+        request_id: string;
       };
     }
   | {
@@ -3146,6 +3147,7 @@ export type RuntimeClientEvent =
       type: 'interaction_audit_settled';
     }
   | {
+      context: RuntimeClientContextView2;
       /**
        * The owning attempt for automatic compaction; absent for manual
        * idle maintenance.
@@ -3154,6 +3156,7 @@ export type RuntimeClientEvent =
       type: 'context_compaction_started';
     }
   | {
+      context: RuntimeClientContextView3;
       /**
        * The owning attempt for automatic compaction; absent for manual
        * idle maintenance.
@@ -3171,7 +3174,7 @@ export type RuntimeClientEvent =
        * idle maintenance.
        */
       attempt_id?: AttemptId | null;
-      context: RuntimeClientContextView2;
+      context: RuntimeClientContextView4;
       type: 'context_compacted';
     }
   | {
@@ -4872,6 +4875,15 @@ export interface CapabilitySourceView {
  */
 export interface RuntimeClientContextView {
   /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
    * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
    */
   last_request_occupancy?: ContextOccupancy | null;
@@ -4890,6 +4902,23 @@ export interface RuntimeClientContextView {
    * The latest committed compaction metadata, when compaction occurred.
    */
   latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * Bounded read evidence for the most recently admitted manual compaction.
+ */
+export interface RuntimeClientManualCompaction {
+  /**
+   * Caller correlation; absent for an uncorrelated native caller.
+   */
+  request_id?: string | null;
+  /**
+   * False until coordinator state is restored and maintenance released.
+   */
+  released: boolean;
+  /**
+   * Exact pre-commit failure diagnostic, if released unsuccessfully.
+   */
+  error?: string | null;
 }
 /**
  * The last provider-measured request context for this Conversation.
@@ -8787,6 +8816,15 @@ export interface QuestionnaireSpecification1 {
  */
 export interface RuntimeClientContextView1 {
   /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
    * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
    */
   last_request_occupancy?: ContextOccupancy | null;
@@ -9670,6 +9708,81 @@ export interface RuntimeClientTranscriptInteractionSettled {
  * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView2 {
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
+   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   */
+  last_request_occupancy?: ContextOccupancy | null;
+  /**
+   * Whether the runtime currently owns a context-compaction operation.
+   * This is live operation state, not inferred from token usage.
+   */
+  compaction_in_progress: boolean;
+  /**
+   * Runtime Client projection statistic: the number of committed
+   * compaction completions folded into this read model. The compaction
+   * generation remains the conversation-owned identity.
+   */
+  compaction_count: number;
+  /**
+   * The latest committed compaction metadata, when compaction occurred.
+   */
+  latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * The context diagnostics carried by the Runtime Client snapshot.
+ */
+export interface RuntimeClientContextView3 {
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
+   * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
+   */
+  last_request_occupancy?: ContextOccupancy | null;
+  /**
+   * Whether the runtime currently owns a context-compaction operation.
+   * This is live operation state, not inferred from token usage.
+   */
+  compaction_in_progress: boolean;
+  /**
+   * Runtime Client projection statistic: the number of committed
+   * compaction completions folded into this read model. The compaction
+   * generation remains the conversation-owned identity.
+   */
+  compaction_count: number;
+  /**
+   * The latest committed compaction metadata, when compaction occurred.
+   */
+  latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * The context diagnostics carried by the Runtime Client snapshot.
+ */
+export interface RuntimeClientContextView4 {
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
   /**
    * Last prepared request occupancy from the Context owner; absent after compaction until measured again.
    */

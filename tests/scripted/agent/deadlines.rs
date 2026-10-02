@@ -1263,7 +1263,7 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     // parked next pull proves the summarizer consumed Started before the
     // single runtime-owned clock is advanced.
     let summary_runtime = runtime.clone();
-    let summary_task = tokio::spawn(async move { summary_runtime.compact_context().await });
+    let summary_task = tokio::spawn(async move { summary_runtime.compact_context(None).await });
     let mut parked = model.parked();
     tokio::time::timeout(
         Duration::from_secs(2),

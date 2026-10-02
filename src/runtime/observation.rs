@@ -152,6 +152,8 @@ pub(crate) enum ConversationObservation {
     /// and failure are live operation observations. Only compaction event
     /// variants are legal in this lane.
     ManualCompactionEvent {
+        /// Client correlation, retained only for this runtime incarnation.
+        request_id: Option<String>,
         /// The compaction lifecycle fact.
         event: RuntimeEvent,
     },

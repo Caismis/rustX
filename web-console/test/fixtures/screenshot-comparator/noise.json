@@ -126,5 +126,65 @@
         [26,799,[247,247,247,255],[241,241,241,255]],
         [27,799,[255,255,255,255],[249,249,249,255]]
     ]
+  },
+  {
+    "reference": "composer-running-draft-dark-390-linux.png",
+    "evidence": "PR #444 CI run 37010526549 (merge 4cd2754, head 2835d219); pinned Playwright 1.63.0 container probe: 30 contexts, 13 exact/17 identical variants. Samples 0 and 5 have identical complete DOM/computed-style/float-rect/focus/scroll SHA256 251e4ecba1d52523d4003aca071eef08d656cc0e8b6dc4f2e963f640b6a7e5f3; variant RGBA equals CI. Half-pixel superellipse focus stroke only; see docs/issue-444-web-conformance.md.",
+    "regions": [
+      {
+        "label": "Composer focus stroke top-left corner row 71",
+        "x": 30,
+        "y": 71,
+        "width": 4,
+        "height": 1,
+        "maxChangedPixels": 4,
+        "maxChannelDelta": 14
+      },
+      {
+        "label": "Composer focus stroke top-left corner row 72",
+        "x": 26,
+        "y": 72,
+        "width": 8,
+        "height": 1,
+        "maxChangedPixels": 8,
+        "maxChannelDelta": 18
+      },
+      {
+        "label": "Composer focus stroke top-left corner row 73",
+        "x": 24,
+        "y": 73,
+        "width": 3,
+        "height": 1,
+        "maxChangedPixels": 3,
+        "maxChannelDelta": 11
+      },
+      {
+        "label": "Composer focus stroke top-left corner row 74",
+        "x": 24,
+        "y": 74,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 13
+      }
+    ],
+    "pixels": [
+      [30,71,[36,48,69,255],[37,49,73,255]],
+      [31,71,[47,65,99,255],[45,62,94,255]],
+      [32,71,[55,80,124,255],[50,72,110,255]],
+      [33,71,[60,88,137,255],[56,81,126,255]],
+      [26,72,[44,62,95,255],[39,52,77,255]],
+      [27,72,[65,95,149,255],[63,92,143,255]],
+      [28,72,[74,106,163,255],[73,103,158,255]],
+      [29,72,[76,106,160,255],[73,101,150,255]],
+      [30,72,[63,82,115,255],[59,74,103,255]],
+      [31,72,[54,65,83,255],[54,64,84,255]],
+      [32,72,[47,51,60,255],[51,57,69,255]],
+      [33,72,[44,44,46,255],[46,49,55,255]],
+      [24,73,[55,80,124,255],[55,79,123,255]],
+      [25,73,[77,111,173,255],[79,116,182,255]],
+      [26,73,[59,73,100,255],[62,79,111,255]],
+      [24,74,[55,67,87,255],[59,73,100,255]]
+    ]
   }
 ]

@@ -18,7 +18,7 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v32';
+import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v33';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
@@ -121,7 +121,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const connected = state.connection === 'connected';
   const attached = !view?.deleting && connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
-  const invokeCommand = (request: CommandRequest | { id: 'new' }) => {
+  const invokeCommand = (request: CommandRequest | { id: 'new' } | { id: 'compact' }) => {
     const currentState = client.getSnapshot();
     const view = selected ? currentState.views[selected] : undefined;
     if (view && client.firstSubmissions.session(view.id) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(view.id)!.phase)) return;
@@ -129,6 +129,11 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
     if (request.id === 'new') { createInWorkspace(workspace); return; }
+    if (request.id === 'compact') {
+      client.compact(view.id, () => setConsumed(previous => ({ id: 'compact', sequence: (previous?.sequence ?? 0) + 1 })));
+      setCommand(undefined);
+      return;
+    }
     if (request.id === 'goal') {
       document.querySelector<HTMLElement>('[data-goal-dock] button')?.focus();
       setConsumed(previous => ({ id: 'goal', sequence: (previous?.sequence ?? 0) + 1 }));
