@@ -38,17 +38,17 @@ fn records(
 }
 
 #[tokio::test]
-async fn archive_v2_contract_preserves_accepted_contributions_and_journal_vocabulary() {
+async fn archive_v3_contract_preserves_accepted_contributions_and_journal_vocabulary() {
     let (directory, catalog, _) = open_catalog();
     let (conversation, session, _) = append_history(&catalog, &[]);
     let store = store_for(&catalog, &session, &conversation);
-    let status_id = MessageId::new("archive-v2-status");
+    let status_id = MessageId::new("archive-v3-status");
     let snapshot = todo_status_start_snapshot(
         store.load_head().unwrap().revision.next(),
         status_id.clone(),
         ContributionEmission {
             key: "active_actionable".into(),
-            fingerprint: "archive-v2-fingerprint".into(),
+            fingerprint: "archive-v3-fingerprint".into(),
         },
     );
     store
@@ -59,12 +59,12 @@ async fn archive_v2_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v2");
+    assert_eq!(manifest["format"], "rustx-session-archive/v3");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
             "journal": 2, "messages": 1, "surface": 1, "requests": 2,
-            "generations": 1, "publication_audits": 1, "inherited_responses": 1,
+            "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
         })
     );
     let requests = records(&files, &conversation, "requests");
@@ -195,7 +195,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v2");
+    assert_eq!(manifest["format"], "rustx-session-archive/v3");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -969,4 +969,200 @@ async fn private_agent_authority_never_enters_archive_or_lineage_copy() {
         "history copy grants no executable child authority"
     );
     assert!(copied.read_events(None, 256).unwrap().events.is_empty());
+}
+
+#[tokio::test]
+async fn archive_terminal_only_inherited_turn_survives_reopen_and_repeated_lineage() {
+    inherited_turn_archive(false).await;
+}
+
+#[tokio::test]
+async fn archive_message_backed_incomplete_at_cut_stays_frozen_after_source_terminal() {
+    inherited_turn_archive(true).await;
+}
+
+#[allow(clippy::too_many_lines)] // Ordered native commits, two real lineage copies and decoded ZIP assertions.
+async fn inherited_turn_archive(member: bool) {
+    use crate::durable::reading::{ConversationTurnId, InheritedTurnOutcome};
+    use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+    use crate::runtime::identity::{AttemptId, EventId};
+    let (directory, mut catalog, _) = open_catalog();
+    let (conversation, session, node) = append_history(&catalog, &[user("input", "input")]);
+    let store = store_for(&catalog, &session, &conversation);
+    let origin = ConversationTurnId {
+        conversation_id: conversation.clone(),
+        attempt_id: AttemptId::new("archive-source-attempt"),
+    };
+    let started_at = chrono::DateTime::parse_from_rfc3339("2026-09-01T01:02:03Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ended_at = started_at + chrono::Duration::seconds(7);
+    let event = |kind, timestamp| RuntimeEventEnvelope {
+        schema_version: 1,
+        event_id: EventId::new(format!(
+            "archive-turn-{}",
+            store.presentation_frontier().unwrap() + 1
+        )),
+        sequence: 0,
+        conversation_id: conversation.clone(),
+        attempt_id: Some(origin.attempt_id.clone()),
+        turn_id: None,
+        timestamp,
+        event: kind,
+    };
+    store
+        .append_event(event(
+            RuntimeEvent::AttemptStarted {
+                attempt_id: origin.attempt_id.clone(),
+            },
+            started_at,
+        ))
+        .unwrap();
+    if member {
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("retained"),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: "retained at the cut".into(),
+                    })],
+                }),
+                event(
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("retained"),
+                    },
+                    started_at,
+                ),
+            )
+            .unwrap();
+    } else {
+        store
+            .append_event(event(
+                RuntimeEvent::AttemptTimedOut {
+                    attempt_id: origin.attempt_id.clone(),
+                },
+                ended_at,
+            ))
+            .unwrap();
+    }
+    let revision = store.load_head().unwrap().revision;
+    let source = store.read_lineage_cut(revision).unwrap();
+    assert_eq!(source.turns.len(), 1);
+    let expected_outcome = if member {
+        InheritedTurnOutcome::IncompleteAtCut
+    } else {
+        InheritedTurnOutcome::TimedOut
+    };
+    assert_eq!(source.turns[0].outcome, expected_outcome);
+    let mut prepared = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(
+            &prepared,
+            SessionNodeOrigin::Clone {
+                source_session: session,
+                source_node: node,
+                source_surface_revision: revision,
+            },
+        )
+        .unwrap();
+    // Destination exists before the source terminal commit. No timing race or sleep.
+    if member {
+        store
+            .append_event(event(
+                RuntimeEvent::AttemptTimedOut {
+                    attempt_id: origin.attempt_id.clone(),
+                },
+                ended_at,
+            ))
+            .unwrap();
+        assert_eq!(
+            store.read_lineage_cut(revision).unwrap().turns[0].outcome,
+            InheritedTurnOutcome::TimedOut
+        );
+    }
+    let source_before = store.conversation_read_cut().unwrap();
+    let source_events = store.read_events(None, 64).unwrap().events;
+    for copy in 0..2 {
+        // Opening the persisted destination proves provenance survives reopen.
+        let destination = SqliteConversationStore::open_existing(
+            prepared.conversation_id.clone(),
+            &prepared.database_path,
+        )
+        .unwrap();
+        let frozen = destination
+            .read_lineage_cut(destination.load_head().unwrap().revision)
+            .unwrap();
+        assert_eq!(frozen.turns.len(), 1);
+        let turn = &frozen.turns[0];
+        assert_eq!(turn.id, origin);
+        assert_eq!(turn.outcome, expected_outcome);
+        assert_eq!(turn.started_at, Some(started_at));
+        assert_eq!(turn.ended_at, (!member).then_some(ended_at));
+        assert_eq!(turn.process_message_ids.len(), usize::from(member));
+        if member {
+            assert_eq!(
+                turn.process_message_ids[0],
+                crate::conversation::message_id_of(&frozen.canonical[1])
+            );
+            assert!(turn.preceding_message_id.is_none());
+        } else {
+            assert_eq!(
+                turn.preceding_message_id,
+                Some(crate::conversation::message_id_of(&frozen.canonical[0]))
+            );
+        }
+        let before = destination.conversation_read_cut().unwrap();
+        let cut = SessionArchiveProducer::prepare(
+            directory.path(),
+            &prepared.session_id,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let files = decode(cut).await;
+        let turns = records(&files, &prepared.conversation_id, "inherited_turns");
+        assert_eq!(turns, vec![serde_json::json!(turn)]);
+        assert_eq!(turns[0]["id"], serde_json::json!(origin));
+        assert!(turns[0].get("terminal_event_id").is_none());
+        for name in ["journal", "requests", "generations", "inherited_responses"] {
+            assert!(
+                records(&files, &prepared.conversation_id, name).is_empty(),
+                "{name}"
+            );
+        }
+        let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+        assert_eq!(manifest["schemas"]["inherited_turns"], 1);
+        assert_eq!(manifest["conversations"][0]["frontiers"]["bootstrap"], 1);
+        assert!(
+            manifest["conversations"][0]["frontiers"]
+                .get("inherited_responses")
+                .is_none()
+        );
+        assert_eq!(manifest["artifacts"], serde_json::json!([]));
+        assert!(!files.keys().any(|name| name.starts_with("artifacts/")));
+        assert_eq!(destination.conversation_read_cut().unwrap(), before);
+        assert!(destination.read_events(None, 64).unwrap().events.is_empty());
+        assert!(
+            destination
+                .read_request_snapshots(None, 64)
+                .unwrap()
+                .snapshots
+                .is_empty()
+        );
+        if copy == 0 {
+            let next = catalog.prepare_clone_session(&state(), &frozen).unwrap();
+            catalog
+                .publish_session(
+                    &next,
+                    SessionNodeOrigin::Clone {
+                        source_session: prepared.session_id,
+                        source_node: prepared.node_id,
+                        source_surface_revision: frozen.surface_revision,
+                    },
+                )
+                .unwrap();
+            prepared = next;
+        }
+    }
+    assert_eq!(store.conversation_read_cut().unwrap(), source_before);
+    assert_eq!(store.read_events(None, 64).unwrap().events, source_events);
 }

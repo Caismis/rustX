@@ -1,6 +1,6 @@
 # Session archive export
 
-`rustx-session-archive/v2` is a ZIP64/DEFLATE inspection archive produced by
+`rustx-session-archive/v3` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
 an import, recovery or persistence format. SQLite schema 49 stores the common accepted contributions; export projects those
@@ -11,13 +11,19 @@ the dedicated Agent Status start record. Journal contribution facts use the gene
 `context_contribution_emitted` vocabulary. Archive versions are independent of
 SQLite, App Server, Context ABI and Runtime Client versions.
 
+V3 adds the immutable inherited-turn stream and renames the shared bootstrap-row
+presence frontier to `bootstrap`. The logical file set and frontier declaration
+change, so the archive format advances; existing stream schemas stay unchanged.
+No decoder for older development archives is provided.
+
 ## Logical files and authority
 
-All JSON is UTF-8. JSONL entries contain one archive-v2 logical value per
+All JSON is UTF-8. JSONL entries contain one archive-v3 logical value per
 line, ordered by the corresponding native immutable append coordinate. Mixed
 historical/private native types cross explicit archive projections, not raw serde. Empty
 histories have empty entries. Journal schema = 2 and requests schema = 2. Messages, surface, generations,
 publication_audits and inherited_responses remain at schema version 1;
+inherited_turns starts at schema version 1;
 the manifest also identifies the rustX package version and native durable schema.
 
 | Entry | Authority |
@@ -30,6 +36,7 @@ the manifest also identifies the rustX package version and native durable schema
 | `sessions/<ConversationId>/generations.jsonl` | Request ID, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
 | `sessions/<ConversationId>/inherited_responses.jsonl` | Immutable native completed-response lineage provenance from bootstrap, never reconstructed destination execution |
+| `sessions/<ConversationId>/inherited_turns.jsonl` | Native `TurnReadingProvenance` from `bootstrap_identity.turn_provenance`: original Conversation/Attempt identity, remapped process members and terminal-only predecessor, frozen outcome and timestamps |
 | `artifacts/<ConversationId>/<ArtifactId>/content` | ArtifactStore bytes; one recorded display descriptor stays in the manifest and original references |
 
 Artifact IDs are conversation-scoped in the native store (`artifact_1` can occur
@@ -107,8 +114,14 @@ artifact-reference scan happens after releasing those barriers, using only the
 immutable prefixes. No large history scan holds execution read barriers.
 Each cut records Journal sequence, Ledger position, Surface revision, Request
 Snapshot insertion frontier, publication-audit insertion frontier and immutable
-bootstrap-row presence. Inherited response records come only from that bootstrap;
-readers decode one response at a time using the native JSON row. Generation
+bootstrap-row presence (`frontiers.bootstrap`). Both inherited response and turn
+records share that immutable presence frontier; readers decode one array member
+at a time from their respective native bootstrap columns. Turn provenance is
+not derived from transcript rows or messages and adds no artifact references.
+It never creates destination Journal events, requests, execution ownership or
+terminal event IDs. `IncompleteAtCut` remains frozen even if the source later
+terminalizes. Terminal-only location is represented by the remapped predecessor
+(`null` means before all content), not by a copied destination execution cursor. Generation
 membership is exactly the captured Journal prefix. Request start/completion
 marker columns and mutable runtime/recovery tables are not exported.
 
@@ -174,7 +187,7 @@ success is reported for the failed export.
 
 ## Safety and native authority audit
 
-Archive v2 is a deliberate historical inspection contract. Adding fields to
+Archive v3 is a deliberate historical inspection contract. Adding fields to
 `RequestSnapshot` or its invocation does not add archive fields: the private
 `ArchiveRequestSnapshotV2` / invocation DTOs in `src/session_archive/projection.rs`
 name each exported field. They include request/Attempt/Step/retry and provisional
@@ -201,6 +214,7 @@ configuration and process-local runtime_resource_revision are deliberately absen
 | Publication audits | Direct native encoding: settled identities, timestamps and committed-for-release text/reasoning/refusal/Tool proposal content; no continuation or provider bindings. |
 | Generations | Explicit index of request ID, Journal sequence and native GenerationEvidence, whose fields are provider-independent numeric offsets. |
 | Inherited responses | Direct native CompletedResponseProvenance: lineage identities, timestamp, normalized token counts and timing measurements only; no provider binding or destination execution claim. |
+| Inherited turns | Direct native TurnReadingProvenance: original Conversation/Attempt identity, remapped member/predecessor identities, immutable outcome and optional timestamps only; no Running state, terminal event IDs, artifact references or destination execution claim. |
 | Manifest/lineage | Explicit manifest fields and archive metadata structs; native SessionSnapshot/SessionNode contain public identity, topology, authored name and timestamps only. No Session configuration is read. |
 | Artifact metadata/bytes | Native File/Image/Tool artifact descriptors contain artifact identity and authored display metadata; bytes are Session-owned tool content. Paths never become identity. |
 
