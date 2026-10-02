@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v30';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); });
 it('bounded native marks retain focus preview when the pointer leaves and keyboard focus never navigates alone', async () => {
@@ -74,3 +75,59 @@ it('a loaded historical rail mark remains usable after same-Attempt append progr
  expect(ui!.getByRole('button',{name:'Jump to turn 2'}).getAttribute('aria-current')).toBe('true');
  expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(1);
 });
+
+for(const initial of [64,128])it(`latest outline follows ${initial} → ${initial+1} through start, location and settlement`,async()=>{
+ const fixture=await pagingRail(initial);const n=initial+1;
+ await fixture.start(n);
+ let current=fixture.mark(n);expect(current).toBeTruthy();expect(current!.disabled).toBe(true);
+ await fixture.locate(n);current=fixture.mark(n);expect(current!.disabled).toBe(false);expect(current!.dataset.turnOrdinal).toBe(String(n));
+ await fixture.settle(n);
+ expect(fixture.mark(n)!.disabled).toBe(false);expect(fixture.mark(n)!.dataset.turnOrdinal).toBe(String(n));
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(initial);
+ expect(fixture.offsets()).toEqual([null,null,null,null]);
+});
+
+it('explicit historical page survives live growth; reaching newest page restores native latest intent',async()=>{
+ const fixture=await pagingRail(128);
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Earlier turns'}));});
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'page',offset:0});
+ await fixture.start(129);await fixture.locate(129);await fixture.settle(129);
+ const outline=server.client.getSnapshot().views.A.turnOutline!;
+ expect(outline.paging).toEqual({type:'page',offset:0});expect(outline.page?.turns.map(turn=>turn.ordinal)).toEqual(Array.from({length:64},(_,i)=>i+1));
+ expect(fixture.mark(129)).toBeNull();expect(fixture.offsets()).toEqual([null,0,0,0,0]);
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Later turns'}));});
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'page',offset:64});
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Later turns'}));});
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});expect(fixture.mark(129)!.dataset.turnOrdinal).toBe('129');
+ await fixture.start(130);await fixture.locate(130);await fixture.settle(130);
+ expect(fixture.mark(130)!.dataset.turnOrdinal).toBe('130');expect(fixture.offsets().slice(-4)).toEqual([null,null,null,null]);
+});
+
+it('settlement during a gated outline reply preserves one latest refresh demand',async()=>{
+ const fixture=await pagingRail(64);server.held.add('session/turns');
+ await fixture.start(65);const started=await server.waitFor('session/turns',2);const captured=server.commit(started);
+ await fixture.locate(65);await fixture.settle(65);
+ expect(fixture.offsets()).toEqual([null,null]);
+ await act(async()=>{server.socket.deliver(captured);});
+ const after=await server.waitFor('session/turns',3);expect(after.params).toMatchObject({offset:null});
+ await act(async()=>server.reply(after));
+ expect(fixture.mark(65)!.dataset.turnOrdinal).toBe('65');expect(fixture.mark(65)!.disabled).toBe(false);
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
+ expect(fixture.offsets()).toEqual([null,null,null]);
+});
+
+async function pagingRail(initial:number){
+ server=new Server();await server.attached('A');let total=initial,location:number|undefined;
+ server.handlers.set('session/turns',request=>{
+  if(request.method!=='session/turns')throw new Error('outline method');
+  const offset=request.params.offset??Math.floor((total-1)/64)*64;
+  return {type:'conversation_turns',page:{cut:{conversation_id:'conversation-A',journal:String(total),transcript:String(location??initial),mutation_revision:'0'},offset,total,
+   turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>{const n=offset+i+1;return {id:{conversation_id:'conversation-A',attempt_id:`a${n}`},ordinal:n,cursor:n>initial && n!==location?null:String(n),preview:`turn ${n}`};})}};
+ });
+ let ui:ReturnType<typeof render>;await act(async()=>{ui=render(<TurnNavigator client={server.client} sessionId="A" onNavigate={()=>{}}/>);});
+ const update=async(n:number,settled=false,phaseChange=false)=>{const s=server.snapshots.get('A')!;const next:RuntimeClientSnapshot={...s,attempt:{attempt_id:`a${n}`,turn:1,phase:settled?{type:'settled',outcome:{type:'completed',finish_reason:{type:'stop'}}}:{type:'running'}},transcript:{entries:location?[{cursor:String(location),item:{type:'message',message:{role:'assistant',id:`m${location}`,content:[{type:'text',text:'native output'}]}},turn_process:{conversation_id:'conversation-A',attempt_id:`a${n}`,control_cursor:String(location),message_count:1,tool_call_count:0,outcome:settled?'completed' as const:'running' as const}}]:[]}};await act(async()=>{server.snapshots.set('A',next);if(phaseChange)await server.client.refresh('A');else server.durableUpdate('A',next);});};
+ return {ui:ui!,mark:(n:number)=>ui!.container.querySelector<HTMLButtonElement>(`[data-turn-id='["conversation-A","a${n}"]']`),
+  offsets:()=>server.requests.filter(row=>row.request.method==='session/turns').map(row=>row.request.method==='session/turns'?row.request.params.offset:undefined),
+  start:async(n:number)=>{total=n;location=undefined;await update(n,false,true);},locate:async(n:number)=>{location=n;await update(n);},settle:async(n:number)=>{await update(n,true,true);}};
+}

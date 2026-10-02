@@ -19,12 +19,12 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
       location:currentTurnLocation(view?.snapshot),generation:state.generation};
   },shallowEqual);
   useEffect(()=>{
-    if(view.attachment==='attached')void client.readTurns(sessionId,view.outline?.page?.offset);
+    if(view.attachment==='attached')void client.refreshTurns(sessionId);
   },[client,sessionId,view.target,view.attachment,view.attempt,view.phase,view.generation]);
   const currentId=view.running && view.conversation && view.attempt ? {conversation_id:view.conversation,attempt_id:view.attempt} : undefined;
   const page=view.outline?.page, turns=turnRailItems(page,currentId,view.location), selected=turns.find(turn=>turnKey(turn.id)===preview);
-  const missingLocation=!!view.location && (!page || BigInt(page.cut.transcript)<BigInt(view.location));
-  useEffect(()=>{if(missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment==='attached')void client.readTurns(sessionId,page?.offset);},[client,sessionId,missingLocation,view.outline?.loading,view.outline?.error,view.attachment,page?.offset]);
+  const missingLocation=!!page && !!view.location && BigInt(page.cut.transcript)<BigInt(view.location);
+  useEffect(()=>{if(missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment==='attached')void client.refreshTurns(sessionId);},[client,sessionId,missingLocation,view.outline?.loading,view.outline?.error,view.attachment,page?.offset]);
   const error=view.navigation?.error ?? view.outline?.error;
   if(page?.total===0 && !currentId && !view.outline?.loading && !error)return null;
   return <aside className={css.root} aria-label={tx('agent:reading.turn-navigation')} data-turn-navigator>
@@ -44,13 +44,13 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
           }}><span/></button>;
       })}
     </div>
-    <button type="button" aria-label={tx('agent:reading.newer-turns')} disabled={!page || page.offset+page.turns.length>=page.total || view.outline?.loading} onClick={()=>void client.readTurns(sessionId,page!.offset+64)}>↓</button>
+    <button type="button" aria-label={tx('agent:reading.newer-turns')} disabled={!page || view.outline?.paging.type==='latest' && page.offset+page.turns.length>=page.total || view.outline?.loading} onClick={()=>void (page!.offset+64>=Math.floor((page!.total-1)/64)*64 ? client.readTurns(sessionId) : client.readTurns(sessionId,page!.offset+64))}>↓</button>
     <form className={css.index} onSubmit={event=>{event.preventDefault();const value=Number(ordinal);if(page && Number.isInteger(value) && value>=1 && value<=page.total)void client.readTurns(sessionId,Math.floor((value-1)/64)*64);}}>
       <input type="number" min={1} max={page?.total ?? 1} value={ordinal} onChange={event=>setOrdinal(event.target.value)} aria-label={tx('agent:reading.turn-number')}/>
       <button type="submit" disabled={!page || view.outline?.loading} aria-label={tx('agent:reading.show-turn-page')}>↵</button>
     </form>
     {selected && <div id={previewId} role="tooltip" className={css.preview}><strong>{selected.ordinal ? tx('agent:reading.jump-turn',{n:selected.ordinal}) : tx('agent:reading.current-turn')}</strong><p>{selected.preview || tx('agent:reading.no-preview')}</p></div>}
     {view.outline?.loading && <span className={css.feedback} role="status">{tx('agent:reading.loading-turns')}</span>}
-    {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={()=>{client.invalidateReading(sessionId);void client.readTurns(sessionId,page?.offset ?? 0);}}>{tx('agent:reading.reload-turns')}</button></div>}
+    {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={()=>{client.invalidateReading(sessionId);void client.refreshTurns(sessionId);}}>{tx('agent:reading.reload-turns')}</button></div>}
   </aside>;
 }

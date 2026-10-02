@@ -82,6 +82,25 @@ it('outline read survives a window switch but a resync retires it synchronously'
  server.socket.success(old,{type:'conversation_turns',page:{...outline,offset:128}});await pending;
  expect(server.client.getSnapshot().views.A.turnOutline).toBeUndefined();
 });
+it('resync retires a queued outline refresh; the old reply cannot retire new authority demand',async()=>{
+ await ready();server.held.add('session/turns');
+ const oldWork=server.client.readTurns('A'),old=await server.waitFor('session/turns',2);
+ await server.client.refreshTurns('A');
+ server.socket.deliver({jsonrpc:'2.0',method:'session/resyncRequired',params:{target:server.target('A'),after_cursor:'0',earliest_serviceable:'1'}});
+ await server.client.refresh('A');
+ const newWork=server.client.readTurns('A'),fresh=await server.waitFor('session/turns',3);
+ await server.client.refreshTurns('A');
+ server.socket.success(old,{type:'conversation_turns',page:{...outline,cut:{...cut,journal:'599'}}});await oldWork;
+ expect(server.client.getSnapshot().views.A.turnOutline?.loading).toBe(true);
+ server.socket.success(fresh,{type:'conversation_turns',page:outline});await newWork;
+ const demanded=await server.waitFor('session/turns',4);
+ await new Promise<void>(resolve=>{
+  const unsubscribe=server.client.subscribe(()=>{if(server.client.getSnapshot().views.A.turnOutline?.page?.cut.journal==='601'){unsubscribe();resolve();}});
+  server.socket.success(demanded,{type:'conversation_turns',page:{...outline,cut:{...cut,journal:'601'}}});
+ });
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.cut.journal).toBe('601');
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(4);
+});
 it('ordinary older paging is superseded by a newer navigation intent',async()=>{
  await ready();
  const older=server.client.loadEarlier('A'),a=await server.waitFor('session/transcript',1);

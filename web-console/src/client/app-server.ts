@@ -20,6 +20,7 @@ export type InboundControlOutcome =
   | { status: 'rejected'; reason: string; observed: boolean };
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
+export type OutlinePagingIntent = { type: 'latest' } | { type: 'page'; offset: number };
 export interface SessionView {
   deleting?: boolean;
   deletionRecovery?: "committed_cleanup_pending" | "committed_durability_uncertain";
@@ -40,7 +41,7 @@ export interface SessionView {
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
-  turnOutline?: { page?: ConversationTurnPage; loading?: boolean; error?: string };
+  turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; active?: string; error?: string };
   settings?: SessionPersistentState;
   /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
@@ -223,6 +224,7 @@ export class AppServerClient {
   private readingIntents = new Map<string, number>();
   private readingInFlight = new Map<string, number>();
   private readingAuthorities = new Map<string, number>();
+  private outlineRefreshPending = new Set<string>();
   private outlineIntents = new Map<string, number>();
   // Native metadata invalidation (Issue #386). One monotonic clock orders every
   // metadata observation this client makes: `summaryReadSequence` is ticked at
@@ -298,7 +300,7 @@ export class AppServerClient {
     // model/cancellation continuations only update already-reserved Session rows.
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
-    this.attachmentEpochs.clear(); this.readingAuthorities.clear(); this.outlineIntents.clear(); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
+    this.attachmentEpochs.clear(); this.readingAuthorities.clear(); this.outlineIntents.clear(); this.outlineRefreshPending.clear(); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
     this.listEpoch++; this.listOffset = 0; this.listQuery = '';
     this.log.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
@@ -619,6 +621,7 @@ export class AppServerClient {
     } else {
       if (value.method === 'session/resyncRequired') {
         this.readingAuthorities.set(target.session_id, (this.readingAuthorities.get(target.session_id) ?? 0) + 1);
+        this.outlineRefreshPending.delete(target.session_id);
         this.invalidateReading(target.session_id);
         this.setSession(target.session_id, { turnOutline: undefined, attachment: 'resynchronizing' });
         this.resubscribe.add(target.session_id);
@@ -978,7 +981,7 @@ export class AppServerClient {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined });
+        if (resync) { this.outlineRefreshPending.delete(id);this.setSession(id, { attachment: 'resynchronizing', trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined }); }
         this.acquiring.add(id);
         const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot');
         if (!current()) return;
@@ -1165,19 +1168,27 @@ export class AppServerClient {
       && this.state.views[id]?.attachment === 'attached' && this.state.views[id]?.attachmentIntent === 'wanted'
       && sameTarget(this.state.views[id]?.target, target);
   }
+  /** Automatic refresh preserves the selected paging intent, never the returned offset. */
+  refreshTurns(id: string) {
+    if(this.state.views[id]?.turnOutline?.loading){this.outlineRefreshPending.add(id);return Promise.resolve();}
+    const paging=this.state.views[id]?.turnOutline?.paging;
+    return this.readTurns(id,paging?.type==='page' ? paging.offset : undefined);
+  }
   async readTurns(id: string, offset?: number) {
     const view = this.state.views[id];
     if (!view?.target || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.turnOutline?.loading) return;
     const target = this.target(id), authority = this.readingAuthority(id, false);
     const intent = (this.outlineIntents.get(id) ?? 0) + 1; this.outlineIntents.set(id,intent);
     const current = () => authority() && this.outlineIntents.get(id) === intent;
-    this.setSession(id,{ turnOutline: { ...this.state.views[id]?.turnOutline, loading: true, error: undefined } });
+    const paging:OutlinePagingIntent=offset===undefined ? {type:'latest'} : {type:'page',offset};
+    this.setSession(id,{ turnOutline: { ...this.state.views[id]?.turnOutline, paging, loading: true, error: undefined } });
     try {
       const result = await this.request({ method: 'session/turns', params: { target, cut: null, offset: offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, current);
       if (!current()) return;
       if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
-      this.setSession(id,{turnOutline:{page:result.page}});
-    } catch (error) { if (current()) this.setSession(id,{turnOutline:{ ...this.state.views[id]?.turnOutline, loading:false, error:String(error) }}); }
+      this.setSession(id,{turnOutline:{paging,page:result.page}});
+      if(this.outlineRefreshPending.delete(id))void this.refreshTurns(id);
+    } catch (error) { if (current()) { this.outlineRefreshPending.delete(id);this.setSession(id,{turnOutline:{ ...this.state.views[id]?.turnOutline, paging, loading:false, error:String(error) }}); } }
   }
   async navigateTurn(id: string, turn: ConversationTurn, userCurrent: () => boolean = () => true) {
     const view = this.state.views[id], cut = view?.turnOutline?.page?.cut;
@@ -1467,7 +1478,7 @@ export class AppServerClient {
   }
   private retireAttachmentWork(id: string) {
     this.acquiring.delete(id);
-    this.readingIntents.delete(id); this.outlineIntents.delete(id); this.readingAuthorities.delete(id);
+    this.readingIntents.delete(id); this.outlineIntents.delete(id); this.outlineRefreshPending.delete(id); this.readingAuthorities.delete(id);
     this.traceReads.delete(id);
     this.traceAuthorities.delete(id);
     this.summarySettled.delete(id);
