@@ -553,25 +553,28 @@ fn classify_containment_result(result: nix::Result<()>) -> ContainmentOutcome {
 pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
     let deadline = std::time::Instant::now() + GROUP_ABSENCE_TIMEOUT;
     loop {
-        match killpg(Pid::from_raw(pgid), None) {
-            Err(Errno::ESRCH) => return Ok(()),
-            // `Ok(())` means a live signalable member remains; `EPERM` means
-            // the group is still observable but this caller cannot signal any
-            // member (a zombie-only group, or a live member it is not
-            // authorized to signal). Both keep polling until `ESRCH` or the
-            // bound, so neither is ever a terminal result by itself.
-            Ok(()) | Err(Errno::EPERM) => {}
-            Err(error) => {
-                return Err(format!("cannot probe the owned group absence: {error}"));
-            }
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(
-                "the owned process group did not become provably absent after containment"
-                    .to_owned(),
-            );
+        if group_absence_probe(
+            killpg(Pid::from_raw(pgid), None),
+            std::time::Instant::now() >= deadline,
+        )? {
+            return Ok(());
         }
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// One absence observation, independent of signal success or child reaping.
+/// Kept pure so the Darwin fail-closed deadline/EPERM contract is testable
+/// without waiting for a real orphan or changing the production deadline.
+#[cfg(any(target_os = "macos", test))]
+fn group_absence_probe(observed: nix::Result<()>, expired: bool) -> Result<bool, String> {
+    match observed {
+        Err(Errno::ESRCH) => Ok(true),
+        Ok(()) | Err(Errno::EPERM) if expired => Err(
+            "the owned process group did not become provably absent after containment".to_owned(),
+        ),
+        Ok(()) | Err(Errno::EPERM) => Ok(false),
+        Err(error) => Err(format!("cannot probe the owned group absence: {error}")),
     }
 }
 
@@ -1027,7 +1030,10 @@ mod seccomp_tests {
 
 #[cfg(test)]
 mod signal_contract_tests {
-    use super::{ContainmentOutcome, classify_containment_result, classify_signal_result};
+    use super::{
+        ContainmentOutcome, classify_containment_result, classify_signal_result,
+        group_absence_probe,
+    };
     use nix::errno::Errno;
 
     /// A successful signal and an `ESRCH` (no target group) are the only
@@ -1091,6 +1097,24 @@ mod signal_contract_tests {
             other @ ContainmentOutcome::Contained => {
                 panic!("EPERM must never be {other:?}")
             }
+        }
+    }
+
+    #[test]
+    fn group_absence_requires_esrch_even_after_reaping_or_deadline() {
+        for expired in [false, true] {
+            assert_eq!(group_absence_probe(Err(Errno::ESRCH), expired), Ok(true));
+            // ECHILD from a reaping gate is never a whole-group absence fact.
+            assert!(group_absence_probe(Err(Errno::ECHILD), expired).is_err());
+            assert!(group_absence_probe(Err(Errno::EINVAL), expired).is_err());
+        }
+        for observable in [Ok(()), Err(Errno::EPERM)] {
+            assert_eq!(group_absence_probe(observable, false), Ok(false));
+            assert!(
+                group_absence_probe(observable, true)
+                    .unwrap_err()
+                    .contains("did not become provably absent")
+            );
         }
     }
 

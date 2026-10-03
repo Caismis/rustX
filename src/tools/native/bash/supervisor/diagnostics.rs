@@ -31,8 +31,8 @@ pub enum Event {
     AnchorStopObserved,
     /// Unexpected nonterminal status from the WEXITED-only observation.
     AnchorExitWaitNonterminal { stopped: bool },
-    /// Exact PID SIGKILL return (zero or errno).
-    AnchorUnwedgeKillAttempt { result: i32 },
+    /// Exact retained PID SIGCONT return (zero or errno); not terminal proof.
+    AnchorResumeAttempt { result: i32 },
     /// Exact anchor terminal status, still retained by WNOWAIT.
     AnchorTerminalObserved,
     /// The owned-group wait reached ECHILD; Darwin still requires absence.
@@ -158,7 +158,7 @@ pub fn fixture_executor(
 }
 
 /// Explicit fixture-only pause after the native stop observation. Diagnostics
-/// are recorded first; the fixture releases this before containment proceeds.
+/// are recorded first; the fixture releases this before the exact owner is resumed.
 pub(crate) fn after_anchor_stop() {
     use std::io::Read;
     if let Some(path) = std::env::var_os(ANCHOR_STOP_GATE_ENV) {
