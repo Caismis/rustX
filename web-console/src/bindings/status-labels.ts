@@ -1,4 +1,4 @@
-import type { RuntimeClientJob, TraceState } from '../../../protocol/app-server/v32';
+import type { RuntimeClientJob, TraceState } from '../../../protocol/app-server/v33';
 import type { Translate, TranslationKey } from '../locale/translation';
 
 // Native states remain the keys. These exhaustive maps own only product labels.

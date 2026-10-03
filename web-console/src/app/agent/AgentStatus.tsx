@@ -1,7 +1,7 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted ContextInjectionRow chrome; native status semantics. See PROVENANCE.md. */
 import { useState } from 'react';
-import type { AgentStatusView } from '../../../../protocol/app-server/v32';
+import type { AgentStatusView } from '../../../../protocol/app-server/v33';
 import { agentStatusFacets, agentStatusSummary } from '../../bindings/agent-status';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconContextInjectionOutline16 } from '../../presentation/primitives/icons';

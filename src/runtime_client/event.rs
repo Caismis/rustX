@@ -147,6 +147,8 @@ pub enum RuntimeClientEvent {
     },
     /// A context compaction operation began.
     ContextCompactionStarted {
+        /// Authoritative context state at this lifecycle boundary.
+        context: RuntimeClientContextView,
         /// The owning attempt for automatic compaction; absent for manual
         /// idle maintenance.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +156,8 @@ pub enum RuntimeClientEvent {
     },
     /// A context compaction operation failed before a semantic commit.
     ContextCompactionFailed {
+        /// Authoritative context state at this lifecycle boundary.
+        context: RuntimeClientContextView,
         /// The owning attempt for automatic compaction; absent for manual
         /// idle maintenance.
         #[serde(default, skip_serializing_if = "Option::is_none")]

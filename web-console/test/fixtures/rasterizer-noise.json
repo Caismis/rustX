@@ -99,64 +99,620 @@
         [264,108,[245,246,247,255],[244,245,246,255]]
     ]
   },
-  {
-    "reference": "composer-running-draft-dark-390-linux.png",
-    "evidence": "PR #444 CI run 37010526549 (merge 4cd2754, head 2835d219); pinned Playwright 1.63.0 container probe: 30 contexts, 13 exact/17 identical variants. Samples 0 and 5 have identical complete DOM/computed-style/float-rect/focus/scroll SHA256 251e4ecba1d52523d4003aca071eef08d656cc0e8b6dc4f2e963f640b6a7e5f3; variant RGBA equals CI. Half-pixel superellipse focus stroke only; see docs/issue-444-web-conformance.md.",
-    "regions": [
-      {
-        "label": "Composer focus stroke top-left corner row 71",
-        "x": 30,
-        "y": 71,
-        "width": 4,
-        "height": 1,
-        "maxChangedPixels": 4,
-        "maxChannelDelta": 14
-      },
-      {
-        "label": "Composer focus stroke top-left corner row 72",
-        "x": 26,
-        "y": 72,
-        "width": 8,
-        "height": 1,
-        "maxChangedPixels": 8,
-        "maxChannelDelta": 18
-      },
-      {
-        "label": "Composer focus stroke top-left corner row 73",
-        "x": 24,
-        "y": 73,
-        "width": 3,
-        "height": 1,
-        "maxChangedPixels": 3,
-        "maxChannelDelta": 11
-      },
-      {
-        "label": "Composer focus stroke top-left corner row 74",
-        "x": 24,
-        "y": 74,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 13
-      }
+{
+  "reference": "composer-idle-empty-dark-390-linux.png",
+  "evidence": "PR #447 integration on main 45e8ca43: strict pinned-container repeated capture; 334x178, 12 corner sites only. Reference RGBA SHA256 db85ab9604872f7bcc0fe14b44f7a9ebd28e2e7013fe6cfd0c74b4a70ff86684; actual 6db765629aad80a83a7098aff79fb7117a3c108ba2ecceceb61af2f0ba4800d2. Fresh integrated measurements, not inherited coordinates or bounds.",
+  "regions": [
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 30,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 31,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 26,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 27,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 28,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 31,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 25,
+      "y": 53,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 24,
+      "y": 54,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    }
+  ],
+  "pixels": [
+    [
+      30,
+      51,
+      [
+        25,
+        25,
+        27,
+        255
+      ],
+      [
+        24,
+        24,
+        26,
+        255
+      ]
     ],
-    "pixels": [
-      [30,71,[36,48,69,255],[37,49,73,255]],
-      [31,71,[47,65,99,255],[45,62,94,255]],
-      [32,71,[55,80,124,255],[50,72,110,255]],
-      [33,71,[60,88,137,255],[56,81,126,255]],
-      [26,72,[44,62,95,255],[39,52,77,255]],
-      [27,72,[65,95,149,255],[63,92,143,255]],
-      [28,72,[74,106,163,255],[73,103,158,255]],
-      [29,72,[76,106,160,255],[73,101,150,255]],
-      [30,72,[63,82,115,255],[59,74,103,255]],
-      [31,72,[54,65,83,255],[54,64,84,255]],
-      [32,72,[47,51,60,255],[51,57,69,255]],
-      [33,72,[44,44,46,255],[46,49,55,255]],
-      [24,73,[55,80,124,255],[55,79,123,255]],
-      [25,73,[77,111,173,255],[79,116,182,255]],
-      [26,73,[59,73,100,255],[62,79,111,255]],
-      [24,74,[55,67,87,255],[59,73,100,255]]
+    [
+      31,
+      51,
+      [
+        27,
+        27,
+        29,
+        255
+      ],
+      [
+        28,
+        28,
+        30,
+        255
+      ]
+    ],
+    [
+      32,
+      51,
+      [
+        29,
+        29,
+        31,
+        255
+      ],
+      [
+        31,
+        31,
+        32,
+        255
+      ]
+    ],
+    [
+      33,
+      51,
+      [
+        31,
+        31,
+        33,
+        255
+      ],
+      [
+        32,
+        32,
+        34,
+        255
+      ]
+    ],
+    [
+      26,
+      52,
+      [
+        25,
+        25,
+        27,
+        255
+      ],
+      [
+        27,
+        27,
+        29,
+        255
+      ]
+    ],
+    [
+      27,
+      52,
+      [
+        34,
+        34,
+        35,
+        255
+      ],
+      [
+        34,
+        34,
+        36,
+        255
+      ]
+    ],
+    [
+      28,
+      52,
+      [
+        41,
+        41,
+        43,
+        255
+      ],
+      [
+        40,
+        40,
+        42,
+        255
+      ]
+    ],
+    [
+      31,
+      52,
+      [
+        43,
+        43,
+        46,
+        255
+      ],
+      [
+        44,
+        44,
+        45,
+        255
+      ]
+    ],
+    [
+      32,
+      52,
+      [
+        44,
+        44,
+        45,
+        255
+      ],
+      [
+        43,
+        43,
+        45,
+        255
+      ]
+    ],
+    [
+      33,
+      52,
+      [
+        43,
+        43,
+        45,
+        255
+      ],
+      [
+        44,
+        44,
+        46,
+        255
+      ]
+    ],
+    [
+      25,
+      53,
+      [
+        43,
+        43,
+        44,
+        255
+      ],
+      [
+        42,
+        42,
+        45,
+        255
+      ]
+    ],
+    [
+      24,
+      54,
+      [
+        44,
+        44,
+        46,
+        255
+      ],
+      [
+        44,
+        44,
+        45,
+        255
+      ]
     ]
-  }
+  ]
+},
+{
+  "reference": "composer-idle-empty-light-390-linux.png",
+  "evidence": "PR #447 integration on main 45e8ca43: strict pinned-container repeated capture; 334x178, 12 corner sites only. Reference RGBA SHA256 e4abb810af581b5f1e84fa49c147156b62cadfdc3b92aa7e530562cfafc72cd1; actual 8058b197d89728e9dc5b978fdbfbdc7bb52148f1c8b984a5cddf91e61f509965. Fresh integrated measurements, not inherited coordinates or bounds.",
+  "regions": [
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 26,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 27,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 28,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 29,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 30,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 25,
+      "y": 53,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 26,
+      "y": 53,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 24,
+      "y": 54,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    }
+  ],
+  "pixels": [
+    [
+      32,
+      51,
+      [
+        240,
+        240,
+        240,
+        255
+      ],
+      [
+        239,
+        239,
+        239,
+        255
+      ]
+    ],
+    [
+      33,
+      51,
+      [
+        239,
+        239,
+        239,
+        255
+      ],
+      [
+        237,
+        237,
+        237,
+        255
+      ]
+    ],
+    [
+      26,
+      52,
+      [
+        246,
+        246,
+        246,
+        255
+      ],
+      [
+        244,
+        244,
+        244,
+        255
+      ]
+    ],
+    [
+      27,
+      52,
+      [
+        238,
+        238,
+        238,
+        255
+      ],
+      [
+        237,
+        237,
+        237,
+        255
+      ]
+    ],
+    [
+      28,
+      52,
+      [
+        237,
+        237,
+        237,
+        255
+      ],
+      [
+        235,
+        235,
+        235,
+        255
+      ]
+    ],
+    [
+      29,
+      52,
+      [
+        240,
+        240,
+        240,
+        255
+      ],
+      [
+        238,
+        238,
+        238,
+        255
+      ]
+    ],
+    [
+      30,
+      52,
+      [
+        247,
+        247,
+        247,
+        255
+      ],
+      [
+        245,
+        245,
+        245,
+        255
+      ]
+    ],
+    [
+      32,
+      52,
+      [
+        252,
+        252,
+        252,
+        255
+      ],
+      [
+        253,
+        253,
+        253,
+        255
+      ]
+    ],
+    [
+      33,
+      52,
+      [
+        254,
+        254,
+        254,
+        255
+      ],
+      [
+        255,
+        255,
+        255,
+        255
+      ]
+    ],
+    [
+      25,
+      53,
+      [
+        233,
+        233,
+        233,
+        255
+      ],
+      [
+        235,
+        235,
+        235,
+        255
+      ]
+    ],
+    [
+      26,
+      53,
+      [
+        245,
+        245,
+        245,
+        255
+      ],
+      [
+        247,
+        247,
+        247,
+        255
+      ]
+    ],
+    [
+      24,
+      54,
+      [
+        247,
+        247,
+        247,
+        255
+      ],
+      [
+        249,
+        249,
+        249,
+        255
+      ]
+    ]
+  ]
+}
 ]

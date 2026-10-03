@@ -9,6 +9,49 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Bounded caller correlation for one manual compaction, not an idempotency key.
+/// Accepts 1..=64 ASCII letters, digits, underscores or hyphens (including UUIDs).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ManualCompactionRequestId(String);
+
+impl ManualCompactionRequestId {
+    /// Returns the validated correlation value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl TryFrom<String> for ManualCompactionRequestId {
+    type Error = &'static str;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty()
+            || value.len() > 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(
+                "manual compaction request ID must contain 1..=64 ASCII letters, digits, underscores or hyphens",
+            );
+        }
+        Ok(Self(value))
+    }
+}
+impl From<ManualCompactionRequestId> for String {
+    fn from(value: ManualCompactionRequestId) -> Self {
+        value.0
+    }
+}
+impl schemars::JsonSchema for ManualCompactionRequestId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ManualCompactionRequestId".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "string", "description": "Manual compaction correlation: 1..64 ASCII letters, digits, underscores or hyphens; not an idempotency key.", "minLength": 1, "maxLength": 64, "pattern": r"^[A-Za-z0-9_-]+$(?![\s\S])" })
+    }
+}
+
 /// Defines a transparent string-backed identifier type with standard traits.
 macro_rules! id_type {
     ($(#[$doc:meta])* $name:ident) => {

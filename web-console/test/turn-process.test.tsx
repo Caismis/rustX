@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v32';
+import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v33';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { turnProcesses } from '../src/bindings/turn-process';
 import { snapshot } from './fixture';

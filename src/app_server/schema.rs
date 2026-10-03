@@ -44,6 +44,17 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     let mut fixtures = vec![
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("manual-compaction-correlation".into()),
+            call: Method::CompactContext {
+                target: target.clone(),
+                request_id: "550e8400-e29b-41d4-a716-446655440000"
+                    .to_owned()
+                    .try_into()
+                    .expect("bounded UUID correlation"),
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
             call: Method::SessionCreate {
                 settings: crate::local_runtime::session::SessionPersistentState {
@@ -726,9 +737,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v32.schema.json", "v32.ts"]);
+        assert_eq!(generations, ["v33.schema.json", "v33.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v32.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v33.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

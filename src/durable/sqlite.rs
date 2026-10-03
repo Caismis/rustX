@@ -280,7 +280,7 @@ fn count_conversation_store_open() {
 /// share a definition digest and execute materially different contracts.
 ///
 /// A v31 journal records ownership facts with no profile identity at all, and
-/// there is nothing a v32 reader could honestly make of them — recomputing the
+/// there is nothing a v33 reader could honestly make of them — recomputing the
 /// value from the current role definition or the current resource generation
 /// is exactly the derivation the durable fact exists to prevent. So the file
 /// is refused at open rather than decoded with an invented or reconstructed
@@ -11904,7 +11904,7 @@ mod tests {
     #[test]
     fn a_version_32_profile_store_is_refused_without_migration() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("profile-v32.sqlite");
+        let path = directory.path().join("profile-v33.sqlite");
         let id = ConversationId::new("conv_bb2149cf-1f8d-7c3c-8c60-73f4acb0a518");
         {
             let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
@@ -14818,7 +14818,7 @@ mod tests {
     /// execution fact, so the store version must gate open.
     ///
     /// A version-31 journal holds ownership facts with no `profile_digest`.
-    /// The one thing a v32 reader must never do is reconstruct it — the
+    /// The one thing a v33 reader must never do is reconstruct it — the
     /// current role definition and the current resource generation are both
     /// mutable, and deriving identity from them is exactly what committing
     /// the value durably exists to prevent. There is therefore nothing honest

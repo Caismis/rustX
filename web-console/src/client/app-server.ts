@@ -7,10 +7,10 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v32';
+} from '../../../protocol/app-server/v33';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage, ConversationWindowAt } from '../../../protocol/app-server/v32';
+import type { ConversationTurn, ConversationTurnPage, ConversationWindowAt } from '../../../protocol/app-server/v33';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 /** Expected observed cancellation identity; never substituted with a successor Attempt. */
@@ -27,7 +27,18 @@ export type InboundControlOutcome =
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export type OutlinePagingIntent = { type: 'latest' } | { type: 'page'; offset: number };
+export interface CompactionRequestEvidence {
+  /** Presentation ordering only; never resolves an uncertain request. */
+  baselineCount: number;
+  generation: number;
+  requestId: string;
+  authorityId?: string;
+  target: AttachmentTarget;
+  status: 'submitting' | 'uncertain' | 'succeeded' | 'failed';
+  diagnostic?: string;
+}
 export interface SessionView {
+  compactionRequest?: CompactionRequestEvidence;
   deleting?: boolean;
   deletionRecovery?: "committed_cleanup_pending" | "committed_durability_uncertain";
   recoveringDeletion?: boolean;
@@ -75,6 +86,7 @@ export type GoalControlOutcome =
   | { status: 'uncertain' }
   | { status: 'obsolete' };
 export interface UncertainOperation {
+  compactionRequestId?: string;
   id: string;
   method: Request1['method'];
   sessionId?: string;
@@ -336,7 +348,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v32', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v33', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -354,12 +366,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 32, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 33, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 32 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v32 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 33 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v33 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -439,6 +451,7 @@ export class AppServerClient {
         const params = pending.request.params;
         uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId,
           generation: this.state.generation,
+          ...(pending.request.method === 'context/compact' ? { compactionRequestId: pending.request.params.request_id } : {}),
           ...('interaction' in params ? { interactionKey: interactionKey(params.interaction) } : {}),
         });
         pending.reject(new OutcomeUncertain());
@@ -1253,6 +1266,26 @@ export class AppServerClient {
   }
   private reconcileInteractions(id: string) {
     const snapshot = this.state.views[id].snapshot!;
+    const request = this.state.views[id].compactionRequest;
+    const target = this.state.views[id].target;
+    if (request) {
+      if (request.authorityId !== this.state.authorityId || (request.generation === this.state.generation && !sameTarget(request.target, target)) || request.target.conversation_id !== target?.conversation_id
+        || request.target.runtime_incarnation !== target?.runtime_incarnation) {
+        this.setSession(id, { compactionRequest: undefined });
+      } else if (snapshot.context?.compaction_in_progress && ['succeeded', 'failed'].includes(request.status)) {
+        this.setSession(id, { compactionRequest: undefined });
+      } else {
+        const evidence = snapshot.context?.manual_compaction;
+        if (evidence?.request_id === request.requestId && evidence.released) {
+          // Native release ends gesture ownership independently of the RPC reply.
+          if (this.compactionRequests.get(id)?.requestId === request.requestId) this.compactionRequests.delete(id);
+          if (request.status !== 'succeeded') this.setSession(id, { compactionRequest: { ...request, status: evidence.error ? 'failed' : 'succeeded', diagnostic: evidence.error ?? undefined } });
+          if (this.state.uncertain.some(item => item.compactionRequestId === request.requestId && item.sessionId === id)) {
+            this.publish({ uncertain: this.state.uncertain.filter(item => item.compactionRequestId !== request.requestId || item.sessionId !== id) });
+          }
+        }
+      }
+    }
     const mutation = this.state.views[id].modelMutation;
     if (mutation && mutation.generation !== this.state.generation) this.setSession(id, { modelMutation: undefined });
     const cancellation = this.state.views[id].cancellation;
@@ -1394,7 +1427,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v32').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v33').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -1409,6 +1442,35 @@ export class AppServerClient {
       throw error;
     }
   }
+  private compactionRequests = new Map<string, CompactionRequestEvidence>();
+  /** Claims the local gesture synchronously. Native maintenance owns admission. */
+  compact(id: string, consume: () => void = () => {}): boolean {
+    const target = this.target(id), generation = this.state.generation;
+    const pending = this.compactionRequests.get(id);
+    if (pending?.generation === generation && sameTarget(pending.target, target)) return false;
+    const operation: CompactionRequestEvidence = { baselineCount: this.state.views[id]?.snapshot?.context?.compaction_count ?? 0, generation, requestId: crypto.randomUUID(), authorityId: this.state.authorityId, target, status: 'submitting' };
+    this.compactionRequests.set(id, operation);
+    this.setSession(id, { compactionRequest: operation });
+    consume();
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+      && this.state.views[id]?.compactionRequest?.requestId === operation.requestId;
+    const release = () => { if (this.compactionRequests.get(id) === operation) this.compactionRequests.delete(id); };
+    void this.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, 'context', undefined, current)
+      .then(async () => {
+        release();
+        if (!current()) return;
+        // The response follows native release. Read failure cannot erase this fact.
+        this.setSession(id, { compactionRequest: { ...operation, status: 'succeeded' } });
+        await this.refresh(id).catch(() => {});
+      }, error => {
+        release();
+        if (this.state.views[id]?.compactionRequest !== operation) return;
+        if (!current() && (this.state.views[id]?.target || this.state.authorityId !== operation.authorityId)) return;
+        this.setSession(id, { compactionRequest: { ...operation, status: isOutcomeUncertain(error) ? 'uncertain' : 'failed', diagnostic: String(error) } });
+      });
+    return true;
+  }
+
   async repairAgentModel(id: string) {
     const target = this.target(id), generation = this.state.generation;
     await this.refresh(id);

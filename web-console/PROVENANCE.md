@@ -22,9 +22,9 @@ source, consulted-only files, exact upstream/local hashes and import closure.
 Native cancellation, Queue/Steer admission, upload gates and retained-first-submission
 semantics keep their existing rustX owners. See [COMPOSER.md](COMPOSER.md).
 
-PR #445 is integrated with merged #444's mandatory App Server v32/file-delivery
+PR #445's accepted Composer behavior is integrated with #447's mandatory App Server v33/file-delivery
 contract. Inventory hashes and retained dependency closures describe this final
-source, including v32 imports; upstream reference pins are unchanged.
+source, including v33 imports; upstream reference pins are unchanged.
 
 ## #420 incremental projection and Chat synchronization
 
@@ -1164,7 +1164,7 @@ No Harness runtime, Session store, semantic turn derivation, scroll coordinator
 or shell was imported. Native Attempt origins own turn identity; display ordinal
 only selects a native page. Existing derived ChatViewport and conversation CSS
 retain their original provenance with updated local hashes and dependency closure.
-The current generated imports and local dependency closure use mandatory App Server v32.
+The current generated imports and local dependency closure use mandatory App Server v33.
 
 ## #431 explicit delivery reference audit
 
@@ -1174,6 +1174,28 @@ actual files. Explicit declaration, canonical action coordinates, and one shared
 preview seat informed the design. No new Harness source was copied/adapted at that
 pin, so no conceptual-only source records are added. The existing attributed
 Markdown and RightPanel descendants are reused with their original upstream
-baselines; current local hashes/import closure are refreshed for v32 and Markdown
+baselines; current local hashes/import closure are refreshed for v33 and Markdown
 preview composition. image-size is an independently pinned MIT dependency for
 encoded raster dimensions, included in generated production dependency notices.
+
+## Issue #435 observable native compaction
+
+Read-only behavioral reference at approved pin
+`639ed015397290b3745d163aafe02ffee4aa3f84`:
+
+- `packages/client/ui-chat/src/client/chat/CompactionCommandCard.tsx`
+- `packages/client/ui-chat/src/client/chat/CompactionItem.tsx`
+- `packages/client/ui-chat/src/client/chat/GenericCommandCard.tsx`
+- `packages/client/ui-chat/src/client/conversation-nodes/compaction.ts`
+- `packages/client/ui-chat/src/client/conversation-nodes/command.ts`
+- `packages/client/ui-conversation/src/client/context-occupancy.ts`
+- `packages/client/ui-chat/src/client/contract/snapshot.ts`
+- `packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx`
+
+These informed the non-modal lifecycle, inspectable diagnostic, checkpoint identity,
+and Composer measurement disclosure. ContextSeat is rustX-authored over native
+read state. No Harness command execution/storage, heuristic token breakdown, or
+projected token estimate was imported. Existing canonical transcript rendering owns
+historical checkpoints; the context seat adds no history rows. The failed lookup
+of `ui-chat/src/client/chat/ContextMeter.tsx` was corrected to the actual
+`ui-conversation` path above. Source hashes are recorded under `inspected_only`.

@@ -29,9 +29,8 @@ const e2e = new URL('./e2e/', import.meta.url);
 const snapshotDirectories = readdirSync(e2e)
   .filter(entry => entry.endsWith('.spec.ts-snapshots'))
   .map(entry => new URL(`${entry}/`, e2e));
-/** The comparator's own contract is proven against frozen fixtures: three
- * earlier Settings references and the rasterizer noise CI measured on two of
- * them. They are copies, not live references, so a product change to a live
+/** The comparator's own contract is proven against frozen fixtures: earlier
+ * Settings and Composer references and their measured rasterizer noise. They are copies, not live references, so a product change to a live
  * screenshot never silently rewrites the comparator's evidence. */
 const comparatorPolicy = frozenManifest as unknown as NoisePolicy;
 const frozen = new URL('./fixtures/screenshot-comparator/', import.meta.url);
@@ -175,26 +174,26 @@ it('C: noise may move to unrecorded coordinates inside its approved region, with
 
 it('composer corner evidence grants tolerance to exactly its 16 measured sites and bounds', () => {
   const name = 'composer-running-draft-dark-390-linux.png';
-  const expected = reference(name);
-  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const expected = fixture(name);
+  const entry = comparatorPolicy.find(entry => entry.reference === name)!;
   const measured = entry.pixels as MeasuredNoisePixel[];
   const sites = entry.regions.flatMap(cells);
   expect(sites).toHaveLength(16);
   expect(sites).toEqual(measured.map(([x, y]) => [x, y]));
   const observed = copy(expected);
   for (const [x, y, , after] of measured) paint(observed, x, y, after);
-  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, comparatorPolicy).ok).toBe(true);
   // The same capture has no allowance under another reference's name.
-  expect(compare(observed, 'composer-idle-draft-dark-390-linux.png', expected, noisePolicy).ok).toBe(false);
+  expect(compare(observed, 'composer-idle-draft-dark-390-linux.png', expected, comparatorPolicy).ok).toBe(false);
   for (const region of entry.regions) {
     const excessive = copy(expected);
     nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
     // Neither neighboring pixels nor an extra row inherit the corner's bound.
     for (const [x, y] of [[region.x - 1, region.y], [region.x + region.width, region.y], [region.x, 75]]) {
       const adjacent = copy(observed);
       nudge(adjacent, x, y, 1);
-      const result = compare(adjacent, name, expected, noisePolicy);
+      const result = compare(adjacent, name, expected, comparatorPolicy);
       expect(result.ok).toBe(false);
       expect(result.changedOutsideRegions).toBe(1);
     }
@@ -203,24 +202,24 @@ it('composer corner evidence grants tolerance to exactly its 16 measured sites a
 
 it('composer corner noise cannot conceal text, focus contrast, theme or layout changes', () => {
   const name = 'composer-running-draft-dark-390-linux.png';
-  const expected = reference(name);
-  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const expected = fixture(name);
+  const entry = comparatorPolicy.find(entry => entry.reference === name)!;
   const observed = copy(expected);
   for (const [x, y, , after] of entry.pixels as MeasuredNoisePixel[]) paint(observed, x, y, after);
   for (const [x, y] of [[50, 95], [150, 71]]) {
     const changed = copy(observed);
     nudge(changed, x, y, 1);
-    expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
+    expect(compare(changed, name, expected, comparatorPolicy).ok).toBe(false);
   }
   const theme = copy(observed);
   for (let y = 0; y < theme.height; y++)
     for (let x = 0; x < theme.width; x++) nudge(theme, x, y, 1);
-  expect(compare(theme, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(theme, name, expected, comparatorPolicy).ok).toBe(false);
   const shifted = copy(observed);
   for (let y = 0; y < shifted.height; y++)
     for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
-  expect(compare(shifted, name, expected, noisePolicy).ok).toBe(false);
-  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(shifted, name, expected, comparatorPolicy).ok).toBe(false);
+  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, comparatorPolicy).ok).toBe(false);
 });
 
 it('D: the same low-amplitude change outside every approved region fails', () => {
@@ -392,4 +391,49 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
   const heightResult = compare(cropHeight(narrow, narrow.height - 1), NARROW);
   expect(heightResult.ok).toBe(false);
   expect(heightResult.report).toContain(`dimensions: expected 390x844, actual 390x843`);
+});
+
+it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51]] as const)('measured Composer corner noise stays restricted: %s %s', (state, theme, sites, bound, cornerY) => {
+  const name = `composer-${state}-${theme}-390-linux.png`;
+  const expected = reference(name);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
+  expect(measured).toHaveLength(sites);
+  const observed = copy(expected);
+  for (const [x, y, before, after] of measured) {
+    expect(pixel(expected, x, y)).toEqual(before);
+    paint(observed, x, y, after);
+  }
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, []).ok).toBe(false);
+  expect(compare(observed, `composer-idle-draft-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  for (const region of entry.regions) {
+    expect(region.maxChannelDelta).toBeLessThanOrEqual(bound);
+    const excessive = copy(expected);
+    nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  // Adjacent corner, text, and control pixels retain exact comparison.
+  for (const [x, y] of [[34, cornerY], [33, cornerY + 2], [24, cornerY + 4], [50, 76], [300, 126]]) {
+    const changed = copy(observed); nudge(changed, x, y, 1);
+    const result = compare(changed, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+  const shifted = copy(observed);
+  for (let y = 0; y < shifted.height; y++)
+    for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
+  expect(compare(shifted, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+});
+
+it.each(['light', 'dark'])('integrated running Composer remains strict after remeasurement: %s', theme => {
+  const name = `composer-running-draft-${theme}-390-linux.png`;
+  expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
+  const expected = reference(name);
+  for (const [x, y] of [[24, 117], [33, 120], [34, 117], [50, 76], [300, 126]]) {
+    const changed = copy(expected); nudge(changed, x, y, 1);
+    expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
+  }
+  expect(compare({ ...expected, height: expected.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
 });

@@ -2,9 +2,9 @@ import { message, displayText, searchVocabulary, type DisplayText } from '../../
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { CompletedResponseView, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v32';
+import type { CompletedResponseView, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v33';
 import type { AppServerClient } from '../../client/app-server';
-import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
+import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from './native';
@@ -13,7 +13,7 @@ import css from './Commands.module.css';
 
 type Choice = { kind: 'model'; model: string; profile?: string } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: DisplayText; detail?: DisplayText; choice: Choice }
-export interface CommandRequest { id: Exclude<CommandId, 'new'> | 'retry' | 'tree'; messageId?: string; response?: CompletedResponseView }
+export interface CommandRequest { id: Exclude<CommandId, 'new' | 'compact'> | 'retry' | 'tree'; messageId?: string; response?: CompletedResponseView }
 export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
   request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
   close: () => void; succeeded: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
@@ -27,8 +27,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   const options = useRef<HTMLDivElement>(null);
   const [scope] = useState(() => new CommandSession(client, sessionId, () => alive.current && current()));
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot).views[sessionId];
-  const blocked = request.id === 'compact' ? activeAttempt(view?.snapshot)
-    : ['branch', 'retry', 'tree'].includes(request.id) && !lineageSwitchSafe(view);
+  const blocked = ['branch', 'retry', 'tree'].includes(request.id) && !lineageSwitchSafe(view);
   const valid = () => alive.current && current();
   const historical = request.id === 'fork' || request.id === 'branch' || request.id === 'retry';
   const loadBoundaries = async (offset: number) => {
@@ -75,7 +74,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
           setDetail(request.response && request.id !== 'retry' ? message('commands:copy.the-new-lineage-includes-this-completed-response-and-opens-with-an-empty-composer') : request.id === 'fork' ? message('commands:copy.independent-session-choose-the-exact-user-boundary-its-prompt-returns-to-the-composer') : request.id === 'retry' ? message('commands:copy.create-a-native-branch-switch-the-idle-session-to-it-and-execute-the-selected-prompt-once-') : message('commands:copy.create-a-native-branch-and-switch-the-idle-session-to-it-the-selected-prompt-returns-to-th'));
           await loadBoundaries(0); break;
         case 'tools': { const result = await scope.tools(); if (valid()) { setDetail(JSON.stringify(result, null, 2)); succeeded(); } break; }
-        case 'compact': setDetail(message('commands:copy.compact-this-session-through-the-native-context-owner')); break;
         case 'tree': setDetail(message('commands:copy.native-session-lineage-opening-another-node-switches-the-idle-resident-runtime-the-origina')); await loadTree(0); break;
         case 'goal': setError(message('commands:copy.goal-controls-are-in-the-goal-dock')); break;
         default: { const exhaustive: never = request.id; throw new Error(String(exhaustive)); }
@@ -100,14 +98,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     } catch (cause) { if (valid()) { setError(message('commands:copy.value-close-and-reread-authoritative-state-before-another-mutation', { p0: String(cause) })); setStopped(true); } }
     finally { selecting.current = false; if (valid()) setBusy(false); }
   };
-  const perform = async () => {
-    if (selecting.current || busy || stopped || blocked || !valid()) return;
-    selecting.current = true; setBusy(true); setError('');
-    try {
-      if (request.id === 'compact') { await scope.compact(); if (valid() && scope.current()) { succeeded(); close(); } }
-    } catch (cause) { if (valid()) { setError(message('commands:copy.value-close-and-reread-authoritative-state-before-another-mutation', { p0: String(cause) })); setStopped(true); } }
-    finally { selecting.current = false; if (valid()) setBusy(false); }
-  };
   const filtered = rows.filter(row => `${searchVocabulary(row.label)} ${searchVocabulary(row.detail ?? '')}`.toLowerCase().includes(query.toLowerCase()));
   useEffect(() => { options.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active, query]);
   const stale = !scope.current();
@@ -118,7 +108,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     {!busy && stale && <p role="status">{tx('commands:command-panel.attachment-changed-close-and-reopen-to-read-current-native-state')}</p>}
     {busy && <p role="status">{tx('commands:command-panel.waiting-for-native-acknowledgement')}</p>}
     {!busy && !error && !rows.length && (historical || request.id === 'tree' || request.id === 'model') && <p role="status">{tx('commands:command-panel.no-native-choices-available')}</p>}
-    {request.id === 'compact' && <Button disabled={busy || stopped || stale || blocked} onClick={() => void perform()}>{tx('commands:command-panel.compact-context')}</Button>}
     {!!rows.length && <><input autoFocus className={css.search} aria-label={tx('commands:command-panel.filter-options')} value={query} disabled={busy}
       onChange={event => { setQuery(event.target.value); setActive(0); }} aria-controls="command-options" aria-activedescendant={filtered[active] ? `choice-${active}` : undefined}
       onKeyDown={event => {

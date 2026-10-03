@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type {
   AgentSkillSelection, ApprovalMode, NativePolicyOverrideDocument, NativeTool,
   RuntimeLayer, SourceScope, SourceSettings, SourceToolSelection,
-} from '../../../../../protocol/app-server/v32';
+} from '../../../../../protocol/app-server/v33';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
 import { CheckboxList, Names, Selection, TextField, nativeTools, policyTools } from '../forms/controls';

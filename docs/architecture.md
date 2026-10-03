@@ -98,7 +98,7 @@ native workspace managers derive storage from their composed Conversation access
 `SessionArchiveProducer` in the native library reads catalog/lineage, immutable
 SQLite history and ArtifactStore bytes. It owns one finite cut and one versioned
 inspection archive, without loading runtimes or depending on transport/Trace.
-App Server v32 prepares a scoped streaming-download capability; Web consumes it
+App Server v33 prepares a scoped streaming-download capability; Web consumes it
 through the browser download manager and TUI writes bytes to a client-local file.
 Neither client composes the archive. Execution coordination ends before history
 serialization, compression or transport backpressure. See the exact authority,
@@ -4513,7 +4513,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v32](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v33](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4538,7 +4538,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v32
+       App Server protocol v33
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4556,7 +4556,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v32, the only external product control protocol, and
+console speak App Server v33, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -5631,7 +5631,7 @@ The following describes that internal framing adapter.
 
 #### Runtime Client configuration projection
 
-App Server v32 projects authored sources, effective configuration and composable
+App Server v33 projects authored sources, effective configuration and composable
 per-unit application state. Save transfers work to native reconciliation; clients
 render native cache impact and submit explicit adoption intent. Scope/version
 notifications and authoritative rereads repair reconnect without mutation replay.
@@ -5668,7 +5668,7 @@ as future authority.
 
 ### Layer 9: TUI and Web
 
-Both are thin App Server v32 clients. TUI `/settings` authors User/Workspace
+Both are thin App Server v33 clients. TUI `/settings` authors User/Workspace
 sources, `/session settings` inspects Session state, `/session adopt` submits the
 inspected candidate, and `/model` changes Session intent. Web Settings separates
 source authoring from Session adoption. Save automatically transfers work to the
@@ -6818,7 +6818,7 @@ See [Session-owned workspace uploads](session-uploads.md) for receipt admission,
 
 ### Pending inbound mutation and committed claim receipts
 
-The exact pending controls described in [App Server protocol v32](app-server-protocol.md#exact-pending-inbound-controls-web-06)
+The exact pending controls described in [App Server protocol v33](app-server-protocol.md#exact-pending-inbound-controls-web-06)
 remain native `ConversationStore` transitions. Sequence + MessageId identify one
 occurrence, and a monotonic pending revision prevents lost updates. The durable
 mutation transaction and canonical adoption transaction are the only ownership
@@ -6890,7 +6890,7 @@ and retained workspace facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v32).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v33).
 
 ## Image Tool and Bash presentation (#412)
 

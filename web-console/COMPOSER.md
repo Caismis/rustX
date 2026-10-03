@@ -440,3 +440,21 @@ choice/multichoice/boolean/text/numeric/custom values and page navigation. Only
 dismissal, navigation and unmount never settle anything. Successful acknowledgements
 keep the pending surface until snapshot absence proves settlement. Lost replies
 stay uncertain, cannot be resent and repair through native reconnect/reread.
+
+### Direct compaction and context seat (#435)
+
+`/compact` consumes its command draft at dispatch, independently of the result.
+The client claims duplicate ownership before any asynchronous boundary. Unlike
+selector commands, it opens no CommandPanel and needs no second confirmation.
+Text entered afterward remains editable and is never cleared by settlement.
+Session-scoped request evidence survives component remount; native context events
+and snapshot repair supply actual progress, release, diagnostics, and occupancy.
+Uncertain responses require authoritative read repair and are never auto-retried.
+See `docs/context-engine.md` for the request/start/commit/release contract.
+
+PR #409 (`f268175bb8d31010706e7070aae80d2b46b7aced`) removed the earlier
+ConversationStats occupancy widget and changed its test to assert absence while
+introducing resident Turn presentation. The inspected diff establishes that change,
+but not a separate meter-specific rationale. The restored capability lives in the
+current Composer context seat; cumulative ConversationStats and Turn tails retain
+their present roles.

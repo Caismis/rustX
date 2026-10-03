@@ -139,8 +139,11 @@ impl RuntimeAttachment {
     /// Await the native maintenance operation.
     /// # Errors
     /// Closed attachment or rejected/failed compaction.
-    pub async fn compact_context(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.compact_context().await
+    pub async fn compact_context(
+        &self,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.compact_context(request_id).await
     }
 
     /// Dispose only the retained resource identified by the native subagent owner.
@@ -401,7 +404,7 @@ impl RuntimeAttachment {
         }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
-                let result = inner.compact_context().await;
+                let result = inner.compact_context(None).await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

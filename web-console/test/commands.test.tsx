@@ -14,7 +14,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v32';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v33';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -122,6 +122,22 @@ describe('successful command draft consumption', () => {
     await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
     return input;
   }
+  it('compact consumes the exact invocation without a confirmation modal or User input', async () => {
+    server.held.add('context/compact');
+    const input = await open('/compact');
+    expect(input).toHaveProperty('value', '');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText('Submitting compaction request…')).toBeTruthy();
+    fireEvent.change(input, { target: { value: '/compact' } });
+    fireEvent.keyDown(input, { key: 'Enter' }); fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.change(input, { target: { value: 'next draft' } });
+    expect(server.client.compact('A')).toBe(false);
+    const pending = await server.waitFor('context/compact', 1);
+    await act(async () => server.reply(pending));
+    expect(input).toHaveProperty('value', 'next draft');
+    expect(methods().filter(method => method === 'context/compact')).toHaveLength(1);
+    expect(methods()).not.toContain('turn/start');
+  });
   it.each(['/model', '/mdl', '/', '/模型'])('%s is consumed only after successful selection', async draft => {
     const input = await open(draft);
     expect(input).toHaveProperty('value', draft);
@@ -245,7 +261,8 @@ describe('inbound transport frontier', () => {
     const { scope, selection } = await subject(); server.held.add('turn/start');
     const work = server.client.send('A', 'in transit');
     const request = await server.waitFor('turn/start', 1);
-    await scope.compact();
+    server.client.compact('A');
+    await server.waitFor('context/compact', 1);
     expect((await scope.transition('fork', selection))?.session.id).toBe('child');
     expect(methods()).not.toContain('session/switchNode');
     server.reply(request); await work;
@@ -347,7 +364,7 @@ describe('typed native operations and continuation fencing', () => {
     await expect(scope.openNode('other-node', 'other-conversation')).rejects.toThrow('accepted inbound');
     expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/switchNode');
     expect(available(commands.find(command => command.id === 'compact')!, false, false, executionIdle(view()))).toBe(true);
-    await act(() => scope.compact()); // native maintenance permits pending inbound
+    await act(async () => { server.client.compact('A'); await server.waitFor('context/compact', 1); }); // native maintenance permits pending inbound
     expect(methods().filter(method => method === 'context/compact')).toHaveLength(1);
     await act(() => server.update('A', { ...history, inbound: { pending: [pending] } }));
     expect(view().submissions ?? []).toEqual([]); // exact MessageId reconciliation, not browser removal
@@ -411,9 +428,9 @@ describe('typed native operations and continuation fencing', () => {
     expect(methods().some(method => method.includes('command'))).toBe(false);
     expect(JSON.stringify(server.requests.map(item => item.request.params))).not.toContain('/model');
   });
-  it.each(['session/create', 'context/compact'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
+  it.each(['session/create'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
     const { scope, fixture } = await subject(); server.held.add(method);
-    const work = method === 'session/create' ? firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}) : scope.compact();
+    const work = method === 'session/create' ? firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}) : Promise.reject(new Error('unreachable'));
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();

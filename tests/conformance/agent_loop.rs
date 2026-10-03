@@ -1701,7 +1701,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
 
     // Manual compaction invokes the production summary request builder and
     // adapter over the image-bearing canonical span, not a helper-only mock.
-    driver.host().compact_context().await.unwrap();
+    driver.host().compact_context(None).await.unwrap();
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 8);
     let summary = body_text(&requests[7]);
