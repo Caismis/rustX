@@ -259,10 +259,12 @@ cwd must extend this admission proof.
 **Capacity.** A validation holds one of the eight ordinary RPC slots, so the final
 classification stays adjacent to send and validation never returns to "validate, then
 queue". At most two validations run at once; waiting validations hold nothing and never
-block requests behind them. Product Host validation therefore remains bounded and
-cannot consume the capacity required for unrelated runtime control or cancellation
-(`turn/cancel` has six ordinary slots Host reads can never take). Each validation has
-the RPC deadline from reservation; retirement (Host replacement, navigation,
+block requests behind them. Product Host validations reserve only ordinary RPC
+capacity and cannot consume the independent lifecycle-control capacity.
+`turn/cancel` uses the separate, bounded two-request control lane: ordinary RPC
+saturation cannot delay an otherwise admissible exact cancellation, while a full
+control lane refuses new local control admission before transmission. Each validation
+has the RPC deadline from reservation; retirement (Host replacement, navigation,
 disconnect, callback replacement or timeout) aborts its reads and releases its
 reservation exactly once, and a late Host answer can neither send nor release again.
 

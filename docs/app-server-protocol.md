@@ -296,17 +296,24 @@ A mutation whose response is lost has an **unknown outcome**: no transport retri
 Reconnect with initialize/attach/snapshot/resync and inspect authoritative state.
 
 The Web typed request layer gives `agent/wait`, `job/wait`, `agent/interrupt`,
-`job/cancel`, and `agent/sendMessage` no response deadline: these operations can
-legitimately await native admission, durable acceptance, or physical settlement.
+`job/cancel`, `turn/cancel`, and `agent/sendMessage` no response deadline: these
+operations can legitimately await native admission, durable acceptance, or physical
+settlement.
 Their lifetime is not transport liveness. Ordinary RPCs retain the 30-second
 response deadline and existing response-loss disconnect behavior. Actual socket
 close/error settles each pending operation once; transmitted mutations remain
 uncertain, waits are abandoned without cancellation, and no request is replayed.
 
 Web admission permits four outstanding waits, two message admissions, and two
-settlement controls, independently of eight transmitted ordinary RPCs (sixteen
-total, within the server bound). A full domain lane rejects new local requests
-before transmission. The existing 64-request queue/uncertainty bound remains.
+lifecycle controls (`agent/interrupt`, `job/cancel`, `turn/cancel`), independently
+of eight transmitted ordinary RPCs (sixteen total, within the server bound).
+`turn/cancel` consumes neither ordinary RPC capacity nor its 30-second response
+deadline; ordinary RPC saturation cannot delay an otherwise admissible exact
+cancellation. A full control lane rejects new local control admission before send,
+just as other full domain lanes reject new local requests before transmission.
+The existing 64-request queue/uncertainty bound remains; cancellation has no browser
+queue, retry or replay. Socket loss after transmission still leaves cancellation
+uncertain under the response-loss contract above.
 Waiting cannot occupy inspection/control slots, and message admission cannot occupy
 interrupt/cancel slots. Connection generations and attachment-target checks still
 fence result adoption after reconnect, detach, or target replacement.
