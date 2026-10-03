@@ -1892,10 +1892,9 @@ async fn quiescence_watchdog_cannot_bypass_process_terminality() {
 
 /// The stopped-anchor regression: a `SIGSTOP` of the inner supervisor
 /// freezes the whole containment chain (TERMINATE is never processed).
-/// The outer supervisor detects the frozen anchor, un-wedges it with
-/// `SIGKILL`, contains the invocation group, and the cancellation
-/// settles normally with the owned group terminal — the bounded
-/// confirmation path is never reached.
+/// The outer resumes the retained reaping owner. Only user cancellation
+/// drives TERM; the inner reaps its direct shell before anchor release.
+/// No shell is orphaned merely to recover a stopped supervisor.
 #[cfg(unix)]
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One exact native stop/containment/reap scenario.
@@ -1909,6 +1908,8 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
     let socket = socket_dir.path().join("gate");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let trace = socket_dir.path().join("trace");
+    let term_socket = socket_dir.path().join("term");
+    let term_listener = tokio::net::UnixListener::bind(&term_socket).unwrap();
     let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let anchor_pid_file = root.join("anchor.pid");
@@ -1923,9 +1924,10 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
     }
     let notification = tokio::task::spawn_blocking(move || std::fs::read(ready).unwrap());
     // The FIFO handshake establishes a live owned command before the test
-    // freezes its anchor. Opening the second FIFO blocks until containment.
+    // freezes its anchor. The shell builtin blocks on the second FIFO until cancellation; no
+    // orphan descendant or launchd reaping is needed for this fixture.
     let command = format!(
-        "printf ready > '{}'; cat '{}'",
+        "printf ready > '{}'; read -r held < '{}'",
         root.join("ready").display(),
         hold.display()
     );
@@ -1935,7 +1937,7 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
         command,
         BashTestControl::new()
             .anchor_pid_file(anchor_pid_file.clone())
-            .stopped_anchor_fixture(trace.clone(), socket),
+            .stopped_anchor_fixture(trace.clone(), socket, term_socket),
         cancellation,
         artifacts.clone(),
         tool_output.clone(),
@@ -1970,8 +1972,36 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
     assert_eq!(&label, b"S");
     // Cancellation follows the exact native stop observation. The outer is
     // parked only by this private fixture; no scheduler race selects the path.
+    assert!(!task.is_finished(), "stop observation is not terminality");
     cancelling.cancel();
     stopped.write_all(&[1]).await.unwrap();
+    // The existing pre-TERM gate is reached only by the resumed inner after
+    // parsing the user's cancellation. Hold it before any group signal.
+    let (mut term, _) = tokio::time::timeout(Duration::from_secs(20), term_listener.accept())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the reaping owner must resume: {}",
+                std::fs::read_to_string(&trace).unwrap_or_default()
+            )
+        })
+        .unwrap();
+    term.read_exact(&mut label).await.unwrap();
+    assert_eq!(&label, b"T");
+    assert!(
+        !task.is_finished(),
+        "cancellation receipt is not physical settlement"
+    );
+    let paused_evidence = std::fs::read_to_string(&trace).unwrap();
+    assert!(
+        !paused_evidence.contains("TerminalPublished")
+            && !paused_evidence.contains("GroupChildrenReaped")
+    );
+    assert!(
+        !paused_evidence.contains("\"Signal\""),
+        "group signal preceded its fixture gate: {paused_evidence}"
+    );
+    term.write_all(&[1]).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(20), task)
         .await
         .unwrap_or_else(|_| {
@@ -1995,9 +2025,9 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
     let mut ordered = events.iter();
     for boundary in [
         |event: &Event| matches!(event, Event::AnchorStopObserved),
-        |event: &Event| matches!(event, Event::AnchorUnwedgeKillAttempt { result: 0 }),
+        |event: &Event| matches!(event, Event::AnchorResumeAttempt { result: 0 }),
         |event: &Event| matches!(event, Event::AnchorTerminalObserved),
-        |event: &Event| matches!(event, Event::FallbackContainment),
+        |event: &Event| matches!(event, Event::GroupChildrenReaped),
         #[cfg(target_os = "macos")]
         |event: &Event| matches!(event, Event::GroupAbsenceProven),
         |event: &Event| matches!(event, Event::TerminalPublished),
@@ -2008,6 +2038,48 @@ async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
             "missing/out-of-order native boundary: {evidence}"
         );
     }
+    for unique in [
+        |event: &Event| matches!(event, Event::AnchorStopObserved),
+        |event: &Event| matches!(event, Event::AnchorResumeAttempt { result: 0 }),
+        |event: &Event| matches!(event, Event::TerminateReceived),
+        |event: &Event| matches!(event, Event::ShellExited { .. }),
+        |event: &Event| matches!(event, Event::TerminalPublished),
+        |event: &Event| matches!(event, Event::TerminalObserved),
+        |event: &Event| matches!(event, Event::DirectChildReaped),
+    ] {
+        assert_eq!(
+            events.iter().filter(|entry| unique(&entry.event)).count(),
+            1,
+            "{evidence}"
+        );
+    }
+    let shell = events
+        .iter()
+        .position(|entry| matches!(entry.event, Event::ShellExited { .. }))
+        .unwrap();
+    let anchor = events
+        .iter()
+        .position(|entry| matches!(entry.event, Event::AnchorTerminalObserved))
+        .unwrap();
+    assert!(
+        shell < anchor,
+        "the inner must reap its shell before exiting: {evidence}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|entry| matches!(entry.event, Event::ControlFailure | Event::GraceExpired))
+    );
+    let released = events
+        .iter()
+        .position(|entry| matches!(entry.event, Event::GroupChildrenReaped))
+        .unwrap();
+    assert!(
+        !events[released..]
+            .iter()
+            .any(|entry| matches!(entry.event, Event::Signal { .. })),
+        "signal after anchor release: {evidence}"
+    );
     // Publication logging is after the frame write, so receiver logging may
     // precede it. Assert each owner's causal order, not cross-process file I/O.
     let mut runner_events = events.iter();

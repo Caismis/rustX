@@ -7,9 +7,14 @@ import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread } from '../src/workspaces/host.ts';
 import { AppServerClient } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
+import { DesktopAdapter } from './desktop.ts';
+import { readDesktopSession } from './desktop-session.ts';
+import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspaces/desktop.ts';
 import { readNativeDelivery } from './file-read.ts';
 
 export interface LocalHostConfig {
+  /** Operator attests native runtime and Host share the same filesystem namespace. */
+  nativeFilesystem?: 'shared';
   transportToken?: string;
   /** Launcher-provisioned secret for native file reads. Never sent to browser. */
   productHostToken?: string;
@@ -27,7 +32,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private registrations: Registration[];
   private readonly roots: LocalHostConfig['roots'];
   private readonly config: LocalHostConfig;
-  constructor(config: LocalHostConfig) {
+  private readonly desktop: DesktopAdapter;
+  private readonly readSession: typeof readDesktopSession;
+  constructor(config: LocalHostConfig, desktop = new DesktopAdapter(), readSession = readDesktopSession) {
+    this.desktop = desktop; this.readSession = readSession;
     this.config = config;
     if (!isAbsolute(config.metadataFile)) throw new Error('Host metadataFile must be absolute');
     this.roots = config.roots.map(root => {
@@ -100,6 +108,33 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       for (const row of this.registrations) this.cwd(row.location);
       return bytes;
     } finally { signal?.removeEventListener('abort', abort); this.fileReads.delete(operation); }
+  }
+  async desktopCatalog(scope: WorkspaceAuthorityScope, refresh = false): Promise<DesktopCatalog> {
+    this.mutationScope(scope);
+    if (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken) return { available: false, reason: 'mapping' };
+    return this.desktop.catalog(refresh);
+  }
+  private desktopPending = false;
+  async openWorkspace(scope: WorkspaceAuthorityScope, target: DesktopTarget, application: DesktopAppId) {
+    this.mutationScope(scope);
+    if (!target || typeof target !== 'object' || Array.isArray(target) || Object.keys(target).length !== 2
+      || !['session_id', 'active_node'].every(key => typeof target[key as keyof DesktopTarget] === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(target[key as keyof DesktopTarget]))
+      || !['files', 'terminal', 'code'].includes(application)) throw new Error('Invalid desktop target or application');
+    if (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken) throw new Error('Native filesystem mapping unavailable on this Product Host');
+    if (this.desktopPending) throw new Error('A desktop launch is already pending');
+    this.desktopPending = true;
+    try {
+      const launch = this.desktop.prepare(application);
+      // Native read is the Session admission point. It rejects a retired Session
+      // or changed active node. No display path enters this operation.
+      const cwd = await this.readSession(this.config.endpoint, this.config.transportToken, target);
+      this.mutationScope(scope);
+      const location = this.classifyLocation(cwd);
+      if (!location.authorized) throw new Error(`Workspace directory is ${location.reason}; it cannot be opened`);
+      // Classification verifies canonical equality. No await between final Host
+      // authority/path admission and the adapter's synchronous spawn call.
+      return await launch(realpathSync(cwd));
+    } finally { this.desktopPending = false; }
   }
   async adoptWorkspace(scope: WorkspaceAuthorityScope, location: string) {
     this.mutationScope(scope);
@@ -176,19 +211,18 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.route(endpoint);
     if (authorityId !== undefined && authorityId !== this.authorityId) throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
     if (cwds.length > 32) throw new Error('Host classification is bounded to 32 summaries');
-    // Exact canonical root membership is deliberate. No recursive allocation or
-    // filesystem sandbox is implied. Unavailable reads are not definitive denials.
-    const roots = new Map<string, string>();
-    for (const root of this.roots) { try { roots.set(this.cwd(root.id), root.id); } catch { /* unavailable */ } }
-    return cwds.map(cwd => {
-      try {
-        const canonical = isAbsolute(cwd) ? realpathSync(cwd) : undefined;
-        if (this.roots.some(root => root.cwd === cwd && canonical !== root.cwd)) return { authorized: false, reason: 'denied' };
-        const location = canonical ? roots.get(canonical) : undefined;
-        if (location === undefined) return { authorized: false, reason: this.roots.some(root => root.cwd === cwd) ? 'unavailable' : 'denied' };
-        const workspaceId = this.registrations.find(row => row.location === location)?.id;
-        return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
-      } catch { return { authorized: false, reason: 'unavailable' }; }
-    });
+    return cwds.map(cwd => this.classifyLocation(cwd));
+  }
+  /** Shared location authority for display classification and desktop admission. */
+  private classifyLocation(cwd: string): SessionLocation {
+    try {
+      const canonical = isAbsolute(cwd) ? realpathSync(cwd) : undefined;
+      if (this.roots.some(root => root.cwd === cwd && canonical !== root.cwd)) return { authorized: false, reason: 'denied' };
+      const root = this.roots.find(root => root.cwd === canonical);
+      if (!root) return { authorized: false, reason: 'denied' };
+      this.cwd(root.id);
+      const workspaceId = this.registrations.find(row => row.location === root.id)?.id;
+      return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
+    } catch { return { authorized: false, reason: 'unavailable' }; }
   }
 }

@@ -1,3 +1,6 @@
+import { OpenWorkspace } from './OpenWorkspace';
+import type { ProductHostWorkspaces } from '../../workspaces/host';
+import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
@@ -12,8 +15,8 @@ import { sessionDisplayTitle } from '../../bindings/session-title';
 import { SessionConfiguration } from '../SessionConfiguration';
 import { AgentControls } from './AgentControls';
 import agentCss from '../../presentation/agent/Conversation.module.css';
-export function ConversationHeader({ client, view, authorityRevision, connected, attached, commandOpen, inspectorOpen, toggleInspector, invokeCommand, openOwningSettings, conversationMode, setConversationMode, settingsFeedback }: {
-  settingsFeedback?: ReactNode; client: AppServerClient; view?: SessionView; authorityRevision?: number; connected: boolean; attached: boolean; commandOpen: boolean;
+export function ConversationHeader({ host, authority, client, view, authorityRevision, connected, attached, commandOpen, inspectorOpen, toggleInspector, invokeCommand, openOwningSettings, conversationMode, setConversationMode, settingsFeedback }: {
+  host: ProductHostWorkspaces; authority: WorkspaceAuthority; settingsFeedback?: ReactNode; client: AppServerClient; view?: SessionView; authorityRevision?: number; connected: boolean; attached: boolean; commandOpen: boolean;
   inspectorOpen: boolean; toggleInspector: () => void; invokeCommand: (request: { id: 'tree' }) => void;
   openOwningSettings: (owner: SourceTarget) => void; conversationMode: 'chat' | 'trajectory'; setConversationMode: (mode: 'chat' | 'trajectory') => void;
 }) {
@@ -24,7 +27,7 @@ export function ConversationHeader({ client, view, authorityRevision, connected,
   const error = failure?.owner === owner ? failure.message : undefined;
   const exportSession = () => { if (!view) return; setFailure(undefined); void client.exportSession(view.id).catch(cause => setFailure({ owner, message: String(cause) })); };
   return <header className={`${agentCss.header} ${!view ? agentCss.headerBlank : ""}`}><div className={`${agentCss.titleRow} agent-title-row`}><div className={agentCss.titleCluster}><strong id="session-title" aria-label={view ? tx('agent:conversation-header.session-title') : tx('agent:conversation-header.product-title')}>{view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}</strong></div>
-        <div className="row">{view && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
+        <div className="row">{view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>} {view && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
 
           <Button aria-label={tx('agent:conversation-header.toggle-inspector')} aria-expanded={inspectorOpen} onClick={toggleInspector}><IconInspectOutline12 /></Button></div>
       </div>

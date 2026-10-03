@@ -222,7 +222,9 @@ impl BashTestControl {
         mut self,
         trace: std::path::PathBuf,
         socket: std::path::PathBuf,
+        term_socket: std::path::PathBuf,
     ) -> Self {
+        self.runner.diagnostics.before_term_socket = Some(term_socket);
         self.runner.diagnostics.trace = Some(trace);
         self.runner.anchor_stop_socket = Some(socket);
         self

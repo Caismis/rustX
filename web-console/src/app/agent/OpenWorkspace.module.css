@@ -1,0 +1,13 @@
+.action {
+  min-width: 0;
+  max-width: 22rem;
+}
+.action p,
+.action details {
+  margin: 4px 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .action { max-width: 12rem; }
+}

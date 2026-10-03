@@ -59,7 +59,7 @@ it('rejects malformed/wrong/native/duplicate launch credentials and non-root exc
 });
 it('both sensitive API families reject absent/malformed/wrong proofs, Cookies and launch/native bearers', async () => {
   const c = await carrier();
-  for (const path of ['/__rustx/bootstrap', '/product-host/list']) for (const proof of ['', 'bad', 'X'.repeat(43), launch, transport]) {
+  for (const path of ['/__rustx/bootstrap', '/product-host/list', '/product-host/desktop-catalog', '/product-host/desktop-open']) for (const proof of ['', 'bad', 'X'.repeat(43), launch, transport]) {
     expect((await fetch(c.url + path, { headers: { [BROWSER_SESSION_HEADER]: proof, cookie: `rustx-browser-old=${proof}`, authorization: `Bearer ${proof}` } })).status).toBe(401);
   }
   const proof = await c.login();
@@ -82,6 +82,7 @@ it('validates exact authority and rejects wrong Host/Origin and stale proof afte
     const req = request(`${a.url}/__rustx/bootstrap`, { headers: { ...headers, host: new URL(b.url).host } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); req.on('error', reject); req.end();
   });
   expect(wrongHost).toBe(403); expect((await fetch(`${a.url}/__rustx/bootstrap`, { headers: { ...headers, origin: b.url } })).status).toBe(403);
+  for (const path of ['desktop-catalog', 'desktop-open']) expect((await fetch(`${a.url}/product-host/${path}`, { method: 'POST', headers: { ...headers, origin: b.url, 'Content-Type': 'application/json' }, body: '{}' })).status).toBe(403);
   a.restart(); expect((await fetch(`${a.url}/__rustx/bootstrap`, { headers })).status).toBe(401);
   const fresh = await a.login(); expect(fresh).not.toBe(proof);
   expect((await fetch(`${a.url}/__rustx/bootstrap`, { headers: { [BROWSER_SESSION_HEADER]: fresh } })).status).toBe(200);

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import {
@@ -436,4 +437,60 @@ it.each(['light', 'dark'])('integrated running Composer remains strict after rem
     expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
   }
   expect(compare({ ...expected, height: expected.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+});
+
+const MOBILE_EXPANDED = 'mobile-expanded-dark-linux.png';
+it('mobile expanded measured variants are exact-reference-local evidence', () => {
+  const expected = reference(MOBILE_EXPANDED);
+  const entry = noisePolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
+  expect(compare(expected, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(true);
+  const sites = entry.regions.flatMap(cells);
+  expect(sites).toEqual(entry.pixels!.map(([x, y]) => [x, y]));
+  expect(new Set(sites.map(([x, y]) => `${x},${y}`)).size).toBe(sites.length);
+  for (const region of entry.regions) {
+    expect([region.width, region.height, region.maxChangedPixels]).toEqual([1, 1, 1]);
+  }
+  // Independent glyph-edge and rounded-card variants, and their combination.
+  const variants = [
+    { select: (x: number) => x === 303, hash: 'c35466f1b179ca625beca2eac7202a454b38789a0265cced9a6d2d12c8c2db6e' },
+    { select: (x: number) => x !== 303, hash: 'f1dc128c4037bc992ee4813e80e1b23b8c30e7e80976150157ae932b29e574c5' },
+    { select: () => true, hash: 'f23070483875d43834555c8fae6848a8f874293b463bd4e47ec2007f37c378b6' },
+  ];
+  for (const { select, hash } of variants) {
+    const actual = copy(expected);
+    for (const [x, y, , after] of entry.pixels!) if (select(x)) paint(actual, x, y, after);
+    expect(createHash('sha256').update(actual.data).digest('hex')).toBe(hash);
+    expect(compare(actual, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(true);
+    expect(compare(actual, MOBILE_EXPANDED, expected, []).ok).toBe(false);
+    expect(compare(actual, 'mobile-rail-dark-linux.png', expected, noisePolicy).ok).toBe(false);
+  }
+});
+
+it('mobile expanded evidence cannot conceal neighboring glyphs, gaps, contrast or layout changes', () => {
+  const expected = reference(MOBILE_EXPANDED);
+  const entry = noisePolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
+  for (const region of entry.regions) {
+    const beyond = copy(expected);
+    nudge(beyond, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(beyond, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(false);
+  }
+  const glyphRows = new Set(entry.pixels!.filter(([x]) => x === 303).map(([, y]) => y));
+  const neighbors = [...glyphRows].flatMap(y => [[302, y], [304, y]]);
+  for (let y = Math.min(...glyphRows); y <= Math.max(...glyphRows); y++) {
+    if (!glyphRows.has(y)) neighbors.push([303, y]);
+  }
+  neighbors.push([320, 250]); // A separate transcript content pixel.
+  for (const [x, y] of neighbors) {
+    const actual = copy(expected); nudge(actual, x, y, 1);
+    expect(compare(actual, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(false);
+  }
+  const shifted = copy(expected);
+  const theme = copy(expected);
+  for (let y = 0; y < expected.height; y++) {
+    for (let x = expected.width - 1; x > 0; x--) paint(shifted, x, y, pixel(expected, x - 1, y));
+    for (let x = 0; x < expected.width; x++) nudge(theme, x, y, 1);
+  }
+  for (const actual of [shifted, theme, { ...expected, width: expected.width - 1 }, { ...expected, height: expected.height - 1 }]) {
+    expect(compare(actual, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(false);
+  }
 });

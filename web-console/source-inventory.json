@@ -3204,7 +3204,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "a718dcc4f8aab8480c003f2b4d69ed65537f9d3603835f149a18109bd594064d"
+      "local_sha256": "3bf3e3fc0850ec3dc55f187128432a6a26c612946ca6d374779485b772fa4279"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -4258,6 +4258,36 @@
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
       "upstream_sha256": "00f785594ab5a5fa75e10d0f9ddad781d49d0d550b8ecac12604010e275a80a8",
       "treatment": "Issue #435 read-only correlation and occupancy applicability comparison; no Harness execution or heuristic measurement imported."
+    },
+    {
+      "upstream": "packages/client/ui-open-in-app/src/client/OpenInAppAction.tsx",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "1ed271e1d1f402b324c7cda4cd5c01692fb1b16a65603d29fb1a0a9b9d80c67f",
+      "treatment": "Issue 432 behavioral reference: split action, closed lazy catalog, safe detached argv; no source copied. rustX uses exact native Session identity and existing Host root authority."
+    },
+    {
+      "upstream": "packages/host/open-in-app/src/index.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "82c9b4307297af905eb53b96a4d8111ea6e6931d90d84f0619a307a2c0502eaf",
+      "treatment": "Issue 432 behavioral reference: split action, closed lazy catalog, safe detached argv; no source copied. rustX uses exact native Session identity and existing Host root authority."
+    },
+    {
+      "upstream": "packages/host/open-in-app/src/resolver.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "d6d6180c1f02d1da3a6563f8c59f0b31d3256713bf8fb5394c5a7fe46de946fa",
+      "treatment": "Issue 432 behavioral reference: split action, closed lazy catalog, safe detached argv; no source copied. rustX uses exact native Session identity and existing Host root authority."
+    },
+    {
+      "upstream": "packages/host/open-in-app/src/catalog.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "7e41fce50d05350fd33c165197157d71920d490026ab26d2df06523133172cfa",
+      "treatment": "Issue 432 behavioral reference only; rustX uses a closed three-application catalog and Session identities instead of browser paths. No source copied."
+    },
+    {
+      "upstream": "packages/host/open-in-app/src/shared.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "9f582ccf0e0db7c65eaa911bcde1974e3579b860a274181d4b842aeec8d56f1a",
+      "treatment": "Issue 432 behavioral reference only; rustX uses a closed three-application catalog and Session identities instead of browser paths. No source copied."
     }
   ],
   "historical_inspection": {

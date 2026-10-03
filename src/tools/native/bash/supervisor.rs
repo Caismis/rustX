@@ -147,7 +147,7 @@
 //! |---|---|---|---|
 //! | outer dedicated anchor wait (`waitid(Pid(inner), WNOWAIT \| WEXITED \| WNOHANG)`) | only the inner anchor | observes only (`WNOWAIT`) | outer dedicated path; `ECHILD` = invariant violation, never terminal |
 //! | outer frozen-anchor wait (`waitid(Pid(inner), WSTOPPED \| WNOHANG \| WNOWAIT)`) | only the inner anchor | observes without consuming the stop event | outer dedicated path |
-//! | outer group gate (`waitid(PGid(inner), WEXITED \| WNOHANG)`) | every outer child in the invocation group, including the anchor | consumes | outer gate; `ECHILD` = canonical terminal event (the anchor's only reaper release); on macOS this is only a terminal event because the fallback containment signal was already issued while the anchor was retained |
+//! | outer group gate (`waitid(PGid(inner), WEXITED \| WNOHANG)`) | every outer child in the invocation group, including the anchor | consumes | outer gate; `ECHILD` = canonical terminal event (the anchor's only reaper release); on macOS this is not terminal proof without the subsequent ESRCH absence proof |
 //! | inner reaping hygiene (`waitpid(-1, WNOHANG)`) | every child of the inner (bash and adopted in-group descendants) | consumes | inner supervisor; no child of the inner is ever an anchor, so this never consumes another owner's identity |
 //! | inner group gate (`waitid(PGid(self), WEXITED \| WNOHANG)`) | every inner child in the invocation group | consumes | inner supervisor; `ECHILD` = `INNER_EXIT_NORMAL` on Linux, `INNER_EXIT_CONTAINMENT` on macOS |
 //!
@@ -200,9 +200,10 @@
 //! has ended, and never without structural ownership proof.
 //!
 //! The outer also detects a **frozen anchor**: the inner supervisor is
-//! never legitimately stopped, so an observed `SIGSTOP` state (an external
-//! freeze of the whole unit) is un-wedged by the outer with `SIGKILL`,
-//! which keeps a stopped containment chain from stranding the owned group.
+//! resumed with an exact-PID `SIGCONT` while its identity is retained.
+//! This preserves its direct-shell reaping ownership, especially on macOS
+//! without subreaping. Stop observation is neither cancellation nor terminality;
+//! the existing control channel remains the cancellation owner.
 //! The only residual state in which terminality cannot be proven from
 //! rustX is a supervisor unit frozen at the kernel level beyond the outer's
 //! reach; the confirmation watchdog then records explicit failure intent,
@@ -491,7 +492,7 @@ fn run_outer() -> i32 {
     let inner_pid =
         i32::try_from(inner_pid).expect("the inner supervisor pid always fits in an i32");
     let mut anchor = InnerAnchor::Running;
-    let mut inner_frozen = false;
+    let mut anchor_stop_handled = false;
     let mut exit_wait_nonterminal_recorded = false;
     let mut anchor_loss_reported = false;
     loop {
@@ -563,30 +564,31 @@ fn run_outer() -> i32 {
                         ));
                     }
                 }
-                // The inner is never legitimately stopped: an observed
-                // `SIGSTOP` state is an external freeze of the whole
-                // containment unit. The outer un-wedges it with `SIGKILL`,
-                // so a frozen anchor can never strand the owned group
-                // behind a dead control chain; the inner's death then
-                // follows the normal abnormal-exit containment path.
-                if !inner_frozen {
+                // A stop is neither cancellation nor terminality. Resume the
+                // exact retained reaping owner so it can process the existing
+                // control channel and reap its direct shell. Killing it here
+                // needlessly orphans that shell on Darwin (no subreaper), making
+                // physical proof depend on launchd's reclamation timing.
+                // This is one recovery attempt, not a retry or a group signal.
+                // Abnormal exit still uses retained-anchor fallback containment.
+                if anchor == InnerAnchor::Running && !anchor_stop_handled {
                     match crate::runtime::process_wait::observe_stopped_child(Pid::from_raw(
                         inner_pid,
                     )) {
                         Ok(WaitStatus::Stopped(..)) => {
-                            inner_frozen = true;
+                            anchor_stop_handled = true;
                             trace(TraceEvent::AnchorStopObserved);
                             diagnostics::after_anchor_stop();
-                            let killed =
-                                nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL);
-                            trace(TraceEvent::AnchorUnwedgeKillAttempt {
-                                result: killed.as_ref().err().map_or(0, |error| *error as i32),
+                            let resumed =
+                                nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGCONT);
+                            trace(TraceEvent::AnchorResumeAttempt {
+                                result: resumed.as_ref().err().map_or(0, |error| *error as i32),
                             });
-                            match killed {
+                            match resumed {
                                 Ok(()) | Err(Errno::ESRCH) => {}
                                 Err(error) => {
                                     let _ = stream.write_failure(&format!(
-                                        "cannot un-wedge the frozen invocation anchor: {error}"
+                                        "cannot resume the stopped invocation anchor: {error}"
                                     ));
                                 }
                             }

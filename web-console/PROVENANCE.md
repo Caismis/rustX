@@ -26,6 +26,19 @@ PR #445's accepted Composer behavior is integrated with #447's mandatory App Ser
 contract. Inventory hashes and retained dependency closures describe this final
 source, including v33 imports; upstream reference pins are unchanged.
 
+## #432 Host desktop opening
+
+Read-only behavioral comparison: `deepseek-ai/deepseek-harness@639ed015397290b3745d163aafe02ffee4aa3f84`,
+`packages/client/ui-open-in-app/src/client/OpenInAppAction.tsx` and
+`packages/host/open-in-app/src/{index,resolver,catalog,shared}.ts`. The inventory records their
+immutable hashes under inspected-only sources. The new code is rustX-authored;
+no upstream source, application registry, icons, Cordis or runtime was copied.
+The shared primary/menu pattern, lazy closed catalog and detached safe-argv
+handoff inform the implementation. rustX instead resolves exact Session/node
+identities via the native catalog, reuses Host root authority, requires an
+explicit filesystem mapping, and reports spawn acknowledgement without a timed
+GUI-success heuristic or automatic replay. See `docs/open-workspace.md`.
+
 ## #420 incremental projection and Chat synchronization
 
 Read-only reference inspected: `477b4f420553e8a52c2fbccc464d7561b239c443`,

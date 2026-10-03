@@ -264,7 +264,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       }
     }}/>}
     <section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
-      <ConversationHeader client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
+      <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
         toggleInspector={() => { setArtifactPreview(undefined); setInspectorOpen(value => !value); }} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>

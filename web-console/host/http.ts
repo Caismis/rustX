@@ -11,9 +11,13 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       if (!host) throw new Error('No Product Host configured');
       if (request.method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new Error('Expected JSON POST');
       if (request.headers.origin && new URL(request.headers.origin).host !== request.headers.host) throw new Error('Cross-origin Host request refused');
-      let text = '';
-      for await (const chunk of request) { text += String(chunk); if (text.length > 65536) throw new Error('Host request too large'); }
-      const body = JSON.parse(text);
+      const chunks: Buffer[] = []; let size = 0;
+      for await (const chunk of request) {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += bytes.byteLength; if (size > 65536) throw new Error('Host request too large');
+        chunks.push(bytes);
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected Host request object');
       const string = (key: string) => { if (typeof body[key] !== 'string') throw new Error(`Expected ${key}`); return body[key] as string; };
       const scope = () => {
@@ -25,6 +29,14 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       };
       let value: unknown;
       switch (request.url.slice('/product-host/'.length)) {
+        case 'desktop-catalog':
+          if (!host.desktopCatalog) throw new Error('Desktop unavailable on this Product Host');
+          if (Object.keys(body).some(key => !['scope', 'refresh'].includes(key)) || typeof body.refresh !== 'boolean') throw new Error('Invalid desktop request');
+          value = await host.desktopCatalog(scope(), body.refresh); break;
+        case 'desktop-open':
+          if (!host.openWorkspace) throw new Error('Desktop unavailable on this Product Host');
+          if (Object.keys(body).some(key => !['scope', 'target', 'application'].includes(key))) throw new Error('Invalid desktop request');
+          value = await host.openWorkspace(scope(), body.target, body.application); break;
         case 'file-read':
           if (!host.readDelivery) throw new Error('Session file reads unavailable on this Product Host');
           {
