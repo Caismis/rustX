@@ -2,7 +2,7 @@ import { incrementalAgent } from './incremental-agent-fixture';
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { traceRecord } from './trace-fixture';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v33';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v34';
 const servers: Server[] = [];
 const create = async () => { const s = new Server(); servers.push(s); await s.attached('A'); return s; };
 afterEach(() => { for (const s of servers) s.client.disconnect(); servers.length = 0; });
@@ -67,7 +67,7 @@ it('failed snapshot remains stale until explicit recovery and never replays a mu
   await s.client.refresh('A');
   expect(s.client.getSnapshot().views.A.cursor).toBe('4');
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(2);
-  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/upload', 'session/create'].includes(row.request.method))).toBe(false);
+  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/uploadPrepare', 'session/create'].includes(row.request.method))).toBe(false);
 });
 it('same Session replacement fences the old snapshot and old events by exact attachment', async () => {
   const s = await create(); const oldTarget = s.target('A');
@@ -116,7 +116,7 @@ it('resync during an explicit snapshot survives acquisition and installs an exac
   expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks).toEqual([]);
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(1);
-  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/upload', 'session/create'].includes(row.request.method))).toBe(false);
+  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/uploadPrepare', 'session/create'].includes(row.request.method))).toBe(false);
   emit(s, '8', delta); // Now the registered continuation advances normally.
   expect(s.client.getSnapshot().views.A.cursor).toBe('8');
 });
@@ -143,7 +143,7 @@ it.each([2, null])('acquisition-time resync uses bounded authoritative replay re
   expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: String(6 + attempts), attachment: successAt ? 'attached' : 'stale' });
   expect(s.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(attempts);
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(attempts);
-  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/upload', 'session/create'].includes(row.request.method))).toBe(false);
+  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/uploadPrepare', 'session/create'].includes(row.request.method))).toBe(false);
 });
 
 it('registered native replay preceding subscribe ACK advances the cut without enabling controls early', async () => {

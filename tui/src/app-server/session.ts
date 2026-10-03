@@ -1,3 +1,4 @@
+import { uploadOperationId } from '../../../protocol/app-server/upload.ts';
 /**
  * One attached Session: its authoritative projection and its typed operations.
  *
@@ -307,11 +308,25 @@ export class AppServerSession {
     if (result.outcome.status !== "applied") throw new Error(`Pending removal: ${result.outcome.status}. Not retried.`);
   }
 
+  get uploadPolicy() { return this.#client.capabilities?.upload_policy; }
   async upload(name: string, bytes: Uint8Array): Promise<UserInputBlock[]> {
-    const result = await this.#client.call("session/upload", {
-      target: this.#target, files: [{ name, data: Buffer.from(bytes).toString("base64") }],
-    }, "session_uploaded");
-    return result.files.map(({ receipt }) => ({ type: "upload", ...receipt }));
+    const operation = uploadOperationId();
+    const epoch = this.#epoch, target = this.#target;
+    const current = () => !this.#released && !this.#serverClosed && epoch === this.#epoch && sameTarget(target, this.#target);
+    const check = () => { if (!current()) throw new Error(`Upload authority changed; reconcile operation ${operation}`); };
+    check();
+    const policy = this.uploadPolicy;
+    if (!policy) throw new Error('Upload policy unavailable');
+    const { transfer } = await this.#client.call("session/uploadPrepare", {
+      target, operation_id: operation, files: [{ name, size: bytes.byteLength }],
+    }, "upload_prepared");
+    check();
+    try { await this.#client.uploadCarrier(transfer, [new Blob([Uint8Array.from(bytes)])], policy, this.#client.uploadEndpoint); } catch { /* Repair the exact operation; never resend bytes. */ }
+    check();
+    const { outcome } = await this.#client.call("session/uploadStatus", { target, operation_id: operation }, "upload_status");
+    check();
+    if (outcome.state !== 'ready') throw new Error(`Upload ${operation}: ${outcome.state}. No bytes replayed.`);
+    return outcome.files.map(({ receipt }) => ({ type: "upload", ...receipt }));
   }
 
   /** Requests cancellation of the current attempt. Acceptance, not settlement. */

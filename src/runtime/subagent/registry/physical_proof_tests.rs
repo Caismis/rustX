@@ -373,8 +373,17 @@ async fn parked_recovery_probe_does_not_hold_registry_mutex() {
     let accepted = start(&plane, &spec("unproven recovery probe")).await;
     child.complete(ChildResultStatus::Succeeded, Some("unproven")).await;
     plane.registry.wait_until_settled(&accepted.subagent_id).await.unwrap();
-    let recovered = SubagentRegistry::new(plane.registry.config.clone());
-    recovered.restore_agents(plane.store.as_ref()).unwrap();
+    // Restore without a Tokio executor: this fixture explicitly owns the probe
+    // and competing pass below. Otherwise restore starts an independent periodic
+    // reconciler whose brief claim lock can race try_lock even while our hook is
+    // correctly parked outside the mutex.
+    let config = plane.registry.config.clone();
+    let store = plane.store.clone();
+    let recovered = std::thread::spawn(move || {
+        let recovered = SubagentRegistry::new(config);
+        recovered.restore_agents(store.as_ref()).unwrap();
+        recovered
+    }).join().unwrap();
     let (entered, entry) = tokio::sync::oneshot::channel();
     let (release, released) = std::sync::mpsc::sync_channel(0);
     recovered.state.lock().unwrap().recovery_probe_hook = Some(Box::new(move || {

@@ -31,8 +31,8 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
   };
   const root = (session: string) => join(fixture.workspaceA, '.agents/uploads', session);
   const paths = (session: string) => {
-    const batches = readdirSync(root(session)); expect(batches).toHaveLength(1);
-    return ['acceptance.txt', 'pixel.png'].map(name => join(root(session), batches[0], name));
+    const batches = readdirSync(root(session)); expect(batches).toHaveLength(2);
+    return ['acceptance.txt', 'pixel.png'].map(name => { const matches = batches.map(batch => join(root(session), batch, name)).filter(existsSync); expect(matches).toHaveLength(1); return matches[0]; });
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
@@ -109,4 +109,23 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     expect(existsSync(root(destination))).toBe(false);
     expect(errors).toEqual([]); passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
+});
+
+test('a real one MiB Markdown document uses the binary lane without a model request', async ({ page }) => {
+  const fixture = await startDogfood('web_upload_conformance');
+  const wire = await wireProbe(page);
+  try {
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await showInspector(page);
+    await openEmptySession(page, fixture, 'Workspace A');
+    const session = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
+    const document = Buffer.alloc(1024 * 1024, 'a'); document.write('# Ordinary Markdown document\n');
+    await page.getByLabel('Attach files').setInputFiles({ name: 'large-document.md', mimeType: 'text/markdown', buffer: document });
+    await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
+    const root = join(fixture.workspaceA, '.agents/uploads', session); const batches = readdirSync(root);
+    expect(batches).toHaveLength(1); expect(readFileSync(join(root, batches[0], 'large-document.md'))).toEqual(document);
+    expect(wire.requests.filter(request => request.method === 'session/uploadPrepare')).toHaveLength(1);
+    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(0);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); expect(report.failures).toEqual([]); }
 });

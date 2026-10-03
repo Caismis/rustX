@@ -98,17 +98,19 @@ test("uncertain upload responses are not replayed", async () => {
   const u = await harness();
   const upload = u.session.upload("selected.txt", new TextEncoder().encode("bytes"));
   const rejected = assert.rejects(upload, /unknown/);
-  await nextRequest(u, "session/upload", 0); u.client.close(); await rejected;
-  assert.equal(u.transport.transportCount("session/upload"), 1);
+  await nextRequest(u, "session/uploadPrepare", 0); u.client.close(); await rejected;
+  assert.equal(u.transport.transportCount("session/uploadPrepare"), 1);
 });
 
 test("upload returns native receipts, preserves ordered blocks, never submits a local path", async () => {
   const h = await harness();
   const work = h.session.upload("data.csv", new TextEncoder().encode("a,b"));
-  const request = await nextRequest(h, "session/upload", 0);
-  assert.deepEqual(request.params, { target: h.target, files: [{ name: "data.csv", data: "YSxi" }] });
+  const request = await nextRequest(h, "session/uploadPrepare", 0);
+  assert.deepEqual((request.params as { files: unknown }).files, [{ name: "data.csv", size: 3 }]);
   const receipt = { session_id: h.session.sessionId, batch_id: "batch", token: "opaque" };
-  h.transport.respond(request.id, { type: "session_uploaded", files: [{ receipt, file: { batch_id: "batch", name: "data.csv" }, path: "/server/uploads/data.csv" }] });
+  h.transport.respond(request.id, { type: "upload_prepared", transfer: { path: "/session-upload/" + "a".repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+  const status = await nextRequest(h, "session/uploadStatus", h.transport.transportCount("session/uploadStatus"));
+  h.transport.respond(status.id, { type: "upload_status", outcome: { state: "ready", files: [{ receipt, file: { batch_id: "batch", name: "data.csv" }, path: "/server/uploads/data.csv" }] } });
   const blocks: UserInputBlock[] = [{ type: "text", text: "before" }, ...await work, { type: "text", text: "after" }];
   assert.deepEqual(editorSubmission(blocks, "beforeafter"), blocks);
   assert.throws(() => editorSubmission(blocks, "ambiguous edit"), /ordering/);

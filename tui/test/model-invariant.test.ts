@@ -1,3 +1,6 @@
+import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
+const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
+const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
 /**
  * The A -> B model invariant, proven deterministically.
  *
@@ -177,7 +180,7 @@ describe("session model A -> B invariant", () => {
       type: "initialized", authority_id: 'fixture-app-server-authority',
       protocol_version: APP_SERVER_PROTOCOL_VERSION,
       capabilities: {
-        multi_session: true,
+        upload_policy: nativeUploadPolicy, multi_session: true,
         single_writable_controller: true,
         headless_interactions: true,
         experimental_methods: [],

@@ -50,8 +50,10 @@ struct HostInner {
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
+    upload_operations: watch::Sender<usize>,
     transport: Arc<TransportResources>,
     archives: super::archive_download::ArchiveDownloads,
+    uploads: super::upload_transfer::UploadTransfers,
     file_reads: Arc<tokio::sync::Semaphore>,
     file_routes: Mutex<
         std::collections::HashMap<
@@ -144,6 +146,9 @@ impl AppServerHost {
         &self.0.authority_id
     }
 
+    pub(crate) fn uploads(&self) -> &super::upload_transfer::UploadTransfers {
+        &self.0.uploads
+    }
     pub(crate) fn archives(&self) -> &super::archive_download::ArchiveDownloads {
         &self.0.archives
     }
@@ -159,8 +164,10 @@ impl AppServerHost {
             manager,
             state: Mutex::default(),
             requests: watch::channel(0).0,
+            upload_operations: watch::channel(0).0,
             transport: Arc::default(),
             archives: super::archive_download::ArchiveDownloads::default(),
+            uploads: super::upload_transfer::UploadTransfers::default(),
             file_reads: Arc::new(tokio::sync::Semaphore::new(
                 crate::tools::session_files::SESSION_FILE_MAX_READS,
             )),
@@ -192,6 +199,24 @@ impl AppServerHost {
         }
         self.0.requests.send_modify(|n| *n += 1);
         Ok(commit(ServerOperation(self.0.requests.clone())))
+    }
+    pub(crate) fn prepare_upload<T>(
+        &self,
+        commit: impl FnOnce() -> T,
+    ) -> Result<T, HostAdmissionError> {
+        // Keep the admission mutex through publication of the prepared intent.
+        let mut state = self.0.state.lock().expect("host mutex");
+        state.accepting()?;
+        Ok(commit())
+    }
+    pub(crate) fn admit_upload<T>(
+        &self,
+        commit: impl FnOnce(ServerOperation) -> T,
+    ) -> Result<T, HostAdmissionError> {
+        let mut state = self.0.state.lock().expect("host mutex");
+        state.accepting()?;
+        self.0.upload_operations.send_modify(|n| *n += 1);
+        Ok(commit(ServerOperation(self.0.upload_operations.clone())))
     }
     pub(crate) fn admit_attachment(&self) -> Result<AttachmentPermit, HostAdmissionError> {
         let mut state = self.0.state.lock().expect("host mutex");
@@ -248,6 +273,8 @@ impl AppServerHost {
         if state.lifecycle == ServerLifecycle::Accepting {
             state.lifecycle = ServerLifecycle::Draining;
         }
+        drop(state);
+        self.uploads().revoke_prepared();
     }
     /// Supervise existing runtimes immediately, including when an accepted
     /// request is still pending. A final pass after request settlement covers
@@ -258,6 +285,12 @@ impl AppServerHost {
         self.begin_drain();
         let requests = async {
             self.0
+                .upload_operations
+                .subscribe()
+                .wait_for(|n| *n == 0)
+                .await
+                .expect("upload owner");
+            self.0
                 .requests
                 .subscribe()
                 .wait_for(|n| *n == 0)
@@ -265,6 +298,7 @@ impl AppServerHost {
                 .expect("host request owner");
         };
         let (mut failures, ()) = tokio::join!(self.manager().drain_all_runtimes(), requests);
+        self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
         failures.sort();
         failures.dedup();
@@ -278,6 +312,9 @@ impl AppServerHost {
         if state.lifecycle != ServerLifecycle::Draining
             || !self.manager().is_empty()
             || *self.0.requests.borrow() != 0
+            || *self.0.upload_operations.borrow() != 0
+            || !self.uploads().is_empty()
+            || self.uploads().actor_count() != 0
             || state.attachments != 0
             || self.0.transport.has_connections()
         {
@@ -291,10 +328,12 @@ impl AppServerHost {
             self.0.state.lock().expect("host mutex").shutdown_timeouts += 1;
         }
         format!(
-            "{}; pending_protocol_operations={}; physical_connections_remain={}",
+            "{}; pending_protocol_operations={}; physical_connections_remain={}; active_uploads={}; upload_actors={}",
             self.manager().unproven_resources(),
             *self.0.requests.borrow(),
-            self.0.transport.has_connections()
+            self.0.transport.has_connections(),
+            *self.0.upload_operations.borrow(),
+            self.uploads().actor_count()
         )
     }
     /// Observations are never used as settlement or admission authority.

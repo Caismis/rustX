@@ -7,6 +7,80 @@ use crate::runtime_client::event::RuntimeClientEvent;
 
 use super::app_server_conformance as conformance;
 
+async fn binary_upload(
+    connection: &AppServerConnection,
+    target: AttachmentTarget,
+    name: &str,
+    bytes: &[u8],
+) -> Vec<crate::local_runtime::session::uploads::UploadedFile> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    let operation_id = uuid::Uuid::new_v4().simple().to_string();
+    let MethodResult::UploadPrepared { transfer } = call(
+        connection,
+        9000,
+        Method::SessionUploadPrepare {
+            target: target.clone(),
+            operation_id: operation_id.clone(),
+            files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                name: name.into(),
+                size: bytes.len(),
+            }],
+        },
+    )
+    .await
+    else {
+        panic!("upload preparation")
+    };
+    let mut request = format!(
+        "ws://127.0.0.1:{}{}",
+        transfer.loopback_port.unwrap(),
+        transfer.path
+    )
+    .into_client_request()
+    .unwrap();
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        "rustx.session-upload.v1".parse().unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    for chunk in bytes.chunks(crate::local_runtime::session::uploads::UPLOAD_POLICY.max_chunk_bytes)
+    {
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Text("next".into())
+        );
+        socket
+            .send(Message::Binary(chunk.to_vec().into()))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        socket.next().await.unwrap().unwrap(),
+        Message::Text("finish".into())
+    );
+    socket.send(Message::Text("finish".into())).await.unwrap();
+    assert_eq!(
+        socket.next().await.unwrap().unwrap(),
+        Message::Text("settled".into())
+    );
+    let MethodResult::UploadStatus {
+        outcome: crate::local_runtime::session::uploads::UploadOutcome::Ready { files },
+    } = call(
+        connection,
+        9001,
+        Method::SessionUploadStatus {
+            target,
+            operation_id,
+        },
+    )
+    .await
+    else {
+        panic!("ready upload")
+    };
+    files
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn direct_connection_runs_shared_transport_neutral_conformance() {
     bounded(async {
@@ -1571,35 +1645,20 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
             },
         )
         .await;
-        let uploaded = call(
+        let uploaded = binary_upload(&connection, target.clone(), "hello.txt", b"hi").await;
+        assert_eq!(uploaded.len(), 1);
+        rejected(
             &connection,
-            910,
-            Method::SessionUpload {
+            Method::SessionUploadPrepare {
                 target: target.clone(),
-                files: vec![UploadBytes {
+                operation_id: "0".repeat(32),
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
                     name: "hello.txt".into(),
-                    data: "aGk=".into(),
+                    size: crate::local_runtime::session::uploads::UPLOAD_POLICY.max_file_bytes + 1,
                 }],
             },
         )
         .await;
-        assert!(matches!(uploaded, MethodResult::SessionUploaded { .. }));
-        for data in [
-            "not base64!".to_owned(),
-            "A".repeat(crate::tools::artifacts::ARTIFACT_TRANSFER_MAX.div_ceil(3) * 4 + 1),
-        ] {
-            rejected(
-                &connection,
-                Method::SessionUpload {
-                    target: target.clone(),
-                    files: vec![UploadBytes {
-                        name: "hello.txt".into(),
-                        data,
-                    }],
-                },
-            )
-            .await;
-        }
         assert!(
             f.provider.request_bodies().is_empty(),
             "storage-only upload never reaches provider"
@@ -1844,9 +1903,7 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
         let other = attach(&connection, &f, 1).await;
-        let MethodResult::SessionUploaded { files } = call(&connection, 1001, Method::SessionUpload {
-            target: target.clone(), files: vec![UploadBytes { name: "picture.png".into(), data: "Tk9UX0VBR0VSTFlfSU5KRUNURUQ=".into() }],
-        }).await else { panic!("committed upload"); };
+        let files = binary_upload(&connection, target.clone(), "picture.png", b"NOT_EAGERLY_INJECTED").await;
         let native = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
         assert!(native.tool_runtime().durable_store().load_canonical().unwrap().is_empty());
         rejected(&connection, Method::TurnStart { target: other, content: vec![UserInputBlock::Upload(files[0].receipt.clone())] }).await;
@@ -1884,6 +1941,7 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
+    use crate::local_runtime::session::deletion::{DeletionBlocker, SessionDeleteResult};
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
@@ -1894,23 +1952,35 @@ async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
         let release = gate.arm_scoped();
         *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
         let caller = connection.clone();
-        let waiter = tokio::spawn(async move {
-            call(
-                &caller,
-                1010,
-                Method::SessionUpload {
-                    target,
-                    files: vec![UploadBytes {
-                        name: "lost.txt".into(),
-                        data: "aGk=".into(),
-                    }],
-                },
-            )
-            .await
-        });
+        let waiter =
+            tokio::spawn(async move { binary_upload(&caller, target, "lost.txt", b"hi").await });
         tokio::task::spawn_blocking(move || gate.wait_entered())
             .await
             .unwrap();
+        let claimed = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&f.sessions[0].id)
+            .unwrap();
+        let (batch, allocation) = claimed.allocations.iter().next().unwrap();
+        let operation = allocation.operation_id.clone().unwrap();
+        assert!(claimed.receipts(&f.sessions[0].id, batch).is_err());
+        let SessionDeleteResult::Preview { preview } =
+            controller.delete_preview(&f.sessions[0].id).await
+        else {
+            panic!("preview")
+        };
+        assert!(matches!(
+            controller
+                .delete_session(&f.sessions[0].id, &preview.target_revision)
+                .await
+                .unwrap(),
+            SessionDeleteResult::Blocked {
+                reason: DeletionBlocker::ResourceConflict,
+                ..
+            }
+        ));
         waiter.abort();
         let _ = waiter.await;
         connection.close();
@@ -1937,6 +2007,15 @@ async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
             .unwrap();
         assert_eq!(registry.allocations.len(), 2);
         assert!(registry.allocations.values().all(|a| a.ready));
+        assert_eq!(
+            controller
+                .upload_status(&f.sessions[0].id, &operation)
+                .await
+                .unwrap(),
+            crate::local_runtime::session::uploads::UploadOutcome::Ready {
+                files: registry.receipts(&f.sessions[0].id, batch).unwrap()
+            }
+        );
         assert_eq!(
             registry
                 .allocations
@@ -3634,7 +3713,6 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
 #[tokio::test]
 async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repaints() {
     bounded(async {
-        use base64::Engine as _;
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
@@ -3643,22 +3721,13 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
             &target.session_id,
         )
         .expect("root composition armed the display-projection publisher");
-        let MethodResult::SessionUploaded { files } = call(
+        let files = binary_upload(
             &connection,
-            70,
-            Method::SessionUpload {
-                target: target.clone(),
-                files: vec![UploadBytes {
-                    name: "pixel.png".into(),
-                    data: base64::engine::general_purpose::STANDARD
-                        .encode([137_u8, 80, 78, 71, 13, 10, 26, 10]),
-                }],
-            },
+            target.clone(),
+            "pixel.png",
+            &[137_u8, 80, 78, 71, 13, 10, 26, 10],
         )
-        .await
-        else {
-            panic!("upload")
-        };
+        .await;
         let reply = call(
             &connection,
             71,
@@ -4622,6 +4691,838 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
             assert!(f.provider.request_bodies().is_empty());
         }
         f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn binary_upload_one_mib_document_repairs_original_receipts_without_model_requests() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let mut document = b"# Ordinary document\n\n".to_vec();
+        document.resize(1024 * 1024 - 1, b'x');
+        document.push(b'\n');
+        let files = binary_upload(&connection, target.clone(), "document.md", &document).await;
+        assert_eq!(std::fs::read(&files[0].path).unwrap(), document);
+        let controller = f.manager.session_controller();
+        let registry = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&target.session_id)
+            .unwrap();
+        assert_eq!(registry.allocations.len(), 1);
+        let operation_id = registry
+            .allocations
+            .values()
+            .next()
+            .unwrap()
+            .operation_id
+            .clone()
+            .unwrap();
+        for _ in 0..2 {
+            let repaired = call(
+                &connection,
+                9500,
+                Method::SessionUploadStatus {
+                    target: target.clone(),
+                    operation_id: operation_id.clone(),
+                },
+            )
+            .await;
+            assert_eq!(
+                repaired,
+                MethodResult::UploadStatus {
+                    outcome: crate::local_runtime::session::uploads::UploadOutcome::Ready {
+                        files: files.clone()
+                    }
+                }
+            );
+        }
+        rejected(
+            &connection,
+            Method::SessionUploadPrepare {
+                target: target.clone(),
+                operation_id,
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                    name: "document.md".into(),
+                    size: document.len(),
+                }],
+            },
+        )
+        .await;
+        assert_eq!(
+            controller
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap()
+                .allocations
+                .len(),
+            1
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn saturated_binary_admission_does_not_hold_control_and_refuses_excess() {
+    bounded(async {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let method = |number| Method::SessionUploadPrepare {
+            target: target.clone(),
+            operation_id: format!("{number:032x}"),
+            files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                name: "held.txt".into(),
+                size: 1,
+            }],
+        };
+        let mut sockets = Vec::new();
+        for number in
+            1..=crate::local_runtime::session::uploads::UPLOAD_POLICY.max_concurrent_transfers
+        {
+            let MethodResult::UploadPrepared { transfer } =
+                call(&connection, 9600, method(number)).await
+            else {
+                panic!("prepared")
+            };
+            let mut request = format!(
+                "ws://127.0.0.1:{}{}",
+                transfer.loopback_port.unwrap(),
+                transfer.path
+            )
+            .into_client_request()
+            .unwrap();
+            request.headers_mut().insert(
+                "sec-websocket-protocol",
+                "rustx.session-upload.v1".parse().unwrap(),
+            );
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Text("next".into())
+            );
+            sockets.push((socket, transfer.loopback_port.unwrap()));
+        }
+        rejected(&connection, method(3)).await;
+        assert_eq!(
+            call(
+                &connection,
+                9601,
+                Method::SessionUploadStatus {
+                    target: target.clone(),
+                    operation_id: format!("{:032x}", 1)
+                }
+            )
+            .await,
+            MethodResult::UploadStatus {
+                outcome: crate::local_runtime::session::uploads::UploadOutcome::Unresolved
+            }
+        );
+        assert!(matches!(
+            call(&connection, 9602, Method::SessionDetach { target }).await,
+            MethodResult::Detached { .. }
+        ));
+        assert!(f.provider.request_bodies().is_empty());
+        for (mut socket, port) in sockets {
+            socket.close(None).await.unwrap();
+            f.host.uploads().settled.notified().await;
+            f.host.uploads().listener_settled.notified().await;
+            assert!(
+                tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+                    .await
+                    .is_err(),
+                "each owned listener closes after its own transfer, even while another remains held"
+            );
+        }
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn binary_carrier_rejects_bad_lengths_reuse_expiry_and_paths_before_allocation() {
+    bounded(async {
+        use crate::local_runtime::session::uploads::{
+            UPLOAD_POLICY, UploadMetadata, UploadOutcome,
+        };
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        for (index, body) in [
+            vec![],
+            vec![0],
+            vec![0; 3],
+            vec![0; UPLOAD_POLICY.max_chunk_bytes + 1],
+            vec![0; 2],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let operation_id = format!("{:032x}", index + 1);
+            let MethodResult::UploadPrepared { transfer } = call(
+                &connection,
+                9700,
+                Method::SessionUploadPrepare {
+                    target: target.clone(),
+                    operation_id: operation_id.clone(),
+                    files: vec![UploadMetadata {
+                        name: "bad.md".into(),
+                        size: 2,
+                    }],
+                },
+            )
+            .await
+            else {
+                panic!("prepared")
+            };
+            let url = format!(
+                "ws://127.0.0.1:{}{}",
+                transfer.loopback_port.unwrap(),
+                transfer.path
+            );
+            let request = || {
+                let mut request = url.clone().into_client_request().unwrap();
+                request.headers_mut().insert(
+                    "sec-websocket-protocol",
+                    "rustx.session-upload.v1".parse().unwrap(),
+                );
+                request
+            };
+            let (mut socket, _) = tokio_tungstenite::connect_async(request()).await.unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Text("next".into())
+            );
+            if body.is_empty() {
+                socket.close(None).await.unwrap();
+            } else {
+                socket.send(Message::Binary(body.into())).await.unwrap();
+                if index == 4 {
+                    assert_eq!(
+                        socket.next().await.unwrap().unwrap(),
+                        Message::Text("finish".into())
+                    );
+                    socket.send(Message::Binary(vec![1].into())).await.unwrap();
+                }
+                if index == 1 {
+                    assert_eq!(
+                        socket.next().await.unwrap().unwrap(),
+                        Message::Text("next".into())
+                    );
+                    socket.close(None).await.unwrap();
+                }
+            }
+            f.host.uploads().settled.notified().await;
+            assert_eq!(
+                call(
+                    &connection,
+                    9701,
+                    Method::SessionUploadStatus {
+                        target: target.clone(),
+                        operation_id
+                    }
+                )
+                .await,
+                MethodResult::UploadStatus {
+                    outcome: UploadOutcome::Absent
+                }
+            );
+            assert!(tokio_tungstenite::connect_async(request()).await.is_err());
+        }
+        let MethodResult::UploadPrepared { transfer } = call(
+            &connection,
+            9702,
+            Method::SessionUploadPrepare {
+                target: target.clone(),
+                operation_id: "f".repeat(32),
+                files: vec![UploadMetadata {
+                    name: "expired.md".into(),
+                    size: 0,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("prepared")
+        };
+        let request = |path: &str| {
+            let mut request = format!("ws://127.0.0.1:{}{path}", transfer.loopback_port.unwrap())
+                .into_client_request()
+                .unwrap();
+            request.headers_mut().insert(
+                "sec-websocket-protocol",
+                "rustx.session-upload.v1".parse().unwrap(),
+            );
+            request
+        };
+        assert!(
+            tokio_tungstenite::connect_async(request("/wrong"))
+                .await
+                .is_err()
+        );
+        let MethodResult::UploadPrepared { transfer: other } = call(
+            &connection,
+            9703,
+            Method::SessionUploadPrepare {
+                target: target.clone(),
+                operation_id: "e".repeat(32),
+                files: vec![UploadMetadata {
+                    name: "other.md".into(),
+                    size: 0,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("second preparation")
+        };
+        // Even a valid capability cannot be moved to another owned-child port.
+        assert!(
+            tokio_tungstenite::connect_async(request(&other.path))
+                .await
+                .is_err()
+        );
+        f.host
+            .uploads()
+            .expire_prepared(std::time::Instant::now() + std::time::Duration::from_secs(61));
+        f.host.uploads().settle_actors().await;
+        assert_eq!(f.host.uploads().actor_count(), 0);
+        assert!(
+            tokio_tungstenite::connect_async(request(&transfer.path))
+                .await
+                .is_err()
+        );
+        assert!(
+            f.manager
+                .session_controller()
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap()
+                .allocations
+                .is_empty()
+        );
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
+    bounded(async {
+        use crate::local_runtime::session::uploads::UploadOutcome;
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let gate = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        *f.host.uploads().reply_gate.lock().unwrap() = Some(gate.clone());
+        let caller = connection.clone();
+        let upload_target = target.clone();
+        let waiter = tokio::spawn(async move {
+            binary_upload(
+                &caller,
+                upload_target,
+                "lost-ready.md",
+                b"# durable before reply",
+            )
+            .await
+        });
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        // The reply gate is after native ready, not merely after byte delivery.
+        let controller = f.manager.session_controller();
+        let registry = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&target.session_id)
+            .unwrap();
+        assert_eq!(registry.allocations.len(), 1);
+        let (batch, allocation) = registry.allocations.iter().next().unwrap();
+        assert!(allocation.ready);
+        let operation_id = allocation.operation_id.clone().unwrap();
+        let original = registry.receipts(&target.session_id, batch).unwrap();
+        assert!(
+            controller
+                .uploaded_content(&target.session_id, &[original[0].receipt.clone()])
+                .await
+                .is_ok()
+        );
+        waiter.abort();
+        let _ = waiter.await;
+        for _ in 0..2 {
+            assert_eq!(
+                call(
+                    &connection,
+                    9800,
+                    Method::SessionUploadStatus {
+                        target: target.clone(),
+                        operation_id: operation_id.clone()
+                    }
+                )
+                .await,
+                MethodResult::UploadStatus {
+                    outcome: UploadOutcome::Ready {
+                        files: original.clone()
+                    }
+                }
+            );
+        }
+        *f.host.uploads().reply_gate.lock().unwrap() = None;
+        drop(release);
+        f.host.uploads().settled.notified().await;
+        assert_eq!(
+            controller
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap(),
+            registry
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_prepared_upload_is_revoked_when_drain_wins_admission() {
+    bounded(async {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let MethodResult::UploadPrepared { transfer } = call(
+            &connection,
+            9900,
+            Method::SessionUploadPrepare {
+                target: target.clone(),
+                operation_id: "a".repeat(32),
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                    name: "revoked.md".into(),
+                    size: 1,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("prepared")
+        };
+        connection.close();
+        f.host.begin_drain();
+        assert!(
+            f.host.uploads().is_empty(),
+            "drain revokes unused capacity synchronously"
+        );
+        let mut request = format!(
+            "ws://127.0.0.1:{}{}",
+            transfer.loopback_port.unwrap(),
+            transfer.path
+        )
+        .into_client_request()
+        .unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            "rustx.session-upload.v1".parse().unwrap(),
+        );
+        assert!(tokio_tungstenite::connect_async(request).await.is_err());
+        assert!(
+            f.manager
+                .session_controller()
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap()
+                .allocations
+                .is_empty()
+        );
+        connection.close();
+        assert!(f.host.drain().await.is_empty());
+        f.host.finish_drain().unwrap();
+        assert!(f.provider.request_bodies().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_active_upload_is_owned_until_native_settlement_during_drain() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let controller = f.manager.session_controller();
+        let gate = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+        let caller = connection.clone();
+        let addressed = target.clone();
+        let waiter = tokio::spawn(async move {
+            binary_upload(&caller, addressed, "accepted.md", b"owned").await
+        });
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        waiter.abort();
+        let _ = waiter.await;
+        connection.close();
+        let draining = f.host.drain();
+        tokio::pin!(draining);
+        assert!(futures_util::poll!(&mut draining).is_pending());
+        assert!(f.host.finish_drain().is_err());
+        assert!(f.host.forced_resources(false).contains("active_uploads=1"));
+        drop(release);
+        assert!(draining.await.is_empty());
+        assert!(f.host.uploads().is_empty());
+        f.host.finish_drain().unwrap();
+        let registry = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&target.session_id)
+            .unwrap();
+        assert_eq!(registry.allocations.len(), 1);
+        assert!(registry.allocations.values().all(|a| a.ready));
+        assert!(f.provider.request_bodies().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority() {
+    bounded(async {
+        use crate::local_runtime::session::uploads::{UPLOAD_POLICY, UploadFile};
+        for byte_boundary in [false, true] {
+            let f = Fixture::new().await;
+            let connection = AppServerConnection::new(f.host.clone());
+            initialize(&connection).await;
+            let target = attach(&connection, &f, 0).await;
+            let controller = f.manager.session_controller();
+            let native = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
+            let mut empty = Vec::new();
+            for _ in 0..=UPLOAD_POLICY.max_uploads_per_user_input {
+                empty.push(
+                    controller
+                        .upload(
+                            &target.session_id,
+                            None,
+                            vec![UploadFile {
+                                name: "empty".into(),
+                                bytes: vec![],
+                            }],
+                        )
+                        .await
+                        .unwrap()[0]
+                        .receipt
+                        .clone(),
+                );
+            }
+            let mut large = Vec::new();
+            for size in [
+                UPLOAD_POLICY.max_file_bytes,
+                UPLOAD_POLICY.max_file_bytes,
+                1,
+            ] {
+                large.push(
+                    controller
+                        .upload(
+                            &target.session_id,
+                            None,
+                            vec![UploadFile {
+                                name: "document".into(),
+                                bytes: vec![b'x'; size],
+                            }],
+                        )
+                        .await
+                        .unwrap()[0]
+                        .receipt
+                        .clone(),
+                );
+            }
+            let mut foreign = empty[0].clone();
+            foreign.session_id = f.sessions[1].id.clone();
+            let mut registry = controller
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap();
+            let mut unready = empty[0].clone();
+            unready.batch_id = registry
+                .claim(
+                    registry
+                        .allocations
+                        .values()
+                        .next()
+                        .unwrap()
+                        .workspace
+                        .clone(),
+                    &[UploadFile {
+                        name: "partial".into(),
+                        bytes: vec![],
+                    }],
+                )
+                .unwrap();
+            unready.token = registry.allocations[&unready.batch_id].files[0]
+                .token
+                .clone();
+            controller
+                .catalog
+                .lock()
+                .await
+                .commit_uploads(&target.session_id, registry.clone())
+                .unwrap();
+            for receipts in [empty.clone(), large.clone(), vec![foreign], vec![unready]] {
+                for steer in [false, true] {
+                    let content = receipts
+                        .iter()
+                        .cloned()
+                        .map(UserInputBlock::Upload)
+                        .collect();
+                    rejected(
+                        &connection,
+                        if steer {
+                            Method::TurnSteer {
+                                target: target.clone(),
+                                content,
+                            }
+                        } else {
+                            Method::TurnStart {
+                                target: target.clone(),
+                                content,
+                            }
+                        },
+                    )
+                    .await;
+                }
+            }
+            assert!(
+                native
+                    .tool_runtime()
+                    .durable_store()
+                    .load_canonical()
+                    .unwrap()
+                    .is_empty()
+            );
+            let MethodResult::Snapshot { snapshot, .. } = call(
+                &connection,
+                9909,
+                Method::SessionSnapshot {
+                    target: target.clone(),
+                    trace_records: vec![],
+                },
+            )
+            .await
+            else {
+                panic!("snapshot")
+            };
+            assert!(snapshot.inbound.pending.is_empty());
+            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(
+                controller
+                    .catalog
+                    .lock()
+                    .await
+                    .upload_registry(&target.session_id)
+                    .unwrap(),
+                registry
+            );
+            let receipts = if byte_boundary {
+                &large[..2]
+            } else {
+                &empty[..UPLOAD_POLICY.max_uploads_per_user_input]
+            };
+            let mut content: Vec<_> = receipts
+                .iter()
+                .cloned()
+                .map(UserInputBlock::Upload)
+                .collect();
+            content.push(UserInputBlock::Text(crate::message::content::TextBlock {
+                text: "request-A".into(),
+            }));
+            call(&connection, 9910, Method::TurnStart { target, content }).await;
+            f.gates[0].wait_entered().await;
+            assert_eq!(f.provider.request_bodies().len(), 1);
+            connection.close();
+            f.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upload_supervisors_settle_after_success_without_accumulating_expiry_actors() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        for _ in 0..6 {
+            binary_upload(&connection, target.clone(), "success.md", b"owned").await;
+            f.host.uploads().settle_actors().await;
+            assert_eq!(f.host.uploads().actor_count(), 0);
+            assert!(f.host.uploads().is_empty());
+        }
+        connection.close();
+        assert!(f.host.drain().await.is_empty());
+        f.host.finish_drain().unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upload_drain_waits_for_revoked_loopback_supervisor_physical_exit() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let gate = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        *f.host.uploads().actor_gate.lock().unwrap() = Some(gate.clone());
+        let MethodResult::UploadPrepared { transfer } = call(
+            &connection,
+            9910,
+            Method::SessionUploadPrepare {
+                target,
+                operation_id: "d".repeat(32),
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                    name: "unused".into(),
+                    size: 1,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("prepare");
+        };
+        f.host.begin_drain();
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        connection.close();
+        assert!(f.manager.drain_all_runtimes().await.is_empty());
+        assert!(f.host.uploads().is_empty());
+        assert_eq!(f.host.uploads().actor_count(), 1);
+        assert!(
+            tokio::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                transfer.loopback_port.unwrap()
+            ))
+            .await
+            .is_err()
+        );
+        let drain = f.host.drain();
+        tokio::pin!(drain);
+        assert!(futures_util::poll!(&mut drain).is_pending());
+        assert!(f.host.finish_drain().is_err());
+        drop(release);
+        assert!(drain.await.is_empty());
+        assert_eq!(f.host.uploads().actor_count(), 0);
+        f.host.finish_drain().unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn detached_unconsumed_upload_is_absent_and_releases_supervisor_capacity() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let operation_id = "e".repeat(32);
+        let MethodResult::UploadPrepared { transfer } = call(
+            &connection,
+            9920,
+            Method::SessionUploadPrepare {
+                target: target.clone(),
+                operation_id: operation_id.clone(),
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                    name: "unused".into(),
+                    size: 1,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("prepare");
+        };
+        assert!(matches!(
+            call(&connection, 9922, Method::SessionDetach { target }).await,
+            MethodResult::Detached {}
+        ));
+        connection.close();
+        f.host.uploads().settle_actors().await;
+        assert_eq!(f.host.uploads().actor_count(), 0);
+        assert!(f.host.uploads().is_empty());
+        assert!(
+            tokio::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                transfer.loopback_port.unwrap()
+            ))
+            .await
+            .is_err()
+        );
+        let replacement = AppServerConnection::new(f.host.clone());
+        initialize(&replacement).await;
+        let target = attach(&replacement, &f, 0).await;
+        assert_eq!(
+            call(
+                &replacement,
+                9921,
+                Method::SessionUploadStatus {
+                    target: target.clone(),
+                    operation_id
+                }
+            )
+            .await,
+            MethodResult::UploadStatus {
+                outcome: crate::local_runtime::session::uploads::UploadOutcome::Absent
+            }
+        );
+        assert!(
+            f.manager
+                .session_controller()
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap()
+                .allocations
+                .is_empty()
+        );
+        binary_upload(&replacement, target, "fresh.md", b"new").await;
+        f.host.uploads().settle_actors().await;
+        replacement.close();
+        assert!(f.host.drain().await.is_empty());
+        f.host.finish_drain().unwrap();
     })
     .await;
 }

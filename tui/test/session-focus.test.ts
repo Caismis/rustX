@@ -1,3 +1,6 @@
+import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
+const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
+const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
 /**
  * Switching the visible Session is focus, and only focus.
  *
@@ -34,7 +37,7 @@ import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { attemptView, runtimeCursor, snapshot } from "./support/fixtures.ts";
 
 const CAPABILITIES = {
-  multi_session: true,
+  upload_policy: nativeUploadPolicy, multi_session: true,
   single_writable_controller: true,
   headless_interactions: true,
   experimental_methods: [],

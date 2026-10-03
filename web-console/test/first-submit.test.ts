@@ -1,7 +1,8 @@
 import { expect, it, vi } from 'vitest';
 import { FirstSubmissions, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
+import { UploadFailure } from '../src/client/uploads';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { UploadReceipt } from '../../protocol/app-server/v33';
+import type { UploadReceipt } from '../../protocol/app-server/v34';
 function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 const session: CreatedSession = { id: 'native-session', node: 'native-node', conversation: 'native-conversation' };
 const draft: FirstDraft = { workspaceId: 'registered', text: 'Task', files: [], model: { model: 'explicit' } };
@@ -23,7 +24,7 @@ it('installs the Session owner before navigation, attach, upload and admission; 
   attach.resolve(); expect(await work).toBe(true); expect(port.send).toHaveBeenCalledTimes(1);
 });
 it.each(['attach', 'upload', 'send'] as const)('retains the Session and original intent after %s failure without replay', async phase => {
-  const { owner, port, start } = fixture({ [phase]: vi.fn(async () => { throw new Error('rejected'); }) });
+  const { owner, port, start } = fixture({ [phase]: vi.fn(async () => { throw phase === 'upload' ? new UploadFailure('failed') : new Error('rejected'); }) });
   const input = { ...draft, files: [new File(['a'], 'a')] };
   expect(await start(input)).toBe(false); const state = owner.session(session.id)!;
   expect(state.phase).toBe('failed'); expect(state.draft).toEqual(input);
@@ -94,4 +95,124 @@ it('retired input remains inspectable until explicit discard and stale observers
   owner.retireAuthority(); const detached = owner.detachedSnapshot()[0];
   expect(detached.draft.text).toBe('new input'); owner.discard(detached);
   expect(owner.detachedSnapshot()).toEqual([]);
+});
+
+it('repairs the retained exact upload without create/upload/send replay, then continues only on a gesture', async () => {
+  const { owner, port, start } = fixture({ upload: vi.fn(async () => { throw new OutcomeUncertain(); }) });
+  await start({ ...draft, files: [new File(['first'], 'first.md'), new File(['second'], 'second.md')] });
+  const lost = owner.session(session.id)!;
+  const reply = gate<import('../../protocol/app-server/v34').UploadOutcome>();
+  port.status = vi.fn(() => reply.promise);
+  const repair = owner.recoverUpload(lost, port, false);
+  await owner.recoverUpload(lost, port, false);
+  expect(port.status).toHaveBeenCalledExactlyOnceWith(session, lost.operations[0]);
+  reply.resolve({ state: 'ready', files: [{ receipt, file: { name: 'first.md', batch_id: receipt.batch_id }, path: '/native/first.md' }] });
+  await repair;
+  const repaired = owner.session(session.id)!;
+  expect(repaired.receipts).toEqual([receipt]); expect(repaired.phase).toBe('paused');
+  expect(port.upload).toHaveBeenCalledOnce(); expect(port.create).toHaveBeenCalledOnce(); expect(port.send).not.toHaveBeenCalled();
+  const second = { ...receipt, token: 'second' }; port.upload = vi.fn(async () => second);
+  await owner.continueUploads(repaired, port);
+  expect(port.upload).toHaveBeenCalledOnce(); expect(port.send).toHaveBeenCalledOnce(); expect(port.create).toHaveBeenCalledOnce();
+  await owner.continueUploads(repaired, port); expect(port.send).toHaveBeenCalledOnce();
+});
+it('retained known failure requires a read before one explicit Retry; removal preserves text and order', async () => {
+  const { owner, port, start } = fixture({ upload: vi.fn(async () => { throw Error('carrier lost'); }), status: vi.fn(async () => ({ state: 'failed' as const })) });
+  await start({ ...draft, files: [new File(['a'], 'a'), new File(['b'], 'b')] });
+  const uncertain = owner.session(session.id)!;
+  await owner.recoverUpload(uncertain, port, true); expect(port.upload).toHaveBeenCalledOnce();
+  await owner.recoverUpload(uncertain, port, false);
+  const failed = owner.session(session.id)!; expect(failed.phase).toBe('failed');
+  const reply = gate<UploadReceipt>(); port.upload = vi.fn(() => reply.promise);
+  const retry = owner.recoverUpload(failed, port, true); await owner.recoverUpload(failed, port, true);
+  expect(port.upload).toHaveBeenCalledOnce(); reply.resolve(receipt); await retry;
+  const ready = owner.session(session.id)!; expect(ready.operations[0]).not.toBe(failed.operations[0]);
+  owner.removeUpload(ready, ready.attachmentIds[0]);
+  expect(owner.session(session.id)?.draft.text).toBe(draft.text);
+  expect(owner.session(session.id)?.draft.files.map(file => file.name)).toEqual(['b']);
+  expect(port.send).not.toHaveBeenCalled();
+});
+
+it('captured retry and continuation receipts survive retirement without a second allocation', async () => {
+  const files = [new File(['a'], 'a'), new File(['b'], 'b')];
+  const { owner, port, start } = fixture({ upload: async () => { throw Error('lost'); }, status: async () => ({ state: 'failed' }) });
+  await start({ ...draft, files });
+  await owner.recoverUpload(owner.session(session.id)!, port, false);
+  port.upload = vi.fn(async (_, __, acknowledged) => { acknowledged(receipt); throw Error('retired after ready'); });
+  await owner.recoverUpload(owner.session(session.id)!, port, true);
+  expect(owner.session(session.id)).toMatchObject({ phase: 'paused', receipts: [receipt] });
+  const second = { ...receipt, token: 'second' };
+  port.upload = vi.fn(async (_, __, acknowledged) => { acknowledged(second); throw Error('retired after ready'); });
+  await owner.continueUploads(owner.session(session.id)!, port);
+  expect(owner.session(session.id)).toMatchObject({ phase: 'paused', receipts: [receipt, second] });
+  expect(port.upload).toHaveBeenCalledOnce(); expect(port.send).not.toHaveBeenCalled();
+  await owner.continueUploads(owner.session(session.id)!, port);
+  expect(port.upload).toHaveBeenCalledOnce(); expect(port.create).toHaveBeenCalledOnce(); expect(port.send).toHaveBeenCalledOnce();
+});
+
+it('removing an unrelated ready card cannot turn an uncertain upload into another upload', async () => {
+  const { owner, port, start } = fixture({ upload: vi.fn().mockResolvedValueOnce(receipt).mockRejectedValueOnce(new OutcomeUncertain()) });
+  await start({ ...draft, files: [new File(['a'], 'a'), new File(['b'], 'b')] });
+  const uncertain = owner.session(session.id)!;
+  owner.removeUpload(uncertain, uncertain.attachmentIds[0]);
+  const remaining = owner.session(session.id)!;
+  expect(remaining).toMatchObject({ phase: 'uncertain', failedPhase: 'uploading', uploadIndex: 0, receipts: [] });
+  expect(remaining.operations).toEqual([uncertain.operations[1]]);
+  await owner.continueUploads(remaining, port);
+  expect(port.upload).toHaveBeenCalledTimes(2); expect(port.send).not.toHaveBeenCalled();
+});
+
+it('an uncertain turn admission cannot be reopened by removing an attachment', async () => {
+  const { owner, port, start } = fixture({ send: vi.fn(async () => { throw new OutcomeUncertain(); }) });
+  await start({ ...draft, files: [new File(['a'], 'a')] });
+  const uncertain = owner.session(session.id)!;
+  expect(uncertain).toMatchObject({ phase: 'uncertain', failedPhase: 'admitting' });
+  owner.removeUpload(uncertain, uncertain.attachmentIds[0]);
+  expect(owner.session(session.id)).toBe(uncertain);
+  await owner.continueUploads(owner.session(session.id)!, port);
+  expect(port.create).toHaveBeenCalledOnce(); expect(port.upload).toHaveBeenCalledOnce(); expect(port.send).toHaveBeenCalledOnce();
+});
+
+it.each(['discard', 'admit'])('sealing first submission transfers File ownership and %s releases it', async finish => {
+  const { AttachmentIntake } = await import('../src/client/uploads');
+  const { capabilities } = await import('./fixture');
+  const intake = new AttachmentIntake();
+  const file = new File(['owned'], 'owned.md'); intake.add([{ file }], capabilities.upload_policy);
+  const creation = gate<CreatedSession>();
+  const { owner, port } = fixture({ create: () => creation.promise });
+  const work = owner.submit('draft', { ...draft, files: intake.snapshot().map(row => row.file!) }, port, () => intake.clear());
+  expect(intake.snapshot()).toEqual([]); expect(owner.draft('draft')?.draft.files).toEqual([file]);
+  if (finish === 'discard') { creation.reject(new Error('known pre-create failure')); await work; owner.discard(owner.draft('draft')!); }
+  else { creation.resolve(session); expect(await work).toBe(true); }
+  expect(owner.draft('draft')?.draft.files).toEqual([]); expect(intake.snapshot()).toEqual([]);
+});
+
+it('known creation rejection returns ownership to a live intake for further editing', async () => {
+  const { AttachmentIntake } = await import('../src/client/uploads');
+  const { capabilities } = await import('./fixture');
+  const intake = new AttachmentIntake();
+  const file = new File(['owned'], 'owned.md'); intake.add([{ file }], capabilities.upload_policy);
+  const id = intake.snapshot()[0].id;
+  const creation = gate<CreatedSession>(); const { owner, port } = fixture({ create: () => creation.promise });
+  const work = owner.submit('draft', { ...draft, files: [file], attachmentIds: [id] }, port, () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
+  expect(intake.snapshot()).toEqual([]);
+  creation.reject(new Error('known rejection')); expect(await work).toBe(false);
+  expect(owner.draft('draft')?.draft.files).toEqual([]);
+  expect(intake.snapshot()).toMatchObject([{ file, id, status: 'draft' }]);
+  intake.add([{ file: new File(['next'], 'next.md') }], capabilities.upload_policy);
+  expect(intake.snapshot().map(row => row.file!.name)).toEqual(['owned.md', 'next.md']);
+  intake.remove(id); expect(intake.snapshot().map(row => row.file!.name)).toEqual(['next.md']);
+});
+
+it('continuation preserves a known no-commit upload failure instead of degrading it to uncertainty', async () => {
+  const { owner, port, start } = fixture({ upload: vi.fn(async () => { throw new UploadFailure('failed'); }) });
+  await start({ ...draft, files: [new File(['a'], 'a'), new File(['b'], 'b')] });
+  const failed = owner.session(session.id)!;
+  port.upload = vi.fn(async () => receipt);
+  await owner.recoverUpload(failed, port, true);
+  const ready = owner.session(session.id)!;
+  port.upload = vi.fn(async () => { throw new UploadFailure('failed'); });
+  await owner.continueUploads(ready, port);
+  expect(owner.session(session.id)).toMatchObject({ phase: 'failed', failedPhase: 'uploading', uploadIndex: 1, receipts: [receipt] });
+  expect(port.send).not.toHaveBeenCalled();
 });
