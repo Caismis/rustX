@@ -103,7 +103,7 @@ impl Drop for AttachReservation {
     }
 }
 
-fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
+fn release_route(host: &AppServerHost, table: &Mutex<RouteTable>, route: &Arc<Route>) {
     let mut routes = table.lock().expect("routes mutex");
     if routes
         .active
@@ -112,6 +112,7 @@ fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
     {
         routes.active.remove(&route.target.session_id);
         route.attachment.detach();
+        host.uploads().revoke_route(route);
         route.external.release();
         route.capacity.release();
     }
@@ -206,6 +207,7 @@ impl AppServerConnection {
         routes.closed = true;
         for (_, route) in std::mem::take(&mut routes.active) {
             route.attachment.detach();
+            self.host.uploads().revoke_route(&route);
             route.external.release();
             route.capacity.release();
         }
@@ -400,7 +402,7 @@ impl AppServerConnection {
             Method::SessionDetach { target } => {
                 // Removing a connection relationship needs no live-runtime lease.
                 let route = self.route(&target)?;
-                release_route(&self.routes, &route);
+                release_route(&self.host, &self.routes, &route);
                 self.changed.notify_one();
                 Ok(MethodResult::Detached {})
             }
@@ -426,6 +428,7 @@ impl AppServerConnection {
             Method::SessionSwitchNode { target, node_id } => {
                 let route = self.route(&target)?;
                 let manager = self.host.manager().clone();
+                let host = self.host.clone();
                 let routes = self.routes.clone();
                 let changed = self.changed.clone();
                 let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -449,7 +452,7 @@ impl AppServerConnection {
                         Ok(MethodResult::Session { session })
                     }
                     .await;
-                    release_route(&routes, &route);
+                    release_route(&host, &routes, &route);
                     changed.notify_one();
                     let _ = sender.send(result);
                 });
@@ -877,7 +880,7 @@ impl AppServerConnection {
                     continue;
                 }
                 EventDelivery::Closed | EventDelivery::Exhausted => {
-                    release_route(&self.routes, &route);
+                    release_route(&self.host, &self.routes, &route);
                     NotificationMethod::Closed { target }
                 }
                 EventDelivery::Pending => unreachable!("async delivery never returns Pending"),

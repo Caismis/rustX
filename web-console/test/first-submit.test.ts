@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { FirstSubmissions, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
+import { UploadFailure } from '../src/client/uploads';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import type { UploadReceipt } from '../../protocol/app-server/v34';
 function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
@@ -23,10 +24,10 @@ it('installs the Session owner before navigation, attach, upload and admission; 
   attach.resolve(); expect(await work).toBe(true); expect(port.send).toHaveBeenCalledTimes(1);
 });
 it.each(['attach', 'upload', 'send'] as const)('retains the Session and original intent after %s failure without replay', async phase => {
-  const { owner, port, start } = fixture({ [phase]: vi.fn(async () => { throw new Error('rejected'); }) });
+  const { owner, port, start } = fixture({ [phase]: vi.fn(async () => { throw phase === 'upload' ? new UploadFailure('failed') : new Error('rejected'); }) });
   const input = { ...draft, files: [new File(['a'], 'a')] };
   expect(await start(input)).toBe(false); const state = owner.session(session.id)!;
-  expect(state.phase).toBe(phase === 'upload' ? 'uncertain' : 'failed'); expect(state.draft).toEqual(input);
+  expect(state.phase).toBe('failed'); expect(state.draft).toEqual(input);
   expect(await start(input)).toBe(false); expect(port.create).toHaveBeenCalledTimes(1); expect(port[phase]).toHaveBeenCalledTimes(1);
   owner.discard(state); expect(owner.session(session.id)?.draft.files).toEqual([]);
 });
@@ -179,7 +180,7 @@ it.each(['discard', 'admit'])('sealing first submission transfers File ownership
   const file = new File(['owned'], 'owned.md'); intake.add([{ file }], capabilities.upload_policy);
   const creation = gate<CreatedSession>();
   const { owner, port } = fixture({ create: () => creation.promise });
-  const work = owner.submit('draft', { ...draft, files: intake.snapshot().map(row => row.file) }, port, () => intake.clear());
+  const work = owner.submit('draft', { ...draft, files: intake.snapshot().map(row => row.file!) }, port, () => intake.clear());
   expect(intake.snapshot()).toEqual([]); expect(owner.draft('draft')?.draft.files).toEqual([file]);
   if (finish === 'discard') { creation.reject(new Error('known pre-create failure')); await work; owner.discard(owner.draft('draft')!); }
   else { creation.resolve(session); expect(await work).toBe(true); }
@@ -199,6 +200,19 @@ it('known creation rejection returns ownership to a live intake for further edit
   expect(owner.draft('draft')?.draft.files).toEqual([]);
   expect(intake.snapshot()).toMatchObject([{ file, id, status: 'draft' }]);
   intake.add([{ file: new File(['next'], 'next.md') }], capabilities.upload_policy);
-  expect(intake.snapshot().map(row => row.file.name)).toEqual(['owned.md', 'next.md']);
-  intake.remove(id); expect(intake.snapshot().map(row => row.file.name)).toEqual(['next.md']);
+  expect(intake.snapshot().map(row => row.file!.name)).toEqual(['owned.md', 'next.md']);
+  intake.remove(id); expect(intake.snapshot().map(row => row.file!.name)).toEqual(['next.md']);
+});
+
+it('continuation preserves a known no-commit upload failure instead of degrading it to uncertainty', async () => {
+  const { owner, port, start } = fixture({ upload: vi.fn(async () => { throw new UploadFailure('failed'); }) });
+  await start({ ...draft, files: [new File(['a'], 'a'), new File(['b'], 'b')] });
+  const failed = owner.session(session.id)!;
+  port.upload = vi.fn(async () => receipt);
+  await owner.recoverUpload(failed, port, true);
+  const ready = owner.session(session.id)!;
+  port.upload = vi.fn(async () => { throw new UploadFailure('failed'); });
+  await owner.continueUploads(ready, port);
+  expect(owner.session(session.id)).toMatchObject({ phase: 'failed', failedPhase: 'uploading', uploadIndex: 1, receipts: [receipt] });
+  expect(port.send).not.toHaveBeenCalled();
 });

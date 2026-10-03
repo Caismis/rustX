@@ -471,3 +471,10 @@ intakes. First-submit sealing transfers ownership to FirstSubmissions before cre
 admission/discard releases those files. A known rejected create returns files to the original live intake for editing.
 User-input count/byte limits are distinct from transfer limits and are independently
 validated by the native receipt collection owner before turn admission.
+
+Upload recovery preserves typed evidence in both immediate and first-submission
+owners: native Absent/Failed permits an explicit fresh-operation Retry; Unresolved
+or unrepairable response loss permits only exact-operation Check status. A queued
+file stopped before dispatch is known retryable, not uncertain. Rebinding never
+restarts it automatically. Failed browser file extraction displays a removable
+rejection without creating an empty File.

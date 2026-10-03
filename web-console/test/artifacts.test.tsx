@@ -194,3 +194,51 @@ it('native authority replacement and client disposal retire attachment File owne
   const current = server.client.attachmentIntakes.lookup('replacement')!; current.add([{ file: new File(['b'], 'b') }], capabilities.upload_policy);
   server.client.dispose(); expect(current.snapshot()).toEqual([]); expect(server.client.attachmentIntakes.size).toBe(0);
 });
+
+it.each(['absent', 'failed', 'unresolved'] as const)('native %s evidence survives client upload into retained first-submission recovery', async state => {
+  const { FirstSubmissions } = await import('../src/app/new-conversation/first-submit');
+  await server.attached('A');
+  server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state } }));
+  const owner = new FirstSubmissions();
+  const session = { id: 'A', node: 'node', conversation: 'conversation' };
+  const port = {
+    current: () => true, create: async () => session, handoff: () => {}, attach: async () => {},
+    upload: async (_session: typeof session, file: File, capture: (receipt: UploadedFile['receipt']) => void, operation?: string) => {
+      const [uploaded] = await server.client.upload('A', [file], { current: () => true, acknowledged: files => capture(files[0].receipt) }, operation);
+      return uploaded.receipt;
+    },
+    status: vi.fn(async (_session: typeof session, operation: string) => server.client.uploadStatus('A', operation)),
+    send: vi.fn(async () => {}),
+  };
+  await owner.submit('draft', { workspaceId: 'workspace', text: 'keep', files: [new File(['a'], 'a')] }, port);
+  const value = owner.session('A')!;
+  expect(value.phase).toBe(state === 'unresolved' ? 'uncertain' : 'failed');
+  const recover = vi.fn((retry: boolean) => { void owner.recoverUpload(value, port, retry); });
+  const ui = render(<AgentComposer firstSubmission={value} onRetainedRecover={recover} uploadPolicy={capabilities.upload_policy} disabled={false} busy={false} active={false} onUpload={async () => []} onSend={async () => false} onCancel={() => {}}/>);
+  expect(ui.queryByRole('button', { name: 'Retry' }) !== null).toBe(state !== 'unresolved');
+  expect(ui.queryByRole('button', { name: 'Check status' }) !== null).toBe(state === 'unresolved');
+  const count = () => server.requests.filter(item => item.request.method === 'session/uploadPrepare').length;
+  if (state === 'unresolved') {
+    await owner.recoverUpload(value, port, true); expect(count()).toBe(1);
+    await owner.recoverUpload(value, port, false);
+    expect(port.status).toHaveBeenCalledExactlyOnceWith(session, value.operations[0]); expect(count()).toBe(1);
+  } else {
+    const work = owner.recoverUpload(value, port, true);
+    await owner.recoverUpload(value, port, true); await work;
+    expect(count()).toBe(2); expect(owner.session('A')!.operations[0]).not.toBe(value.operations[0]);
+    expect(owner.session('A')!.phase).toBe('failed');
+  }
+  expect(port.send).not.toHaveBeenCalled();
+});
+
+it('explicit prepare refusal is read as no-commit failure and never transmits a carrier', async () => {
+  const { UploadFailure } = await import('../src/client/uploads');
+  await server.attached('A'); server.held.add('session/uploadPrepare');
+  const operation = 'a'.repeat(32);
+  const work = server.client.upload('A', [new File(['x'], 'x')], undefined, operation);
+  const rejected = expect(work).rejects.toMatchObject(new UploadFailure('failed'));
+  const request = await server.waitFor('session/uploadPrepare', 1);
+  server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32602, message: 'Invalid params', data: { kind: 'invalid_params' } } });
+  await rejected;
+  expect(server.requests.filter(item => item.request.method === 'session/uploadStatus').map(item => item.request.params)).toMatchObject([{ operation_id: operation }]);
+});

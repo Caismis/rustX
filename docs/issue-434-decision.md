@@ -80,3 +80,15 @@ The macOS recovery-probe test had an unrelated second actor: restore automatical
 started periodic reconciliation, which could briefly hold the mutex at try_lock.
 The fixture now restores on an executor-free thread and explicitly owns its parked
 probe and competing pass. Production Subagent recovery code is unchanged.
+
+The upload transport now owns one TaskTracker-supervised actor per preparation,
+combining expiry and an optional loopback listener. Transfer capacity covers that
+actor through physical exit. Host admission excludes new actors during drain;
+drain revokes prepared intent and awaits the tracker. Detach revokes only
+unconsumed intent through the same transfer owner. No standalone sleeping expiry
+task or independent listener escapes terminal Host settlement.
+
+Web recovery carries typed native/no-commit evidence through immediate intake and
+FirstSubmissions. Never-dispatched queued files are known retryable; uncertain
+operations are read-only until native repair. DataTransfer extraction failure is
+rejected metadata with no invented File content.

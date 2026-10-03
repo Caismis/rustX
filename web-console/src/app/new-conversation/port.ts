@@ -1,3 +1,4 @@
+import { UploadFailure } from '../../client/uploads';
 import { modelPreferences } from '../model-preference';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -47,7 +48,7 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       // Attach consumes the established native model/configuration. No second
       // selection, provider probe, model repair or catalog refresh owns startup.
     },
-    async upload(session, file, acknowledged, operation) { bindSession(session); const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }, operation); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
+    async upload(session, file, acknowledged, operation) { try { bindSession(session); } catch (error) { throw new UploadFailure('failed', error); } const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }, operation); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
     status: async (session, operation) => { bindSession(session); const result = await client.uploadStatus(session.id, operation); requireCurrent(); return result; },
     async send(session, draft, receipts, acknowledged) { bindSession(session); await client.send(session.id, draft.text, receipts, 'send', acknowledged, current); },
   };

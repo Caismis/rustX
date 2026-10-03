@@ -1,4 +1,4 @@
-import { AttachmentIntakes } from './uploads';
+import { UploadFailure, AttachmentIntakes } from './uploads';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import { NavigationEpoch } from './navigation';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
@@ -1326,27 +1326,40 @@ export class AppServerClient {
     return outcome;
   }
   async upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }, operationId = uploadOperationId()): Promise<UploadedFile[]> {
-    const target = this.target(id);
+    let target: AttachmentTarget;
+    try { target = this.target(id); } catch (error) { throw new UploadFailure('failed', error); }
     const generation = this.state.generation;
     const policy = this.state.capabilities?.upload_policy;
-    if (!policy) throw new Error('Upload policy unavailable');
-    if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new Error('Selection exceeds native upload policy');
+    if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
+    if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target) && (!evidence || evidence.current());
-    if (!current()) throw new Error('Upload authority changed');
-    const { transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current);
+    if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
+    const read = async () => {
+      const outcome = await this.uploadStatus(id, operationId).catch(error => { throw new UploadFailure('uncertain', error); });
+      if (outcome.state !== 'ready') throw new UploadFailure(outcome.state === 'unresolved' ? 'uncertain' : 'failed');
+      evidence?.acknowledged(outcome.files);
+      if (!current()) throw new UploadFailure('uncertain', 'Upload belongs to a retired view');
+      return outcome.files;
+    };
+    let transfer;
+    try {
+      ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current));
+    } catch (error) {
+      // A refusal published no new preparation, but the exact operation may
+      // already exist. Read its authority before permitting a fresh Retry.
+      if (error instanceof RpcFailure && !isOutcomeUncertain(error) && current()) return read();
+      throw new UploadFailure('uncertain', error);
+    }
     try {
       if (!current()) throw new Error('Upload authority changed');
       await this.uploadCarrier(transfer, files, policy, this.state.endpoint);
     } catch {
       // No retransmission: the authoritative read below repairs carrier loss.
     }
-    if (!current()) throw new Error(`Upload authority changed; reconcile operation ${operationId}`);
-    const outcome = await this.uploadStatus(id, operationId);
-    if (outcome.state !== 'ready') throw new Error(`Upload ${outcome.state}; check operation ${operationId}`);
-    evidence?.acknowledged(outcome.files);
-    if (!current()) throw new Error('Upload belongs to a retired view');
-    return outcome.files;
+    if (!current()) throw new UploadFailure('uncertain', 'Upload authority changed');
+    return read();
   }
+
   async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
     if (receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [

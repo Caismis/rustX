@@ -33,7 +33,7 @@ it('checks below, at and above every selection storage bound', () => {
 it('normalizes drop and paste items exactly once and reports directories', () => {
   const selected = file();
   const data = { items: [{ kind: 'file', getAsFile: () => selected, webkitGetAsEntry: () => ({ isDirectory: false }) }], files: [selected] } as unknown as DataTransfer;
-  expect(transferInputs(data)).toEqual([{ file: selected, directory: false }]);
+  expect(transferInputs(data)).toEqual([{ file: selected, name: undefined, directory: false }]);
   expect(intake(transferInputs(data), [], policy).map(row => row.status)).toEqual(intake([{ file: selected }], [], policy).map(row => row.status));
 });
 it('preserves exact text and selection when inserting a file-plus-text paste', () => {
@@ -93,7 +93,11 @@ it('rebind stops a finite selection and gates old publication until explicit nat
   const [first, second] = owner.snapshot();
   expect(first.status).toBe('uploading'); expect(second.status).toBe('queued');
   owner.bind('authority-B');
-  expect(owner.snapshot().map(row => row.status)).toEqual(['uncertain', 'uncertain']);
+  expect(owner.snapshot().map(row => row.status)).toEqual(['uncertain', 'failed']);
+  const ui = render(<AgentComposer intakeOwner={owner} uploadPolicy={policy} disabled={false} busy={false} active={false} onUpload={async () => []} onSend={async () => false} onCancel={() => {}}/>);
+  expect(ui.getAllByRole('button', { name: 'Check status' })).toHaveLength(1);
+  expect(ui.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+  ui.unmount();
   expect(owner.snapshot()[0].receipt).toBeUndefined(); expect(port.upload).toHaveBeenCalledOnce();
   const repair = owner.reconcile(first.id, port);
   expect(port.status).toHaveBeenCalledExactlyOnceWith(first.operation);
@@ -104,6 +108,13 @@ it('rebind stops a finite selection and gates old publication until explicit nat
   expect(port.status).toHaveBeenCalledOnce();
   statusGate.resolve({ state: 'ready', files: [ready] }); await repair;
   expect(owner.snapshot()[0].receipt).toEqual(ready.receipt); expect(port.upload).toHaveBeenCalledOnce();
+  await owner.reconcile(second.id, port);
+  expect(port.status).toHaveBeenCalledExactlyOnceWith(first.operation);
+  port.upload = vi.fn(async () => [ready]);
+  await owner.upload(second.id, port);
+  expect(port.upload).toHaveBeenCalledOnce();
+  expect(port.upload).toHaveBeenCalledWith([second.file], expect.any(String));
+  expect(owner.snapshot()[1].operation).not.toBe(second.operation);
 });
 
 it.each(['picker', 'drop', 'paste'])('%s produces the same visible mixed outcomes and blocks send', source => {
@@ -211,4 +222,15 @@ it('only a committed replacement retires the visible Composer owner; suspended r
   const remount = render(<Composer selected="B"/>);
   expect(owners.lookup('B')).toBe(b); expect(remount.getByText('B.md')).toBeTruthy();
   expect(retire).toHaveBeenCalledOnce();
+});
+
+it('unavailable DataTransfer file items remain visible rejected metadata, never empty Files', () => {
+  const data = { items: [{ kind: 'file', getAsFile: () => null, webkitGetAsEntry: () => ({ name: 'unavailable.pdf', isDirectory: false }) }], files: [] } as unknown as DataTransfer;
+  const owner = new AttachmentIntake(); const upload = vi.fn();
+  owner.add(transferInputs(data), policy, { upload, status: async () => ({ state: 'absent' }) });
+  expect(owner.snapshot()).toMatchObject([{ file: null, name: 'unavailable.pdf', status: 'rejected', reason: 'unavailable' }]);
+  expect(upload).not.toHaveBeenCalled();
+  const ui = render(<AgentComposer intakeOwner={owner} uploadPolicy={policy} disabled={false} busy={false} active={false} onUpload={upload} onSend={async () => false} onCancel={() => {}}/>);
+  expect(ui.getByText('unavailable.pdf')).toBeTruthy();
+  expect(ui.getByText('This file is unavailable or unsupported. Select it again.')).toBeTruthy();
 });

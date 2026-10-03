@@ -48,7 +48,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "7a2f18d276fff9bba51996ec1c940ef0a2b11f91affcf66d05a0fbc44bd28f4b",
+      "local_sha256": "8e0c5562da2460eac2defc6b0c7e468e9e87e883b351c1c569d2d6e1563e74bc",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -3204,7 +3204,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "c61a42bc79763bc95efbd78c0fcd8d3acaea7e25522dd44ba6be57d0811cd386"
+      "local_sha256": "47a4051d9476edd61a6b9cf8b72232cf0127b2b5bafcd1e157bfa5d7f66a457e"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

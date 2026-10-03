@@ -5002,6 +5002,8 @@ async fn binary_carrier_rejects_bad_lengths_reuse_expiry_and_paths_before_alloca
         f.host
             .uploads()
             .expire_prepared(std::time::Instant::now() + std::time::Duration::from_secs(61));
+        f.host.uploads().settle_actors().await;
+        assert_eq!(f.host.uploads().actor_count(), 0);
         assert!(
             tokio_tungstenite::connect_async(request(&transfer.path))
                 .await
@@ -5370,6 +5372,157 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
             connection.close();
             f.close().await;
         }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upload_supervisors_settle_after_success_without_accumulating_expiry_actors() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        for _ in 0..6 {
+            binary_upload(&connection, target.clone(), "success.md", b"owned").await;
+            f.host.uploads().settle_actors().await;
+            assert_eq!(f.host.uploads().actor_count(), 0);
+            assert!(f.host.uploads().is_empty());
+        }
+        connection.close();
+        assert!(f.host.drain().await.is_empty());
+        f.host.finish_drain().unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upload_drain_waits_for_revoked_loopback_supervisor_physical_exit() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let gate = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        *f.host.uploads().actor_gate.lock().unwrap() = Some(gate.clone());
+        let MethodResult::UploadPrepared { transfer } = call(
+            &connection,
+            9910,
+            Method::SessionUploadPrepare {
+                target,
+                operation_id: "d".repeat(32),
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                    name: "unused".into(),
+                    size: 1,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("prepare");
+        };
+        f.host.begin_drain();
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        connection.close();
+        assert!(f.manager.drain_all_runtimes().await.is_empty());
+        assert!(f.host.uploads().is_empty());
+        assert_eq!(f.host.uploads().actor_count(), 1);
+        assert!(
+            tokio::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                transfer.loopback_port.unwrap()
+            ))
+            .await
+            .is_err()
+        );
+        let drain = f.host.drain();
+        tokio::pin!(drain);
+        assert!(futures_util::poll!(&mut drain).is_pending());
+        assert!(f.host.finish_drain().is_err());
+        drop(release);
+        assert!(drain.await.is_empty());
+        assert_eq!(f.host.uploads().actor_count(), 0);
+        f.host.finish_drain().unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn detached_unconsumed_upload_is_absent_and_releases_supervisor_capacity() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let operation_id = "e".repeat(32);
+        let MethodResult::UploadPrepared { transfer } = call(
+            &connection,
+            9920,
+            Method::SessionUploadPrepare {
+                target: target.clone(),
+                operation_id: operation_id.clone(),
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                    name: "unused".into(),
+                    size: 1,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("prepare");
+        };
+        assert!(matches!(
+            call(&connection, 9922, Method::SessionDetach { target }).await,
+            MethodResult::Detached {}
+        ));
+        connection.close();
+        f.host.uploads().settle_actors().await;
+        assert_eq!(f.host.uploads().actor_count(), 0);
+        assert!(f.host.uploads().is_empty());
+        assert!(
+            tokio::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                transfer.loopback_port.unwrap()
+            ))
+            .await
+            .is_err()
+        );
+        let replacement = AppServerConnection::new(f.host.clone());
+        initialize(&replacement).await;
+        let target = attach(&replacement, &f, 0).await;
+        assert_eq!(
+            call(
+                &replacement,
+                9921,
+                Method::SessionUploadStatus {
+                    target: target.clone(),
+                    operation_id
+                }
+            )
+            .await,
+            MethodResult::UploadStatus {
+                outcome: crate::local_runtime::session::uploads::UploadOutcome::Absent
+            }
+        );
+        assert!(
+            f.manager
+                .session_controller()
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap()
+                .allocations
+                .is_empty()
+        );
+        binary_upload(&replacement, target, "fresh.md", b"new").await;
+        f.host.uploads().settle_actors().await;
+        replacement.close();
+        assert!(f.host.drain().await.is_empty());
+        f.host.finish_drain().unwrap();
     })
     .await;
 }

@@ -1,8 +1,9 @@
 # Issue 434 validation and ownership audit
 
 Initial repair started from PR HEAD `da93e80afadfb56299ec9725cd9f1a1c4b8321df`.
-The commit-boundary/catalog-invariant repair starts from
-`ea07fa454e8d00c141cb95c9c20a7e45600d5bc4`; its green CI is not evidence for later changes.
+The commit-boundary/catalog-invariant repair started from
+`ea07fa454e8d00c141cb95c9c20a7e45600d5bc4`. The actor/outcome repair starts from
+`ce23a59b5586bf3a0e5dc2510125634e43f03cbb`; previous green CI is not evidence for later changes.
 Base: `260994fc27ebc1ef1f767b6e6aa21a01c5f676c6` (PR #446, including #447).
 Final fetched main: `260994fc27ebc1ef1f767b6e6aa21a01c5f676c6` (unchanged; no rebase required).
 Branch: `issue-434-upload-intake`.
@@ -42,7 +43,8 @@ never retransmits bytes. Prepared/active carriers prevent a premature absent rea
 Binary admission shares the host drain mutex and acquires an independent host
 upload guard. Drain revokes unconsumed preparations and their loopback listeners;
 admitted carriers remain counted through terminal settlement. `finish_drain` checks
-both zero upload guards and an empty transfer registry. Route/resource drops occur
+zero upload guards, an empty transfer registry and zero tracked supervisors after
+their task futures have been destroyed. Route/resource drops occur
 outside ownership mutexes to avoid host/transfer lock inversion.
 
 Native Session access excludes deletion through carrier/native settlement.
@@ -144,7 +146,7 @@ coverage was enabled; no ignore was added for this issue.
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed |
 | `cargo build --bins --all-features --locked` | Passed |
 | `cargo test --all-targets --all-features --locked -- --list` | Passed, all harnesses discovered |
-| `TMPDIR=/var/tmp/rustx-434-tests RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | 4,103 passed; eight existing ignores; 19 harnesses |
+| `TMPDIR=/var/tmp/rustx-434-tests RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | 4,106 passed; eight existing ignores; 19 harnesses |
 | `cargo run --example check_test_lanes -- --job rust-contracts` | Linux selectors and coverage passed |
 | `cargo run --example check_test_lanes -- --job rust-boundaries` | Linux selectors and coverage passed |
 | `pnpm --dir protocol/app-server generate` | Passed |
@@ -156,7 +158,7 @@ coverage was enabled; no ignore was added for this issue.
 | `pnpm --dir dev test` | 38 passed |
 | `uv sync --frozen --project test-support/fake-provider` / `uv run --frozen --project test-support/fake-provider pytest test-support/fake-provider` | Passed / 51 passed |
 | `pnpm --dir web-console typecheck` | Passed |
-| `pnpm --dir web-console test` | 1,512 passed |
+| `pnpm --dir web-console test` | 1,518 passed |
 | `pnpm --dir web-console check:i18n` | Passed |
 | `pnpm --dir web-console check:provenance` | Passed; 148 source records and 132 production package notices |
 | `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 166 passed (10.5 minutes) |
@@ -248,3 +250,42 @@ Focused repair validation passed:
 The complete validation table above records fresh runs for this repair, not the
 previous green HEAD. Local logs use `/tmp/rustx-448-r2-*.log`. Hosted required
 checks must pass on the new commit before completion is reported.
+
+## Upload actor and truthful recovery repair
+
+One upload-owned TaskTracker supervisor contains expiry and the optional loopback
+listener. Publication registers it under Host admission; its transfer permit and
+Session exclusion survive until its future is destroyed. Settlement cancels expiry
+instead of leaving detached sleeping tasks. Host drain revokes prepared intent,
+awaits admitted native work and tracker settlement, and refuses termination with
+any remaining actor. Detach/close removes only unconsumed preparations under the
+transfer mutex; route destruction remains outside that mutex. Revalidation during
+publication prevents a concurrently detached route from publishing new intent.
+
+Deterministic regressions hold the supervisor after listener closure, prove an
+empty registry is insufficient for finish_drain, then release it and prove physical
+settlement. Six sequential successful uploads each await zero tracked actors.
+Explicit detach/re-attach reads original-operation Absent, refuses the old port,
+proves no allocation, and successfully uses released capacity. Controlled expiry
+now additionally awaits supervisor termination. Existing consumed-work disconnect,
+ready response loss and saturated control-progress regressions are preserved.
+
+Both Web upload owners preserve typed Failed/Uncertain evidence. Native Absent
+and Failed permit fresh-operation Retry; Unresolved and unrepairable response loss
+permit only original-operation Check status. A rejected prepare reads exact status
+before classifying, preserving any already-existing ready allocation. Never-dispatched
+queued work becomes known retryable when fenced, never uncertain or auto-replayed.
+DataTransfer null extraction is rejected metadata; no File content is fabricated.
+
+Focused validation: 36 native upload tests, six binary-filter tests and 63 Web
+intake/first-submit/client tests passed. The Web tests exercise native outcomes
+through AppServerClient into FirstSubmissions, localized recovery controls, duplicate
+gestures, continuation failures, exact operation identities and captured receipts.
+The obsolete queued-is-uncertain and rejected-upload-is-uncertain expectations were
+replaced with the truthful states. The prior Suspense commit-boundary regression
+remains in the executed suite.
+
+The first browser invocation was deliberately interrupted because the new native
+binary build had not completed; that run is not counted. Browser and TUI validation
+were started again after the final binary build. Current logs use
+`/tmp/rustx-448-r3-*.log`.

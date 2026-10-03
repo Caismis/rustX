@@ -213,17 +213,24 @@ does not invoke image processing or create a provider-native image block.
 Preparation reserves finite transport intent and native exclusion; it does not
 admit semantic upload execution. The binary handshake consumes the capability
 under the same host mutex as `begin_drain`. Drain revokes every unconsumed
-preparation and cancels its owned loopback listener. A handshake losing this
+preparation. Each preparation owns one tracked supervisor containing its expiry
+future and optional loopback listener; normal settlement cancels expiry immediately.
+The transfer permit remains held until that supervisor has physically exited. A handshake losing this
 boundary cannot mutate native storage. A winning handshake owns a separate host
 upload-operation guard through carrier/native settlement. Ordinary request capacity
 is independent. Neither control disconnect nor data disconnect after native handoff
 cancels the native obligation. Truncated receive settles without allocation.
 
-Drain waits for upload guards as well as protocol/runtime owners. `finish_drain`
-requires zero active upload guards and an empty transfer registry; forced-shutdown
-diagnostics expose active uploads without asserting settlement. Remote transport
+Drain waits for upload guards and tracked supervisor termination as well as
+protocol/runtime owners. `finish_drain` requires zero upload guards, an empty
+transfer registry and zero tracked actors. Forced-shutdown diagnostics expose
+active uploads and remaining actors without asserting settlement. Remote transport
 joins admitted carrier work, and owned stdio listeners obey the same host admission.
-Unused expiry also cancels the prepared listener and releases capacity.
+Unused expiry closes the prepared listener and releases capacity after actor exit.
+Permanent attachment detach/close promptly revokes only unconsumed preparations
+through this same owner. An exact status read can then report native Absent; it
+cannot remain Unresolved solely because a dead capability remains until expiry.
+Consumed work survives detach and remains server-owned through native settlement.
 
 `SessionController::uploaded_content` validates the entire receipt collection once
 for both `turn/start` and `turn/steer`, before inbound admission. It checks count,
@@ -252,3 +259,18 @@ replacement and client disposal explicitly retire applicable owners. First-submi
 FirstSubmissions synchronously; intake is empty before create starts. A known creation rejection returns files and local IDs to the still-live original
 intake for editing; a retired origin cannot reclaim them. Otherwise the retained
 first-submission owner keeps the intent until admission/discard.
+
+### Client recovery evidence
+
+Both immediate intake and retained first submission preserve typed upload evidence.
+Ready captures the original receipt; Absent/Failed permits explicit Retry with a
+fresh operation ID. Unresolved or an unrepairable transport loss permits only
+Check status for the original operation, never byte replay. A prepare refusal
+publishes no new intent; the client reads the exact operation to distinguish no
+commit from a previously known operation. A captured receipt survives subsequent
+local authority loss and pauses continuation without allocating again.
+
+Queued files stopped before dispatch are locally known to have no side effect.
+Rebinding makes them retryable, never uncertain, and never automatically dispatches
+them. Only dispatched/fenced work needs reconciliation. Unavailable DataTransfer
+file items are visible rejected metadata, not fabricated zero-byte files.

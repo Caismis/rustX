@@ -1,3 +1,4 @@
+import { UploadFailure, uploadFailureState } from '../../client/uploads';
 import { uploadOperationId } from '../../../../protocol/app-server/upload';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { WorkspaceHostError } from '../../workspaces/host';
@@ -107,7 +108,7 @@ export class FirstSubmissions {
         if (outcome?.state === 'ready' && outcome.files.length === 1) this.publish({ ...next, receipts: [...value.receipts, outcome.files[0].receipt], phase: 'paused', failedPhase: undefined });
         else this.publish({ ...next, phase: outcome?.state === 'absent' || outcome?.state === 'failed' ? 'failed' : 'uncertain' });
       }
-    } catch (error) { this.publish({ ...next, phase: next.receipts.length > index ? 'paused' : 'uncertain', failedPhase: next.receipts.length > index ? undefined : 'uploading', error }); }
+    } catch (error) { this.publish({ ...next, phase: next.receipts.length > index ? 'paused' : uploadFailureState(error), failedPhase: next.receipts.length > index ? undefined : 'uploading', error }); }
     finally { this.recovery.delete(value); }
   }
   async continueUploads(value: FirstSubmission, port: FirstSubmitPort) {
@@ -116,7 +117,8 @@ export class FirstSubmissions {
     const update = (patch: Partial<FirstSubmission>) => { next = { ...next, ...patch }; this.publish(next); };
     try {
       for (let index = next.receipts.length; index < next.draft.files.length; index++) {
-        live(port); update({ phase: 'uploading', uploadIndex: index });
+        update({ phase: 'uploading', uploadIndex: index });
+        if (!port.current()) throw new UploadFailure('failed', 'Upload not dispatched');
         let acknowledged = false;
         const capture = (receipt: UploadReceipt) => { if (!acknowledged) { acknowledged = true; update({ receipts: [...next.receipts, receipt] }); } };
         const receipt = await port.upload(next.session!, next.draft.files[index], capture, next.operations[index]);
@@ -125,7 +127,7 @@ export class FirstSubmissions {
       live(port); update({ phase: 'admitting' });
       await port.send(next.session!, next.draft, next.receipts, () => update({ phase: 'admitted', receipts: [], draft: { ...next.draft, text: '', files: [] } }));
       update({ phase: 'admitted', receipts: [], draft: { ...next.draft, text: '', files: [] } });
-    } catch (error) { if (next.phase !== 'admitted') { const captured = next.phase === 'uploading' && next.uploadIndex !== undefined && next.receipts.length > next.uploadIndex; update({ phase: captured ? 'paused' : 'uncertain', failedPhase: captured ? undefined : next.phase, error }); } }
+    } catch (error) { if (next.phase !== 'admitted') { const captured = next.phase === 'uploading' && next.uploadIndex !== undefined && next.receipts.length > next.uploadIndex; update({ phase: captured ? 'paused' : next.phase === 'uploading' ? uploadFailureState(error) : uncertain(error) ? 'uncertain' : 'failed', failedPhase: captured ? undefined : next.phase, error }); } }
   }
   async submit(binding: string, draft: FirstDraft, port: FirstSubmitPort, sealed?: () => void, rejected?: (files: readonly File[], ids: readonly string[]) => boolean): Promise<boolean> {
     const previous = this.drafts.get(`${this.authority}:${binding}`);
@@ -158,7 +160,8 @@ export class FirstSubmissions {
       await port.attach(session);
       current();
       for (const [uploadIndex, file] of value.draft.files.entries()) {
-        update({ phase: 'uploading', uploadIndex }); current();
+        update({ phase: 'uploading', uploadIndex });
+        try { current(); } catch (error) { throw new UploadFailure('failed', error); }
         let acknowledged = false;
         const capture = (receipt: UploadReceipt) => { if (!acknowledged) { acknowledged = true; update({ receipts: [...value.receipts, receipt] }); } };
         const receipt = await port.upload(session, file, capture, value.operations[uploadIndex]);
@@ -174,7 +177,7 @@ export class FirstSubmissions {
     } catch (error) {
       if (value.phase === 'admitted') return true;
       const captured = value.phase === 'uploading' && value.uploadIndex !== undefined && value.receipts.length > value.uploadIndex;
-      const phase = captured ? 'paused' : value.phase === 'uploading' || uncertain(error) ? 'uncertain' : value.session ? 'failed' : 'rejected';
+      const phase = captured ? 'paused' : value.phase === 'uploading' ? uploadFailureState(error) : uncertain(error) ? 'uncertain' : value.session ? 'failed' : 'rejected';
       const returned = phase === 'rejected' && rejected?.(value.draft.files, value.attachmentIds);
       update({ phase, failedPhase: captured ? undefined : value.phase, error, ...(returned ? { draft: { ...value.draft, files: [] } } : {}) });
       return false;

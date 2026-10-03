@@ -1,29 +1,33 @@
 import type { UploadPolicy, UploadReceipt, UploadedFile, UploadOutcome } from '../../../protocol/app-server/v34';
 import { uploadOperationId } from '../../../protocol/app-server/upload';
 
-export type IntakeInput = { file: File; directory?: boolean };
-export type IntakeReason = 'count' | 'size' | 'batch' | 'name' | 'directory' | 'policy';
-export type IntakeFile = { id: string; file: File; operation: string; status: 'draft' | 'queued' | 'uploading' | 'ready' | 'rejected' | 'failed' | 'uncertain' | 'reconciling'; reason?: IntakeReason; receipt?: UploadReceipt; error?: string };
+export type IntakeInput = { file: File | null; name?: string; directory?: boolean };
+export class UploadFailure extends Error {
+  constructor(readonly state: 'failed' | 'uncertain', cause?: unknown) { super(`Upload ${state}${cause === undefined ? '' : `: ${String(cause)}`}`, { cause }); }
+}
+export const uploadFailureState = (error: unknown) => error instanceof UploadFailure ? error.state : 'uncertain';
+export type IntakeReason = 'count' | 'size' | 'batch' | 'name' | 'directory' | 'policy' | 'unavailable';
+export type IntakeFile = { id: string; file: File | null; name: string; operation: string; status: 'draft' | 'queued' | 'uploading' | 'ready' | 'rejected' | 'failed' | 'uncertain' | 'reconciling'; reason?: IntakeReason; receipt?: UploadReceipt; error?: string };
 export type UploadPort = { upload(files: readonly File[], operation: string): Promise<UploadedFile[]>; status(operation: string): Promise<UploadOutcome> };
 const safeName = (name: string) => !!name && new TextEncoder().encode(name).length <= 255 && !/[\p{Cc}/\\:*?"<>|]/u.test(name) && !/[. ]$/.test(name) && !/^(CON|PRN|AUX|NUL|COM\d|LPT\d)(\.|$)/i.test(name);
 
 /** One normalization path, with bounded visible rejection and no silent truncation. */
 export function intake(inputs: readonly IntakeInput[], existing: readonly IntakeFile[], policy?: UploadPolicy): IntakeFile[] {
   if (!inputs.length) return [];
-  const row = (file: File, reason?: IntakeReason): IntakeFile => ({ id: uploadOperationId(), operation: uploadOperationId(), file, status: reason ? 'rejected' : 'draft', reason });
-  if (!policy || inputs.length + existing.length > policy.max_uploads_per_user_input) return [row(new File([], `${inputs.length} files`), policy ? 'count' : 'policy')];
-  let total = existing.reduce((sum, item) => sum + (item.status === 'rejected' ? 0 : item.file.size), 0);
-  return inputs.map(({ file, directory }) => {
-    const reason = directory ? 'directory' : !safeName(file.name) ? 'name' : file.size > policy.max_file_bytes ? 'size' : total + file.size > policy.max_upload_bytes_per_user_input ? 'batch' : undefined;
-    if (!reason) total += file.size;
-    return row(file, reason);
+  const row = (file: File | null, reason?: IntakeReason, name = file?.name ?? ''): IntakeFile => ({ name, id: uploadOperationId(), operation: uploadOperationId(), file, status: reason ? 'rejected' : 'draft', reason });
+  if (!policy || inputs.length + existing.length > policy.max_uploads_per_user_input) return [row(null, policy ? 'count' : 'policy', `${inputs.length} files`)];
+  let total = existing.reduce((sum, item) => sum + (item.status === 'rejected' ? 0 : (item.file?.size ?? 0)), 0);
+  return inputs.map(({ file, directory, name }) => {
+    const reason = directory ? 'directory' : !file ? 'unavailable' : !safeName(file.name) ? 'name' : file.size > policy.max_file_bytes ? 'size' : total + file.size > policy.max_upload_bytes_per_user_input ? 'batch' : undefined;
+    if (!reason) total += file!.size;
+    return row(file, reason, name ?? file?.name);
   });
 }
 export function transferInputs(data: DataTransfer): IntakeInput[] {
   const items = Array.from(data.items ?? []).filter(item => item.kind === 'file');
   if (items.length) return items.map(item => {
     const entry = item.webkitGetAsEntry?.();
-    return { file: item.getAsFile() ?? new File([], entry?.name ?? ''), directory: entry?.isDirectory ?? false };
+    return { file: item.getAsFile(), name: entry?.name, directory: entry?.isDirectory ?? false };
   });
   return Array.from(data.files).map(file => ({ file }));
 }
@@ -40,7 +44,7 @@ export class AttachmentIntake {
   bind(binding: string) {
     if (this.retired || this.binding === binding) return;
     this.binding = binding; this.revision++;
-    this.publish(this.files.map(file => ['queued', 'uploading', 'reconciling'].includes(file.status) ? { ...file, status: 'uncertain' } : file));
+    this.publish(this.files.map(file => file.status === 'queued' ? { ...file, status: 'failed' } : ['uploading', 'reconciling'].includes(file.status) ? { ...file, status: 'uncertain' } : file));
   }
   private listeners = new Set<() => void>();
   private actions = new Map<string, { revision: number }>();
@@ -50,7 +54,7 @@ export class AttachmentIntake {
   private update(id: string, patch: Partial<IntakeFile>) { this.publish(this.files.map(file => file.id === id ? { ...file, ...patch } : file)); }
   restoreDraft(files: readonly File[], ids: readonly string[]) {
     if (this.retired) return false;
-    this.publish(files.map((file, index) => ({ file, id: ids[index], operation: uploadOperationId(), status: 'draft' })));
+    this.publish(files.map((file, index) => ({ file, name: file.name, id: ids[index], operation: uploadOperationId(), status: 'draft' })));
     return true;
   }
   remove(id: string) { this.publish(this.files.filter(file => file.id !== id)); }
@@ -86,7 +90,7 @@ export class AttachmentIntake {
   }
   async upload(id: string, port: UploadPort) {
     const file = this.files.find(file => file.id === id);
-    if (this.retired || !file || !['draft', 'queued', 'failed'].includes(file.status) || this.actions.get(id)?.revision === this.revision) return;
+    if (this.retired || !file?.file || !['draft', 'queued', 'failed'].includes(file.status) || this.actions.get(id)?.revision === this.revision) return;
     const action = { revision: this.revision };
     const { revision } = action;
     this.actions.set(id, action);
@@ -97,7 +101,11 @@ export class AttachmentIntake {
       if (result.length !== 1) throw new Error('Invalid upload result');
       if (revision === this.revision) this.update(id, { status: 'ready', receipt: result[0].receipt });
     } catch (error) {
-      // All failures require native evidence before Retry can become legal.
+      if (error instanceof UploadFailure) {
+        if (revision === this.revision) this.update(id, { status: error.state, error: String(error) });
+        return;
+      }
+      // Unknown port failures require authoritative read-repair.
       try { const outcome = await port.status(operation); if (revision === this.revision) this.apply(id, outcome); }
       catch { if (revision === this.revision) this.update(id, { status: 'uncertain', error: String(error) }); }
     } finally { if (this.actions.get(id) === action) this.actions.delete(id); }

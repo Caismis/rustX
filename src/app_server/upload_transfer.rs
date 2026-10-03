@@ -31,7 +31,7 @@ use tokio_tungstenite::{
         protocol::WebSocketConfig,
     },
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 pub(crate) const PREFIX: &str = "/session-upload/";
 const PROTOCOL: &str = "rustx.session-upload.v1";
@@ -60,13 +60,22 @@ pub(crate) struct UploadTransfers {
     pub(crate) listener_settled: tokio::sync::Notify,
     #[cfg(test)]
     pub(crate) reply_gate: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
+    #[cfg(test)]
+    pub(crate) actor_gate: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
+    actors: TaskTracker,
     transfers: Mutex<BTreeMap<String, Arc<Transfer>>>,
     capacity: Arc<tokio::sync::Semaphore>,
     remote: AtomicBool,
 }
 impl Default for UploadTransfers {
     fn default() -> Self {
+        let actors = TaskTracker::new();
+        // Host admission, not this join latch, excludes new work during drain.
+        actors.close();
         Self {
+            actors,
+            #[cfg(test)]
+            actor_gate: Mutex::default(),
             #[cfg(test)]
             settled: tokio::sync::Notify::new(),
             #[cfg(test)]
@@ -82,22 +91,33 @@ impl Default for UploadTransfers {
     }
 }
 impl UploadTransfers {
+    pub(crate) async fn settle_actors(&self) {
+        self.actors.wait().await;
+    }
+    pub(crate) fn actor_count(&self) -> usize {
+        self.actors.len()
+    }
     pub(crate) fn is_empty(&self) -> bool {
         self.transfers.lock().expect("upload transfers").is_empty()
     }
     pub(crate) fn revoke_prepared(&self) {
-        self.remove_prepared(None);
+        self.remove_prepared(None, None);
     }
     pub(crate) fn expire_prepared(&self, now: Instant) {
-        self.remove_prepared(Some(now));
+        self.remove_prepared(Some(now), None);
     }
-    fn remove_prepared(&self, expired: Option<Instant>) {
+    pub(super) fn revoke_route(&self, route: &Arc<Route>) {
+        self.remove_prepared(None, Some(route));
+    }
+    fn remove_prepared(&self, expired: Option<Instant>, route: Option<&Arc<Route>>) {
         let removed = {
             let mut transfers = self.transfers.lock().expect("upload transfers");
             let paths: Vec<_> = transfers
                 .iter()
                 .filter(|(_, t)| {
-                    !t.consumed.load(Ordering::SeqCst) && expired.is_none_or(|now| t.expires <= now)
+                    !t.consumed.load(Ordering::SeqCst)
+                        && expired.is_none_or(|now| t.expires <= now)
+                        && route.is_none_or(|route| Arc::ptr_eq(route, &t.route))
                 })
                 .map(|(path, _)| path.clone())
                 .collect();
@@ -221,57 +241,83 @@ pub(super) async fn prepare(
         }) {
             return Err(invalid("operation already prepared"));
         }
-        transfers.insert(
-            path.clone(),
-            Arc::new(Transfer {
-                route,
-                operation,
-                files,
-                expires: Instant::now() + TTL,
-                consumed: AtomicBool::new(false),
-                access,
-                revoked: revoked.clone(),
-                _permit: permit,
-            }),
-        );
+        route
+            .attachment
+            .operation_authority()
+            .map_err(|_| invalid("stale upload attachment"))?;
+        let transfer = Arc::new(Transfer {
+            route: route.clone(),
+            operation,
+            files,
+            expires: Instant::now() + TTL,
+            consumed: AtomicBool::new(false),
+            access,
+            revoked: revoked.clone(),
+            _permit: permit,
+        });
+        transfers.insert(path.clone(), transfer.clone());
+        let owner = host.clone();
+        let expected_path = path.clone();
+        host.uploads().actors.spawn(async move {
+            supervise(owner, expected_path, transfer, listener).await;
+        });
         Ok(())
     })
     .map_err(|_| invalid("server draining"))??;
-    let owner = host.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(TTL).await;
-        owner.uploads().expire_prepared(Instant::now());
-    });
-    if let Some(listener) = listener {
-        let owner = host.clone();
-        let expected_path = path.clone();
-        tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + TTL;
-            'accept: while let Ok(Ok((socket, _))) = tokio::select! {
-                () = revoked.cancelled() => break 'accept,
-                result = tokio::time::timeout_at(deadline, listener.accept()) => result,
-            } {
-                let _ = serve(socket, owner.clone(), Some(&expected_path)).await;
-                if !owner
-                    .uploads()
-                    .transfers
-                    .lock()
-                    .expect("upload transfers")
-                    .contains_key(&expected_path)
-                {
-                    break;
-                }
-            }
-            drop(listener);
-            #[cfg(test)]
-            owner.uploads().listener_settled.notify_one();
-        });
-    }
     Ok(UploadDescriptor {
         path,
         loopback_port,
         expires_in_seconds: 60,
     })
+}
+
+// One bounded actor owns both preparation expiry and the optional loopback
+// listener. The permit is retained until the complete actor future is destroyed.
+async fn supervise(
+    host: AppServerHost,
+    path: String,
+    transfer: Arc<Transfer>,
+    listener: Option<TcpListener>,
+) {
+    let expiry = async {
+        tokio::select! {
+            () = transfer.revoked.cancelled() => {},
+            () = tokio::time::sleep_until(tokio::time::Instant::from_std(transfer.expires)) => {
+                host.uploads().expire_prepared(Instant::now());
+                transfer.revoked.cancelled().await;
+            }
+        }
+    };
+    let accept = async {
+        if let Some(listener) = listener {
+            loop {
+                let socket = tokio::select! {
+                    () = transfer.revoked.cancelled() => break,
+                    result = listener.accept() => match result { Ok((socket, _)) => socket, Err(_) => break },
+                };
+                tokio::select! {
+                    () = transfer.revoked.cancelled() => break,
+                    _ = serve(socket, host.clone(), Some(&path)) => {},
+                }
+                if transfer.consumed.load(Ordering::SeqCst) {
+                    break;
+                }
+            }
+            drop(listener);
+            #[cfg(test)]
+            host.uploads().listener_settled.notify_one();
+        }
+    };
+    tokio::join!(expiry, accept);
+    #[cfg(test)]
+    {
+        let gate = host.uploads().actor_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            tokio::task::spawn_blocking(move || gate.enter())
+                .await
+                .unwrap();
+        }
+    }
 }
 
 struct Settlement {
@@ -289,7 +335,9 @@ impl Drop for Settlement {
                 .expect("upload transfers")
                 .remove(&self.path)
         };
-        drop(removed);
+        if let Some(transfer) = removed {
+            transfer.revoked.cancel();
+        }
         #[cfg(test)]
         self.host.uploads().settled.notify_one();
     }

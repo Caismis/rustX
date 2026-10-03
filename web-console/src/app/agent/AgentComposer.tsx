@@ -43,7 +43,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   const intake = intakeOwner ?? localIntake;
   const selections = useSyncExternalStore(intake.subscribe, intake.snapshot);
   const retained = firstSubmission && !['rejected', 'discarded', 'admitted'].includes(firstSubmission.phase) ? firstSubmission : undefined;
-  const files: readonly Pick<IntakeFile, "id" | "file" | "receipt" | "status" | "reason" | "error">[] = retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', reason: undefined, error: undefined })) : selections;
+  const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "reason" | "error">[] = retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', reason: undefined, error: undefined })) : selections;
   const [error, setError] = useNotice();
   const [dragging, setDragging] = useState(false);
   const pending = files.some(file => file.status !== 'ready' && !(onDraftSend && file.status === 'draft'));
@@ -127,7 +127,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     const submitted = draft;
     const owner = binding;
     try {
-      if (await (onDraftSend ? onDraftSend(submitted, files.map(file => file.file), files.map(file => file.id)) : onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery, () => intake.clear())) && draftBinding.current === owner) { setDraft(current => current === submitted ? '' : current); intake.clear(); setRestored([]); input.current?.focus(); }
+      if (await (onDraftSend ? onDraftSend(submitted, files.map(file => file.file!), files.map(file => file.id)) : onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery, () => intake.clear())) && draftBinding.current === owner) { setDraft(current => current === submitted ? '' : current); intake.clear(); setRestored([]); input.current?.focus(); }
     } catch (cause) {
       if (draftBinding.current === owner) setError(String(cause));
     }
@@ -142,7 +142,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
       {menu && <CommandMenu rows={rows} active={highlight} select={invoke} highlight={trigger.highlight} />}
       {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>{tx('agent:agent-composer.native-restored-upload-batch')}{' '}{receipt.batch_id}</span><Button disabled={disabled || busy} onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>{tx('agent:agent-composer.remove-draft-upload')}</Button></div>)}
       <div className={css.attachments} aria-label={tx('agent:agent-composer.draft-attachments')}>{files.map(item => <div key={item.id}>
-        <DraftAttachment file={item.file} remove={firstSubmission && onRetainedRemove ? () => onRetainedRemove(item.id) : disabled || busy ? undefined : () => intake.remove(item.id)} />
+        <DraftAttachment name={item.name} file={item.file} remove={firstSubmission && onRetainedRemove ? () => onRetainedRemove(item.id) : disabled || busy ? undefined : () => intake.remove(item.id)} />
         <small role="status">{item.reason ? tx(`agent:upload.${item.reason}`) : tx(`agent:upload.${item.status}`)}</small>
         {item.status === 'failed' && <Button disabled={!onRetainedRecover && (disabled || busy)} onClick={() => onRetainedRecover ? onRetainedRecover(true) : void intake.upload(item.id, port)}>{tx('agent:upload.retry')}</Button>}
         {item.status === 'uncertain' && <Button disabled={!onRetainedRecover && (disabled || busy)} onClick={() => onRetainedRecover ? onRetainedRecover(false) : void intake.reconcile(item.id, port)}>{tx('agent:upload.reconcile')}</Button>}
@@ -217,15 +217,15 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   </div>;
 }
 
-function DraftAttachment({ file, remove }: { file: File; remove?: () => void }) {
+function DraftAttachment({ file, name, remove }: { file: File | null; name: string; remove?: () => void }) {
   const tx = useTranslation();
   const [url, setUrl] = useState<string>();
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     setFailed(false);
-    if (!file.type.startsWith('image/')) return;
+    if (!file?.type.startsWith('image/')) return;
     const value = URL.createObjectURL(file); setUrl(value);
     return () => URL.revokeObjectURL(value);
   }, [file]);
-  return <AttachmentCard name={file.name} image={file.type.startsWith('image/')} url={url} error={failed ? tx('agent:copy.image-preview-unavailable') : undefined} onDecodeError={() => setFailed(true)} onRemove={remove} />;
+  return <AttachmentCard name={name} image={!!file?.type.startsWith('image/')} url={url} error={failed ? tx('agent:copy.image-preview-unavailable') : undefined} onDecodeError={() => setFailed(true)} onRemove={remove} />;
 }

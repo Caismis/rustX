@@ -1483,3 +1483,10 @@ collection at turn/start and turn/steer, using native persisted admitted sizes.
 Preparation reserves intent; binary handshake admission linearizes against host
 drain. Prepared capabilities are revoked; accepted carriers retain a host upload
 guard until settlement. See [Session uploads](session-uploads.md).
+
+Upload preparation actors belong to the Host upload subsystem: one tracked
+supervisor owns expiry and any private loopback listener. Normal settlement cancels
+expiry; detach revokes only unconsumed preparations. Drain revokes prepared intent
+and waits for admitted native work and physical supervisor exit. Terminal settlement
+requires no transfers, upload guards or upload actors. Status on a revoked,
+unallocated operation is Absent; consumed work survives control disconnect.

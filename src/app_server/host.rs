@@ -298,6 +298,7 @@ impl AppServerHost {
                 .expect("host request owner");
         };
         let (mut failures, ()) = tokio::join!(self.manager().drain_all_runtimes(), requests);
+        self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
         failures.sort();
         failures.dedup();
@@ -313,6 +314,7 @@ impl AppServerHost {
             || *self.0.requests.borrow() != 0
             || *self.0.upload_operations.borrow() != 0
             || !self.uploads().is_empty()
+            || self.uploads().actor_count() != 0
             || state.attachments != 0
             || self.0.transport.has_connections()
         {
@@ -326,11 +328,12 @@ impl AppServerHost {
             self.0.state.lock().expect("host mutex").shutdown_timeouts += 1;
         }
         format!(
-            "{}; pending_protocol_operations={}; physical_connections_remain={}; active_uploads={}",
+            "{}; pending_protocol_operations={}; physical_connections_remain={}; active_uploads={}; upload_actors={}",
             self.manager().unproven_resources(),
             *self.0.requests.borrow(),
             self.0.transport.has_connections(),
-            *self.0.upload_operations.borrow()
+            *self.0.upload_operations.borrow(),
+            self.uploads().actor_count()
         )
     }
     /// Observations are never used as settlement or admission authority.
