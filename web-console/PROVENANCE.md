@@ -1,3 +1,31 @@
+## #439 Composer keyboard policy
+
+Approved read-only reference: `deepseek-ai/deepseek-harness` at
+`639ed015397290b3745d163aafe02ffee4aa3f84`, inspected using `git show` without
+changing its working checkout. Existing source pins remain unchanged.
+
+- Adapted: `packages/client/ui-conversation/src/client/input/submission-policy.ts`
+  (preferred/complementary delivery mapping in rustX's existing pure policy), and
+  `packages/client/ui-conversation/src/client/stop-sequence.ts` (bounded two-state
+  sequence, exact identity comparison and reset-before-dispatch in `stop-sequence.ts`).
+- Behaviorally consulted only: `packages/client/ui-conversation/src/submission-settings.ts`,
+  `src/client/stop-shortcut.ts`, `packages/client/shortcuts/README.md` and
+  `packages/client/ui-conversation/README.md`. Closed union/default and focus/menu
+  arbitration inform the local contract; no source from these files is copied.
+- Excluded: Cordis, Host user-settings/storage authority, generic shortcut registry,
+  editable keybindings, configurable timing, optimistic submission consumption,
+  continuable-child scope and upstream runtime execution/admission ownership.
+
+The dedicated origin/device preference and textarea event adapter are rustX-authored.
+The source inventory records the added sequence's MIT lineage, additional policy
+source, consulted-only files, exact upstream/local hashes and import closure.
+Native cancellation, Queue/Steer admission, upload gates and retained-first-submission
+semantics keep their existing rustX owners. See [COMPOSER.md](COMPOSER.md).
+
+PR #445 is integrated with merged #444's mandatory App Server v32/file-delivery
+contract. Inventory hashes and retained dependency closures describe this final
+source, including v32 imports; upstream reference pins are unchanged.
+
 ## #420 incremental projection and Chat synchronization
 
 Read-only reference inspected: `477b4f420553e8a52c2fbccc464d7561b239c443`,

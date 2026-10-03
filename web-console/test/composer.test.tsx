@@ -1,7 +1,9 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-afterEach(cleanup);
+import { composerPreferences, COMPOSER_PREFERENCE_KEY } from '../src/app/composer/preferences';
+beforeEach(() => { localStorage.clear(); composerPreferences().setBusyEnter('queue'); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 const props = () => ({ disabled: false, busy: false, active: false, onSend: vi.fn(async () => false), onUpload: vi.fn(async () => []), onCancel: vi.fn(), onCommand: vi.fn() });
 
 it.each(['button', 'Enter', 'Control', 'Meta'])('resolves %s through the same message policy, preserving failed drafts', async gesture => {
@@ -64,4 +66,55 @@ it('an uploaded attachment cannot be discarded by command selection', async () =
   expect(screen.getByRole('alert').textContent).toContain('Remove draft attachments');
   expect(screen.getByRole('button', { name: 'Remove note.txt' })).toBeTruthy();
   expect(p.onCommand).not.toHaveBeenCalled(); expect(p.onSend).not.toHaveBeenCalled();
+});
+
+const preferSteer = () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Enter while running: Queue' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Steer' }));
+  expect(screen.getByRole('button', { name: 'Enter while running: Steer' })).toBeTruthy();
+};
+it.each(['button', 'Enter', 'Control', 'Meta'])('Steer preference resolves %s and persists across remounts', async gesture => {
+  const p = props(); const ui = render(<AgentComposer {...p} active />); preferSteer();
+  expect(localStorage.getItem(COMPOSER_PREFERENCE_KEY)).toBe('steer');
+  ui.unmount(); render(<AgentComposer {...p} active />);
+  expect(screen.getByRole('button', { name: 'Enter while running: Steer' })).toBeTruthy();
+  const input = screen.getByLabelText('Message'); fireEvent.change(input, { target: { value: 'exact draft' } });
+  expect(screen.getByRole('button', { name: 'Steer' }).title).toBe('Steer · Enter (Ctrl/Cmd+Enter to Queue)');
+  await act(async () => gesture === 'button' ? fireEvent.click(screen.getByRole('button', { name: 'Steer' }))
+    : fireEvent.keyDown(input, { key: 'Enter', ctrlKey: gesture === 'Control', metaKey: gesture === 'Meta' }));
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('exact draft', [], ['Control', 'Meta'].includes(gesture) ? 'send' : 'steer');
+});
+it.each(['button', 'Enter', 'Control', 'Meta'])('idle %s stays Send with Steer preference', async gesture => {
+  const p = props(); render(<AgentComposer {...p} />); preferSteer();
+  const input = screen.getByLabelText('Message'); fireEvent.change(input, { target: { value: 'idle' } });
+  await act(async () => gesture === 'button' ? fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    : fireEvent.keyDown(input, { key: 'Enter', ctrlKey: gesture === 'Control', metaKey: gesture === 'Meta' }));
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('idle', [], 'send');
+});
+it('Steer preference never turns a command or IME Enter into a prompt', () => {
+  const p = props(); render(<AgentComposer {...p} active />); preferSteer();
+  const input = screen.getByLabelText('Message'); fireEvent.change(input, { target: { value: '/mdl' } });
+  fireEvent.keyDown(input, { key: 'Enter', isComposing: true }); fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+  expect(p.onCommand).not.toHaveBeenCalled(); fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+  expect(p.onCommand).toHaveBeenCalledExactlyOnceWith('model'); expect(p.onSend).not.toHaveBeenCalled();
+});
+it.each(['busy', 'disabled', 'submitDisabled', 'upload'] as const)('Steer preference preserves the %s admission gate', async gate => {
+  const p = props(); const ui = render(<AgentComposer {...p} active />); preferSteer();
+  const input = screen.getByLabelText('Message'); fireEvent.change(input, { target: { value: 'gated' } });
+  let complete!: (value: []) => void;
+  if (gate === 'upload') {
+    ui.rerender(<AgentComposer {...p} active onUpload={() => new Promise(resolve => { complete = resolve; })} />);
+    fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [new File(['x'], 'gated.txt')] } });
+  } else ui.rerender(<AgentComposer {...p} active {...{ [gate]: true }} />);
+  fireEvent.keyDown(input, { key: 'Enter' }); fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+  fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+  expect(p.onSend).not.toHaveBeenCalled(); expect(input).toHaveProperty('value', 'gated');
+  if (gate === 'upload') await act(async () => complete([]));
+});
+it('denied preference writes keep the Composer usable', async () => {
+  const p = props(); render(<AgentComposer {...p} active />);
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('denied'); }); preferSteer();
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'usable' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Steer' })));
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('usable', [], 'steer');
 });

@@ -72,7 +72,8 @@ window.sessionFixture = {
     await server.update('A', next);
     if (mode === 'stopping' || mode === 'uncertain') {
       server.held.add('turn/cancel');
-      void server.client.cancelTurn('A').catch(() => {});
+      const expected = server.client.cancellationTarget('A')!;
+      void server.client.cancelTurn(expected).catch(() => {});
       await server.waitFor('turn/cancel', 1);
     }
     if (mode === 'reconnect' || mode === 'uncertain') server.socket.close();

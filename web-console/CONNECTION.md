@@ -124,9 +124,11 @@ that exact cwd under the captured Host ID. Before attach/fork dispatch, holding 
 reserved RPC slot, it re-observes the Host and freshly classifies the same exact cwd
 under that observation and the captured normalized endpoint; process identity alone
 never re-admits. The transport checks that proof plus native generation, navigation
-and injected callback identity before send. At most two such validations hold RPC
-slots at once, so a stalled Product Host read never blocks `turn/cancel` or other
-native control. Host authority scope is `authorityId` plus normalized endpoint.
+and injected callback identity before send. At most two such validations reserve
+ordinary RPC slots at once; they cannot consume the independent two-request
+lifecycle-control lane used by `turn/cancel`. Ordinary RPC saturation cannot delay
+an otherwise admissible exact cancellation; a full control lane refuses it locally
+before transmission. Host authority scope is `authorityId` plus normalized endpoint.
 Old successful classification cannot authorize a replacement Host, even with the same
 adapter and no display projection running. Display listens to authority retirement
 only to clear incompatible evidence; a cached association never authorizes an

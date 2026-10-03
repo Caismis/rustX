@@ -13,21 +13,29 @@ import { CommandMenu } from '../commands/CommandMenu';
 import { useInputTrigger } from '../composer/input-trigger';
 import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
+import { useBusyEnter } from '../composer/preferences';
+import { StopSequence, type StopScope } from '../composer/stop-sequence';
+import { Menu } from '../../presentation/primitives/Menu';
 import { useTextareaAutosize } from '../composer/useTextareaAutosize';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled }: {
+export function AgentComposer({ binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
   firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
-  onDraftSend?: (text: string, files: readonly File[]) => Promise<boolean>; cancellationAvailable?: boolean;
+  onDraftSend?: (text: string, files: readonly File[]) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; commandAvailable?: (id: CommandId) => boolean; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
   consumed?: { id: string; sequence: number };
 }) {
   const tx = useTranslation();
+  const [busyEnter, preference] = useBusyEnter();
+  const [preferenceOpen, setPreferenceOpen] = useState(false);
+  const [stopSequence] = useState(() => new StopSequence());
+  const composing = useRef(false);
+  const escapePress = useRef<{ event: KeyboardEvent; accept: ReturnType<StopSequence['prepare']> } | undefined>(undefined);
   const [restoreSupported, setRestoreSupported] = useState(() => editableContent(initialContent));
   disabled = disabled || !restoreSupported;
   type DraftFile = { id: number; file: File; status: 'draft' | 'uploading' | 'complete' | 'failed' | 'uncertain'; receipt?: UploadReceipt; error?: DisplayText };
@@ -110,10 +118,16 @@ export function AgentComposer({ binding = 'default', firstSubmission, disabled, 
   const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true)));
   const parsed = parseCommand(draft);
   const selectedCommand = menu && rows[highlight] ? rows[highlight].id : parsed.type === 'command' ? parsed.id : undefined;
-  const facts = { running: active, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
+  const facts = { running: active, busyEnter, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
     blocked: disabled || submitDisabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
   const primary = composerSubmissionPolicy(facts);
+  useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu, preferenceOpen]);
+  useEffect(() => {
+    // Window blur only resets; keyboard recognition stays on the focused editor.
+    window.addEventListener('blur', stopSequence.reset);
+    return () => { window.removeEventListener('blur', stopSequence.reset); stopSequence.reset(); };
+  }, [stopSequence]);
   const invoke = (id: CommandId) => {
     if (disabled || busy) return;
     if (files.length || restored.length) { setError(message('agent:copy.remove-draft-attachments-before-invoking-a-command')); return; }
@@ -161,9 +175,21 @@ export function AgentComposer({ binding = 'default', firstSubmission, disabled, 
           aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
           value={draft} disabled={disabled} readOnly={busy} rows={1} onChange={event => { setDraft(event.target.value); trigger.track(event.target.value); setError(''); }}
           onPaste={event => { const pasted = Array.from(event.clipboardData.files); if (pasted.length) { event.preventDefault(); pick(pasted); } }}
+          onBlur={() => { composing.current = false; stopSequence.reset(); }}
+          onCompositionStart={() => { composing.current = true; stopSequence.reset(); }} onCompositionEnd={() => { composing.current = false; }}
+          onKeyDownCapture={event => {
+            if (event.key === 'Escape') escapePress.current = { event: event.nativeEvent, accept: stopSequence.prepare() };
+          }}
           onKeyDown={event => {
-            if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-            if (menu && event.key === 'Escape') { event.preventDefault(); trigger.dismiss(); return; }
+            if (event.key === 'Escape') {
+              const press = escapePress.current; escapePress.current = undefined;
+              if (event.defaultPrevented || composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
+                || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) { stopSequence.reset(); return; }
+              if (menu) { stopSequence.reset(); event.preventDefault(); trigger.dismiss(); return; }
+              if (!active || !cancellationAvailable || !cancellationScope || document.activeElement !== event.currentTarget) { stopSequence.reset(); return; }
+              event.preventDefault(); if (press?.event === event.nativeEvent) press.accept(cancellationScope, onCancel); return;
+            }
+            if (event.defaultPrevented || composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
             if (menu && event.key === 'Tab') { event.preventDefault(); if (event.shiftKey) trigger.dismiss(); else if (rows[highlight]) invoke(rows[highlight].id); return; }
             if (menu && rows.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); trigger.highlight((highlight + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length); return; }
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
@@ -188,6 +214,15 @@ export function AgentComposer({ binding = 'default', firstSubmission, disabled, 
           </button>
         </div>
       </div>
+    </div>
+    <div className={css.busyEnter}>
+      <Menu open={preferenceOpen} autoFocus onClose={() => setPreferenceOpen(false)} selectedId={busyEnter}
+        items={['queue', 'steer'].map(id => ({ id, label: tx(id === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') }))}
+        onSelect={id => { preference.setBusyEnter(id as 'queue' | 'steer'); setPreferenceOpen(false); }}
+        anchor={<button type="button" className={css.select} title={tx('agent:submission.enter-while-running')}
+          aria-haspopup="menu" aria-expanded={preferenceOpen} onClick={() => setPreferenceOpen(value => !value)}>
+          {tx('agent:submission.enter-preference', { behavior: tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') })}
+        </button>} />
     </div>
   </div>;
 }

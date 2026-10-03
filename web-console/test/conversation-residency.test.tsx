@@ -11,7 +11,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v32';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v32';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -32,15 +32,21 @@ function live(text = 'first token'): RuntimeClientSnapshot {
     attempt: { attempt_id: 'exact-attempt', phase: { type: 'running' }, turn: 2, in_flight: { message_id: 'exact-message', blocks: [{ type: 'text', block_index: 0, text }] } } };
 }
 it('streaming publications update the transcript but do not render AppFrame or composer; local clock ticks stay local', async () => {
-  server.snapshots.set('A', live());
   await server.attached('A');
+  const emit = (event: RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event } });
+  emit({ type: 'attempt_started', attempt_id: 'exact-attempt' });
+  emit({ type: 'assistant_message_started', attempt_id: 'exact-attempt', message_id: 'exact-message' });
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   const message = input(), seat = message.closest('[data-composer-seat]'), header = screen.getByLabelText('Session title').closest('header');
   fireEvent.change(message, { target: { value: 'untouched draft' } }); message.focus(); message.setSelectionRange(4, 7);
   const frameCalls = vi.mocked(AppFrame).mock.calls.length, composerCalls = vi.mocked(AgentComposer).mock.calls.length;
-  for (let index = 0; index < 5; index++) await act(async () => server.update('A', live('token ' + index)));
-  expect(screen.getByText('token 4')).toBeTruthy();
+  const reads = server.requests.filter(row => row.request.method === 'session/snapshot').length;
+  for (let index = 0; index < 5; index++) await act(async () => {
+    emit({ type: 'assistant_text_delta', attempt_id: 'exact-attempt', message_id: 'exact-message', block_index: 0, delta: String(index) });
+  });
+  expect(screen.getByText('01234')).toBeTruthy();
+  expect(server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(reads);
   expect(input()).toBe(message); expect(message.closest('[data-composer-seat]')).toBe(seat);
   expect(screen.getByLabelText('Session title').closest('header')).toBe(header);
   expect(vi.mocked(AppFrame).mock.calls.length).toBe(frameCalls);
@@ -50,8 +56,11 @@ it('streaming publications update the transcript but do not render AppFrame or c
   // Explicit clock synchronization, not a sleep. Start a new exact native
   // attempt so the timer is installed under the fake clock.
   vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-25T00:00:00Z'));
-  const next = live(); next.attempt!.attempt_id = 'clock-attempt'; next.transcript.statistics!.latest_turn!.attempt_id = 'clock-attempt';
-  await act(async () => server.update('A', next));
+  await act(async () => emit({ type: 'attempt_started', attempt_id: 'clock-attempt' }));
+  expect(vi.mocked(AgentComposer).mock.calls.length).toBeGreaterThan(composerCalls);
+  expect(vi.mocked(AppFrame).mock.calls.length).toBe(frameCalls);
+  const clock = live(); clock.transcript.statistics!.latest_turn!.attempt_id = 'clock-attempt';
+  await act(async () => emit({ type: 'read_domains_updated', transcript: clock.transcript, todos: clock.todos }));
   const before = [vi.mocked(AppFrame).mock.calls.length, vi.mocked(AgentComposer).mock.calls.length];
   await act(async () => vi.advanceTimersByTime(5000));
   expect(screen.getByRole('button', { name: 'Deep diving for 5s' })).toBeTruthy();

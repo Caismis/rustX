@@ -254,9 +254,14 @@ On a fresh page the Session remains available through the native list
 for explicit Open. Opening or resuming resolves through rustX's canonical
 configuration owners.
 
-Request IDs provide correlation only. There are at most eight transmitted and 64
-pending/queued calls, below the transport's native work bound. The 30-second
-response deadline closes the transport rather than resending. A transmitted
+Request IDs provide correlation only. Separate bounded lanes permit four waits,
+two Agent message admissions, two lifecycle controls and eight transmitted ordinary
+RPCs, within the transport's sixteen-request work bound; the overall 64-request
+pending/queue bound remains. `turn/cancel` shares the control lane with
+`agent/interrupt` and `job/cancel`, independently of ordinary RPC capacity. Full
+domain lanes refuse local admission before transmission. Only ordinary RPCs use
+the 30-second response deadline, which closes the transport rather than resending;
+wait, admission and control lanes have no response deadline. A transmitted
 side-effect with no acknowledgement is **outcome uncertain**, including create,
 delete, turn/cancellation, interaction and lifecycle operations. Unsent calls are
 discarded. Reconnect reads authority first; no mutation is automatically replayed.

@@ -185,16 +185,78 @@ disabled state and, for ordinary messages, the existing client delivery argument
 | Idle, actionable message | Send | `turn/start` (`send`) |
 | Idle, empty | disabled Send | none |
 | Running, empty or owner-blocked | Stop, disabled if cancellation unavailable/pending | existing `cancelTurn` |
-| Running, ready message | Queue | `turn/start` (`send`) |
+| Running, ready message, Queue preference | Queue | `turn/start` (`send`) |
+| Running, ready message, Steer preference | Steer | `turn/steer` (`steer`) |
 | Slash/discovery draft | Run command or Review command | typed selection/adjudication; never message delivery |
 | Upload unresolved or acknowledgement pending | disabled submit; acknowledgement status below card | none |
 
-Plain Enter and clicking the message primary button use the same policy. While
-running, Ctrl/Cmd+Enter selects **Steer** (`turn/steer`) through that function;
-while idle it remains Send. Shift+Enter is a newline, and IME/keyCode 229 bypasses
-the key handling. Empty Enter never invokes Stop. Both message transports enter
-the existing native mailbox; Steer promises neither interruption nor priority.
-There is no local delivery selector, durable busy-Enter setting or browser queue.
+Plain Enter and clicking the message primary button use the same pure policy:
+
+| Native state | Busy Enter preference | Enter / primary button | Ctrl/Cmd+Enter |
+| --- | --- | --- | --- |
+| Idle | either | Send (`turn/start`) | Send (`turn/start`) |
+| Running | Queue | Queue (`turn/start`) | Steer (`turn/steer`) |
+| Running | Steer | Steer (`turn/steer`) | Queue (`turn/start`) |
+
+Shift+Enter remains a native textarea newline. IME composition/keyCode 229
+bypasses submission. Commands stay typed commands; this preference cannot turn
+slash input into a prompt. Empty Enter never invokes Stop. Both message transports
+enter the existing native mailbox; Steer promises neither interruption nor priority.
+Acknowledgment locks, disabled/submission gates, unresolved uploads (including
+failed/uncertain), first-submission retention and exact draft consumption are unchanged.
+There is no browser queue, replay or text-only fallback.
+
+The compact keyboard-accessible **Enter while running** menu below the card edits
+`app/composer/preferences.ts`, one shared origin/device browser presentation owner.
+The closed union is `queue | steer`, default `queue`, stored as a raw value under
+`rustx-composer-busy-enter-v1`. Valid values survive remount and browser reload;
+missing, corrupt or unreadable storage defaults to Queue. Denied writes leave the
+live page preference usable. No Session, Workspace or native configuration changes,
+migrations or cross-device synchronization are involved. Labels and modifier help
+are localized in English/Chinese and the primary action names its actual delivery.
+The closed preference trigger's visible text also supplies its accessible name,
+including the current Queue/Steer value.
+
+### Scoped double Escape
+
+Two independent, unmodified Escape keydowns in the focused **message textarea**,
+within an inclusive **500 ms** window, request cancellation. This is the supported
+Composer region; toolbar controls, other editors, Chat, dialogs and hidden Sessions
+cannot participate. The first press arms only a short-lived exact scope. The
+second resolves the same scope and clears the arm **before** invoking the operation.
+A fresh press after expiry starts a new sequence; held-key repeat cannot complete it.
+
+Identity includes the actual client object, client generation, native attachment
+target (Session, Conversation, runtime incarnation and attachment ID), resident
+composer binding and exact Attempt ID. The sequence resets on replacement of any
+of these, cancellation becoming unavailable, Attempt settlement, editor blur,
+window blur, composition beginning, command/preference menu opening or consumed
+Escape, expiry and unmount. Modified, repeated, prevented and IME events reset
+without arming. Command-menu Escape dismisses only the menu and preserves the draft.
+Existing modal/menu focus owners arbitrate before the editor; there is no global
+cancellation shortcut or DOM exception list.
+
+The Stop button and double Escape converge on `ConversationSeat` →
+`AppServerClient.cancelTurn(expected)` → native `turn/cancel`. The internal expected
+target captures generation, native target and Attempt ID. The client refuses an
+obsolete expected target and revalidates eligibility again beside actual socket
+dispatch. `turn/cancel` is an exact lifecycle control operation in the existing
+bounded two-request control lane. Ordinary RPC capacity cannot queue it; a full
+control lane refuses it locally, definitely unsent. No protocol change is involved.
+The exact local cancellation operation owns its in-flight/stopping marker. A
+failure known to precede transmission removes only that operation's marker,
+even if its transport/generation has been retired. An older continuation cannot
+clear a successor marker. A transmitted request with a lost reply stays uncertain;
+an acknowledged request stays acknowledged even if its subsequent refresh fails.
+Only authoritative Attempt projection determines
+settlement. A lost reply follows existing refresh/reconnect repair; it is never
+replayed or retried, and there is no browser cancellation queue. Further gestures
+while cancellation is pending create no duplicate request. Escape never consumes text, selection, receipts, queued input or attachments.
+
+The browser recognizes a gesture and chooses an existing operation; it does not
+prove, own, retry or settle execution. Native/App Server cancellation and native
+inbound Queue/Steer admission remain authoritative.
+
 The current Web binding addresses root Sessions, with no continuable-child input
 scope; it therefore has no independent Stop + Send exception.
 

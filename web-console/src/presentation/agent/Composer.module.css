@@ -416,3 +416,8 @@
 
 .attachments { display: flex; gap: 10px; overflow-x: auto; padding: 6px 14px; }
 .attachments:empty { display: none; }
+
+/* Quiet input preference, outside the operation toolbar. */
+.busyEnter { width: 100%; max-width: var(--dsh-composer-card-max-width); display: flex; justify-content: flex-end; }
+.busyEnter .select { height: 24px; font-size: 12px; font-weight: 400; }
+.busyEnter .select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
