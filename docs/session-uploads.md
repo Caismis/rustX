@@ -230,6 +230,10 @@ for both `turn/start` and `turn/steer`, before inbound admission. It checks coun
 Session ownership, ready status and the sum of native `UploadEntry.admitted_bytes`.
 This size is persisted with the original claim and retained across native copies;
 later mutable-file metadata and client claims cannot redefine admission policy.
+Catalog validation rejects empty/over-count allocations, oversized admitted file
+sizes, and checked aggregate admitted sizes exceeding the transfer bound. This
+also applies on reopen and to copied subsets; current mutable bytes need not equal
+the original admitted fact.
 Canonical block order remains the submitted order. Multi-file native transfers
 remain supported; Web and TUI ordinarily transfer one file at a time.
 
@@ -241,8 +245,10 @@ catalog's visible ready record and original receipts remain the read-repair auth
 
 Browser intake owns File references until removal, successful admission/clear,
 incompatible binding retirement or client disposal. There is one selected Composer
-owner; same-binding remount/reconnect retains it, while navigation to another
-Session/Conversation retires it. First-submit sealing transfers File ownership to
+owner; same-binding remount/reconnect retains it. Only committed semantic
+Composer activation retires an incompatible owner. Speculative or abandoned
+React render never clears, rebinds or retires the committed draft. Native authority
+replacement and client disposal explicitly retire applicable owners. First-submit sealing transfers File ownership to
 FirstSubmissions synchronously; intake is empty before create starts. A known creation rejection returns files and local IDs to the still-live original
 intake for editing; a retired origin cannot reclaim them. Otherwise the retained
 first-submission owner keeps the intent until admission/discard.

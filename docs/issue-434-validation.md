@@ -1,6 +1,8 @@
 # Issue 434 validation and ownership audit
 
-Repair starts from PR HEAD `da93e80afadfb56299ec9725cd9f1a1c4b8321df`.
+Initial repair started from PR HEAD `da93e80afadfb56299ec9725cd9f1a1c4b8321df`.
+The commit-boundary/catalog-invariant repair starts from
+`ea07fa454e8d00c141cb95c9c20a7e45600d5bc4`; its green CI is not evidence for later changes.
 Base: `260994fc27ebc1ef1f767b6e6aa21a01c5f676c6` (PR #446, including #447).
 Final fetched main: `260994fc27ebc1ef1f767b6e6aa21a01c5f676c6` (unchanged; no rebase required).
 Branch: `issue-434-upload-intake`.
@@ -49,8 +51,9 @@ a deletion winner prevents subsequent upload admission. Removing a browser card
 only removes presentation. It cannot roll back a native allocation.
 
 The one selected Composer intake owner retains per-file identities and outcomes
-across compatible remounts. Incompatible binding/Session/Conversation/authority
-replacement retires its File references; disposal clears the collection. First-submit
+across compatible remounts. Only committed semantic activation retires an incompatible
+binding/Session/Conversation owner; speculative render never mutates the committed
+ownership. Native authority replacement explicitly retires its File references; disposal clears the collection. First-submit
 sealing transfers references to FirstSubmissions before create begins. Native message
 ACK, explicit removal/clear, first-submission admission/discard release their owners. Normal mixed selections retain accepted and rejected cards;
 over-count selections produce one bounded rejection summary. Every unresolved
@@ -141,7 +144,7 @@ coverage was enabled; no ignore was added for this issue.
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed |
 | `cargo build --bins --all-features --locked` | Passed |
 | `cargo test --all-targets --all-features --locked -- --list` | Passed, all harnesses discovered |
-| `TMPDIR=/var/tmp/rustx-434-tests RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | 4,102 passed; eight existing ignores; 19 harnesses |
+| `TMPDIR=/var/tmp/rustx-434-tests RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | 4,103 passed; eight existing ignores; 19 harnesses |
 | `cargo run --example check_test_lanes -- --job rust-contracts` | Linux selectors and coverage passed |
 | `cargo run --example check_test_lanes -- --job rust-boundaries` | Linux selectors and coverage passed |
 | `pnpm --dir protocol/app-server generate` | Passed |
@@ -153,10 +156,10 @@ coverage was enabled; no ignore was added for this issue.
 | `pnpm --dir dev test` | 38 passed |
 | `uv sync --frozen --project test-support/fake-provider` / `uv run --frozen --project test-support/fake-provider pytest test-support/fake-provider` | Passed / 51 passed |
 | `pnpm --dir web-console typecheck` | Passed |
-| `pnpm --dir web-console test` | 1,511 passed |
+| `pnpm --dir web-console test` | 1,512 passed |
 | `pnpm --dir web-console check:i18n` | Passed |
 | `pnpm --dir web-console check:provenance` | Passed; 148 source records and 132 production package notices |
-| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 166 passed (9.9 minutes) |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 166 passed (10.5 minutes) |
 | `git diff --check` | Passed |
 
 The full native run includes App Server process, stdio/WebSocket conformance,
@@ -211,3 +214,37 @@ No production recovery code, timeout, sleep, assertion or suite parallelism chan
 The exact test passed 20/20 Linux executions before and 20/20 after the fixture fix.
 Current main's CI run 37111005268 passed; this does not prove the old test race absent.
 Hosted macOS evidence must come from the final repaired head, not the old PR run.
+
+## Commit-boundary and durable admission invariant repair
+
+`AttachmentIntakes.lookup` is read-only. A Composer render may create an unattached
+candidate, but `useAttachmentIntake` activates it only in the commit layout effect.
+Activation registers/binds the selected owner and retires incompatible owners;
+transient unmount has no retirement effect. Same-key remount recovers the existing
+owner. Explicit authority retirement and terminal client disposal remain intact.
+
+The component regression renders the production intake hook with AgentComposer
+and an explicit Suspense gate. A transition attempts B after A owns a visible File.
+The render witness proves B ran, and the layout witness proves B did not commit;
+A's visible card, exact File reference and owner remain, with zero retirement calls.
+Releasing the gate proves B commits, A retires exactly once and releases its File,
+and B alone is registered. Unmount/remount then proves B's File owner survives.
+
+Catalog validation checks each durable allocation has one through eight entries,
+each admitted size is at most two MiB, and the checked aggregate is at most four
+MiB. A real controller-reopen regression writes malformed catalog facts: empty
+allocation, oversized file, oversized aggregate of individually valid entries,
+and over-count allocation all fail closed. Exact file/aggregate/count boundaries
+open successfully. A separate final reopen after workspace content changes proves
+the original admitted size is retained; fork/clone still carry that original fact.
+No public shape, version, carrier, drain boundary or resource limit changed.
+
+Focused repair validation passed:
+- `pnpm --dir web-console exec vitest run test/upload-intake.test.tsx test/first-submit.test.ts test/artifacts.test.tsx`: 57 tests, including the Suspense commit boundary and existing handoff/restoration/authority disposal.
+- `TMPDIR=/var/tmp/rustx-434-tests cargo test --lib --all-features --locked catalog_reopen_validates_durable_upload_admission_bounds`: controller reopen corruption/boundaries passed.
+- `TMPDIR=/var/tmp/rustx-434-tests RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked upload`: 33 tests, including stdio drain orderings, Failed/Unresolved, mutable fork/clone and one MiB.
+- The same native command with filters `native_user_input_receipt_collection` and `binary_ready_commit_precedes`: one test each passed, preserving complete receipt policy and original-receipt response-loss repair.
+
+The complete validation table above records fresh runs for this repair, not the
+previous green HEAD. Local logs use `/tmp/rustx-448-r2-*.log`. Hosted required
+checks must pass on the new commit before completion is reported.

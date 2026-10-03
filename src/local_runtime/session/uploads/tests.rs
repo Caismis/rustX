@@ -1781,3 +1781,64 @@ async fn ready_publication_durability_uncertainty_is_never_reclassified_failed()
         }
     );
 }
+
+#[tokio::test]
+async fn catalog_reopen_validates_durable_upload_admission_bounds() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let id = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session
+        .id;
+    let uploaded = controller
+        .upload(&id, None, vec![file("original", b"mutable")])
+        .await
+        .unwrap();
+    drop(controller);
+    let path = root.path().join("sessions/catalog.json");
+    let original: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let batch = &uploaded[0].receipt.batch_id;
+    for (sizes, valid) in [
+        (vec![], false),
+        (vec![UPLOAD_POLICY.max_file_bytes + 1], false),
+        (vec![UPLOAD_POLICY.max_file_bytes; 3], false),
+        (vec![0; UPLOAD_POLICY.max_files_per_transfer + 1], false),
+        (vec![UPLOAD_POLICY.max_file_bytes], true),
+        (vec![UPLOAD_POLICY.max_file_bytes; 2], true),
+        (vec![0; UPLOAD_POLICY.max_files_per_transfer], true),
+    ] {
+        let mut document = original.clone();
+        let files =
+            &mut document["sessions"][id.as_str()]["uploads"]["allocations"][batch]["files"];
+        let template = files[0].clone();
+        *files = serde_json::Value::Array(
+            sizes
+                .iter()
+                .enumerate()
+                .map(|(index, size)| {
+                    let mut entry = template.clone();
+                    entry["name"] = format!("entry-{index}").into();
+                    entry["token"] = identity().unwrap().into();
+                    entry["admitted_bytes"] = (*size).into();
+                    entry
+                })
+                .collect(),
+        );
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        let reopened = SessionController::open(root.path());
+        assert_eq!(reopened.is_ok(), valid, "admitted sizes {sizes:?}");
+        if let Err(error) = reopened {
+            assert!(matches!(error, super::super::SessionError::Catalog { .. }));
+        }
+    }
+    // Workspace content is mutable; a valid admitted fact is not recomputed on reopen.
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    std::fs::write(&uploaded[0].path, b"changed after admission").unwrap();
+    let reopened = SessionController::open(root.path()).unwrap();
+    let registry = reopened.catalog.lock().await.upload_registry(&id).unwrap();
+    assert_eq!(registry.allocations[batch].files[0].admitted_bytes, 7);
+}

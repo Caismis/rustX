@@ -462,8 +462,10 @@ but not a separate meter-specific rationale. The restored capability lives in th
 current Composer context seat; cumulative ConversationStats and Turn tails retain
 their present roles.
 
-The selected Composer has one retained intake owner. Incompatible Session,
-Conversation, draft binding or authority replacement retires its File references;
+The selected Composer has one retained intake owner. Only committed semantic
+Composer activation retires an incompatible Session, Conversation or draft binding.
+Speculative/abandoned render cannot clear, rebind or retire the committed File owner.
+Native authority replacement explicitly retires obsolete owners;
 same-binding remount/reconnect retains recovery state. Client disposal clears all
 intakes. First-submit sealing transfers ownership to FirstSubmissions before create;
 admission/discard releases those files. A known rejected create returns files to the original live intake for editing.

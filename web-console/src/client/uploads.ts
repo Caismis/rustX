@@ -40,7 +40,7 @@ export class AttachmentIntake {
   bind(binding: string) {
     if (this.retired || this.binding === binding) return;
     this.binding = binding; this.revision++;
-    this.files = this.files.map(file => ['queued', 'uploading', 'reconciling'].includes(file.status) ? { ...file, status: 'uncertain' } : file);
+    this.publish(this.files.map(file => ['queued', 'uploading', 'reconciling'].includes(file.status) ? { ...file, status: 'uncertain' } : file));
   }
   private listeners = new Set<() => void>();
   private actions = new Map<string, { revision: number }>();
@@ -110,13 +110,17 @@ export class AttachmentIntakes {
   release(key: string) { const owner = this.owners.get(key); this.owners.delete(key); owner?.retire(); }
   retireAll() { for (const key of this.owners.keys()) this.release(key); }
   dispose() { this.retireAll(); this.terminal = new AttachmentIntake(); this.terminal.retire(); }
-  /** The product has one selected Composer. Navigation retires incompatible
-   * drafts; remount/reconnect of that same semantic binding retains its owner. */
-  owner(key: string, binding = key) {
-    if (this.terminal) return this.terminal;
+  /** Render may inspect an owner, but never registers, rebinds or retires one. */
+  lookup(key: string) { return this.terminal ?? this.owners.get(key); }
+  /** Only committed semantic navigation replaces the selected Composer owner.
+   * Transient unmount has no release: the same binding can recover this owner. */
+  activate(key: string, binding: string, candidate: AttachmentIntake) {
+    if (this.terminal) { if (candidate !== this.terminal) candidate.retire(); return this.terminal; }
     for (const previous of this.owners.keys()) if (previous !== key) this.release(previous);
-    let owner = this.owners.get(key);
-    if (!owner) { owner = new AttachmentIntake(); this.owners.set(key, owner); }
-    owner.bind(binding); return owner;
+    const owner = this.owners.get(key) ?? candidate;
+    if (owner !== candidate) candidate.retire();
+    this.owners.set(key, owner);
+    owner.bind(binding);
+    return owner;
   }
 }

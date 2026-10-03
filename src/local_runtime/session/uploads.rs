@@ -290,11 +290,22 @@ impl UploadRegistry {
                 }
             }
             validate_workspace(&allocation.workspace)?;
-            if !valid_identity(batch) || allocation.files.is_empty() {
+            if !valid_identity(batch)
+                || allocation.files.is_empty()
+                || allocation.files.len() > UPLOAD_POLICY.max_files_per_transfer
+            {
                 return Err(invalid("invalid owned upload allocation"));
             }
             let mut names = BTreeSet::new();
+            let mut admitted_bytes = 0usize;
             for file in &allocation.files {
+                if file.admitted_bytes > UPLOAD_POLICY.max_file_bytes {
+                    return Err(invalid("invalid admitted upload file size"));
+                }
+                admitted_bytes = admitted_bytes
+                    .checked_add(file.admitted_bytes)
+                    .filter(|total| *total <= UPLOAD_POLICY.max_transfer_bytes)
+                    .ok_or_else(|| invalid("invalid admitted upload transfer size"))?;
                 validate_name(&file.name)?;
                 if !valid_identity(&file.token) || !names.insert(&file.name) {
                     return Err(invalid("invalid owned upload entry"));

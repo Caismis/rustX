@@ -69,7 +69,11 @@ capabilities are synchronously revoked by drain. No generic task manager is adde
 The native receipt collection owner checks the complete submitted User input using
 persisted admitted sizes. Transfer policy and User-input policy have distinct fields.
 The single selected Composer retains one intake owner; first submission explicitly
-transfers File references and semantic retirement releases them. Known pre-ready
+transfers File references and committed semantic activation retires incompatible
+owners. Render only looks up an owner or constructs an unattached candidate;
+abandoned renders cannot destroy the committed draft. Same-binding remount retains
+the owner. Catalog validation fail-closes malformed durable admitted byte/count
+facts without consulting mutable workspace file sizes. Known pre-ready
 verification failures share Failed settlement with materialization failures.
 
 The macOS recovery-probe test had an unrelated second actor: restore automatically

@@ -1,3 +1,4 @@
+import { AttachmentIntake } from '../src/client/uploads';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
@@ -185,11 +186,11 @@ it('renders inert text and downloads the same bounded native bytes through one U
 
 it('native authority replacement and client disposal retire attachment File owners', async () => {
   await server.attached('A');
-  const first = server.client.attachmentIntakes.owner('old'); first.add([{ file: new File(['a'], 'a') }], capabilities.upload_policy);
+  const first = server.client.attachmentIntakes.activate('old', 'old', new AttachmentIntake()); first.add([{ file: new File(['a'], 'a') }], capabilities.upload_policy);
   await server.client.connect('ws://127.0.0.1:8089', TOKEN, 'replace-authority');
   expect(server.client.attachmentIntakes.size).toBe(0);
-  server.client.attachmentIntakes.owner('replacement');
+  server.client.attachmentIntakes.activate('replacement', 'replacement', new AttachmentIntake());
   expect(first.snapshot()).toEqual([]); expect(server.client.attachmentIntakes.size).toBe(1);
-  const current = server.client.attachmentIntakes.owner('replacement'); current.add([{ file: new File(['b'], 'b') }], capabilities.upload_policy);
+  const current = server.client.attachmentIntakes.lookup('replacement')!; current.add([{ file: new File(['b'], 'b') }], capabilities.upload_policy);
   server.client.dispose(); expect(current.snapshot()).toEqual([]); expect(server.client.attachmentIntakes.size).toBe(0);
 });

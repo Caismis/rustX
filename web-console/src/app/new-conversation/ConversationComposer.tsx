@@ -17,6 +17,7 @@ import { IconChevronDownOutline14, IconFolderClose16 } from '../../presentation/
 import hero from '../../presentation/agent/HeroShell.module.css';
 import modal from '../../presentation/primitives/Modal.module.css';
 import { useModelPreference } from '../model-preference';
+import { useAttachmentIntake } from '../composer/use-attachment-intake';
 import { ComposerContextStack } from '../composer/ComposerContextStack';
 import { AgentControls } from '../agent/AgentControls';
 import { AgentComposer } from '../agent/AgentComposer';
@@ -78,7 +79,7 @@ export function ConversationComposer({ client, host, authority, associations, in
       queueMicrotask(() => seat.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus());
     }
   };
-  const intake = client.attachmentIntakes.owner(JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding, activeView?.id, activeView?.target?.conversation_id]), JSON.stringify([client.getSnapshot().generation, activeView?.target]));
+  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding, activeView?.id, activeView?.target?.conversation_id]), JSON.stringify([client.getSnapshot().generation, activeView?.target]));
   const composer = (block: () => Message | undefined, permission?: React.ReactNode, model?: React.ReactNode) => <AgentComposer onRetainedRemove={flow && (flow.phase === 'paused' || ['failed', 'uncertain'].includes(flow.phase) && flow.failedPhase === 'uploading') ? id => submissions.removeUpload(flow, id) : undefined} onRetainedRecover={flow && ['failed', 'uncertain'].includes(flow.phase) ? retry => { void submissions.recoverUpload(flow, firstSubmitPort(client, host, current, opened), retry); } : undefined} uploadPolicy={client.getSnapshot().capabilities?.upload_policy} intakeOwner={intake} firstSubmission={flow} consumed={active ? consumed : draftConsumed} commandAvailable={active ? undefined : id => id === 'model'} onCommand={() => { modelCommand.current = true; seat.current?.querySelector<HTMLButtonElement>('[data-model-select]')?.click(); }} submitDisabled={!!block()} active={false}
     permission={permission} model={model} onCancel={() => {}} onUpload={async () => { throw new Error(tx('common:copy.no-session-exists-before-submit')); }} onSend={async () => false}
     onDraftSend={active ? undefined : async (text, files, attachmentIds) => {

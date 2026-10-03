@@ -1,3 +1,5 @@
+import { Suspense, startTransition, useLayoutEffect, useState } from 'react';
+import { useAttachmentIntake } from '../src/app/composer/use-attachment-intake';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AttachmentIntake, AttachmentIntakes, intake, pasteText, transferInputs, type UploadPort } from '../src/client/uploads';
@@ -141,15 +143,15 @@ it('semantic navigation retires File owners while remount retains the current bi
   const owners = new AttachmentIntakes();
   let previous: AttachmentIntake | undefined;
   for (let index = 0; index < 100; index++) {
-    const owner = owners.owner(`session-${index}`); owner.add([{ file: file() }], policy);
+    const owner = owners.activate(`session-${index}`, `session-${index}`, new AttachmentIntake()); owner.add([{ file: file() }], policy);
     expect(previous?.snapshot() ?? []).toEqual([]);
-    expect(owners.size).toBe(1); expect(owners.owner(`session-${index}`)).toBe(owner);
+    expect(owners.size).toBe(1); expect(owners.lookup(`session-${index}`)).toBe(owner);
     previous = owner;
   }
   owners.dispose(); expect(owners.size).toBe(0); expect(previous!.snapshot()).toEqual([]);
   previous!.add([{ file: file() }], policy);
-  owners.owner("after-dispose").add([{ file: file() }], policy);
-  expect(previous!.snapshot()).toEqual([]); expect(owners.owner("after-dispose").snapshot()).toEqual([]); expect(owners.size).toBe(0);
+  owners.lookup("after-dispose")!.add([{ file: file() }], policy);
+  expect(previous!.snapshot()).toEqual([]); expect(owners.lookup("after-dispose")!.snapshot()).toEqual([]); expect(owners.size).toBe(0);
 });
 it('remove and successful draft clear release every retained File', () => {
   const owner = new AttachmentIntake(); owner.add([{ file: file() }, { file: file('other') }], policy);
@@ -166,4 +168,47 @@ it('native message acknowledgement releases Files even while the sending promise
   expect(owner.snapshot()).toHaveLength(1);
   act(() => acknowledged!()); expect(owner.snapshot()).toEqual([]);
   await act(async () => reply.resolve(true));
+});
+
+it('only a committed replacement retires the visible Composer owner; suspended render and remount preserve it', async () => {
+  const owners = new AttachmentIntakes();
+  const gate = deferred<void>();
+  const rendered = vi.fn(), committed = vi.fn();
+  let blocked = true;
+  let navigate!: (key: string) => void;
+  function CommitGate({ selected }: { selected: string }) {
+    rendered(selected);
+    useLayoutEffect(() => { committed(selected); }, [selected]);
+    if (selected === 'B' && blocked) throw gate.promise;
+    return null;
+  }
+  function Composer({ selected }: { selected: string }) {
+    const intake = useAttachmentIntake(owners, selected, selected);
+    return <AgentComposer intakeOwner={intake} uploadPolicy={policy} disabled={false} busy={false} active={false} onDraftSend={async () => false} onUpload={async () => []} onSend={async () => false} onCancel={() => {}} />;
+  }
+  function Fixture() {
+    const [selected, setSelected] = useState('A'); navigate = setSelected;
+    return <Suspense fallback={<p>Suspended</p>}><Composer key={selected} selected={selected}/><CommitGate selected={selected}/></Suspense>;
+  }
+  const ui = render(<Fixture/>);
+  const a = owners.lookup('A')!;
+  const retire = vi.spyOn(a, 'retire');
+  const selectedFile = file('A.md');
+  fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [selectedFile] } });
+  expect(ui.getByText('A.md')).toBeTruthy(); expect(a.snapshot()[0].file).toBe(selectedFile);
+  await act(async () => { startTransition(() => navigate('B')); });
+  expect(rendered).toHaveBeenCalledWith('B'); expect(committed).not.toHaveBeenCalledWith('B');
+  expect(ui.queryByText('Suspended')).toBeNull(); expect(ui.getByText('A.md')).toBeTruthy();
+  expect(owners.lookup('A')).toBe(a); expect(owners.lookup('B')).toBeUndefined();
+  expect(a.snapshot()[0].file).toBe(selectedFile); expect(retire).not.toHaveBeenCalled();
+  await act(async () => { blocked = false; gate.resolve(); });
+  expect(committed).toHaveBeenCalledWith('B'); expect(retire).toHaveBeenCalledOnce();
+  expect(a.snapshot()).toEqual([]); expect(owners.lookup('A')).toBeUndefined();
+  const b = owners.lookup('B')!; expect(b).toBeDefined(); expect(owners.size).toBe(1);
+  expect(ui.queryByText('A.md')).toBeNull();
+  fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [file('B.md')] } });
+  ui.unmount(); expect(owners.lookup('B')).toBe(b); expect(b.snapshot()).toHaveLength(1);
+  const remount = render(<Composer selected="B"/>);
+  expect(owners.lookup('B')).toBe(b); expect(remount.getByText('B.md')).toBeTruthy();
+  expect(retire).toHaveBeenCalledOnce();
 });

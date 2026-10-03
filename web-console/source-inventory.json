@@ -2735,6 +2735,7 @@
         "../agent/AgentComposer",
         "../agent/AgentControls",
         "../composer/ComposerContextStack",
+        "../composer/use-attachment-intake",
         "../model-preference",
         "./FirstSubmission.module.css",
         "./WorkspaceControls",
@@ -2746,7 +2747,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "f38dc896cc36d6b28f520ca6e7aa4e1451d42a9db9c105b486d61b49792a518e",
+      "local_sha256": "3e276b8ebf79b9af90be888260aba1504644ab4b822c7d51427f956954ea3987",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
