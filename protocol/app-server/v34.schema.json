@@ -14069,13 +14069,25 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
-        "max_batch_bytes": {
+        "max_transfer_bytes": {
           "type": "integer",
           "format": "uint",
           "minimum": 0,
           "maximum": 9007199254740991
         },
-        "max_files": {
+        "max_files_per_transfer": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_uploads_per_user_input": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_upload_bytes_per_user_input": {
           "type": "integer",
           "format": "uint",
           "minimum": 0,
@@ -14097,8 +14109,10 @@
       "additionalProperties": false,
       "required": [
         "max_file_bytes",
-        "max_batch_bytes",
-        "max_files",
+        "max_transfer_bytes",
+        "max_files_per_transfer",
+        "max_uploads_per_user_input",
+        "max_upload_bytes_per_user_input",
         "max_concurrent_transfers",
         "max_chunk_bytes"
       ]

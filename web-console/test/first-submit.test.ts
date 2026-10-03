@@ -171,3 +171,34 @@ it('an uncertain turn admission cannot be reopened by removing an attachment', a
   await owner.continueUploads(owner.session(session.id)!, port);
   expect(port.create).toHaveBeenCalledOnce(); expect(port.upload).toHaveBeenCalledOnce(); expect(port.send).toHaveBeenCalledOnce();
 });
+
+it.each(['discard', 'admit'])('sealing first submission transfers File ownership and %s releases it', async finish => {
+  const { AttachmentIntake } = await import('../src/client/uploads');
+  const { capabilities } = await import('./fixture');
+  const intake = new AttachmentIntake();
+  const file = new File(['owned'], 'owned.md'); intake.add([{ file }], capabilities.upload_policy);
+  const creation = gate<CreatedSession>();
+  const { owner, port } = fixture({ create: () => creation.promise });
+  const work = owner.submit('draft', { ...draft, files: intake.snapshot().map(row => row.file) }, port, () => intake.clear());
+  expect(intake.snapshot()).toEqual([]); expect(owner.draft('draft')?.draft.files).toEqual([file]);
+  if (finish === 'discard') { creation.reject(new Error('known pre-create failure')); await work; owner.discard(owner.draft('draft')!); }
+  else { creation.resolve(session); expect(await work).toBe(true); }
+  expect(owner.draft('draft')?.draft.files).toEqual([]); expect(intake.snapshot()).toEqual([]);
+});
+
+it('known creation rejection returns ownership to a live intake for further editing', async () => {
+  const { AttachmentIntake } = await import('../src/client/uploads');
+  const { capabilities } = await import('./fixture');
+  const intake = new AttachmentIntake();
+  const file = new File(['owned'], 'owned.md'); intake.add([{ file }], capabilities.upload_policy);
+  const id = intake.snapshot()[0].id;
+  const creation = gate<CreatedSession>(); const { owner, port } = fixture({ create: () => creation.promise });
+  const work = owner.submit('draft', { ...draft, files: [file], attachmentIds: [id] }, port, () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
+  expect(intake.snapshot()).toEqual([]);
+  creation.reject(new Error('known rejection')); expect(await work).toBe(false);
+  expect(owner.draft('draft')?.draft.files).toEqual([]);
+  expect(intake.snapshot()).toMatchObject([{ file, id, status: 'draft' }]);
+  intake.add([{ file: new File(['next'], 'next.md') }], capabilities.upload_policy);
+  expect(intake.snapshot().map(row => row.file.name)).toEqual(['owned.md', 'next.md']);
+  intake.remove(id); expect(intake.snapshot().map(row => row.file.name)).toEqual(['next.md']);
+});

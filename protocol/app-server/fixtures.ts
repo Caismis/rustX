@@ -136,8 +136,10 @@ export const fixtures = [
       "capabilities": {
         "upload_policy": {
           "max_file_bytes": 2097152,
-          "max_batch_bytes": 4194304,
-          "max_files": 8,
+          "max_transfer_bytes": 4194304,
+          "max_files_per_transfer": 8,
+          "max_uploads_per_user_input": 8,
+          "max_upload_bytes_per_user_input": 4194304,
           "max_concurrent_transfers": 2,
           "max_chunk_bytes": 65536
         },

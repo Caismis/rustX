@@ -229,7 +229,7 @@ export class AppServerClient {
   readonly navigation = new NavigationEpoch();
   readonly firstSubmissions = new FirstSubmissions();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
-  dispose() { this.firstSubmissions.dispose(); return this.disconnect(); }
+  dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
   private socket?: Socket;
   private initialized = false;
   private nextId = 0;
@@ -312,6 +312,7 @@ export class AppServerClient {
   }
   private retireAuthority() {
     this.navigation.invalidate();
+    this.attachmentIntakes.retireAll();
     this.firstSubmissions.retireAuthority();
     const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
       .map(({ id, error, modelMutation, cancellation, deleting, deletionCommitted }) => ({ id, error, modelMutation, cancellation,
@@ -1329,7 +1330,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     const policy = this.state.capabilities?.upload_policy;
     if (!policy) throw new Error('Upload policy unavailable');
-    if (!files.length || files.length > policy.max_files || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_batch_bytes) throw new Error('Selection exceeds native upload policy');
+    if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new Error('Selection exceeds native upload policy');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target) && (!evidence || evidence.current());
     if (!current()) throw new Error('Upload authority changed');
     const { transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current);

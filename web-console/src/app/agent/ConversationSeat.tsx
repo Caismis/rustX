@@ -53,9 +53,9 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           onCancel: () => { setFailure(undefined); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure({ owner, message: String(cause) })); },
           onUpload: (files, operation) => client.upload(view.id, files, { current: uploadCurrent, acknowledged: () => {} }, operation),
           onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!uploadCurrent()) throw new Error('Upload view replaced'); return result; },
-          onSend: async (text, receipts, delivery) => {
+          onSend: async (text, receipts, delivery, acknowledged) => {
             const generation = client.getSnapshot().generation; setFailure(undefined); setSending(owner);
-            try { await client.send(view.id, text, receipts, delivery); return generation === client.getSnapshot().generation; }
+            try { await client.send(view.id, text, receipts, delivery, acknowledged); return generation === client.getSnapshot().generation; }
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>

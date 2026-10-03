@@ -21,7 +21,7 @@ it.each(['button', 'Enter', 'Control', 'Meta'])('resolves %s through the same me
     if (gesture === 'button') fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
     else fireEvent.keyDown(input, { key: 'Enter', ctrlKey: gesture === 'Control', metaKey: gesture === 'Meta' });
   });
-  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('Keep the native contract', [], ['Control', 'Meta'].includes(gesture) ? 'steer' : 'send');
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('Keep the native contract', [], ['Control', 'Meta'].includes(gesture) ? 'steer' : 'send', expect.any(Function));
   expect(input).toHaveProperty('value', 'Keep the native contract');
   ui.rerender(<AgentComposer uploadPolicy={uploadCapabilities.upload_policy} {...p} />);
   expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
@@ -83,14 +83,14 @@ it.each(['button', 'Enter', 'Control', 'Meta'])('Steer preference resolves %s an
   expect(screen.getByRole('button', { name: 'Steer' }).title).toBe('Steer · Enter (Ctrl/Cmd+Enter to Queue)');
   await act(async () => gesture === 'button' ? fireEvent.click(screen.getByRole('button', { name: 'Steer' }))
     : fireEvent.keyDown(input, { key: 'Enter', ctrlKey: gesture === 'Control', metaKey: gesture === 'Meta' }));
-  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('exact draft', [], ['Control', 'Meta'].includes(gesture) ? 'send' : 'steer');
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('exact draft', [], ['Control', 'Meta'].includes(gesture) ? 'send' : 'steer', expect.any(Function));
 });
 it.each(['button', 'Enter', 'Control', 'Meta'])('idle %s stays Send with Steer preference', async gesture => {
   const p = props(); render(<AgentComposer uploadPolicy={uploadCapabilities.upload_policy} {...p} />); preferSteer();
   const input = screen.getByLabelText('Message'); fireEvent.change(input, { target: { value: 'idle' } });
   await act(async () => gesture === 'button' ? fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     : fireEvent.keyDown(input, { key: 'Enter', ctrlKey: gesture === 'Control', metaKey: gesture === 'Meta' }));
-  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('idle', [], 'send');
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('idle', [], 'send', expect.any(Function));
 });
 it('Steer preference never turns a command or IME Enter into a prompt', () => {
   const p = props(); render(<AgentComposer uploadPolicy={uploadCapabilities.upload_policy} {...p} active />); preferSteer();
@@ -117,5 +117,5 @@ it('denied preference writes keep the Composer usable', async () => {
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('denied'); }); preferSteer();
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'usable' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Steer' })));
-  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('usable', [], 'steer');
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('usable', [], 'steer', expect.any(Function));
 });

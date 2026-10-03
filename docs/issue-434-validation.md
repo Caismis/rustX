@@ -1,5 +1,6 @@
 # Issue 434 validation and ownership audit
 
+Repair starts from PR HEAD `da93e80afadfb56299ec9725cd9f1a1c4b8321df`.
 Base: `260994fc27ebc1ef1f767b6e6aa21a01c5f676c6` (PR #446, including #447).
 Final fetched main: `260994fc27ebc1ef1f767b6e6aa21a01c5f676c6` (unchanged; no rebase required).
 Branch: `issue-434-upload-intake`.
@@ -15,7 +16,8 @@ capability → native Session upload allocation/materialization → ready commit
 control status read with original receipts. Product Host does not ingest or stage
 these bytes. The ordinary 1 MiB JSON control limit is unchanged.
 
-The native policy is 2,097,152 bytes/file, 4,194,304 bytes/batch, eight files,
+The native policy is 2,097,152 bytes/file; 4,194,304 bytes and eight files per
+transfer; independently 4,194,304 admitted bytes and eight uploads per User input;
 two prepared-or-active transfers and 65,536-byte binary messages. Native payload
 buffering is at most 8 MiB plus a conservative 512 KiB framing allowance; OS TCP
 buffers and metadata are separate. Maximum admitted concurrent file bytes/disk
@@ -35,13 +37,22 @@ A lost reply does not revoke ready. Retry requires authoritative absent/failed
 proof and uses a new operation; Check status reads the original operation and
 never retransmits bytes. Prepared/active carriers prevent a premature absent read.
 
+Binary admission shares the host drain mutex and acquires an independent host
+upload guard. Drain revokes unconsumed preparations and their loopback listeners;
+admitted carriers remain counted through terminal settlement. `finish_drain` checks
+both zero upload guards and an empty transfer registry. Route/resource drops occur
+outside ownership mutexes to avoid host/transfer lock inversion.
+
 Native Session access excludes deletion through carrier/native settlement.
 Deletion refuses while that access is held, including immediately before ready;
 a deletion winner prevents subsequent upload admission. Removing a browser card
 only removes presentation. It cannot roll back a native allocation.
 
-The client-lifetime intake owner retains per-file identities and outcomes across
-Composer remounts. Normal mixed selections retain accepted and rejected cards;
+The one selected Composer intake owner retains per-file identities and outcomes
+across compatible remounts. Incompatible binding/Session/Conversation/authority
+replacement retires its File references; disposal clears the collection. First-submit
+sealing transfers references to FirstSubmissions before create begins. Native message
+ACK, explicit removal/clear, first-submission admission/discard release their owners. Normal mixed selections retain accepted and rejected cards;
 over-count selections produce one bounded rejection summary. Every unresolved
 card gates submission. Initial per-file dispatch is finite and ordered, stops at
 binding replacement, and is never restarted by observation/reconnect. Retained
@@ -104,8 +115,9 @@ file storage until an existing image capability explicitly reads it.
 ## Validation environment and results
 
 Linux; Rust/Cargo 1.98.1; Node 24.21.0; pnpm 11.13.1; uv 0.11.12.
-Provider preparation used `uv sync --frozen` and `uv run --frozen pytest` in
-`test-support/fake-provider` (51 passed).
+Provider preparation used `uv sync --frozen --project test-support/fake-provider`
+and `uv run --frozen --project test-support/fake-provider pytest test-support/fake-provider`
+(51 passed).
 
 Native tests use `TMPDIR=/var/tmp/rustx-434-tests`. The ambient `/tmp/.git` and
 `/tmp/rustx.toml` predate this task and redirect discovery fixtures into an
@@ -129,7 +141,7 @@ coverage was enabled; no ignore was added for this issue.
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed |
 | `cargo build --bins --all-features --locked` | Passed |
 | `cargo test --all-targets --all-features --locked -- --list` | Passed, all harnesses discovered |
-| `TMPDIR=/var/tmp/rustx-434-tests RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | 4,097 passed; eight existing ignores; 19 harnesses |
+| `TMPDIR=/var/tmp/rustx-434-tests RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | 4,102 passed; eight existing ignores; 19 harnesses |
 | `cargo run --example check_test_lanes -- --job rust-contracts` | Linux selectors and coverage passed |
 | `cargo run --example check_test_lanes -- --job rust-boundaries` | Linux selectors and coverage passed |
 | `pnpm --dir protocol/app-server generate` | Passed |
@@ -139,27 +151,63 @@ coverage was enabled; no ignore was added for this issue.
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 895 passed, zero skipped |
 | `pnpm --dir dev typecheck` | Passed |
 | `pnpm --dir dev test` | 38 passed |
-| `uv sync --frozen` / `uv run --frozen pytest` in `test-support/fake-provider` | Passed / 51 passed |
+| `uv sync --frozen --project test-support/fake-provider` / `uv run --frozen --project test-support/fake-provider pytest test-support/fake-provider` | Passed / 51 passed |
 | `pnpm --dir web-console typecheck` | Passed |
-| `pnpm --dir web-console test` | 1,504 passed |
+| `pnpm --dir web-console test` | 1,511 passed |
 | `pnpm --dir web-console check:i18n` | Passed |
 | `pnpm --dir web-console check:provenance` | Passed; 148 source records and 132 production package notices |
-| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 166 passed (9.8 minutes) |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 166 passed (9.9 minutes) |
 | `git diff --check` | Passed |
 
 The full native run includes App Server process, stdio/WebSocket conformance,
 Linux filesystem, image capability/projection/accounting and durability tests.
 Web tests include affected Product Host admission/file-read boundaries and retained
-first submissions. An intermediate browser run was explicitly interrupted to repair
-the stale action guard; it is not counted as a passing run. The subsequent
+first submissions. Intermediate browser runs were explicitly interrupted for the original stale
+action guard and the repair's known-create-rejection handback; neither is counted
+as a passing run. The subsequent
 runner initially found the interrupted run's own preview processes still bound to
 5173/5174. Those exact owned processes were stopped before the final execution;
 no reuse-existing-server setting or retry policy was introduced.
 
 macOS filesystem/platform execution and real desktop GUI checks were not run
 locally. Linux success does not claim macOS success. Hosted checks are reported
-once after PR creation; auto-merge remains disabled.
+on the repaired head through required completion for this repair; auto-merge remains disabled.
 
 DSH inspected files, adopted/rejected patterns and exact reference hashes are in
 [the architectural decision](issue-434-decision.md). The original reference
 checkout was not modified; the audit uses the required pinned independent worktree.
+
+## Repair regressions and macOS investigation
+
+- Owned stdio prepare, then close the control caller and begin drain: revoke
+  capability/capacity, reject handshake, prove zero allocation and finish drain.
+- Owned stdio admission, gate before native ready, abort caller and close control,
+  begin drain: poll proves drain pending, finish refuses and diagnostics count one
+  active upload. Release proves ready, empty transfer registry and successful drain.
+- Raw start/steer reject nine valid ready receipts, over-budget ready bytes,
+  cross-Session and unready receipts with no canonical User/inbound/provider request.
+  Exactly eight receipts and exactly four MiB succeed. Files/registry remain owned.
+- Nonregular substitution after materialization settles durable Failed, survives
+  controller reopen, exposes no receipt, and permits a new explicit operation.
+  A consumed pre-rename ready fault settles Failed; a consumed post-rename fault
+  preserves visible ready/original receipts, never fabricating failure.
+- Web tests prove handoff empties intake, admission/discard release retained files,
+  known create rejection returns files/IDs to the live intake for further selection,
+  remove/clear and ACK release files, endpoint authority replacement/disposal retire
+  owners, disposal is terminal even if a later render requests an owner, and 100
+  navigation transitions retain exactly one current owner.
+
+Original macOS failure: run 37116713316, job 111184830556, exact test
+`runtime::subagent::registry::tests::parked_recovery_probe_does_not_hold_registry_mutex`.
+The first panic was try_lock; hook RecvError followed the test dropping its release
+sender. The hook is already taken after releasing the registry mutex. However,
+`restore_agents` also starts periodic reconciliation on the Tokio executor. That
+independent pass can briefly hold the claim mutex while the explicit test probe is
+parked, invalidating try_lock as proof about that probe. It can also consume the
+hook first, so joining only the manually spawned thread did not identify the
+parked hook owner. The fixture now restores
+on a thread with no Tokio executor, then explicitly runs both competing passes.
+No production recovery code, timeout, sleep, assertion or suite parallelism changed.
+The exact test passed 20/20 Linux executions before and 20/20 after the fixture fix.
+Current main's CI run 37111005268 passed; this does not prove the old test race absent.
+Hosted macOS evidence must come from the final repaired head, not the old PR run.

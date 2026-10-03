@@ -4,7 +4,7 @@ import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import type { UploadedFile } from '../../protocol/app-server/v34';
-import { Server, capabilities } from './fixture';
+import { Server, capabilities, TOKEN } from './fixture';
 let server: Server;
 let sequence = 0;
 const create = vi.fn(() => `blob:${++sequence}`), revoke = vi.fn();
@@ -54,7 +54,7 @@ it('mixed draft order and failed admission retain text and attachments, with det
   const file = new File(['text'], 'second.txt', { type: 'text/plain' });
   await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [image, file] } }));
   await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Send' })));
-  expect(send).toHaveBeenCalledWith('keep me', [completed('first.png', 'one').receipt, completed('second.txt', 'two').receipt], 'send');
+  expect(send).toHaveBeenCalledWith('keep me', [completed('first.png', 'one').receipt, completed('second.txt', 'two').receipt], 'send', expect.any(Function));
   expect((ui.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('keep me');
   expect(ui.getByRole('button', { name: 'Remove second.txt' })).toBeTruthy();
   ui.unmount(); expect(revoke).toHaveBeenCalledTimes(1);
@@ -181,4 +181,15 @@ it('renders inert text and downloads the same bounded native bytes through one U
   server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: 'aGk=' });
   await expect(obsolete).rejects.toThrow('Obsolete');
   expect(revoke).toHaveBeenCalledOnce();
+});
+
+it('native authority replacement and client disposal retire attachment File owners', async () => {
+  await server.attached('A');
+  const first = server.client.attachmentIntakes.owner('old'); first.add([{ file: new File(['a'], 'a') }], capabilities.upload_policy);
+  await server.client.connect('ws://127.0.0.1:8089', TOKEN, 'replace-authority');
+  expect(server.client.attachmentIntakes.size).toBe(0);
+  server.client.attachmentIntakes.owner('replacement');
+  expect(first.snapshot()).toEqual([]); expect(server.client.attachmentIntakes.size).toBe(1);
+  const current = server.client.attachmentIntakes.owner('replacement'); current.add([{ file: new File(['b'], 'b') }], capabilities.upload_policy);
+  server.client.dispose(); expect(current.snapshot()).toEqual([]); expect(server.client.attachmentIntakes.size).toBe(0);
 });

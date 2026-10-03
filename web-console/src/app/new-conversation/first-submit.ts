@@ -70,7 +70,7 @@ export class FirstSubmissions {
     this.publish({ ...value, phase: 'discarded', draft: { ...value.draft, text: '', files: [] }, receipts: [], error: undefined });
   }
   dispose() {
-    this.disposed = true; this.drafts.clear(); this.sessions.clear(); this.detached = []; this.listeners.clear();
+    this.disposed = true; this.recovery.clear(); this.drafts.clear(); this.sessions.clear(); this.detached = []; this.listeners.clear();
   }
   removeUpload(value: FirstSubmission, id: string) {
     if (!value.session || !['failed', 'uncertain', 'paused'].includes(value.phase)
@@ -127,16 +127,17 @@ export class FirstSubmissions {
       update({ phase: 'admitted', receipts: [], draft: { ...next.draft, text: '', files: [] } });
     } catch (error) { if (next.phase !== 'admitted') { const captured = next.phase === 'uploading' && next.uploadIndex !== undefined && next.receipts.length > next.uploadIndex; update({ phase: captured ? 'paused' : 'uncertain', failedPhase: captured ? undefined : next.phase, error }); } }
   }
-  async submit(binding: string, draft: FirstDraft, port: FirstSubmitPort): Promise<boolean> {
+  async submit(binding: string, draft: FirstDraft, port: FirstSubmitPort, sealed?: () => void, rejected?: (files: readonly File[], ids: readonly string[]) => boolean): Promise<boolean> {
     const previous = this.drafts.get(`${this.authority}:${binding}`);
     if (this.disposed || previous && !['rejected', 'discarded'].includes(previous.phase) || !port.current()
       || !draft.workspaceId || !draft.text.trim() && !draft.files.length) return false;
-    // Copies seal order/intent at the gesture. File contents stay browser-owned.
+    // The accepted gesture transfers File ownership from intake to this owner.
     const authority = this.authority;
     let value: FirstSubmission = { authority, binding, draft: { ...draft, files: [...draft.files] }, receipts: [], operations: draft.files.map(() => uploadOperationId()), attachmentIds: draft.attachmentIds ?? draft.files.map(() => uploadOperationId()), phase: 'creating' };
     const update = (patch: Partial<FirstSubmission>) => { value = { ...value, ...patch }; this.publish(value); };
     const current = () => { if (this.disposed) throw new Error('Client disposed'); live(port); };
     update({});
+    sealed?.();
     try {
       let handedOff = false;
       let handoffError: unknown;
@@ -173,7 +174,9 @@ export class FirstSubmissions {
     } catch (error) {
       if (value.phase === 'admitted') return true;
       const captured = value.phase === 'uploading' && value.uploadIndex !== undefined && value.receipts.length > value.uploadIndex;
-      update({ phase: captured ? 'paused' : value.phase === 'uploading' || uncertain(error) ? 'uncertain' : value.session ? 'failed' : 'rejected', failedPhase: captured ? undefined : value.phase, error });
+      const phase = captured ? 'paused' : value.phase === 'uploading' || uncertain(error) ? 'uncertain' : value.session ? 'failed' : 'rejected';
+      const returned = phase === 'rejected' && rejected?.(value.draft.files, value.attachmentIds);
+      update({ phase, failedPhase: captured ? undefined : value.phase, error, ...(returned ? { draft: { ...value.draft, files: [] } } : {}) });
       return false;
     }
   }

@@ -491,3 +491,11 @@ separate finite disclosure seat precedes the earliest controlled entry body or
 anchored Status. The Status stays after its original anchor; an independent User
 body stays outside the fold, before that seat. Pagination may move the seat but
 never changes the native disclosure key or canonical membership.
+
+The selected Composer has one retained intake owner. Incompatible Session,
+Conversation, draft binding or authority replacement retires its File references;
+same-binding remount/reconnect retains recovery state. Client disposal clears all
+intakes. First-submit sealing transfers ownership to FirstSubmissions before create;
+admission/discard releases those files. A known rejected create returns files to the original live intake for editing.
+User-input count/byte limits are distinct from transfer limits and are independently
+validated by the native receipt collection owner before turn admission.

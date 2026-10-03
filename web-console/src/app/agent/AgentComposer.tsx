@@ -26,7 +26,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   intakeOwner?: AttachmentIntake; uploadPolicy?: UploadPolicy; onReconcile?: UploadPort['status'];
   firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[]) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
-  onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
+  onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: () => void) => Promise<boolean>;
   onUpload: (files: readonly File[], operation?: string) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; commandAvailable?: (id: CommandId) => boolean; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
   consumed?: { id: string; sequence: number };
@@ -127,7 +127,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     const submitted = draft;
     const owner = binding;
     try {
-      if (await (onDraftSend ? onDraftSend(submitted, files.map(file => file.file), files.map(file => file.id)) : onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery)) && draftBinding.current === owner) { setDraft(current => current === submitted ? '' : current); intake.clear(); setRestored([]); input.current?.focus(); }
+      if (await (onDraftSend ? onDraftSend(submitted, files.map(file => file.file), files.map(file => file.id)) : onSend(submitted, [...restored, ...files.map(file => file.receipt!)], action.delivery, () => intake.clear())) && draftBinding.current === owner) { setDraft(current => current === submitted ? '' : current); intake.clear(); setRestored([]); input.current?.focus(); }
     } catch (cause) {
       if (draftBinding.current === owner) setError(String(cause));
     }
@@ -191,7 +191,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
         <div className={css.tools}>
           {onCommand && <button type="button" className={css.add} aria-label={tx('agent:agent-composer.commands')} title={tx('agent:agent-composer.commands')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}>+</button>}
           <input ref={picker} type="file" hidden multiple aria-label={tx('agent:agent-composer.attach-files')} disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? []).map(file => ({ file }))); event.target.value = ''; }}/>
-          <button type="button" className={css.attachment} aria-label={tx('agent:agent-composer.add-attachments')} title={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_files, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_batch_bytes }) : tx('agent:upload.policy')} disabled={disabled || busy} onClick={() => picker.current?.click()}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 14l8-8" /></svg></button>
+          <button type="button" className={css.attachment} aria-label={tx('agent:agent-composer.add-attachments')} title={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy')} disabled={disabled || busy} onClick={() => picker.current?.click()}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 14l8-8" /></svg></button>
           {permission}
         </div>
         <div className={css.trailing}>

@@ -12,7 +12,8 @@ uses the existing tungstenite/browser/Node implementations, avoiding a new HTTP
 request-body parser and browser streaming-request portability restrictions.
 Control WebSocket binary messages remain forbidden. No Product Host involvement.
 
-Policy: 2 MiB/file, 4 MiB/batch, 8 files, 2 prepared-or-active transfers, 64 KiB
+Policy: 2 MiB/file; 4 MiB and 8 files per transfer; independently 4 MiB and
+8 uploads per User input; 2 prepared-or-active transfers, 64 KiB
 binary messages. Acknowledgement of each chunk bounds client sending. Native input
 remains a bounded vector: at most 8 MiB payload across the two transfers plus bounded
 framing buffers. Full buffering before native materialization rejects incomplete
@@ -59,3 +60,19 @@ Reference file SHA-256 evidence (audit only; no source copied):
 - `packages/client/file-upload/src/client/runtime.ts`: `857d776f153ca3e8694f9ee98e72e37fd7bdf39e0c47a9db82a78e22b25203d9`
 
 The carrier is a dedicated WebSocket stream, not an HTTP upload body. Content-Length does not delimit uploads. Ordered native-admitted lengths, finite binary message limits and the terminal finish exchange enforce actual bytes, including truncation and trailing data. Redirects are forbidden by the WebSocket opening contract; descriptors cannot select another origin or path.
+
+## PR 448 repair decisions
+
+Binary admission, not preparation, linearizes execution against host drain. A
+host-owned upload guard survives control/socket loss through settlement; prepared
+capabilities are synchronously revoked by drain. No generic task manager is added.
+The native receipt collection owner checks the complete submitted User input using
+persisted admitted sizes. Transfer policy and User-input policy have distinct fields.
+The single selected Composer retains one intake owner; first submission explicitly
+transfers File references and semantic retirement releases them. Known pre-ready
+verification failures share Failed settlement with materialization failures.
+
+The macOS recovery-probe test had an unrelated second actor: restore automatically
+started periodic reconciliation, which could briefly hold the mutex at try_lock.
+The fixture now restores on an executor-free thread and explicitly owns its parked
+probe and competing pass. Production Subagent recovery code is unchanged.

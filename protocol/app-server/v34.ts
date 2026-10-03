@@ -7499,8 +7499,10 @@ export interface ServerCapabilities {
  */
 export interface UploadPolicy {
   max_file_bytes: number;
-  max_batch_bytes: number;
-  max_files: number;
+  max_transfer_bytes: number;
+  max_files_per_transfer: number;
+  max_uploads_per_user_input: number;
+  max_upload_bytes_per_user_input: number;
   max_concurrent_transfers: number;
   max_chunk_bytes: number;
 }

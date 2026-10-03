@@ -50,6 +50,7 @@ struct Transfer {
     expires: Instant,
     consumed: AtomicBool,
     access: SessionAccess,
+    revoked: CancellationToken,
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 pub(crate) struct UploadTransfers {
@@ -81,11 +82,35 @@ impl Default for UploadTransfers {
     }
 }
 impl UploadTransfers {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.transfers.lock().expect("upload transfers").is_empty()
+    }
+    pub(crate) fn revoke_prepared(&self) {
+        self.remove_prepared(None);
+    }
     pub(crate) fn expire_prepared(&self, now: Instant) {
-        self.transfers
-            .lock()
-            .expect("upload transfers")
-            .retain(|_, t| t.consumed.load(Ordering::SeqCst) || t.expires > now);
+        self.remove_prepared(Some(now));
+    }
+    fn remove_prepared(&self, expired: Option<Instant>) {
+        let removed = {
+            let mut transfers = self.transfers.lock().expect("upload transfers");
+            let paths: Vec<_> = transfers
+                .iter()
+                .filter(|(_, t)| {
+                    !t.consumed.load(Ordering::SeqCst) && expired.is_none_or(|now| t.expires <= now)
+                })
+                .map(|(path, _)| path.clone())
+                .collect();
+            paths
+                .into_iter()
+                .filter_map(|path| transfers.remove(&path))
+                .collect::<Vec<_>>()
+        };
+        // Dropping a route can release host attachment ownership. Never do that
+        // while holding the transfer mutex (admission takes host then transfer).
+        for transfer in removed {
+            transfer.revoked.cancel();
+        }
     }
     pub(crate) fn serve_remote(&self) {
         self.remote.store(true, Ordering::Relaxed);
@@ -100,6 +125,7 @@ impl UploadTransfers {
     fn take(&self, path: &str) -> Option<Arc<Transfer>> {
         let transfers = self.transfers.lock().expect("upload transfers");
         let transfer = transfers.get(path)?;
+        transfer.route.attachment.operation_authority().ok()?;
         if transfer.expires <= Instant::now() || transfer.consumed.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -187,7 +213,8 @@ pub(super) async fn prepare(
         .map(TcpListener::local_addr)
         .transpose()?
         .map(|a| a.port());
-    {
+    let revoked = CancellationToken::new();
+    host.prepare_upload(|| {
         let mut transfers = host.uploads().transfers.lock().expect("upload transfers");
         if transfers.values().any(|t| {
             t.route.target.session_id == route.target.session_id && t.operation == operation
@@ -203,10 +230,13 @@ pub(super) async fn prepare(
                 expires: Instant::now() + TTL,
                 consumed: AtomicBool::new(false),
                 access,
+                revoked: revoked.clone(),
                 _permit: permit,
             }),
         );
-    }
+        Ok(())
+    })
+    .map_err(|_| invalid("server draining"))??;
     let owner = host.clone();
     tokio::spawn(async move {
         tokio::time::sleep(TTL).await;
@@ -217,16 +247,11 @@ pub(super) async fn prepare(
         let expected_path = path.clone();
         tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + TTL;
-            while let Ok(Ok((socket, _))) =
-                tokio::time::timeout_at(deadline, listener.accept()).await
-            {
-                let _ = serve(
-                    socket,
-                    owner.clone(),
-                    CancellationToken::new(),
-                    Some(&expected_path),
-                )
-                .await;
+            'accept: while let Ok(Ok((socket, _))) = tokio::select! {
+                () = revoked.cancelled() => break 'accept,
+                result = tokio::time::timeout_at(deadline, listener.accept()) => result,
+            } {
+                let _ = serve(socket, owner.clone(), Some(&expected_path)).await;
                 if !owner
                     .uploads()
                     .transfers
@@ -252,15 +277,19 @@ pub(super) async fn prepare(
 struct Settlement {
     host: AppServerHost,
     path: String,
+    _operation: super::host::ServerOperation,
 }
 impl Drop for Settlement {
     fn drop(&mut self) {
-        self.host
-            .uploads()
-            .transfers
-            .lock()
-            .expect("upload transfers")
-            .remove(&self.path);
+        let removed = {
+            self.host
+                .uploads()
+                .transfers
+                .lock()
+                .expect("upload transfers")
+                .remove(&self.path)
+        };
+        drop(removed);
         #[cfg(test)]
         self.host.uploads().settled.notify_one();
     }
@@ -270,7 +299,6 @@ impl Drop for Settlement {
 pub(crate) async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send>(
     socket: S,
     host: AppServerHost,
-    shutdown: CancellationToken,
     expected_path: Option<&str>,
 ) -> io::Result<()> {
     let expected_path = expected_path.map(str::to_owned);
@@ -288,10 +316,13 @@ pub(crate) async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send>(
             .is_none_or(|path| path == request.uri().path())
             && request.uri().query().is_none()
             && offered == Some(PROTOCOL)
-            && let Some(transfer) = owner.uploads().take(request.uri().path())
+            && let Ok(Some((transfer, operation))) = owner.admit_upload(|operation| {
+                let transfer = owner.uploads().take(request.uri().path())?;
+                Some((transfer, operation))
+            })
         {
             *admitted.lock().expect("upload handshake") =
-                Some((request.uri().path().to_owned(), transfer));
+                Some((request.uri().path().to_owned(), transfer, operation));
             response.headers_mut().insert(
                 "sec-websocket-protocol",
                 http::HeaderValue::from_static(PROTOCOL),
@@ -315,19 +346,21 @@ pub(crate) async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send>(
     )
     .await;
     let admission = selected.lock().expect("upload handshake").take();
-    let _settlement = admission.as_ref().map(|(path, _)| Settlement {
-        host: host.clone(),
-        path: path.clone(),
-    });
+    let (transfer, _settlement) = match admission {
+        Some((path, transfer, operation)) => (
+            Some(transfer),
+            Some(Settlement {
+                host: host.clone(),
+                path,
+                _operation: operation,
+            }),
+        ),
+        None => (None, None),
+    };
     let mut socket = handshake
         .map_err(io::Error::other)?
         .map_err(io::Error::other)?;
-    let (_, transfer) = admission.ok_or_else(|| invalid("missing upload admission"))?;
-    transfer
-        .route
-        .attachment
-        .operation_authority()
-        .map_err(|_| invalid("stale upload attachment"))?;
+    let transfer = transfer.ok_or_else(|| invalid("missing upload admission"))?;
     let receive = async {
         let mut files = Vec::with_capacity(transfer.files.len());
         for metadata in &transfer.files {
@@ -366,17 +399,11 @@ pub(crate) async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send>(
         }
         Ok(files)
     };
-    let files = tokio::select! {
-        () = shutdown.cancelled() => return Err(invalid("upload stopped")),
-        files = tokio::time::timeout(TTL, receive) => files.map_err(io::Error::other)??,
-    };
+    let files = tokio::time::timeout(TTL, receive)
+        .await
+        .map_err(io::Error::other)??;
     // No cancellation from here: native settlement owns its allocation even if
     // this socket disappears. The permit and Session exclusion survive the ACK.
-    transfer
-        .route
-        .attachment
-        .operation_authority()
-        .map_err(|_| invalid("stale upload attachment"))?;
     let outcome = host
         .manager()
         .session_controller()

@@ -166,8 +166,11 @@ or failed evidence uses a new operation identity; old allocations are never reus
 ### Finite budgets
 
 The typed initialization capability `upload_policy` is the only policy source:
-2,097,152 bytes/file, 4,194,304 bytes/batch, eight files and two prepared-or-active
-transfers, each with 65,536-byte messages. There is no pending transfer admission
+`max_file_bytes = 2,097,152`; `max_files_per_transfer = 8` and
+`max_transfer_bytes = 4,194,304` bound one preparation. Separately,
+`max_uploads_per_user_input = 8` and `max_upload_bytes_per_user_input = 4,194,304`
+bound one submitted User input, even across multiple transfers. Two prepared-or-active
+transfers (`max_concurrent_transfers`) each allow 65,536-byte messages (`max_chunk_bytes`). There is no pending transfer admission
 queue. Prepared descriptors retain permits; expiry releases unused preparations.
 Consumption retains the permit through native settlement even if its reply is lost.
 
@@ -204,3 +207,42 @@ does not invoke image processing or create a provider-native image block.
 - `artifact/read` and Web `ArtifactResources`: retained solely for managed Tool
   galleries; uploaded-file transcript cards never invoke them.
 - Markdown parser `ImageReference`: unrelated Markdown syntax tree, unchanged.
+
+### Execution admission, drain and receipt-set authority
+
+Preparation reserves finite transport intent and native exclusion; it does not
+admit semantic upload execution. The binary handshake consumes the capability
+under the same host mutex as `begin_drain`. Drain revokes every unconsumed
+preparation and cancels its owned loopback listener. A handshake losing this
+boundary cannot mutate native storage. A winning handshake owns a separate host
+upload-operation guard through carrier/native settlement. Ordinary request capacity
+is independent. Neither control disconnect nor data disconnect after native handoff
+cancels the native obligation. Truncated receive settles without allocation.
+
+Drain waits for upload guards as well as protocol/runtime owners. `finish_drain`
+requires zero active upload guards and an empty transfer registry; forced-shutdown
+diagnostics expose active uploads without asserting settlement. Remote transport
+joins admitted carrier work, and owned stdio listeners obey the same host admission.
+Unused expiry also cancels the prepared listener and releases capacity.
+
+`SessionController::uploaded_content` validates the entire receipt collection once
+for both `turn/start` and `turn/steer`, before inbound admission. It checks count,
+Session ownership, ready status and the sum of native `UploadEntry.admitted_bytes`.
+This size is persisted with the original claim and retained across native copies;
+later mutable-file metadata and client claims cannot redefine admission policy.
+Canonical block order remains the submitted order. Multi-file native transfers
+remain supported; Web and TUI ordinarily transfer one file at a time.
+
+Materialization and final verification failures share durable Failed settlement,
+retaining cleanup ownership. A ready publication proven NotCommitted also settles
+Failed. Failure to persist that classification leaves uncertain evidence. A
+post-rename ready durability diagnostic is never overwritten as Failed: the
+catalog's visible ready record and original receipts remain the read-repair authority.
+
+Browser intake owns File references until removal, successful admission/clear,
+incompatible binding retirement or client disposal. There is one selected Composer
+owner; same-binding remount/reconnect retains it, while navigation to another
+Session/Conversation retires it. First-submit sealing transfers File ownership to
+FirstSubmissions synchronously; intake is empty before create starts. A known creation rejection returns files and local IDs to the still-live original
+intake for editing; a retired origin cannot reclaim them. Otherwise the retained
+first-submission owner keeps the intent until admission/discard.

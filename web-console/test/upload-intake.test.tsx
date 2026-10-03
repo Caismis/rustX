@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { AttachmentIntake, intake, pasteText, transferInputs, type UploadPort } from '../src/client/uploads';
+import { AttachmentIntake, AttachmentIntakes, intake, pasteText, transferInputs, type UploadPort } from '../src/client/uploads';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { capabilities } from './fixture';
 import type { UploadedFile, UploadOutcome } from '../../protocol/app-server/v34';
@@ -23,10 +23,10 @@ it('admits per-file outcomes and explicit duplicate identities, with bounded ove
 it('checks below, at and above every selection storage bound', () => {
   for (const size of [policy.max_file_bytes - 1, policy.max_file_bytes]) expect(intake([{ file: file('x', size) }], [], policy)[0].status).toBe('draft');
   expect(intake([{ file: file('x', policy.max_file_bytes + 1) }], [], policy)[0].reason).toBe('size');
-  for (const total of [policy.max_batch_bytes - 1, policy.max_batch_bytes]) expect(intake([{ file: file('a', policy.max_file_bytes) }, { file: file('b', total - policy.max_file_bytes) }], [], policy).every(row => row.status === 'draft')).toBe(true);
+  for (const total of [policy.max_upload_bytes_per_user_input - 1, policy.max_upload_bytes_per_user_input]) expect(intake([{ file: file('a', policy.max_file_bytes) }, { file: file('b', total - policy.max_file_bytes) }], [], policy).every(row => row.status === 'draft')).toBe(true);
   expect(intake([{ file: file('a', policy.max_file_bytes) }, { file: file('b', policy.max_file_bytes) }, { file: file('c') }], [], policy)[2].reason).toBe('batch');
-  for (const count of [policy.max_files - 1, policy.max_files]) expect(intake(Array.from({ length: count }, () => ({ file: file() })), [], policy)).toHaveLength(count);
-  expect(intake(Array.from({ length: policy.max_files + 1 }, () => ({ file: file() })), [], policy)).toMatchObject([{ reason: 'count' }]);
+  for (const count of [policy.max_uploads_per_user_input - 1, policy.max_uploads_per_user_input]) expect(intake(Array.from({ length: count }, () => ({ file: file() })), [], policy)).toHaveLength(count);
+  expect(intake(Array.from({ length: policy.max_uploads_per_user_input + 1 }, () => ({ file: file() })), [], policy)).toMatchObject([{ reason: 'count' }]);
 });
 it('normalizes drop and paste items exactly once and reports directories', () => {
   const selected = file();
@@ -135,4 +135,35 @@ it('file-only paste preserves selected text and a busy editor cannot be changed 
   ui.rerender(<AgentComposer {...props} busy />);
   fireEvent.paste(input, { clipboardData: { files: [file()], items: [], getData: () => 'replacement' } });
   expect(input.value).toBe('keep selection'); expect(owner.snapshot()).toHaveLength(1);
+});
+
+it('semantic navigation retires File owners while remount retains the current binding', () => {
+  const owners = new AttachmentIntakes();
+  let previous: AttachmentIntake | undefined;
+  for (let index = 0; index < 100; index++) {
+    const owner = owners.owner(`session-${index}`); owner.add([{ file: file() }], policy);
+    expect(previous?.snapshot() ?? []).toEqual([]);
+    expect(owners.size).toBe(1); expect(owners.owner(`session-${index}`)).toBe(owner);
+    previous = owner;
+  }
+  owners.dispose(); expect(owners.size).toBe(0); expect(previous!.snapshot()).toEqual([]);
+  previous!.add([{ file: file() }], policy);
+  owners.owner("after-dispose").add([{ file: file() }], policy);
+  expect(previous!.snapshot()).toEqual([]); expect(owners.owner("after-dispose").snapshot()).toEqual([]); expect(owners.size).toBe(0);
+});
+it('remove and successful draft clear release every retained File', () => {
+  const owner = new AttachmentIntake(); owner.add([{ file: file() }, { file: file('other') }], policy);
+  owner.remove(owner.snapshot()[0].id); expect(owner.snapshot()).toHaveLength(1);
+  owner.clear(); expect(owner.snapshot()).toEqual([]);
+});
+
+it('native message acknowledgement releases Files even while the sending promise is held', async () => {
+  const owner = new AttachmentIntake(); owner.add([{ file: file() }], policy);
+  await owner.upload(owner.snapshot()[0].id, { upload: async () => [ready], status: async () => ({ state: 'unresolved' }) });
+  const reply = deferred<boolean>(); let acknowledged: (() => void) | undefined;
+  const ui = render(<AgentComposer intakeOwner={owner} uploadPolicy={policy} disabled={false} busy={false} active={false} onUpload={async () => []} onSend={(_text, _receipts, _delivery, ack) => { acknowledged = ack; return reply.promise; }} onCancel={() => {}} />);
+  fireEvent.keyDown(ui.getByLabelText('Message'), { key: 'Enter' });
+  expect(owner.snapshot()).toHaveLength(1);
+  act(() => acknowledged!()); expect(owner.snapshot()).toEqual([]);
+  await act(async () => reply.resolve(true));
 });

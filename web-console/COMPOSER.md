@@ -461,3 +461,11 @@ introducing resident Turn presentation. The inspected diff establishes that chan
 but not a separate meter-specific rationale. The restored capability lives in the
 current Composer context seat; cumulative ConversationStats and Turn tails retain
 their present roles.
+
+The selected Composer has one retained intake owner. Incompatible Session,
+Conversation, draft binding or authority replacement retires its File references;
+same-binding remount/reconnect retains recovery state. Client disposal clears all
+intakes. First-submit sealing transfers ownership to FirstSubmissions before create;
+admission/discard releases those files. A known rejected create returns files to the original live intake for editing.
+User-input count/byte limits are distinct from transfer limits and are independently
+validated by the native receipt collection owner before turn admission.

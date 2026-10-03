@@ -11,10 +11,10 @@ const safeName = (name: string) => !!name && new TextEncoder().encode(name).leng
 export function intake(inputs: readonly IntakeInput[], existing: readonly IntakeFile[], policy?: UploadPolicy): IntakeFile[] {
   if (!inputs.length) return [];
   const row = (file: File, reason?: IntakeReason): IntakeFile => ({ id: uploadOperationId(), operation: uploadOperationId(), file, status: reason ? 'rejected' : 'draft', reason });
-  if (!policy || inputs.length + existing.length > policy.max_files) return [row(new File([], `${inputs.length} files`), policy ? 'count' : 'policy')];
+  if (!policy || inputs.length + existing.length > policy.max_uploads_per_user_input) return [row(new File([], `${inputs.length} files`), policy ? 'count' : 'policy')];
   let total = existing.reduce((sum, item) => sum + (item.status === 'rejected' ? 0 : item.file.size), 0);
   return inputs.map(({ file, directory }) => {
-    const reason = directory ? 'directory' : !safeName(file.name) ? 'name' : file.size > policy.max_file_bytes ? 'size' : total + file.size > policy.max_batch_bytes ? 'batch' : undefined;
+    const reason = directory ? 'directory' : !safeName(file.name) ? 'name' : file.size > policy.max_file_bytes ? 'size' : total + file.size > policy.max_upload_bytes_per_user_input ? 'batch' : undefined;
     if (!reason) total += file.size;
     return row(file, reason);
   });
@@ -36,8 +36,9 @@ export class AttachmentIntake {
   private files: readonly IntakeFile[] = [];
   private binding?: string;
   private revision = 0;
+  private retired = false;
   bind(binding: string) {
-    if (this.binding === binding) return;
+    if (this.retired || this.binding === binding) return;
     this.binding = binding; this.revision++;
     this.files = this.files.map(file => ['queued', 'uploading', 'reconciling'].includes(file.status) ? { ...file, status: 'uncertain' } : file);
   }
@@ -47,9 +48,16 @@ export class AttachmentIntake {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private publish(files: readonly IntakeFile[]) { this.files = files; for (const listener of this.listeners) listener(); }
   private update(id: string, patch: Partial<IntakeFile>) { this.publish(this.files.map(file => file.id === id ? { ...file, ...patch } : file)); }
+  restoreDraft(files: readonly File[], ids: readonly string[]) {
+    if (this.retired) return false;
+    this.publish(files.map((file, index) => ({ file, id: ids[index], operation: uploadOperationId(), status: 'draft' })));
+    return true;
+  }
   remove(id: string) { this.publish(this.files.filter(file => file.id !== id)); }
-  clear() { this.publish([]); }
+  clear() { this.revision++; this.actions.clear(); this.publish([]); }
+  retire() { this.retired = true; this.clear(); this.listeners.clear(); }
   add(inputs: readonly IntakeInput[], policy: UploadPolicy | undefined, port?: UploadPort) {
+    if (this.retired) return;
     const added = intake(inputs, this.files, policy).map(file => port && file.status === 'draft' ? { ...file, status: 'queued' as const } : file);
     this.publish([...this.files.filter(file => !added.some(row => row.reason && row.reason === file.reason && ['count', 'policy'].includes(row.reason))), ...added]);
     if (port) {
@@ -64,7 +72,7 @@ export class AttachmentIntake {
   }
   async reconcile(id: string, port: UploadPort) {
     const file = this.files.find(file => file.id === id);
-    if (!file || file.status !== 'uncertain' || this.actions.get(id)?.revision === this.revision) return;
+    if (this.retired || !file || file.status !== 'uncertain' || this.actions.get(id)?.revision === this.revision) return;
     const action = { revision: this.revision };
     const { revision } = action;
     this.actions.set(id, action); this.update(id, { status: 'reconciling' });
@@ -78,7 +86,7 @@ export class AttachmentIntake {
   }
   async upload(id: string, port: UploadPort) {
     const file = this.files.find(file => file.id === id);
-    if (!file || !['draft', 'queued', 'failed'].includes(file.status) || this.actions.get(id)?.revision === this.revision) return;
+    if (this.retired || !file || !['draft', 'queued', 'failed'].includes(file.status) || this.actions.get(id)?.revision === this.revision) return;
     const action = { revision: this.revision };
     const { revision } = action;
     this.actions.set(id, action);
@@ -97,5 +105,18 @@ export class AttachmentIntake {
 }
 export class AttachmentIntakes {
   private owners = new Map<string, AttachmentIntake>();
-  owner(key: string, binding = key) { let owner = this.owners.get(key); if (!owner) { owner = new AttachmentIntake(); this.owners.set(key, owner); } owner.bind(binding); return owner; }
+  private terminal?: AttachmentIntake;
+  get size() { return this.owners.size; }
+  release(key: string) { const owner = this.owners.get(key); this.owners.delete(key); owner?.retire(); }
+  retireAll() { for (const key of this.owners.keys()) this.release(key); }
+  dispose() { this.retireAll(); this.terminal = new AttachmentIntake(); this.terminal.retire(); }
+  /** The product has one selected Composer. Navigation retires incompatible
+   * drafts; remount/reconnect of that same semantic binding retains its owner. */
+  owner(key: string, binding = key) {
+    if (this.terminal) return this.terminal;
+    for (const previous of this.owners.keys()) if (previous !== key) this.release(previous);
+    let owner = this.owners.get(key);
+    if (!owner) { owner = new AttachmentIntake(); this.owners.set(key, owner); }
+    owner.bind(binding); return owner;
+  }
 }

@@ -1475,3 +1475,11 @@ read evidence only; it does not authorize execution or provide exactly-once repl
 An exact correlated native release frees Web's gesture guard independently of the
 original transport acknowledgement. The unresolved RPC still settles normally,
 with its callbacks fenced from any later explicit request.
+
+The v34 upload policy separately names `max_files_per_transfer`,
+`max_transfer_bytes`, `max_uploads_per_user_input` and
+`max_upload_bytes_per_user_input`. User-input limits apply to the whole receipt
+collection at turn/start and turn/steer, using native persisted admitted sizes.
+Preparation reserves intent; binary handshake admission linearizes against host
+drain. Prepared capabilities are revoked; accepted carriers retain a host upload
+guard until settlement. See [Session uploads](session-uploads.md).

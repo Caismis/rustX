@@ -63,7 +63,7 @@ describe('one narrow browser command grammar', () => {
     expect((input as HTMLTextAreaElement).value).toBe('/not-a-command');
     fireEvent.change(input, { target: { value: 'Read /model documentation' } });
     await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
-    expect(send).toHaveBeenCalledWith('Read /model documentation', [], 'send');
+    expect(send).toHaveBeenCalledWith('Read /model documentation', [], 'send', expect.any(Function));
   });
 });
 

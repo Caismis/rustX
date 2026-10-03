@@ -1096,18 +1096,27 @@ async fn dispatch_runtime(
             Ok(MethodResult::Subscribed { after_cursor })
         }
         Method::TurnStart { target, content } | Method::TurnSteer { target, content } => {
+            let receipts: Vec<_> = content
+                .iter()
+                .filter_map(|block| match block {
+                    UserInputBlock::Upload(receipt) => Some(receipt.clone()),
+                    UserInputBlock::Text(_) => None,
+                })
+                .collect();
+            let mut uploads = sessions
+                .uploaded_content(&target.session_id, &receipts)
+                .await
+                .map_err(session_error)?
+                .into_iter();
             let mut canonical = Vec::with_capacity(content.len());
             for block in content {
                 match block {
                     UserInputBlock::Text(text) => {
                         canonical.push(crate::message::types::UserContentBlock::Text(text));
                     }
-                    UserInputBlock::Upload(receipt) => canonical.extend(
-                        sessions
-                            .uploaded_content(&target.session_id, &[receipt])
-                            .await
-                            .map_err(session_error)?,
-                    ),
+                    UserInputBlock::Upload(_) => {
+                        canonical.push(uploads.next().expect("validated receipt collection"));
+                    }
                 }
             }
             native_result(authority.submit_session_inbound(canonical))

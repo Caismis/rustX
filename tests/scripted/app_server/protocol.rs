@@ -5106,3 +5106,270 @@ async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_prepared_upload_is_revoked_when_drain_wins_admission() {
+    bounded(async {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let MethodResult::UploadPrepared { transfer } = call(
+            &connection,
+            9900,
+            Method::SessionUploadPrepare {
+                target: target.clone(),
+                operation_id: "a".repeat(32),
+                files: vec![crate::local_runtime::session::uploads::UploadMetadata {
+                    name: "revoked.md".into(),
+                    size: 1,
+                }],
+            },
+        )
+        .await
+        else {
+            panic!("prepared")
+        };
+        connection.close();
+        f.host.begin_drain();
+        assert!(
+            f.host.uploads().is_empty(),
+            "drain revokes unused capacity synchronously"
+        );
+        let mut request = format!(
+            "ws://127.0.0.1:{}{}",
+            transfer.loopback_port.unwrap(),
+            transfer.path
+        )
+        .into_client_request()
+        .unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            "rustx.session-upload.v1".parse().unwrap(),
+        );
+        assert!(tokio_tungstenite::connect_async(request).await.is_err());
+        assert!(
+            f.manager
+                .session_controller()
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap()
+                .allocations
+                .is_empty()
+        );
+        connection.close();
+        assert!(f.host.drain().await.is_empty());
+        f.host.finish_drain().unwrap();
+        assert!(f.provider.request_bodies().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_active_upload_is_owned_until_native_settlement_during_drain() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let controller = f.manager.session_controller();
+        let gate = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+        let caller = connection.clone();
+        let addressed = target.clone();
+        let waiter = tokio::spawn(async move {
+            binary_upload(&caller, addressed, "accepted.md", b"owned").await
+        });
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        waiter.abort();
+        let _ = waiter.await;
+        connection.close();
+        let draining = f.host.drain();
+        tokio::pin!(draining);
+        assert!(futures_util::poll!(&mut draining).is_pending());
+        assert!(f.host.finish_drain().is_err());
+        assert!(f.host.forced_resources(false).contains("active_uploads=1"));
+        drop(release);
+        assert!(draining.await.is_empty());
+        assert!(f.host.uploads().is_empty());
+        f.host.finish_drain().unwrap();
+        let registry = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&target.session_id)
+            .unwrap();
+        assert_eq!(registry.allocations.len(), 1);
+        assert!(registry.allocations.values().all(|a| a.ready));
+        assert!(f.provider.request_bodies().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority() {
+    bounded(async {
+        use crate::local_runtime::session::uploads::{UPLOAD_POLICY, UploadFile};
+        for byte_boundary in [false, true] {
+            let f = Fixture::new().await;
+            let connection = AppServerConnection::new(f.host.clone());
+            initialize(&connection).await;
+            let target = attach(&connection, &f, 0).await;
+            let controller = f.manager.session_controller();
+            let native = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
+            let mut empty = Vec::new();
+            for _ in 0..=UPLOAD_POLICY.max_uploads_per_user_input {
+                empty.push(
+                    controller
+                        .upload(
+                            &target.session_id,
+                            None,
+                            vec![UploadFile {
+                                name: "empty".into(),
+                                bytes: vec![],
+                            }],
+                        )
+                        .await
+                        .unwrap()[0]
+                        .receipt
+                        .clone(),
+                );
+            }
+            let mut large = Vec::new();
+            for size in [
+                UPLOAD_POLICY.max_file_bytes,
+                UPLOAD_POLICY.max_file_bytes,
+                1,
+            ] {
+                large.push(
+                    controller
+                        .upload(
+                            &target.session_id,
+                            None,
+                            vec![UploadFile {
+                                name: "document".into(),
+                                bytes: vec![b'x'; size],
+                            }],
+                        )
+                        .await
+                        .unwrap()[0]
+                        .receipt
+                        .clone(),
+                );
+            }
+            let mut foreign = empty[0].clone();
+            foreign.session_id = f.sessions[1].id.clone();
+            let mut registry = controller
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap();
+            let mut unready = empty[0].clone();
+            unready.batch_id = registry
+                .claim(
+                    registry
+                        .allocations
+                        .values()
+                        .next()
+                        .unwrap()
+                        .workspace
+                        .clone(),
+                    &[UploadFile {
+                        name: "partial".into(),
+                        bytes: vec![],
+                    }],
+                )
+                .unwrap();
+            unready.token = registry.allocations[&unready.batch_id].files[0]
+                .token
+                .clone();
+            controller
+                .catalog
+                .lock()
+                .await
+                .commit_uploads(&target.session_id, registry.clone())
+                .unwrap();
+            for receipts in [empty.clone(), large.clone(), vec![foreign], vec![unready]] {
+                for steer in [false, true] {
+                    let content = receipts
+                        .iter()
+                        .cloned()
+                        .map(UserInputBlock::Upload)
+                        .collect();
+                    rejected(
+                        &connection,
+                        if steer {
+                            Method::TurnSteer {
+                                target: target.clone(),
+                                content,
+                            }
+                        } else {
+                            Method::TurnStart {
+                                target: target.clone(),
+                                content,
+                            }
+                        },
+                    )
+                    .await;
+                }
+            }
+            assert!(
+                native
+                    .tool_runtime()
+                    .durable_store()
+                    .load_canonical()
+                    .unwrap()
+                    .is_empty()
+            );
+            let MethodResult::Snapshot { snapshot, .. } = call(
+                &connection,
+                9909,
+                Method::SessionSnapshot {
+                    target: target.clone(),
+                    trace_records: vec![],
+                },
+            )
+            .await
+            else {
+                panic!("snapshot")
+            };
+            assert!(snapshot.inbound.pending.is_empty());
+            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(
+                controller
+                    .catalog
+                    .lock()
+                    .await
+                    .upload_registry(&target.session_id)
+                    .unwrap(),
+                registry
+            );
+            let receipts = if byte_boundary {
+                &large[..2]
+            } else {
+                &empty[..UPLOAD_POLICY.max_uploads_per_user_input]
+            };
+            let mut content: Vec<_> = receipts
+                .iter()
+                .cloned()
+                .map(UserInputBlock::Upload)
+                .collect();
+            content.push(UserInputBlock::Text(crate::message::content::TextBlock {
+                text: "request-A".into(),
+            }));
+            call(&connection, 9910, Method::TurnStart { target, content }).await;
+            f.gates[0].wait_entered().await;
+            assert_eq!(f.provider.request_bodies().len(), 1);
+            connection.close();
+            f.close().await;
+        }
+    })
+    .await;
+}

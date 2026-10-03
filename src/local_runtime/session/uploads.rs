@@ -25,15 +25,19 @@ pub struct UploadFile {
 #[serde(deny_unknown_fields)]
 pub struct UploadPolicy {
     pub max_file_bytes: usize,
-    pub max_batch_bytes: usize,
-    pub max_files: usize,
+    pub max_transfer_bytes: usize,
+    pub max_files_per_transfer: usize,
+    pub max_uploads_per_user_input: usize,
+    pub max_upload_bytes_per_user_input: usize,
     pub max_concurrent_transfers: usize,
     pub max_chunk_bytes: usize,
 }
 pub const UPLOAD_POLICY: UploadPolicy = UploadPolicy {
     max_file_bytes: 2 * 1024 * 1024,
-    max_batch_bytes: 4 * 1024 * 1024,
-    max_files: 8,
+    max_transfer_bytes: 4 * 1024 * 1024,
+    max_files_per_transfer: 8,
+    max_uploads_per_user_input: 8,
+    max_upload_bytes_per_user_input: 4 * 1024 * 1024,
     max_concurrent_transfers: 2,
     max_chunk_bytes: 64 * 1024,
 };
@@ -55,7 +59,7 @@ pub enum UploadOutcome {
 /// # Errors
 /// Rejects unsafe names, duplicate basenames and every native policy overflow.
 pub fn validate_metadata(files: &[UploadMetadata]) -> io::Result<()> {
-    if files.is_empty() || files.len() > UPLOAD_POLICY.max_files {
+    if files.is_empty() || files.len() > UPLOAD_POLICY.max_files_per_transfer {
         return Err(invalid("upload file count exceeds native policy"));
     }
     let mut total = 0usize;
@@ -70,7 +74,7 @@ pub fn validate_metadata(files: &[UploadMetadata]) -> io::Result<()> {
         total = total
             .checked_add(file.size)
             .ok_or_else(|| invalid("upload size overflow"))?;
-        if total > UPLOAD_POLICY.max_batch_bytes {
+        if total > UPLOAD_POLICY.max_transfer_bytes {
             return Err(invalid("upload batch size exceeds native policy"));
         }
     }
@@ -131,6 +135,7 @@ pub(crate) struct UploadAllocation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UploadEntry {
+    pub admitted_bytes: usize,
     pub name: String,
     pub token: String,
 }
@@ -321,6 +326,7 @@ impl UploadRegistry {
                 }
                 Ok(UploadEntry {
                     name: file.name.clone(),
+                    admitted_bytes: file.bytes.len(),
                     token: identity()?,
                 })
             })
@@ -447,6 +453,36 @@ impl UploadRegistry {
             batch_id: receipt.batch_id.clone(),
             name: entry.name.clone(),
         })
+    }
+    pub(crate) fn receipt_content(
+        &self,
+        session: &SessionId,
+        receipts: &[UploadReceipt],
+    ) -> io::Result<Vec<crate::message::types::UserContentBlock>> {
+        if receipts.len() > UPLOAD_POLICY.max_uploads_per_user_input {
+            return Err(invalid("user input upload count exceeds native policy"));
+        }
+        let mut total = 0usize;
+        receipts
+            .iter()
+            .map(|receipt| {
+                let reference = self.receipt_ref(session, receipt)?;
+                let entry = self.allocations[&receipt.batch_id]
+                    .files
+                    .iter()
+                    .find(|f| f.token == receipt.token)
+                    .expect("validated receipt");
+                total = total
+                    .checked_add(entry.admitted_bytes)
+                    .ok_or_else(|| invalid("user input upload size overflow"))?;
+                if total > UPLOAD_POLICY.max_upload_bytes_per_user_input {
+                    return Err(invalid("user input upload bytes exceed native policy"));
+                }
+                Ok(crate::message::types::UserContentBlock::UploadedFile(
+                    reference,
+                ))
+            })
+            .collect()
     }
     pub(crate) fn resolve(
         &self,
@@ -661,6 +697,7 @@ impl UploadRegistry {
             if !allocation.files.iter().any(|e| e.name == entry.name) {
                 allocation.files.push(UploadEntry {
                     name: entry.name.clone(),
+                    admitted_bytes: entry.admitted_bytes,
                     token: identity()?,
                 });
             }

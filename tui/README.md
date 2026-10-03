@@ -1108,3 +1108,9 @@ even when connected to a remote App Server. Existing files are not overwritten;
 parent directories must exist. Failed transfers remove the partial output when
 possible and report failure. The server receives only the Session ID.
 See [archive format and transport](../docs/session-archive.md).
+
+Upload policy distinguishes per-file and per-transfer bounds from per-User-input
+receipt count/byte bounds. `/attach` uses one file per transfer; native
+`uploaded_content` finally validates all accumulated receipts at send/steer using
+persisted admitted sizes. Prepared loopback capabilities are revoked on host drain;
+an already admitted carrier remains host-owned until terminal settlement.

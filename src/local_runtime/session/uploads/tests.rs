@@ -1275,6 +1275,14 @@ async fn ready_registry_commit_failure_never_issues_a_receipt() {
         panic!("exactly one durable claim");
     };
     assert!(!allocation.ready);
+    assert!(allocation.failed);
+    assert_eq!(
+        controller
+            .upload_status(&id, allocation.operation_id.as_ref().unwrap())
+            .await
+            .unwrap(),
+        UploadOutcome::Failed
+    );
     assert_eq!(
         std::fs::read(file_path(workspace.path(), &id, batch, "synced.txt")).unwrap(),
         b"complete"
@@ -1343,6 +1351,13 @@ async fn declared_path_substitution_during_materialization_never_commits_ready()
             panic!("{component}: exactly one durable claim");
         };
         assert!(!allocation.ready, "{component}");
+        assert_eq!(
+            controller
+                .upload_status(&id, allocation.operation_id.as_ref().unwrap())
+                .await
+                .unwrap(),
+            UploadOutcome::Failed
+        );
         assert!(registry.receipts(&id, batch).is_err(), "{component}");
         let suffix = match component {
             "workspace" => Path::new(".agents/uploads").join(id.as_str()).join(batch),
@@ -1501,8 +1516,8 @@ fn native_policy_boundaries_are_independent_of_json_and_images() {
     }
     assert!(validate_metadata(&metadata(&[UPLOAD_POLICY.max_file_bytes + 1])).is_err());
     for total in [
-        UPLOAD_POLICY.max_batch_bytes - 1,
-        UPLOAD_POLICY.max_batch_bytes,
+        UPLOAD_POLICY.max_transfer_bytes - 1,
+        UPLOAD_POLICY.max_transfer_bytes,
     ] {
         assert!(
             validate_metadata(&metadata(&[
@@ -1520,10 +1535,13 @@ fn native_policy_boundaries_are_independent_of_json_and_images() {
         ]))
         .is_err()
     );
-    for count in [UPLOAD_POLICY.max_files - 1, UPLOAD_POLICY.max_files] {
+    for count in [
+        UPLOAD_POLICY.max_files_per_transfer - 1,
+        UPLOAD_POLICY.max_files_per_transfer,
+    ] {
         assert!(validate_metadata(&metadata(&vec![0; count])).is_ok());
     }
-    for count in [0, UPLOAD_POLICY.max_files + 1] {
+    for count in [0, UPLOAD_POLICY.max_files_per_transfer + 1] {
         assert!(validate_metadata(&metadata(&vec![0; count])).is_err());
     }
 }
@@ -1615,4 +1633,151 @@ async fn deletion_loses_to_native_upload_exclusion_at_each_materialization_bound
                 .exists()
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_materialization_verification_failure_is_durable_failed_and_retryable() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let id = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session
+        .id;
+    let gate = Arc::new(Gate::default());
+    let release = gate.arm_scoped();
+    *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+    let worker = controller.clone();
+    let addressed = id.clone();
+    let operation = "b".repeat(32);
+    let correlation = operation.clone();
+    let upload = tokio::spawn(async move {
+        worker
+            .upload_correlated(
+                &addressed,
+                None,
+                correlation,
+                vec![file("verified.txt", b"synced")],
+            )
+            .await
+    });
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    let registry = controller
+        .catalog
+        .lock()
+        .await
+        .upload_registry(&id)
+        .unwrap();
+    let batch = registry.allocations.keys().next().unwrap();
+    let path = file_path(workspace.path(), &id, batch, "verified.txt");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    drop(release);
+    assert!(upload.await.unwrap().is_err());
+    *controller.upload_commit_gate.lock().unwrap() = None;
+    assert_eq!(
+        controller.upload_status(&id, &operation).await.unwrap(),
+        UploadOutcome::Failed
+    );
+    let registry = controller
+        .catalog
+        .lock()
+        .await
+        .upload_registry(&id)
+        .unwrap();
+    assert!(registry.receipts(&id, batch).is_err());
+    assert!(registry.allocations[batch].failed);
+    controller
+        .upload_correlated(
+            &id,
+            None,
+            "c".repeat(32),
+            vec![file("retry.txt", b"explicit retry")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&id)
+            .unwrap()
+            .allocations
+            .len(),
+        2
+    );
+    drop(controller);
+    let reopened = SessionController::open(root.path()).unwrap();
+    assert_eq!(
+        reopened.upload_status(&id, &operation).await.unwrap(),
+        UploadOutcome::Failed
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_publication_durability_uncertainty_is_never_reclassified_failed() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let id = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session
+        .id;
+    let gate = Arc::new(Gate::default());
+    let release = gate.arm_scoped();
+    *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+    let worker = controller.clone();
+    let addressed = id.clone();
+    let upload = tokio::spawn(async move {
+        worker
+            .upload_correlated(
+                &addressed,
+                None,
+                "d".repeat(32),
+                vec![file("ready.txt", b"synced")],
+            )
+            .await
+    });
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    controller
+        .catalog
+        .lock()
+        .await
+        .arm_write_fault_after_rename();
+    drop(release);
+    assert!(
+        matches!(
+            upload.await.unwrap(),
+            Err(SessionError::CatalogCommit {
+                error: super::super::CatalogCommitError::CommittedButDurabilityUncertain { .. }
+            })
+        ),
+        "fault consumed at ready publication"
+    );
+    let registry = controller
+        .catalog
+        .lock()
+        .await
+        .upload_registry(&id)
+        .unwrap();
+    let (batch, allocation) = registry.allocations.iter().next().unwrap();
+    assert!(allocation.ready && !allocation.failed);
+    assert_eq!(
+        controller
+            .upload_status(&id, &"d".repeat(32))
+            .await
+            .unwrap(),
+        UploadOutcome::Ready {
+            files: registry.receipts(&id, batch).unwrap()
+        }
+    );
 }

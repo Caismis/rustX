@@ -252,19 +252,8 @@ impl SessionController {
                 }
             })
             .await
-            .map_err(|e| SessionError::Catalog {
-                detail: e.to_string(),
-            })?
+            .unwrap_or_else(|error| Err(std::io::Error::other(error)))
         };
-        if let Err(error) = materialization {
-            registry
-                .allocations
-                .get_mut(&batch)
-                .expect("claimed batch")
-                .failed = true;
-            self.catalog.lock().await.commit_uploads(id, registry)?;
-            return Err(fail(error));
-        }
         #[cfg(test)]
         {
             let gate = self.upload_commit_gate.lock().unwrap().clone();
@@ -274,40 +263,57 @@ impl SessionController {
                     .unwrap();
             }
         }
-        registry.verify_materialized(id, &batch).map_err(fail)?;
+        if let Err(error) = materialization.and_then(|()| registry.verify_materialized(id, &batch))
+        {
+            self.settle_upload_failed(id, registry, &batch).await?;
+            return Err(fail(error));
+        }
+
         registry
             .allocations
             .get_mut(&batch)
             .expect("claimed batch")
             .ready = true;
         // Semantic commit point: synced complete files plus durable ready registry.
-        self.catalog
+        let ready_commit = self
+            .catalog
             .lock()
             .await
-            .commit_uploads(id, registry.clone())?;
+            .commit_uploads(id, registry.clone());
+        if let Err(error) = ready_commit {
+            if !error.committed() {
+                self.settle_upload_failed(id, registry, &batch).await?;
+            }
+            return Err(error);
+        }
         registry.receipts(id, &batch).map_err(fail)
+    }
+    async fn settle_upload_failed(
+        &self,
+        id: &SessionId,
+        mut registry: super::session::uploads::UploadRegistry,
+        batch: &str,
+    ) -> Result<(), SessionError> {
+        let allocation = registry.allocations.get_mut(batch).expect("claimed batch");
+        allocation.ready = false;
+        allocation.failed = true;
+        self.catalog.lock().await.commit_uploads(id, registry)
     }
 
     /// Validate server receipts and author typed canonical content.
     /// # Errors
-    /// Unknown, incomplete and cross-Session receipts are rejected.
+    /// Unknown, incomplete, cross-Session and over-budget receipt collections are rejected.
     pub async fn uploaded_content(
         &self,
         id: &SessionId,
         receipts: &[super::session::uploads::UploadReceipt],
     ) -> Result<Vec<crate::message::types::UserContentBlock>, SessionError> {
         let registry = self.catalog.lock().await.upload_registry(id)?;
-        receipts
-            .iter()
-            .map(|receipt| {
-                registry
-                    .receipt_ref(id, receipt)
-                    .map(crate::message::types::UserContentBlock::UploadedFile)
-                    .map_err(|e| SessionError::Catalog {
-                        detail: e.to_string(),
-                    })
+        registry
+            .receipt_content(id, receipts)
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
             })
-            .collect()
     }
 
     /// Open one root without selecting, resolving, or composing a Session.
