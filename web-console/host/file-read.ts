@@ -1,6 +1,6 @@
 /** Node-only native seam. Never imported by browser code or its protocol log. */
 import type { DeliveryBytes, DeliveryRead } from '../src/workspaces/host.ts';
-import type { RpcError } from '../../protocol/app-server/v33.ts';
+import type { RpcError } from '../../protocol/app-server/v34.ts';
 
 export class NativeFileReadError extends Error {
   readonly error: RpcError;

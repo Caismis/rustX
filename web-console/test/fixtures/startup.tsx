@@ -3,7 +3,7 @@ import { App } from '../../src/app/App';
 import { Server, snapshot } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request, UploadReceipt } from '../../../protocol/app-server/v33';
+import type { Request } from '../../../protocol/app-server/v34';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -25,11 +25,6 @@ server.handlers.set('session/create', request => {
   server.snapshots.set('created', { ...snapshot('created'), model: { ...cfg3Effective().effective_model!, configured: model, effective: { ...cfg3Effective().effective_model!.effective, model: model.model } } as NonNullable<ReturnType<typeof snapshot>['model']> });
   server.invalidateSummary('created', server.socket, true);
   return { type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
-});
-let sequence = 0;
-server.handlers.set('session/upload', request => {
-  if (request.method !== 'session/upload') throw Error('Wrong method');
-  return { type: 'session_uploaded', files: request.params.files.map(file => ({ file: { name: file.name, batch_id: `batch-${sequence + 1}` }, path: `/workspace/A/${file.name}`, receipt: { session_id: 'created', batch_id: `batch-${++sequence}`, token: `token-${sequence}` } as UploadReceipt })) };
 });
 await server.connect();
 for (const method of ['session/create', 'session/attach', 'session/list', 'session/summary', 'turn/start'] as const) server.held.add(method);

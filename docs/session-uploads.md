@@ -7,7 +7,9 @@ managed artifacts, text spill and background output retain their separate owners
 ## Allocation and commit
 
 The native `SessionController::upload` accepts an addressed Session/node and an
-ordered vector of safe basenames plus decoded bytes. App Server routing proves
+ordered vector of safe basenames plus raw bytes. `upload_correlated` also takes
+the required operation identity; native callers of `upload` receive one before
+allocation. App Server routing proves
 which admitted Session is addressed; attachment and runtime lifetimes do not own
 files. Web, TUI and headless clients can all use the same Session API. A remote
 client must transfer bytes, never assume its local path exists on the server.
@@ -125,16 +127,70 @@ another Session's root.
 
 ## Protocol and schema boundaries
 
-App Server v33 is the one mandatory vocabulary; its WebSocket subprotocol is
-`rustx.app-server.v33`. `session/upload` replaces the old user carrier. `artifact/read`
-remains for Tool-managed artifact presentation only. Session catalog schema 13,
-SQLite schema 49 and native Runtime Client version 56 reject older development
-contracts without migrations or compatibility modes.
+App Server v34 is mandatory (`rustx.app-server.v34`). Session catalog schema 14
+records native operation correlation and known pre-ready failure alongside each
+allocation. SQLite schema 49 and Runtime Client v57 are unchanged.
 
-JSON/base64 is a bounded current carrier: 1–8 files, at most 256 KiB each and
-512 KiB per batch, additionally subject to the 1 MiB JSON frame limit. Core
-Session methods receive decoded bytes, leaving a direct seam for a future binary
-carrier without adding a storage abstraction.
+### Control and data contract
+
+`session/uploadPrepare { target, operation_id, files: [{ name, size }] }` validates
+the exact writable attachment, safe metadata, native policy and transfer capacity
+before receiving payload. `operation_id` is 32 lowercase hexadecimal characters,
+created and retained by the client before dispatch. A random 256-bit capability
+returns as a relative `/session-upload/<capability>` path, valid for 60 seconds and
+single use. Transport API keys are never in this path. Remote clients resolve only
+against their selected native WebSocket origin; an owned stdio child supplies an
+explicit loopback port bound to that exact capability path. Neither Product Host paths nor Workspace association
+confer upload authority.
+
+The separate socket negotiates `rustx.session-upload.v1`. For each declared file,
+the server sends `next` and accepts one nonempty binary message of at most 64 KiB,
+never exceeding the remaining declared length. Files follow metadata order; empty
+files consume no binary message. After the exact declared bytes, the server sends
+`finish` and requires the client's `finish` terminal marker. Early termination,
+extra bytes in place of that marker, oversized messages and nonbinary data chunks
+fail before native allocation. The whole receive phase has a 60-second deadline.
+No HTTP request body or Content-Length parser is involved. The ordinary JSON
+WebSocket still rejects binary messages and retains its 1 MiB bound.
+
+The carrier hands bounded byte vectors to `SessionController`, which alone claims,
+materializes, synchronizes, verifies and commits ready. The carrier's `settled` or
+`check` message carries no receipt: clients read `session/uploadStatus` for the exact
+operation. A prepared/active carrier is unresolved even before native allocation.
+Native states distinguish absent, unresolved, known pre-ready failure and ready.
+Ready returns the original receipt identities, including after response loss or
+restart. A failed materialization retains native-owned cleanup residue. An
+unresolved durable claim never authorizes Retry. A new explicit retry after absent
+or failed evidence uses a new operation identity; old allocations are never reused.
+
+### Finite budgets
+
+The typed initialization capability `upload_policy` is the only policy source:
+2,097,152 bytes/file, 4,194,304 bytes/batch, eight files and two prepared-or-active
+transfers, each with 65,536-byte messages. There is no pending transfer admission
+queue. Prepared descriptors retain permits; expiry releases unused preparations.
+Consumption retains the permit through native settlement even if its reply is lost.
+
+Native payload buffers total at most 8 MiB across both transfers. Reserve a further
+512 KiB for bounded socket/frame working buffers (8.5 MiB aggregate, excluding
+metadata and OS TCP buffers). Maximum admitted concurrent file materialization is
+8 MiB. Committed Session storage and native partial residue are retained until native
+cleanup; this is an in-flight budget, not a total Session disk quota. Browser sending
+has at most one 64 KiB slice in flight per transfer. TUI local-file reading is bounded
+by the advertised file limit; its byte vector and Blob copies are separate client
+memory, not native storage (at most three 2 MiB backing allocations plus a
+64 KiB slice and the one-byte oversize sentinel). Full bounded buffering avoids a second staging owner
+or a speculative streaming storage strategy. Filesystem work runs on the blocking
+pool, leaving cancellation, detach and status available on the control socket.
+
+General multipart/resumable protocols and a new HTTP request-body parser were not
+introduced. Explicit binary message framing reuses existing supported browser,
+Node and tungstenite stacks. Archive-style native capability admission remains the
+architectural pattern. See [the reference audit and decision](issue-434-decision.md).
+
+Image decoding, `read_image`, provider image counts/token budgets, managed Artifact
+reads and Session-file previews keep their independent policies. Uploading an image
+does not invoke image processing or create a provider-native image block.
 
 ## Artifact audit
 

@@ -66,11 +66,13 @@ test("actual app command overlay uploads selected bytes without losing text orde
   const h = await appHarness(t);
   h.editor.setText("before\n"); h.input("\x10"); // Ctrl+P command, normal draft stays intact
   h.input(`attach ${path}`); h.input("\r");
-  const upload = await nextRequest(h, "session/upload", 0);
-  assert.deepEqual(upload.params, { target: h.target, files: [{ name: "selected.txt", data: Buffer.from("selected bytes").toString("base64") }] });
+  const upload = await nextRequest(h, "session/uploadPrepare", 0);
+  assert.deepEqual((upload.params as { files: unknown }).files, [{ name: "selected.txt", size: 14 }]);
   h.editor.setText("after"); // typing after the upload action is a separate ordered region
   const receipt = { session_id: h.session.sessionId, batch_id: "batch", token: "receipt" };
-  h.transport.respond(upload.id, { type: "session_uploaded", files: [{ receipt, file: { batch_id: "batch", name: "selected.txt" }, path: "/server/native/path" }] });
+  h.transport.respond(upload.id, { type: "upload_prepared", transfer: { path: "/session-upload/" + "a".repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+  const status = await nextRequest(h, "session/uploadStatus", h.transport.transportCount("session/uploadStatus"));
+  h.transport.respond(status.id, { type: "upload_status", outcome: { state: "ready", files: [{ receipt, file: { batch_id: "batch", name: "selected.txt" }, path: "/server/native/path" }] } });
   await continuation(); assert.equal(h.editor.getExpandedText(), "after");
   // Native projection replacement must leave the editor and receipt untouched.
   const repair = h.session.resync();
@@ -142,7 +144,7 @@ test("pasted leading command tokens dispatch as Agent input, including typed suf
     h.transport.respond(request.id, { type: "inbound_accepted", message_id: `m-${count}`, inbound_sequence: String(count + 1) });
     await continuation();
   }
-  assert.equal(h.transport.transportCount("session/upload"), 0);
+  assert.equal(h.transport.transportCount("session/uploadPrepare"), 0);
   assert.equal(h.transport.transportCount("configuration/sourcesRead"), 0);
 });
 
@@ -153,11 +155,13 @@ test("typed attach token with pasted path arguments executes upload, including s
     const path = temp.path(name); writeFileSync(path, name);
     h.input("/attach ");
     h.input("\x1b[200~"); h.input(path); h.input("\x1b[201~");
-    const count = h.transport.transportCount("session/upload");
+    const count = h.transport.transportCount("session/uploadPrepare");
     h.input("\r");
-    const upload = await nextRequest(h, "session/upload", count);
-    assert.deepEqual(upload.params, { target: h.target, files: [{ name, data: Buffer.from(name).toString("base64") }] });
-    h.transport.respond(upload.id, { type: "session_uploaded", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name }, path: "/server/native/path" }] });
+    const upload = await nextRequest(h, "session/uploadPrepare", count);
+    assert.deepEqual((upload.params as { files: unknown }).files, [{ name, size: Buffer.byteLength(name) }]);
+    h.transport.respond(upload.id, { type: "upload_prepared", transfer: { path: "/session-upload/" + "a".repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+  const status = await nextRequest(h, "session/uploadStatus", h.transport.transportCount("session/uploadStatus"));
+  h.transport.respond(status.id, { type: "upload_status", outcome: { state: "ready", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name }, path: "/server/native/path" }] } });
     await continuation();
   }
   assert.equal(h.transport.transportCount("turn/start"), 0);
@@ -186,10 +190,12 @@ test("typed attach token accepts a pasted separator and path across whole and fr
   const path = temp.path("my file.txt"); writeFileSync(path, "selected bytes");
   for (const [typed, fragments] of [["/attach", [`\x1b[200~ ${path}\x1b[201~`]], ["  /attach", ["\x1b[200~", " ", path, "\x1b[20", "1~"]]] as const) {
     h.input(typed); for (const fragment of fragments) h.input(fragment);
-    const count = h.transport.transportCount("session/upload"); h.input("\r");
-    const upload = await nextRequest(h, "session/upload", count);
-    assert.deepEqual(upload.params, { target: h.target, files: [{ name: "my file.txt", data: Buffer.from("selected bytes").toString("base64") }] });
-    h.transport.respond(upload.id, { type: "session_uploaded", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name: "my file.txt" }, path: "/server/native/path" }] });
+    const count = h.transport.transportCount("session/uploadPrepare"); h.input("\r");
+    const upload = await nextRequest(h, "session/uploadPrepare", count);
+    assert.deepEqual((upload.params as { files: unknown }).files, [{ name: "my file.txt", size: 14 }]);
+    h.transport.respond(upload.id, { type: "upload_prepared", transfer: { path: "/session-upload/" + "a".repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+  const status = await nextRequest(h, "session/uploadStatus", h.transport.transportCount("session/uploadStatus"));
+  h.transport.respond(status.id, { type: "upload_status", outcome: { state: "ready", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name: "my file.txt" }, path: "/server/native/path" }] } });
     await continuation();
   }
   assert.equal(h.transport.transportCount("turn/start"), 0);
@@ -207,7 +213,7 @@ test("pasted token extensions and a pasted leading slash remain literal Agent in
     h.transport.respond(request.id, { type: "inbound_accepted", message_id: `m-${count}`, inbound_sequence: String(count + 1) });
     await continuation();
   }
-  assert.equal(h.transport.transportCount("session/upload"), 0);
+  assert.equal(h.transport.transportCount("session/uploadPrepare"), 0);
 });
 
 

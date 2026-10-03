@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v33';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v34';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -70,14 +70,7 @@ createRoot(document.getElementById('root')!).render(mode === 'restored' ? <Resto
 // Browser-only controls for deterministic composer projection/transport tests.
 // No fixture code enters the production bundle.
 if (mode === 'composer') {
-  server.handlers.set('session/upload', request => {
-    if (request.method !== 'session/upload') throw new Error('Wrong method');
-    return { type: 'session_uploaded', files: request.params.files.map((file, index) => ({
-      receipt: { session_id: 'A', batch_id: 'batch', token: `file-${index}` },
-      file: { batch_id: 'batch', name: file.name }, path: `/workspace/A/.agents/uploads/A/batch/${file.name}`,
-    })) };
-  });
-  window.composerFixture = {
+    window.composerFixture = {
     running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null; await server.update('A', next); },
     docks: async value => {
       const next = structuredClone(server.snapshots.get('A')!);
@@ -100,7 +93,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; cancellations(): import('../../../protocol/app-server/v33').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; cancellations(): import('../../../protocol/app-server/v34').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

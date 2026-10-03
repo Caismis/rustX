@@ -255,7 +255,7 @@ pub(crate) mod create_profile {
 /// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 13;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 14;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;

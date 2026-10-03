@@ -1,4 +1,4 @@
-import type { ConversationWindow, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v33';
+import type { ConversationWindow, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v34';
 
 export const HISTORY_LIMIT = 512;
 export const HISTORY_MAX_BYTES = 8 * 1024 * 1024;

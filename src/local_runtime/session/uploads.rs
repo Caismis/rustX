@@ -20,6 +20,75 @@ pub struct UploadFile {
     pub name: String,
     pub bytes: Vec<u8>,
 }
+/// Finite native storage admission, independent of image and control-frame limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UploadPolicy {
+    pub max_file_bytes: usize,
+    pub max_batch_bytes: usize,
+    pub max_files: usize,
+    pub max_concurrent_transfers: usize,
+    pub max_chunk_bytes: usize,
+}
+pub const UPLOAD_POLICY: UploadPolicy = UploadPolicy {
+    max_file_bytes: 2 * 1024 * 1024,
+    max_batch_bytes: 4 * 1024 * 1024,
+    max_files: 8,
+    max_concurrent_transfers: 2,
+    max_chunk_bytes: 64 * 1024,
+};
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UploadMetadata {
+    pub name: String,
+    pub size: usize,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UploadOutcome {
+    Absent,
+    Unresolved,
+    Failed,
+    Ready { files: Vec<UploadedFile> },
+}
+/// Validate before allocating any transport payload buffer.
+/// # Errors
+/// Rejects unsafe names, duplicate basenames and every native policy overflow.
+pub fn validate_metadata(files: &[UploadMetadata]) -> io::Result<()> {
+    if files.is_empty() || files.len() > UPLOAD_POLICY.max_files {
+        return Err(invalid("upload file count exceeds native policy"));
+    }
+    let mut total = 0usize;
+    let mut names = BTreeSet::new();
+    for file in files {
+        validate_name(&file.name)?;
+        if !names.insert(&file.name) || file.size > UPLOAD_POLICY.max_file_bytes {
+            return Err(invalid(
+                "duplicate name or upload file size exceeds native policy",
+            ));
+        }
+        total = total
+            .checked_add(file.size)
+            .ok_or_else(|| invalid("upload size overflow"))?;
+        if total > UPLOAD_POLICY.max_batch_bytes {
+            return Err(invalid("upload batch size exceeds native policy"));
+        }
+    }
+    Ok(())
+}
+/// Opaque client correlation, never a filesystem path or receipt.
+/// # Errors
+/// Requires a fixed lowercase hexadecimal identity.
+pub fn validate_operation(operation: &str) -> io::Result<()> {
+    if operation.len() != 32
+        || !operation
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return Err(invalid("invalid upload operation identity"));
+    }
+    Ok(())
+}
 /// A server-issued capability, scoped to exactly one Session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +122,8 @@ pub(crate) struct UploadRegistry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UploadAllocation {
+    pub operation_id: Option<String>,
+    pub failed: bool,
     pub workspace: PathBuf,
     pub files: Vec<UploadEntry>,
     pub ready: bool,
@@ -181,8 +252,38 @@ fn file_path(workspace: &Path, session: &SessionId, batch: &str, name: &str) -> 
         .join(name)
 }
 impl UploadRegistry {
+    pub(crate) fn outcome(
+        &self,
+        session: &SessionId,
+        operation: &str,
+    ) -> io::Result<UploadOutcome> {
+        validate_operation(operation)?;
+        let Some((batch, allocation)) = self
+            .allocations
+            .iter()
+            .find(|(_, a)| a.operation_id.as_deref() == Some(operation))
+        else {
+            return Ok(UploadOutcome::Absent);
+        };
+        if allocation.ready {
+            Ok(UploadOutcome::Ready {
+                files: self.receipts(session, batch)?,
+            })
+        } else if allocation.failed {
+            Ok(UploadOutcome::Failed)
+        } else {
+            Ok(UploadOutcome::Unresolved)
+        }
+    }
     pub(crate) fn validate(&self) -> io::Result<()> {
+        let mut operations = BTreeSet::new();
         for (batch, allocation) in &self.allocations {
+            if let Some(operation) = &allocation.operation_id {
+                validate_operation(operation)?;
+                if !operations.insert(operation) || allocation.ready && allocation.failed {
+                    return Err(invalid("invalid upload operation state"));
+                }
+            }
             validate_workspace(&allocation.workspace)?;
             if !valid_identity(batch) || allocation.files.is_empty() {
                 return Err(invalid("invalid owned upload allocation"));
@@ -231,6 +332,8 @@ impl UploadRegistry {
         self.allocations.insert(
             batch.clone(),
             UploadAllocation {
+                operation_id: None,
+                failed: false,
                 workspace,
                 files: entries,
                 ready: false,
@@ -251,10 +354,14 @@ impl UploadRegistry {
         if allocation.files.len() != files.len() {
             return Err(invalid("upload batch length mismatch"));
         }
+        #[cfg(test)]
+        tests::materialize_checkpoint("allocation claim")?;
         let root = session_directory(&allocation.workspace, session, true)?;
         // Exclusive batch creation: never adopt or overwrite existing residue.
         mkdirat(&root, batch, Mode::from_bits_truncate(0o700))?;
         root.sync_all()?;
+        #[cfg(test)]
+        tests::materialize_checkpoint("batch directory")?;
         let directory = directory_at(&root, OsStr::new(batch))?;
         for (entry, input) in allocation.files.iter().zip(files) {
             if entry.name != input.name {
@@ -270,6 +377,8 @@ impl UploadRegistry {
                     | OFlag::O_CLOEXEC,
                 Mode::from_bits_truncate(0o600),
             )?);
+            #[cfg(test)]
+            tests::materialize_checkpoint("file write")?;
             output.write_all(&input.bytes)?;
             #[cfg(test)]
             tests::materialize_checkpoint("file sync")?;
@@ -543,6 +652,8 @@ impl UploadRegistry {
                 .allocations
                 .entry(reference.batch_id.clone())
                 .or_insert_with(|| UploadAllocation {
+                    operation_id: None,
+                    failed: false,
                     workspace: workspace.to_path_buf(),
                     files: Vec::new(),
                     ready: false,
@@ -757,7 +868,7 @@ impl SessionCatalog {
     }
 }
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 impl SessionCatalog {
     pub(crate) fn claim_upload_preparation(

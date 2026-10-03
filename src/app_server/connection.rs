@@ -350,6 +350,7 @@ impl AppServerConnection {
             let changed = self.changed.clone();
             let sessions = self.sessions.clone();
             let manager = self.host.manager().clone();
+            let upload_host = self.host.clone();
             let receiver = {
                 let routes = self.routes.lock().expect("routes mutex");
                 if routes.closed
@@ -377,6 +378,7 @@ impl AppServerConnection {
                                     changed,
                                     sessions,
                                     manager,
+                                    upload_host,
                                 )
                                 .await
                             }
@@ -904,7 +906,8 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::ModelSet { target, .. }
         | Method::Capability { target, .. }
         | Method::ArtifactRead { target, .. }
-        | Method::SessionUpload { target, .. }
+        | Method::SessionUploadPrepare { target, .. }
+        | Method::SessionUploadStatus { target, .. }
         | Method::Trace { target, .. }
         | Method::TraceDetail { target, .. }
         | Method::Transcript { target, .. }
@@ -944,6 +947,7 @@ async fn dispatch_runtime(
     changed: Arc<tokio::sync::Notify>,
     sessions: SessionController,
     manager: crate::local_runtime::session_runtime_manager::SessionRuntimeManager,
+    upload_host: AppServerHost,
 ) -> Result<MethodResult, RpcError> {
     match method {
         Method::ConfigurationGet { target } => {
@@ -962,47 +966,26 @@ async fn dispatch_runtime(
                 .artifact_read(&artifact_id)
                 .map_err(client_error)?,
         }),
-        Method::SessionUpload { target, files } => {
-            use base64::Engine;
-            // 512 KiB decoded per batch -> <=699,072 base64 bytes for eight
-            // files, leaving >300 KiB of the 1 MiB frame for JSON/routing.
-            const FILE_MAX: usize = 256 * 1024;
-            const BATCH_MAX: usize = 512 * 1024;
-            if files.is_empty() || files.len() > 8 {
-                return Err(domain(ErrorData::InvalidParams));
-            }
-            let mut total = 0usize;
-            let files = files
-                .into_iter()
-                .map(|file| {
-                    if file.name.len() > 255 || file.data.len() > FILE_MAX.div_ceil(3) * 4 {
-                        return Err(domain(ErrorData::InvalidParams));
-                    }
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(file.data)
-                        .map_err(|_| domain(ErrorData::InvalidParams))?;
-                    total += bytes.len();
-                    if bytes.len() > FILE_MAX || total > BATCH_MAX {
-                        return Err(domain(ErrorData::InvalidParams));
-                    }
-                    Ok(crate::local_runtime::session::uploads::UploadFile {
-                        name: file.name,
-                        bytes,
-                    })
-                })
-                .collect::<Result<Vec<_>, RpcError>>()?;
-            let node = sessions
-                .catalog
-                .lock()
-                .await
-                .conversation_lineage(&target.session_id, &target.conversation_id)
-                .map_err(session_error)?
-                .0;
-            let files = sessions
-                .upload(&target.session_id, Some(&node.id), files)
-                .await
-                .map_err(session_error)?;
-            Ok(MethodResult::SessionUploaded { files })
+        Method::SessionUploadPrepare {
+            target: _,
+            operation_id,
+            files,
+        } => {
+            let transfer =
+                super::upload_transfer::prepare(&upload_host, route, operation_id, files)
+                    .await
+                    .map_err(|_| domain(ErrorData::InvalidParams))?;
+            Ok(MethodResult::UploadPrepared { transfer })
+        }
+        Method::SessionUploadStatus {
+            target,
+            operation_id,
+        } => {
+            let outcome =
+                super::upload_transfer::status(&upload_host, &target.session_id, &operation_id)
+                    .await
+                    .map_err(|_| domain(ErrorData::InvalidParams))?;
+            Ok(MethodResult::UploadStatus { outcome })
         }
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),

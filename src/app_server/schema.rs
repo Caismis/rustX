@@ -263,11 +263,16 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             target: target.clone(),
             artifact_id: crate::runtime::identity::ArtifactId::new("artifact_1"),
         },
-        Method::SessionUpload {
+        Method::SessionUploadStatus {
             target: target.clone(),
-            files: vec![super::protocol::UploadBytes {
+            operation_id: "0".repeat(32),
+        },
+        Method::SessionUploadPrepare {
+            operation_id: "0".repeat(32),
+            target: target.clone(),
+            files: vec![crate::local_runtime::session::uploads::UploadMetadata {
                 name: "hello.txt".into(),
-                data: "aGk=".into(),
+                size: 2,
             }],
         },
         Method::SessionSubscribe {
@@ -354,6 +359,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })));
     }
     for result in [
+        MethodResult::UploadPrepared { transfer: super::upload_transfer::UploadDescriptor { path: format!("/session-upload/{}", "a".repeat(43)), loopback_port: None, expires_in_seconds: 60 } },
+        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Absent },
+        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Unresolved },
+        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Failed },
+        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Ready { files: Vec::new() } },
         MethodResult::SessionFileBytes {
             file: crate::tools::session_files::SessionFileReference {
                 scope: crate::tools::session_files::SessionFileScope { conversation_id: target.conversation_id.clone(), device: "1".into(), inode: "2".into() },
@@ -737,9 +747,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v33.schema.json", "v33.ts"]);
+        assert_eq!(generations, ["v34.schema.json", "v34.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v33.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v34.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v33. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v34. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -160,7 +160,7 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v33)
+  -> initialize (App Server protocol v34)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -421,7 +421,7 @@ input is interpreted.
 
 There is deliberately **no** `!bash`, no `@file` source-code feature, and no
 client-side Skill execution. `/attach` intentionally reads only the selected
-local file and transfers its bytes to native `session/upload`. Agent file and
+local file and transfers its bytes to native metadata preparation and the binary upload carrier. Agent file and
 Skill operations still travel through the native Tool/capability path. The
 subagent detail view reads the addressed server projection; it grants no
 filesystem or capability authority.
@@ -471,7 +471,10 @@ remain independent of these source-authoring commands.
 To add a file while preserving prompt text, press Ctrl+P and enter
 `/attach <local-path>`. The direct slash command also works on an empty Composer.
 Paths are literal (no shell expansion or quoting). The client reads one regular
-file of at most 256 KiB and uploads a safe basename plus base64 bytes. Subsequent
+file within the server-advertised ordinary upload policy (currently 2 MiB/file).
+It prepares safe metadata with a retained operation ID, transfers bounded binary
+chunks to the native capability endpoint, and reads that exact operation for its
+original receipts. No JSON byte payload or base64 fallback exists. Subsequent
 input uses only Session-owned receipts, never the local path or a server path.
 Text before the action is retained before the upload; text typed afterward stays
 after it. The compact attachment row summarizes the preceding region. Native

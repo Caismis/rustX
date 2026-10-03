@@ -1,6 +1,6 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from StatsPills and ContextMeter; see PROVENANCE.md. */
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v33';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v34';
 import { useState } from 'react';
 import { Modal } from '../../presentation/primitives/Modal';
 import { Usage } from './TurnTail';

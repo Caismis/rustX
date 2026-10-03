@@ -65,7 +65,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "session/upload"
+              "const": "session/uploadPrepare"
             },
             "params": {
               "type": "object",
@@ -73,17 +73,50 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
+                "operation_id": {
+                  "type": "string"
+                },
                 "files": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/$defs/UploadBytes"
+                    "$ref": "#/$defs/UploadMetadata"
                   }
                 }
               },
               "additionalProperties": false,
               "required": [
                 "target",
+                "operation_id",
                 "files"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/uploadStatus"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "operation_id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "operation_id"
               ]
             }
           },
@@ -1851,21 +1884,23 @@
       "description": "Identifies a durable artifact produced or referenced by the runtime.\n\nAn artifact is identified by an opaque runtime-owned id, never by a\nlocal filesystem path: paths are executor concerns and are not a\nuniversal durable artifact identity.",
       "type": "string"
     },
-    "UploadBytes": {
-      "description": "Bounded JSON carrier. The Session domain accepts decoded bytes.",
+    "UploadMetadata": {
       "type": "object",
       "properties": {
         "name": {
           "type": "string"
         },
-        "data": {
-          "type": "string"
+        "size": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
       "required": [
         "name",
-        "data"
+        "size"
       ]
     },
     "SessionNodeId": {
@@ -5325,21 +5360,35 @@
         {
           "type": "object",
           "properties": {
-            "files": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/UploadedFile"
-              }
+            "transfer": {
+              "$ref": "#/$defs/UploadDescriptor"
             },
             "type": {
               "type": "string",
-              "const": "session_uploaded"
+              "const": "upload_prepared"
             }
           },
           "additionalProperties": false,
           "required": [
             "type",
-            "files"
+            "transfer"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/UploadOutcome"
+            },
+            "type": {
+              "type": "string",
+              "const": "upload_status"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "outcome"
           ]
         },
         {
@@ -6377,6 +6426,97 @@
             "status"
           ],
           "additionalProperties": false
+        }
+      ]
+    },
+    "UploadDescriptor": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "loopback_port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "expires_in_seconds": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "expires_in_seconds"
+      ]
+    },
+    "UploadOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "absent"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "unresolved"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UploadedFile"
+              }
+            },
+            "state": {
+              "type": "string",
+              "const": "ready"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "files"
+          ]
         }
       ]
     },
@@ -13891,6 +14031,9 @@
     "ServerCapabilities": {
       "type": "object",
       "properties": {
+        "upload_policy": {
+          "$ref": "#/$defs/UploadPolicy"
+        },
         "multi_session": {
           "type": "boolean"
         },
@@ -13909,10 +14052,55 @@
       },
       "additionalProperties": false,
       "required": [
+        "upload_policy",
         "multi_session",
         "single_writable_controller",
         "headless_interactions",
         "experimental_methods"
+      ]
+    },
+    "UploadPolicy": {
+      "description": "Finite native storage admission, independent of image and control-frame limits.",
+      "type": "object",
+      "properties": {
+        "max_file_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_batch_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_files": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_concurrent_transfers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_chunk_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_file_bytes",
+        "max_batch_bytes",
+        "max_files",
+        "max_concurrent_transfers",
+        "max_chunk_bytes"
       ]
     },
     "SessionSnapshot": {

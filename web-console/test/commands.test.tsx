@@ -14,7 +14,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v33';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v34';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -480,7 +480,7 @@ describe('typed native operations and continuation fencing', () => {
     server.reply(request); const result = await work;
     expect(result?.session.id).toBe('child');
     expect(result?.content[1]).toMatchObject({ type: 'upload', session_id: 'child', token: 'native-destination-receipt' });
-    expect(fixture.original).toEqual(fixture.originals); expect(methods()).not.toContain('session/upload');
+    expect(fixture.original).toEqual(fixture.originals); expect(methods()).not.toContain('session/uploadPrepare');
     expect(methods()).not.toContain('turn/start');
   });
   it.each(['branch', 'retry'] as const)('%s creates a native node, unloads then attaches exactly; only retry executes returned input once', async action => {
@@ -504,7 +504,7 @@ describe('typed native operations and continuation fencing', () => {
       expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
       expect(result?.content).toEqual([]);
     } else { expect(methods()).not.toContain('turn/start'); expect(result?.content).toEqual(fixture.content); }
-    expect(methods()).not.toContain('session/upload');
+    expect(methods()).not.toContain('session/uploadPrepare');
   });
   it.each(['session/switchNode', 'session/attach', 'turn/start'] as const)('retry stops after lost %s response and never repeats the branch or execution', async method => {
     const { scope, selection, fixture } = await subject(); server.held.add(method);

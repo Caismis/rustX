@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v33.js';
+import type {ProtocolMessage} from './v34.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -114,7 +114,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 33,
+      "protocol_version": 34,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -132,8 +132,15 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 33,
+      "protocol_version": 34,
       "capabilities": {
+        "upload_policy": {
+          "max_file_bytes": 2097152,
+          "max_batch_bytes": 4194304,
+          "max_files": 8,
+          "max_concurrent_transfers": 2,
+          "max_chunk_bytes": 65536
+        },
         "multi_session": true,
         "single_writable_controller": true,
         "headless_interactions": true,
@@ -328,7 +335,7 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
-    "method": "session/upload",
+    "method": "session/uploadStatus",
     "params": {
       "target": {
         "session_id": "ses_00000000-0000-7000-8000-000000000001",
@@ -336,10 +343,25 @@ export const fixtures = [
         "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
+      "operation_id": "00000000000000000000000000000000"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/uploadPrepare",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "operation_id": "00000000000000000000000000000000",
       "files": [
         {
           "name": "hello.txt",
-          "data": "aGk="
+          "size": 2
         }
       ]
     }
@@ -526,6 +548,59 @@ export const fixtures = [
         "mutation": {
           "action": "pause"
         }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "upload_prepared",
+      "transfer": {
+        "path": "/session-upload/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "loopback_port": null,
+        "expires_in_seconds": 60
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "upload_status",
+      "outcome": {
+        "state": "absent"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "upload_status",
+      "outcome": {
+        "state": "unresolved"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "upload_status",
+      "outcome": {
+        "state": "failed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "upload_status",
+      "outcome": {
+        "state": "ready",
+        "files": []
       }
     }
   },

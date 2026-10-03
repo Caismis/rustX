@@ -1,6 +1,6 @@
 import { useTranslation } from '../locale/react';
 import { useSelector } from '@xstate/react';
-import type { SourceTarget } from '../../../protocol/app-server/v33';
+import type { SourceTarget } from '../../../protocol/app-server/v34';
 import type { AppServerClient, SessionView, ConnectionState } from '../client/app-server';
 import type { ReactNode } from 'react';
 import { Button } from '../presentation/primitives/Button';

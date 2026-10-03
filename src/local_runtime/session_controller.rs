@@ -158,6 +158,53 @@ impl SessionController {
         node: Option<&SessionNodeId>,
         files: Vec<super::session::uploads::UploadFile>,
     ) -> Result<Vec<super::session::uploads::UploadedFile>, SessionError> {
+        self.upload_correlated(id, node, uuid::Uuid::now_v7().simple().to_string(), files)
+            .await
+    }
+
+    /// Read the exact native operation; a missing reply never allocates again.
+    /// # Errors
+    /// Unknown Sessions and malformed operation identities are rejected.
+    pub async fn upload_status(
+        &self,
+        id: &SessionId,
+        operation: &str,
+    ) -> Result<super::session::uploads::UploadOutcome, SessionError> {
+        self.catalog
+            .lock()
+            .await
+            .upload_registry(id)?
+            .outcome(id, operation)
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })
+    }
+
+    /// Correlation is durably claimed before any filesystem side effect.
+    /// # Errors
+    /// Repeated operations, invalid metadata and storage failures are rejected.
+    /// # Panics
+    /// Only if an internal claimed allocation or test gate invariant is broken.
+    pub async fn upload_correlated(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        operation: String,
+        files: Vec<super::session::uploads::UploadFile>,
+    ) -> Result<Vec<super::session::uploads::UploadedFile>, SessionError> {
+        use super::session::uploads::{UploadMetadata, UploadOutcome, validate_metadata};
+        validate_metadata(
+            &files
+                .iter()
+                .map(|f| UploadMetadata {
+                    name: f.name.clone(),
+                    size: f.bytes.len(),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
         let _preparation = self.preparation.lock().await;
         let access = self.acquire_session(id, node).await?;
         let fail = |e: std::io::Error| SessionError::Catalog {
@@ -170,13 +217,54 @@ impl SessionController {
             });
         }
         let mut registry = self.catalog.lock().await.upload_registry(id)?;
+        if registry.outcome(id, &operation).map_err(fail)? != UploadOutcome::Absent {
+            return Err(SessionError::Catalog {
+                detail: "upload operation already claimed; read its status".into(),
+            });
+        }
         let batch = registry.claim(workspace, &files).map_err(fail)?;
+        registry
+            .allocations
+            .get_mut(&batch)
+            .expect("claimed batch")
+            .operation_id = Some(operation);
         // Durable ownership first. Even failed materialization is deletion work.
         self.catalog
             .lock()
             .await
             .commit_uploads(id, registry.clone())?;
-        registry.materialize(id, &batch, &files).map_err(fail)?;
+        let materialization = {
+            let registry = registry.clone();
+            let id = id.clone();
+            let batch = batch.clone();
+            #[cfg(test)]
+            let checkpoint = super::session::uploads::tests::capture_checkpoint();
+            tokio::task::spawn_blocking(move || {
+                #[cfg(test)]
+                {
+                    super::session::uploads::tests::with_checkpoint(checkpoint, || {
+                        registry.materialize(&id, &batch, &files)
+                    })
+                }
+                #[cfg(not(test))]
+                {
+                    registry.materialize(&id, &batch, &files)
+                }
+            })
+            .await
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })?
+        };
+        if let Err(error) = materialization {
+            registry
+                .allocations
+                .get_mut(&batch)
+                .expect("claimed batch")
+                .failed = true;
+            self.catalog.lock().await.commit_uploads(id, registry)?;
+            return Err(fail(error));
+        }
         #[cfg(test)]
         {
             let gate = self.upload_commit_gate.lock().unwrap().clone();

@@ -1,3 +1,4 @@
+import { transferUpload } from '../../../protocol/app-server/upload.ts';
 /**
  * The one typed App Server client.
  *
@@ -70,7 +71,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 33;
+export const APP_SERVER_PROTOCOL_VERSION = 34;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -145,7 +146,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   // safely retryable.
   "session/traceDetail": "read",
   "artifact/read": "read",
-  "session/upload": "side_effecting",
+  "session/uploadPrepare": "side_effecting",
+  "session/uploadStatus": "read",
   "configuration/sourcesRead": "read",
   "session/effectiveConfiguration": "read",
   "configuration/sourceWrite": "side_effecting",
@@ -232,6 +234,8 @@ export interface AppServerClientOptions {
 }
 
 export class AppServerClient {
+  uploadCarrier = transferUpload;
+  uploadEndpoint?: string;
   readonly #transport: AppServerTransport;
   readonly #pending = new Map<RequestId, PendingRequest>();
   readonly #notificationListeners = new Set<NotificationListener>();
@@ -375,7 +379,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v33 protocol message");
+      this.#fail("invalid App Server v34 protocol message");
       return;
     }
 

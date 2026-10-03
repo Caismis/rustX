@@ -329,18 +329,21 @@ and reconnect diagnostics remain visible.
 
 ## Uploads
 
-User uploads are Session-owned workspace uploads on App Server **v8**. The stack
-wraps `app/agent/AgentComposer` and the pinned Harness card/footer seats: a draft transfers
-through `session/upload` first, and either delivery action carries the resulting
-typed `UploadReceipt`s as ordinary content.
+User uploads are native Session-owned files under App Server v34. The dedicated
+intake owner normalizes picker/drop/paste, preserves duplicate selections through
+local identities, and keeps per-file accepted/rejected outcomes. Raw over-count
+selections are atomically rejected with one summary. Directory entries are detected
+through DataTransfer items; paste reads file items once and inserts plain text at
+the textarea selection. IME and existing command/Enter/Escape ownership remain.
+The attachment button tooltip exposes server policy in English and Chinese.
 
-```text
-send(sessionId, text, uploadReceipts, delivery) -> turn/start or turn/steer
-```
-
-There is no `artifact/upload` user path or upload compatibility path. Upload receipts are content only:
-they never participate in the accepted-`MessageId` identity contract above, and an
-uncertain upload leaves its draft card uncertain rather than being replayed.
+Ready cards carry native receipts. All other outcomes gate submission except
+accepted draft files owned by the retained first-submission lifecycle. Retry needs
+authoritative no-commit evidence; Check status only reads the original operation.
+A ready repair reuses its receipt without uploading again. The first-submission
+owner retains operation identities and receipts outside React; recovery never
+creates another Session or automatically sends a turn. Continue is a separate
+explicit gesture after reconciliation. Removal never claims native rollback.
 
 ## Commands (WEB-05)
 

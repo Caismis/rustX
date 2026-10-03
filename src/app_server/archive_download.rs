@@ -212,6 +212,14 @@ pub(crate) async fn dispatch(
                 download(&mut socket, &host, &path).await
             } => result,
         }
+    } else if text.starts_with(&format!("GET {}", super::upload_transfer::PREFIX)) {
+        super::upload_transfer::serve(
+            Replay(std::io::Cursor::new(line).chain(socket)),
+            host,
+            shutdown,
+            None,
+        )
+        .await
     } else {
         // Preserve the established WebSocket endpoint's cooperative shutdown.
         super::transport::websocket::connection(

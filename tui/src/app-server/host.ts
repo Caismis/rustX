@@ -143,6 +143,7 @@ export class AppServerHost {
         "an owned App Server host has a child process and an external one does not",
       );
     }
+    client.uploadEndpoint = composition.endpoint;
     this.client = client;
     this.ownership = ownership;
     this.#child = child;

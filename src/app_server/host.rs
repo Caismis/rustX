@@ -52,6 +52,7 @@ struct HostInner {
     requests: watch::Sender<usize>,
     transport: Arc<TransportResources>,
     archives: super::archive_download::ArchiveDownloads,
+    uploads: super::upload_transfer::UploadTransfers,
     file_reads: Arc<tokio::sync::Semaphore>,
     file_routes: Mutex<
         std::collections::HashMap<
@@ -144,6 +145,9 @@ impl AppServerHost {
         &self.0.authority_id
     }
 
+    pub(crate) fn uploads(&self) -> &super::upload_transfer::UploadTransfers {
+        &self.0.uploads
+    }
     pub(crate) fn archives(&self) -> &super::archive_download::ArchiveDownloads {
         &self.0.archives
     }
@@ -161,6 +165,7 @@ impl AppServerHost {
             requests: watch::channel(0).0,
             transport: Arc::default(),
             archives: super::archive_download::ArchiveDownloads::default(),
+            uploads: super::upload_transfer::UploadTransfers::default(),
             file_reads: Arc::new(tokio::sync::Semaphore::new(
                 crate::tools::session_files::SESSION_FILE_MAX_READS,
             )),

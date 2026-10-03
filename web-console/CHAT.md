@@ -282,15 +282,17 @@ silently substitute a different default node.
 
 ## Attachments
 
-Paperclip, drop and paste transfer bytes through native `session/upload`. Draft
-cards distinguish uploading, complete, failed and uncertain states. Send includes
-only completed server receipts, in draft order; no model-modality preflight is
-needed. Uploaded images are workspace files under this contract.
+Paperclip, drop and paste use one client-lifetime intake owner and the native
+advertised policy. Valid and rejected selections remain visible; an over-count
+selection produces one bounded summary. Filename is not identity. Any rejected,
+pending, failed or uncertain item gates Send until resolved or removed.
 
-The current carrier limits are eight files, 256 KiB per file and 512 KiB per batch.
-The 1 MiB request bound also includes base64/JSON overhead. Browser encoding is
-transport-only; the Session owner receives ordinary decoded bytes. Removing a
-draft card revokes its preview URL but does not delete a committed workspace file.
+Uploads use metadata preparation, a separate bounded binary capability socket,
+and exact-operation status reads. Ready means native receipts were read after the
+ready commit. Retry is available only after absent/pre-ready-failure evidence;
+uncertain uploads offer Check status. Removing a card releases browser presentation
+resources and never rolls back native storage. Native authority and Composer binding
+fence completion publication; reconnect does not retransmit files.
 
 Canonical transcripts render `uploaded_file { batch_id, name }` attachment cards
 without XML parsing, host filesystem browsing, or artifact readback. The native
@@ -308,8 +310,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v33 (`rustx.app-server.v33` and generated
-`protocol/app-server/v33.ts` / `v33.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v34 (`rustx.app-server.v34` and generated
+`protocol/app-server/v34.ts` / `v34.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -389,7 +391,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v33, Runtime Client v53, SQLite v44, and Session catalog v13, with no
+App Server v34, Runtime Client v53, SQLite v44, and Session catalog v13, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -450,7 +452,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v33 / Runtime Client v53 project one `turn_process` owner on exact
+App Server v34 / Runtime Client v53 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,
