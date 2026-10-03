@@ -81,8 +81,10 @@ check has zero launch effects; closure after spawn does not kill the application
 Filesystem mutations by other processes remain outside that JavaScript boundary.
 
 `host/desktop.ts` owns platform discovery, safe argv and a small injectable process
-boundary. Only an allowlist of desktop environment variables reaches the child;
-provider credentials, transport tokens and NODE_OPTIONS are excluded. The child
+boundary. rustX supplies only an allowlisted environment to the desktop launcher.
+The operating system/runtime may add platform-owned environment variables. rustX
+credentials, provider secrets, transport tokens and runtime injection variables
+such as NODE_OPTIONS are not supplied. The child
 is detached with ignored stdio and unreferenced after spawn. Application discovery
 creates no children; the short macOS eligibility query is bounded and reaped.
 Native metadata connections have handshake/request bounds

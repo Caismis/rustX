@@ -245,19 +245,30 @@ it('macOS opener existence cannot override unknown, headless or SSH availability
   delete f.system.env.SSH_CONNECTION;
   expect(f.adapter.catalog(true)).toMatchObject({ available: true });
 });
-it('real Node child receives literal argv, canonical cwd and only filtered environment without a GUI', async () => {
+it('real Node child preserves literal argv, canonical cwd and allowed environment without credentials or a GUI', async () => {
   const { spawn } = await import('node:child_process');
   const { readFileSync } = await import('node:fs');
   const f = fixture(), output = join(f.directory, 'child.json'), closed = gate<void>();
   const literal = '- quotes " 汉字 ; $(false)\nnext';
+  const forbidden = { NODE_OPTIONS: '--invalid', NODE_PATH: '/untrusted', API_KEY: 'secret',
+    OPENAI_API_KEY: 'secret', ANTHROPIC_API_KEY: 'secret', RUSTX_TOKEN: 'secret',
+    RUSTX_TRANSPORT_TOKEN: 'secret', LD_PRELOAD: '/untrusted', DYLD_INSERT_LIBRARIES: '/untrusted',
+    UNRELATED_PARENT_VARIABLE: 'not-desktop' };
   const spec = { command: process.execPath, cwd: f.a,
     args: ['-e', 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({cwd:process.cwd(),arg:process.argv[2],env:process.env}))', '--', output, literal],
-    env: desktopEnvironment({ HOME: f.directory, NODE_OPTIONS: '--invalid', API_KEY: 'secret', RUSTX_TRANSPORT_TOKEN: 'secret' }) };
+    env: desktopEnvironment({ HOME: f.directory, ...forbidden }) };
   expect(await launchDesktop(spec, ((...args: Parameters<typeof spawn>) => {
+    // rustX owns the exact environment supplied at the spawn boundary.
+    expect(args[2]?.env).toEqual({ HOME: f.directory });
     const child = spawn(...args); child.once('close', () => closed.resolve()); return child;
   }) as typeof spawn)).toEqual({ status: 'spawned' });
   await closed.promise;
-  expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual({ cwd: f.a, arg: literal, env: { HOME: f.directory } });
+  const result = JSON.parse(readFileSync(output, 'utf8'));
+  expect(result.cwd).toBe(realpathSync(f.a));
+  expect(result.arg).toBe(literal); // Quotes, substitution syntax and newline remain uninterpreted.
+  expect(result.env.HOME).toBe(f.directory);
+  // The OS/runtime may add platform-owned variables; credentials and injection may not survive.
+  for (const key of Object.keys(forbidden)) expect(result.env[key], key).toBeUndefined();
   await expect(launchDesktop({ ...spec, command: join(f.directory, 'missing-opener') })).rejects.toThrow('could not be started');
 });
 it('executes native eligibility checks fail-closed without opening a GUI', () => {
