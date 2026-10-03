@@ -49,7 +49,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "a7c474cfb08895bbc3096b1bce4a86c9492e839996f214598087c5884176ab5e",
+      "local_sha256": "2c52eaec12437f4951bcee29880050172b3de9abbfe2b797aa5354be862fb64e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -3204,7 +3204,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "577015f67f6d922dae3abae5a90f2f7f6e4724a6875e2c2daa3f6c217916620f"
+      "local_sha256": "a718dcc4f8aab8480c003f2b4d69ed65537f9d3603835f149a18109bd594064d"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3463,7 +3463,7 @@
         "Cordis runtime",
         "Harness scroll ownership"
       ],
-      "local_sha256": "8848709bdc717602ef33cee43f026a60e7e8a617b1d6128a8c6dbbd983975227"
+      "local_sha256": "dd4156c73cc5215bb318394f5ba2cc4380c32c817492311a2ec76b3ac17b3880"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",

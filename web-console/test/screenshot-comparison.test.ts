@@ -393,7 +393,7 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
   expect(heightResult.report).toContain(`dimensions: expected 390x844, actual 390x843`);
 });
 
-it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51], ['running-draft', 'light', 15, 13, 117], ['running-draft', 'dark', 16, 18, 117]] as const)('measured Composer corner noise stays restricted: %s %s', (state, theme, sites, bound, cornerY) => {
+it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51]] as const)('measured Composer corner noise stays restricted: %s %s', (state, theme, sites, bound, cornerY) => {
   const name = `composer-${state}-${theme}-390-linux.png`;
   const expected = reference(name);
   const entry = noisePolicy.find(entry => entry.reference === name)!;
@@ -425,4 +425,15 @@ it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51], 
     for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
   expect(compare(shifted, name, expected, noisePolicy).ok).toBe(false);
   expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+});
+
+it.each(['light', 'dark'])('integrated running Composer remains strict after remeasurement: %s', theme => {
+  const name = `composer-running-draft-${theme}-390-linux.png`;
+  expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
+  const expected = reference(name);
+  for (const [x, y] of [[24, 117], [33, 120], [34, 117], [50, 76], [300, 126]]) {
+    const changed = copy(expected); nudge(changed, x, y, 1);
+    expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
+  }
+  expect(compare({ ...expected, height: expected.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
 });

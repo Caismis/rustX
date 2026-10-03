@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v32';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v33';
+import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot, endpoint } from './fixture';
@@ -160,4 +161,37 @@ it('a locally refused control continuation cannot clear a successor cancellation
   expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target: expectedB.target });
   await Promise.all(occupied); server.reply(cancels()[0]); await successor;
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-B', status: 'acknowledged' });
+});
+
+it.each(['queue', 'steer'] as const)('resident ContextSeat preserves %s submission, exact cancellation and compact draft ownership', async preference => {
+  composerPreferences().setBusyEnter(preference);
+  await mount(); vi.useRealTimers();
+  expect(screen.getByText('Last request context unavailable')).toBeTruthy();
+  const expected = server.client.cancellationTarget('A')!;
+  fireEvent.change(input(), { target: { value: 'ordinary draft' } });
+  await act(async () => fireEvent.keyDown(input(), { key: 'Enter' }));
+  const method = preference === 'queue' ? 'turn/start' : 'turn/steer';
+  expect(server.requests.filter(row => row.request.method === method)).toHaveLength(1);
+  expect(server.client.cancellationTarget('A')).toEqual(expected);
+  server.held.add('turn/cancel'); act(() => input().focus());
+  await act(async () => { escape(); escape(); });
+  expect(cancels()).toHaveLength(1);
+  expect(cancels()[0]).toMatchObject({ params: { target: expected.target } });
+  expect(server.client.getSnapshot().views.A.cancellation?.attemptId).toBe(expected.attemptId);
+  await act(async () => server.reply(cancels()[0]));
+  await act(async () => server.update('A', { ...snapshot(), context: { compaction_count: 0, compaction_in_progress: false } }));
+  server.held.add('context/compact');
+  fireEvent.change(input(), { target: { value: '/compact' } });
+  await act(async () => fireEvent.keyDown(input(), { key: 'Enter' }));
+  const compact = await server.waitFor('context/compact', 1);
+  expect(input().value).toBe(''); expect(screen.queryByRole('dialog')).toBeNull();
+  fireEvent.change(input(), { target: { value: 'later draft' } });
+  const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
+  await act(async () => server.update('A', { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, manual_compaction: { request_id: requestId, released: true, error: null } } }));
+  expect(screen.getByText('Context compacted')).toBeTruthy();
+  expect(input().value).toBe('later draft');
+  expect(server.requests.filter(row => ['turn/start', 'turn/steer'].includes(row.request.method))).toHaveLength(1);
+  server.handlers.set('context/compact', () => ({ type: 'context', context: server.snapshots.get('A')!.context! }));
+  await act(async () => server.reply(compact));
+  composerPreferences().setBusyEnter('queue');
 });

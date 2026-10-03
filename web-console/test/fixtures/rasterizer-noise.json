@@ -99,586 +99,620 @@
         [264,108,[245,246,247,255],[244,245,246,255]]
     ]
   },
-  {
-    "reference": "composer-idle-empty-light-390-linux.png",
-    "evidence": "PR #447 CI run 37044726558, artifact 11245406105, head 9ee612f6. Exactly 12 corner hairline pixels; raw channel delta <=2, dimensions 334x154. Twenty fresh pinned-container contexts per theme match the baseline exactly; CI differs only at these sites. No text pixels differ. See docs/issue-435-observable-compaction.md repair audit; browser-internal trigger is not inferred.",
-    "regions": [
-      {
-        "label": "Idle Composer corner (32,51)",
-        "x": 32,
-        "y": 51,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (33,51)",
-        "x": 33,
-        "y": 51,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (26,52)",
-        "x": 26,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (27,52)",
-        "x": 27,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (28,52)",
-        "x": 28,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (29,52)",
-        "x": 29,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (30,52)",
-        "x": 30,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (32,52)",
-        "x": 32,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (33,52)",
-        "x": 33,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (25,53)",
-        "x": 25,
-        "y": 53,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (26,53)",
-        "x": 26,
-        "y": 53,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (24,54)",
-        "x": 24,
-        "y": 54,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      }
+{
+  "reference": "composer-idle-empty-dark-390-linux.png",
+  "evidence": "PR #447 integration on main 45e8ca43: strict pinned-container repeated capture; 334x178, 12 corner sites only. Reference RGBA SHA256 db85ab9604872f7bcc0fe14b44f7a9ebd28e2e7013fe6cfd0c74b4a70ff86684; actual 6db765629aad80a83a7098aff79fb7117a3c108ba2ecceceb61af2f0ba4800d2. Fresh integrated measurements, not inherited coordinates or bounds.",
+  "regions": [
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 30,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 31,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 26,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 27,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 28,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 31,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 25,
+      "y": 53,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 24,
+      "y": 54,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    }
+  ],
+  "pixels": [
+    [
+      30,
+      51,
+      [
+        25,
+        25,
+        27,
+        255
+      ],
+      [
+        24,
+        24,
+        26,
+        255
+      ]
     ],
-    "pixels": [
-      [32, 51, [239, 239, 239, 255], [240, 240, 240, 255]],
-      [33, 51, [237, 237, 237, 255], [239, 239, 239, 255]],
-      [26, 52, [244, 244, 244, 255], [246, 246, 246, 255]],
-      [27, 52, [237, 237, 237, 255], [238, 238, 238, 255]],
-      [28, 52, [235, 235, 235, 255], [237, 237, 237, 255]],
-      [29, 52, [238, 238, 238, 255], [240, 240, 240, 255]],
-      [30, 52, [245, 245, 245, 255], [247, 247, 247, 255]],
-      [32, 52, [253, 253, 253, 255], [252, 252, 252, 255]],
-      [33, 52, [255, 255, 255, 255], [254, 254, 254, 255]],
-      [25, 53, [235, 235, 235, 255], [233, 233, 233, 255]],
-      [26, 53, [247, 247, 247, 255], [245, 245, 245, 255]],
-      [24, 54, [249, 249, 249, 255], [247, 247, 247, 255]]
-    ]
-  },
-  {
-    "reference": "composer-idle-empty-dark-390-linux.png",
-    "evidence": "PR #447 CI run 37044726558, artifact 11245406105, head 9ee612f6. Exactly 12 corner hairline pixels; raw channel delta <=2, dimensions 334x154. Twenty fresh pinned-container contexts per theme match the baseline exactly; CI differs only at these sites. No text pixels differ. See docs/issue-435-observable-compaction.md repair audit; browser-internal trigger is not inferred.",
-    "regions": [
-      {
-        "label": "Idle Composer corner (30,51)",
-        "x": 30,
-        "y": 51,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (31,51)",
-        "x": 31,
-        "y": 51,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (32,51)",
-        "x": 32,
-        "y": 51,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (33,51)",
-        "x": 33,
-        "y": 51,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (26,52)",
-        "x": 26,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 2
-      },
-      {
-        "label": "Idle Composer corner (27,52)",
-        "x": 27,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (28,52)",
-        "x": 28,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (31,52)",
-        "x": 31,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (32,52)",
-        "x": 32,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (33,52)",
-        "x": 33,
-        "y": 52,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (25,53)",
-        "x": 25,
-        "y": 53,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Idle Composer corner (24,54)",
-        "x": 24,
-        "y": 54,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      }
+    [
+      31,
+      51,
+      [
+        27,
+        27,
+        29,
+        255
+      ],
+      [
+        28,
+        28,
+        30,
+        255
+      ]
     ],
-    "pixels": [
-      [30, 51, [24, 24, 26, 255], [25, 25, 27, 255]],
-      [31, 51, [28, 28, 30, 255], [27, 27, 29, 255]],
-      [32, 51, [31, 31, 32, 255], [29, 29, 31, 255]],
-      [33, 51, [32, 32, 34, 255], [31, 31, 33, 255]],
-      [26, 52, [27, 27, 29, 255], [25, 25, 27, 255]],
-      [27, 52, [34, 34, 36, 255], [34, 34, 35, 255]],
-      [28, 52, [40, 40, 42, 255], [41, 41, 43, 255]],
-      [31, 52, [44, 44, 45, 255], [43, 43, 46, 255]],
-      [32, 52, [43, 43, 45, 255], [44, 44, 45, 255]],
-      [33, 52, [44, 44, 46, 255], [43, 43, 45, 255]],
-      [25, 53, [42, 42, 45, 255], [43, 43, 44, 255]],
-      [24, 54, [44, 44, 45, 255], [44, 44, 46, 255]]
-    ]
-  },
-  {
-    "reference": "composer-running-draft-light-390-linux.png",
-    "evidence": "PR #447 repair: repeated pinned-container narrow tests and fresh-context probe reproduce exactly two stable focus-corner variants with identical DOM, computed styles, floating rects, scroll and focus. Current 334x220 captures differ only at these measured sites. See docs/issue-435-observable-compaction.md; no old region was copied or widened.",
-    "regions": [
-      {
-        "label": "Running Composer focus corner (30,117)",
-        "x": 30,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 3
-      },
-      {
-        "label": "Running Composer focus corner (31,117)",
-        "x": 31,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 4
-      },
-      {
-        "label": "Running Composer focus corner (32,117)",
-        "x": 32,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
-      },
-      {
-        "label": "Running Composer focus corner (33,117)",
-        "x": 33,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "Running Composer focus corner (26,118)",
-        "x": 26,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 13
-      },
-      {
-        "label": "Running Composer focus corner (27,118)",
-        "x": 27,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 5
-      },
-      {
-        "label": "Running Composer focus corner (28,118)",
-        "x": 28,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 6
-      },
-      {
-        "label": "Running Composer focus corner (29,118)",
-        "x": 29,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "Running Composer focus corner (30,118)",
-        "x": 30,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
-      },
-      {
-        "label": "Running Composer focus corner (32,118)",
-        "x": 32,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 8
-      },
-      {
-        "label": "Running Composer focus corner (33,118)",
-        "x": 33,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "Running Composer focus corner (24,119)",
-        "x": 24,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Running Composer focus corner (25,119)",
-        "x": 25,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "Running Composer focus corner (26,119)",
-        "x": 26,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "Running Composer focus corner (24,120)",
-        "x": 24,
-        "y": 120,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
-      }
+    [
+      32,
+      51,
+      [
+        29,
+        29,
+        31,
+        255
+      ],
+      [
+        31,
+        31,
+        32,
+        255
+      ]
     ],
-    "pixels": [
-      [30, 117, [212, 223, 247, 255], [209, 221, 247, 255]],
-      [31, 117, [188, 206, 244, 255], [192, 209, 244, 255]],
-      [32, 117, [167, 191, 241, 255], [179, 199, 242, 255]],
-      [33, 117, [157, 184, 240, 255], [166, 190, 241, 255]],
-      [26, 118, [192, 209, 245, 255], [205, 219, 246, 255]],
-      [27, 118, [148, 177, 239, 255], [153, 180, 239, 255]],
-      [28, 118, [141, 172, 238, 255], [147, 177, 240, 255]],
-      [29, 118, [150, 179, 241, 255], [160, 187, 243, 255]],
-      [30, 118, [191, 209, 247, 255], [203, 217, 248, 255]],
-      [32, 118, [241, 245, 254, 255], [233, 239, 252, 255]],
-      [33, 118, [255, 255, 255, 255], [246, 248, 254, 255]],
-      [24, 119, [168, 192, 242, 255], [169, 193, 242, 255]],
-      [25, 119, [136, 169, 239, 255], [126, 162, 237, 255]],
-      [26, 119, [205, 219, 249, 255], [195, 212, 247, 255]],
-      [24, 120, [217, 227, 250, 255], [205, 219, 249, 255]]
-    ]
-  },
-  {
-    "reference": "composer-running-draft-dark-390-linux.png",
-    "evidence": "PR #447 repair: repeated pinned-container narrow tests and fresh-context probe reproduce exactly two stable focus-corner variants with identical DOM, computed styles, floating rects, scroll and focus. Current 334x220 captures differ only at these measured sites. See docs/issue-435-observable-compaction.md; no old region was copied or widened.",
-    "regions": [
-      {
-        "label": "Running Composer focus corner (30,117)",
-        "x": 30,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 4
-      },
-      {
-        "label": "Running Composer focus corner (31,117)",
-        "x": 31,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 5
-      },
-      {
-        "label": "Running Composer focus corner (32,117)",
-        "x": 32,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 14
-      },
-      {
-        "label": "Running Composer focus corner (33,117)",
-        "x": 33,
-        "y": 117,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 11
-      },
-      {
-        "label": "Running Composer focus corner (26,118)",
-        "x": 26,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 18
-      },
-      {
-        "label": "Running Composer focus corner (27,118)",
-        "x": 27,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 6
-      },
-      {
-        "label": "Running Composer focus corner (28,118)",
-        "x": 28,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 5
-      },
-      {
-        "label": "Running Composer focus corner (29,118)",
-        "x": 29,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 10
-      },
-      {
-        "label": "Running Composer focus corner (30,118)",
-        "x": 30,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 12
-      },
-      {
-        "label": "Running Composer focus corner (31,118)",
-        "x": 31,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Running Composer focus corner (32,118)",
-        "x": 32,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "Running Composer focus corner (33,118)",
-        "x": 33,
-        "y": 118,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "Running Composer focus corner (24,119)",
-        "x": 24,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 1
-      },
-      {
-        "label": "Running Composer focus corner (25,119)",
-        "x": 25,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 9
-      },
-      {
-        "label": "Running Composer focus corner (26,119)",
-        "x": 26,
-        "y": 119,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 11
-      },
-      {
-        "label": "Running Composer focus corner (24,120)",
-        "x": 24,
-        "y": 120,
-        "width": 1,
-        "height": 1,
-        "maxChangedPixels": 1,
-        "maxChannelDelta": 13
-      }
+    [
+      33,
+      51,
+      [
+        31,
+        31,
+        33,
+        255
+      ],
+      [
+        32,
+        32,
+        34,
+        255
+      ]
     ],
-    "pixels": [
-      [30, 117, [36, 48, 69, 255], [37, 49, 73, 255]],
-      [31, 117, [47, 65, 99, 255], [45, 62, 94, 255]],
-      [32, 117, [55, 80, 124, 255], [50, 72, 110, 255]],
-      [33, 117, [60, 88, 137, 255], [56, 81, 126, 255]],
-      [26, 118, [44, 62, 95, 255], [39, 52, 77, 255]],
-      [27, 118, [65, 95, 149, 255], [63, 92, 143, 255]],
-      [28, 118, [74, 106, 163, 255], [73, 103, 158, 255]],
-      [29, 118, [76, 106, 160, 255], [73, 101, 150, 255]],
-      [30, 118, [63, 82, 115, 255], [59, 74, 103, 255]],
-      [31, 118, [54, 65, 83, 255], [54, 64, 84, 255]],
-      [32, 118, [47, 51, 60, 255], [51, 57, 69, 255]],
-      [33, 118, [44, 44, 46, 255], [46, 49, 55, 255]],
-      [24, 119, [55, 80, 124, 255], [55, 79, 123, 255]],
-      [25, 119, [77, 111, 173, 255], [79, 116, 182, 255]],
-      [26, 119, [59, 73, 100, 255], [62, 79, 111, 255]],
-      [24, 120, [55, 67, 87, 255], [59, 73, 100, 255]]
+    [
+      26,
+      52,
+      [
+        25,
+        25,
+        27,
+        255
+      ],
+      [
+        27,
+        27,
+        29,
+        255
+      ]
+    ],
+    [
+      27,
+      52,
+      [
+        34,
+        34,
+        35,
+        255
+      ],
+      [
+        34,
+        34,
+        36,
+        255
+      ]
+    ],
+    [
+      28,
+      52,
+      [
+        41,
+        41,
+        43,
+        255
+      ],
+      [
+        40,
+        40,
+        42,
+        255
+      ]
+    ],
+    [
+      31,
+      52,
+      [
+        43,
+        43,
+        46,
+        255
+      ],
+      [
+        44,
+        44,
+        45,
+        255
+      ]
+    ],
+    [
+      32,
+      52,
+      [
+        44,
+        44,
+        45,
+        255
+      ],
+      [
+        43,
+        43,
+        45,
+        255
+      ]
+    ],
+    [
+      33,
+      52,
+      [
+        43,
+        43,
+        45,
+        255
+      ],
+      [
+        44,
+        44,
+        46,
+        255
+      ]
+    ],
+    [
+      25,
+      53,
+      [
+        43,
+        43,
+        44,
+        255
+      ],
+      [
+        42,
+        42,
+        45,
+        255
+      ]
+    ],
+    [
+      24,
+      54,
+      [
+        44,
+        44,
+        46,
+        255
+      ],
+      [
+        44,
+        44,
+        45,
+        255
+      ]
     ]
-  }
+  ]
+},
+{
+  "reference": "composer-idle-empty-light-390-linux.png",
+  "evidence": "PR #447 integration on main 45e8ca43: strict pinned-container repeated capture; 334x178, 12 corner sites only. Reference RGBA SHA256 e4abb810af581b5f1e84fa49c147156b62cadfdc3b92aa7e530562cfafc72cd1; actual 8058b197d89728e9dc5b978fdbfbdc7bb52148f1c8b984a5cddf91e61f509965. Fresh integrated measurements, not inherited coordinates or bounds.",
+  "regions": [
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 51,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 26,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 27,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 28,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 29,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 30,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 32,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 33,
+      "y": 52,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 1
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 25,
+      "y": 53,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 26,
+      "y": 53,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    },
+    {
+      "label": "Measured integrated Composer corner coverage",
+      "x": 24,
+      "y": 54,
+      "width": 1,
+      "height": 1,
+      "maxChangedPixels": 1,
+      "maxChannelDelta": 2
+    }
+  ],
+  "pixels": [
+    [
+      32,
+      51,
+      [
+        240,
+        240,
+        240,
+        255
+      ],
+      [
+        239,
+        239,
+        239,
+        255
+      ]
+    ],
+    [
+      33,
+      51,
+      [
+        239,
+        239,
+        239,
+        255
+      ],
+      [
+        237,
+        237,
+        237,
+        255
+      ]
+    ],
+    [
+      26,
+      52,
+      [
+        246,
+        246,
+        246,
+        255
+      ],
+      [
+        244,
+        244,
+        244,
+        255
+      ]
+    ],
+    [
+      27,
+      52,
+      [
+        238,
+        238,
+        238,
+        255
+      ],
+      [
+        237,
+        237,
+        237,
+        255
+      ]
+    ],
+    [
+      28,
+      52,
+      [
+        237,
+        237,
+        237,
+        255
+      ],
+      [
+        235,
+        235,
+        235,
+        255
+      ]
+    ],
+    [
+      29,
+      52,
+      [
+        240,
+        240,
+        240,
+        255
+      ],
+      [
+        238,
+        238,
+        238,
+        255
+      ]
+    ],
+    [
+      30,
+      52,
+      [
+        247,
+        247,
+        247,
+        255
+      ],
+      [
+        245,
+        245,
+        245,
+        255
+      ]
+    ],
+    [
+      32,
+      52,
+      [
+        252,
+        252,
+        252,
+        255
+      ],
+      [
+        253,
+        253,
+        253,
+        255
+      ]
+    ],
+    [
+      33,
+      52,
+      [
+        254,
+        254,
+        254,
+        255
+      ],
+      [
+        255,
+        255,
+        255,
+        255
+      ]
+    ],
+    [
+      25,
+      53,
+      [
+        233,
+        233,
+        233,
+        255
+      ],
+      [
+        235,
+        235,
+        235,
+        255
+      ]
+    ],
+    [
+      26,
+      53,
+      [
+        245,
+        245,
+        245,
+        255
+      ],
+      [
+        247,
+        247,
+        247,
+        255
+      ]
+    ],
+    [
+      24,
+      54,
+      [
+        247,
+        247,
+        247,
+        255
+      ],
+      [
+        249,
+        249,
+        249,
+        255
+      ]
+    ]
+  ]
+}
 ]

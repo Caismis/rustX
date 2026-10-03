@@ -244,7 +244,7 @@ from a broad obsolete region. The earlier frozen comparator fixture remains inta
 All four live references have adversarial policy tests; every other reference and
 unmeasured pixel retains its existing exact comparison policy.
 
-### Repair validation
+### Pre-integration repair validation
 
 Focused checks: 46 Web guard/comparator tests; 7 native manual-compaction tests;
 10 repeated 390px Agent runs (five per theme); and all 4 corrected locale lifecycle
@@ -286,3 +286,213 @@ Final fetch before delivery kept `origin/main` and the merge base at
 `06dc8b101acf5a880466548e9e9b3214e41ac7e8`. PRs #445 and #446 remained open;
 no main integration was needed. The primary checkout retained only its pre-existing
 untracked `.playwright-mcp/` directory and was not modified.
+
+
+## Integration with merged PR #445
+
+The clean PR-owned worktree started at `ff397c4652befede7fb409138e53133944a0fab4`,
+matching the remote branch. Main had advanced from the old merge base
+`06dc8b101acf5a880466548e9e9b3214e41ac7e8` to #445's merge commit
+`45e8ca434994910587078538d80ca10d4a7ce9d0`. The two #447 commits were rebased
+onto that accepted architecture; no merge commit or replacement branch was made.
+Earlier validation and the no-integration statement above describe the preceding
+head only, not this integration.
+
+Actual textual conflicts were `web-console/source-inventory.json`,
+`web-console/src/locale/dictionaries/agent.ts`, and
+`web-console/test/conversation-residency.test.tsx`. Locale keys were united;
+residency retained main's `RuntimeClientEvent` import and event-driven exact Attempt
+rendering while migrating to v33. Inventory references were united and final source
+hashes/import closures recomputed. Both parent inventories' destination and
+inspected-only sets remain present; both approved reference audits are retained.
+
+The mechanically merged owner files were reviewed against current main:
+
+- `AgentComposer.tsx` differs only by its v33 import. Busy Enter, StopSequence,
+  composition/focus/menu fences and Queue/Steer preference remain unchanged.
+- `ConversationSeat.tsx` adds ContextSeat before the docks while preserving exact
+  cancellationTarget, client/binding/native scope and Attempt selector dependency.
+- `app-server.ts` retains main's cancellationTarget/cancelTurn and dispatch fence.
+  `turn/cancel` remains in the two-slot lifecycle-control lane; ordinary RPC
+  saturation cannot delay it and full control capacity is definitely unsent.
+  Compaction correlation/gesture ownership remains a separate domain. Native
+  exact release or actual transport settlement releases only its own invocation.
+- Native Rust, generated protocol and TUI match the reviewed #447 head. There is
+  no new native redesign or version bump: App Server v33 / Runtime Client v57.
+
+The current-v32 audit also found conflict-free references in the cancellation test
+and the agent fixture's Window declaration; both were migrated. Current normative
+protocol prose was corrected, including the architecture, uploads, deletion,
+file-delivery, jobs, invariant and contribution documents. Historical #431/#444
+validation reports retain their then-current v32/v56 evidence. The old database
+v32 rejection in session-deletion-ownership is a database version, not App Server.
+The protocol introduction retains explicitly historical v32/v56 explanations and
+its statement rejecting earlier peers. No current v32 generated reader remains.
+
+The combined deterministic regression runs for both Queue and Steer. In the real
+App fixture it observes ContextSeat, submits the ordinary draft through the correct
+native method, verifies unchanged exact cancellation identity, cancels via double
+Escape, then invokes `/compact` directly after native Attempt settlement. It proves
+exact command consumption, no modal or extra turn, authoritative context completion,
+and retention of text typed after invocation. The seven-file focused integration
+run passed 111 tests, including both combined cases; native manual compaction passed
+all seven focused regressions.
+
+Browser execution uses the repository's pinned Chromium container. Another active
+worktree occupied default ports, so this integration uses the existing
+`RUSTX_E2E_PREVIEW_PORT=5273 RUSTX_E2E_FIXTURE_PORT=5274` overrides without touching
+that worktree or its processes. All nine accepted #445 keyboard/persistence browser
+cases passed before screenshot updates. Four primary-seat comparisons failed
+against temporary main-side references, demonstrating the changed combined UI.
+The three textual conflicts and 70 binary conflicts were handled separately;
+main-side PNGs were only temporary mechanical resolutions.
+
+### Integrated visual references
+
+The scoped update ran `agent.spec.ts locale.spec.ts settings-presentation.spec.ts
+shell.spec.ts` through the pinned runner with explicit screenshot update enabled:
+54 tests passed. It regenerated the 70 overlapping conflict references from the
+combined product; 59 changed bytes and 11 were identical. No changed PNG lies
+outside the conflict list. Visual inspection covered light/dark narrow context
+stacks, desktop Composer, and Settings. Context, To-dos, Goal, Queue, Composer and
+Busy Enter remain visible in their intended seats. Every later verification run
+uses no screenshot update mode.
+
+All four pre-integration Composer noise entries were removed before testing. Fresh
+strict repeats then reproduced the two idle corner variants in all five captures
+per theme (each theme had one identical actual RGBA hash across those captures): each is now
+334×178 (previously 334×154), exactly 12 changed pixels at x24–33/y51–54, maximum
+channel delta 2. Both integrated references use the opposite pixel values from the
+old reference, so their before/after tuples and RGBA hashes were remeasured rather
+than copied. The manifest records one 1×1 region per measured site, budget one,
+and each site's exact channel delta. Adversarial tests reject neighboring pixels,
+text/controls, excess delta, another reference, dimension changes and layout shifts.
+
+The running-draft crops are now 334×244 (previously 334×220). Both old running
+allowances were deleted; five strict runs per theme passed all six Composer states
+(10 tests, 44.0 seconds). Separate comparator assertions keep those running corner
+and text/control sites strict. Existing frozen comparator evidence is unchanged;
+no broad region, global tolerance, retry, timeout or product style was changed.
+
+Changed references (relative to `web-console/test/e2e/`):
+
+- `agent.spec.ts-snapshots/agent-dark-desktop-linux.png`
+- `agent.spec.ts-snapshots/agent-dark-narrow-linux.png`
+- `agent.spec.ts-snapshots/agent-error-light-linux.png`
+- `agent.spec.ts-snapshots/agent-selectors-light-linux.png`
+- `agent.spec.ts-snapshots/agent-settled-light-linux.png`
+- `agent.spec.ts-snapshots/agent-streaming-light-linux.png`
+- `agent.spec.ts-snapshots/agent-tools-light-linux.png`
+- `agent.spec.ts-snapshots/composer-attachment-dark-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-attachment-dark-390-linux.png`
+- `agent.spec.ts-snapshots/composer-attachment-light-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-attachment-light-390-linux.png`
+- `agent.spec.ts-snapshots/composer-context-dark-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-context-dark-390-linux.png`
+- `agent.spec.ts-snapshots/composer-context-light-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-context-light-390-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-draft-dark-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-draft-dark-390-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-draft-light-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-draft-light-390-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-empty-dark-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-empty-dark-390-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-empty-light-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-idle-empty-light-390-linux.png`
+- `agent.spec.ts-snapshots/composer-running-draft-dark-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-running-draft-dark-390-linux.png`
+- `agent.spec.ts-snapshots/composer-running-draft-light-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-running-draft-light-390-linux.png`
+- `agent.spec.ts-snapshots/composer-running-empty-dark-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-running-empty-dark-390-linux.png`
+- `agent.spec.ts-snapshots/composer-running-empty-light-1440-linux.png`
+- `agent.spec.ts-snapshots/composer-running-empty-light-390-linux.png`
+- `locale.spec.ts-snapshots/locale-general-zh-linux.png`
+- `settings-presentation.spec.ts-snapshots/settings-agent-narrow-dark-linux.png`
+- `settings-presentation.spec.ts-snapshots/settings-delete-confirm-light-linux.png`
+- `settings-presentation.spec.ts-snapshots/settings-mobile-dark-linux.png`
+- `settings-presentation.spec.ts-snapshots/settings-mobile-menu-dark-linux.png`
+- `settings-presentation.spec.ts-snapshots/settings-provider-detail-mobile-dark-linux.png`
+- `shell.spec.ts-snapshots/desktop-collapsed-rail-linux.png`
+- `shell.spec.ts-snapshots/desktop-expanded-dark-linux.png`
+- `shell.spec.ts-snapshots/desktop-expanded-light-linux.png`
+- `shell.spec.ts-snapshots/desktop-right-panel-linux.png`
+- `shell.spec.ts-snapshots/mobile-expanded-dark-linux.png`
+- `shell.spec.ts-snapshots/mobile-rail-dark-linux.png`
+- `shell.spec.ts-snapshots/mobile-settings-dark-linux.png`
+- `shell.spec.ts-snapshots/session-idle-light-linux.png`
+- `shell.spec.ts-snapshots/session-queued-light-linux.png`
+- `shell.spec.ts-snapshots/session-reconnect-light-linux.png`
+- `shell.spec.ts-snapshots/session-stopping-light-linux.png`
+- `shell.spec.ts-snapshots/session-uncertain-light-linux.png`
+- `shell.spec.ts-snapshots/session-uncertain-mobile-linux.png`
+- `shell.spec.ts-snapshots/settings-shell-dark-linux.png`
+- `shell.spec.ts-snapshots/settings-shell-light-linux.png`
+- `shell.spec.ts-snapshots/sidebar-delete-light-linux.png`
+- `shell.spec.ts-snapshots/sidebar-empty-light-linux.png`
+- `shell.spec.ts-snapshots/sidebar-named-light-linux.png`
+- `shell.spec.ts-snapshots/sidebar-other-uncertain-light-linux.png`
+- `shell.spec.ts-snapshots/sidebar-preview-light-linux.png`
+- `shell.spec.ts-snapshots/sidebar-scoped-inspector-linux.png`
+- `shell.spec.ts-snapshots/workspace-session-browser-linux.png`
+
+
+### Integrated validation
+
+The final Web unit run passed all 1,446 tests in 78 files. An earlier run timed out
+one unchanged residency test at its existing 5-second limit while full native and
+browser work overlapped; its focused rerun passed (43 residency/comparator tests),
+and the complete final unit run passed without source, assertion or timeout changes.
+The initial stale-noise-policy failures and the strict idle measurement failures
+were diagnostic runs, not reported as passing verification.
+
+| Command | Integrated result |
+| --- | --- |
+| `pnpm --dir protocol/app-server check` | Passed, regenerated v33 without drift |
+| `pnpm --dir protocol/app-server typecheck` | Passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | 78 files, 1,446 passed |
+| `pnpm --dir web-console check:i18n` | Passed |
+| `pnpm --dir web-console check:provenance` | 148 source records, 132 package notices |
+| `pnpm --dir web-console build` | Passed, artifact provenance verified |
+| `pnpm --dir dev typecheck` | Passed |
+| `pnpm --dir dev test` | 38 passed |
+| `pnpm --dir tui typecheck` | Passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 895 passed, 0 failed/skipped |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed |
+| `cargo build --bins --all-features --locked` | Passed |
+| `TMPDIR=/var/tmp/rustx-issue-435-validation RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked` | 4,090 passed, 0 failed, 8 existing ignored, 19 binaries |
+| `uv run --frozen pytest` in `test-support/fake-provider` | 51 passed |
+
+Focused Web command:
+`pnpm --dir web-console exec vitest run test/composer-cancellation.test.tsx test/composer-escape.test.tsx test/submission-policy.test.ts test/composer-preferences.test.ts test/request-lifetime.test.ts test/conversation-residency.test.tsx test/context-seat.test.tsx`
+passed 111 tests. `TMPDIR=/var/tmp/rustx-issue-435-validation cargo test --lib --all-features --locked manual_compaction`
+passed 7 tests, including bounded admission and commit/release gates.
+
+All browser commands below use the two port overrides stated above:
+
+- `CONTAINER_ENGINE=podman bash web-console/scripts/browser-tests.sh agent.spec.ts --grep 'scoped Composer keyboard policy|Busy Enter preference is read|composer primary seat'`: 9 keyboard/persistence passes; 4 expected pre-update reference failures.
+- `RUSTX_SCREENSHOT_UPDATE=1 CONTAINER_ENGINE=podman bash web-console/scripts/browser-tests.sh agent.spec.ts locale.spec.ts settings-presentation.spec.ts shell.spec.ts`: 54 passed; intentional scoped reference update only.
+- `CONTAINER_ENGINE=podman bash web-console/scripts/browser-tests.sh agent.spec.ts --grep 'composer primary seat.*390' --repeat-each=5`: final 10 passed after fresh idle measurement; running references strict.
+- `CONTAINER_ENGINE=podman bash web-console/scripts/browser-tests.sh compaction.spec.ts`: 4 passed, both languages/themes.
+
+The new head was validated locally on Linux; macOS/Windows were not executed
+locally. The eight existing ignored native tests and TMPDIR isolation have the
+reasons recorded above. Hosted CI for the rebased head is separate evidence.
+
+
+Final complete browser verification:
+`RUSTX_E2E_PREVIEW_PORT=5273 RUSTX_E2E_FIXTURE_PORT=5274 CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e`
+passed **161 tests in 9.8 minutes**, with screenshot updates disabled.
+Both `cargo run --locked --example check_test_lanes -- --job rust-contracts` and
+`cargo run --locked --example check_test_lanes -- --job rust-boundaries` passed.
+Final whitespace checks passed. The post-generation current-v32 reference audit
+returned zero matches for generated imports/schema paths, WebSocket subprotocols,
+initialize constants and App Server version constants.
+
+Immediately before delivery, fetch confirmed main and the exact merge base still
+`45e8ca434994910587078538d80ca10d4a7ce9d0`; #446 remained open. Main did not move
+again. Remote #447 remained `ff397c4652befede7fb409138e53133944a0fab4`, the explicit
+force-with-lease guard for the existing branch. The primary checkout was not
+modified and retained its pre-existing untracked `.playwright-mcp/` directory.
