@@ -1378,7 +1378,7 @@ pub struct ConversationWindow {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientManualCompaction {
     /// Caller correlation; absent for an uncorrelated native caller.
-    pub request_id: Option<String>,
+    pub request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     /// False until coordinator state is restored and maintenance released.
     pub released: bool,
     /// Exact pre-commit failure diagnostic, if released unsuccessfully.

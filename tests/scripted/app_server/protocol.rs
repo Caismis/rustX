@@ -4552,3 +4552,76 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn manual_compaction_correlation_is_bounded_before_admission() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let schema = crate::app_server::schema::protocol_schema();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let identity = &schema["$defs"]["ManualCompactionRequestId"];
+        assert_eq!(identity["maxLength"], 64);
+        assert_eq!(identity["minLength"], 1);
+        assert_eq!(identity["pattern"], r"^[A-Za-z0-9_-]+$(?![\s\S])");
+        let read = || {
+            call(
+                &connection,
+                20,
+                Method::SessionSnapshot {
+                    target: target.clone(),
+                    trace_records: vec![],
+                },
+            )
+        };
+        for (value, valid) in [
+            ("550e8400-e29b-41d4-a716-446655440000".to_owned(), true),
+            ("a".repeat(64), true),
+            ("a".repeat(65), false),
+            ("a".repeat(900_000), false),
+            (String::new(), false),
+            ("has space".to_owned(), false),
+            ("非ASCII".to_owned(), false),
+            ("trailing\n".to_owned(), false),
+        ] {
+            let before = read().await;
+            let mut wire = serde_json::to_value(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(30),
+                call: Method::CompactContext {
+                    target: target.clone(),
+                    request_id: "valid".to_owned().try_into().unwrap(),
+                },
+            })
+            .unwrap();
+            wire["params"]["request_id"] = serde_json::Value::String(value.clone());
+            assert_eq!(validator.is_valid(&wire), valid);
+            let response = connection.handle_json(&wire.to_string()).await.unwrap();
+            let Response::Failure(failure) = response else {
+                panic!("empty context cannot compact")
+            };
+            if valid {
+                assert_ne!(failure.error.code, -32602);
+                let MethodResult::Snapshot { snapshot, .. } = read().await else {
+                    panic!("snapshot")
+                };
+                let result = snapshot.context.manual_compaction.unwrap();
+                assert_eq!(result.request_id.unwrap().as_str(), value);
+                assert!(result.released);
+                assert!(result.error.is_some());
+            } else {
+                assert_eq!(failure.error.code, -32602);
+                // Equal cursor and full context prove no start or correlation mutation.
+                assert_eq!(
+                    serde_json::to_value(read().await).unwrap(),
+                    serde_json::to_value(before).unwrap()
+                );
+            }
+            assert!(f.provider.request_bodies().is_empty());
+        }
+        f.close().await;
+    })
+    .await;
+}

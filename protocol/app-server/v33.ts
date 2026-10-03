@@ -103,7 +103,7 @@ export type Request1 =
       method: 'context/compact';
       params: {
         target: AttachmentTarget;
-        request_id: string;
+        request_id: ManualCompactionRequestId;
       };
     }
   | {
@@ -498,6 +498,10 @@ export type AttemptId = string;
  * exactly the profile's configured `request_params`.
  */
 export type ReasoningProfileId = string;
+/**
+ * Manual compaction correlation: 1..64 ASCII letters, digits, underscores or hyphens; not an idempotency key.
+ */
+export type ManualCompactionRequestId = string;
 /**
  * Typed Runtime Client control; an existing-state mutation always names its observation.
  */
@@ -4910,7 +4914,7 @@ export interface RuntimeClientManualCompaction {
   /**
    * Caller correlation; absent for an uncorrelated native caller.
    */
-  request_id?: string | null;
+  request_id?: ManualCompactionRequestId | null;
   /**
    * False until coordinator state is restored and maintenance released.
    */

@@ -392,3 +392,37 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
   expect(heightResult.ok).toBe(false);
   expect(heightResult.report).toContain(`dimensions: expected 390x844, actual 390x843`);
 });
+
+it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51], ['running-draft', 'light', 15, 13, 117], ['running-draft', 'dark', 16, 18, 117]] as const)('measured Composer corner noise stays restricted: %s %s', (state, theme, sites, bound, cornerY) => {
+  const name = `composer-${state}-${theme}-390-linux.png`;
+  const expected = reference(name);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
+  expect(measured).toHaveLength(sites);
+  const observed = copy(expected);
+  for (const [x, y, before, after] of measured) {
+    expect(pixel(expected, x, y)).toEqual(before);
+    paint(observed, x, y, after);
+  }
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, []).ok).toBe(false);
+  expect(compare(observed, `composer-idle-draft-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  for (const region of entry.regions) {
+    expect(region.maxChannelDelta).toBeLessThanOrEqual(bound);
+    const excessive = copy(expected);
+    nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  // Adjacent corner, text, and control pixels retain exact comparison.
+  for (const [x, y] of [[34, cornerY], [33, cornerY + 2], [24, cornerY + 4], [50, 76], [300, 126]]) {
+    const changed = copy(observed); nudge(changed, x, y, 1);
+    const result = compare(changed, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+  const shifted = copy(observed);
+  for (let y = 0; y < shifted.height; y++)
+    for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
+  expect(compare(shifted, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+});

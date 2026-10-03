@@ -407,7 +407,7 @@
                   "$ref": "#/$defs/AttachmentTarget"
                 },
                 "request_id": {
-                  "type": "string"
+                  "$ref": "#/$defs/ManualCompactionRequestId"
                 }
               },
               "additionalProperties": false,
@@ -2138,6 +2138,13 @@
           ]
         }
       ]
+    },
+    "ManualCompactionRequestId": {
+      "description": "Manual compaction correlation: 1..64 ASCII letters, digits, underscores or hyphens; not an idempotency key.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
     },
     "GoalControl": {
       "description": "Typed Runtime Client control; an existing-state mutation always names its observation.",
@@ -7486,9 +7493,13 @@
       "properties": {
         "request_id": {
           "description": "Caller correlation; absent for an uncorrelated native caller.",
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManualCompactionRequestId"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "released": {

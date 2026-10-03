@@ -918,7 +918,7 @@ impl ClientInner {
     /// returns the authoritative context projection after success.
     pub(crate) async fn compact_context(
         &self,
-        request_id: Option<String>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         self.runtime
@@ -2393,7 +2393,7 @@ impl RuntimeClientHost {
     /// successful response means the canonical compaction already committed.
     pub async fn compact_context(
         &self,
-        request_id: Option<String>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.inner.compact_context(request_id).await
     }

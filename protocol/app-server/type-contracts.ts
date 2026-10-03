@@ -90,3 +90,13 @@ const readFailure = {kind: 'session_file_read', reason: 'unavailable'} satisfies
 // @ts-expect-error File errors use a closed native reason vocabulary.
 const ambiguousFailure: ErrorData = {kind: 'session_file_read', reason: 'whatever'};
 void managed; void forbiddenFileRead; void readFailure; void ambiguousFailure;
+
+// Compaction correlation remains the one native bounded string domain on v33.
+import type {ManualCompactionRequestId} from './v33.js';
+const compactionId: ManualCompactionRequestId = '550e8400-e29b-41d4-a716-446655440000';
+const compactId: Extract<Request1, {method: 'context/compact'}>['params']['request_id'] = compactionId;
+const projectedId: NonNullable<NonNullable<RuntimeClientSnapshot['context']>['manual_compaction']>['request_id'] = compactId;
+// @ts-expect-error A transport number is not manual compaction correlation.
+const numericCompactionId: ManualCompactionRequestId = 1;
+void projectedId;
+void numericCompactionId;

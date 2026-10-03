@@ -141,7 +141,7 @@ impl RuntimeAttachment {
     /// Closed attachment or rejected/failed compaction.
     pub async fn compact_context(
         &self,
-        request_id: Option<String>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.access(true)?.compact_context(request_id).await
     }

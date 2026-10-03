@@ -957,7 +957,10 @@ consumes its exact invoking draft, and submits one `context/compact` request dir
 The resident Composer context seat observes execution without a command modal.
 Pending inbound remains permitted; manual compaction creates no Attempt.
 
-App Server v33 requires a caller-generated `request_id` for `context/compact`.
+App Server v33 requires a caller-generated `ManualCompactionRequestId` for
+`context/compact`: 1–64 ASCII letters, digits, underscores or hyphens. Rust
+deserialization rejects invalid values before native admission; schema bounds
+match this contract. The value is correlation only, not an exactly-once key.
 Runtime Client v57 carries the latest admitted manual compaction's correlation,
 `released` boundary, and exact pre-commit diagnostic in `context.manual_compaction`.
 The runtime-owned maintenance task carries that correlation even when its RPC
@@ -979,7 +982,10 @@ mutation. Only matching native correlation can resolve an uncertain request. A f
 progress flag, another client's result, or a newer checkpoint cannot do so. Missing
 or overwritten correlation remains explicitly uncertain. Native authority and runtime
 incarnation replacement retire old scope; generation and exact attachment fences
-prevent obsolete callbacks from changing a replacement view. A confirmed successful
+prevent obsolete callbacks from changing a replacement view. Exact correlated native
+release also frees the local duplicate-gesture guard,
+independently of the still-pending RPC. A new explicit invocation receives a new ID;
+old transport callbacks cannot change it. A confirmed successful
 RPC remains successful if the following read repair fails.
 
 The separate context meter reads `last_request_occupancy`: input tokens, capacity,

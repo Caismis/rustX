@@ -4944,7 +4944,7 @@ mod tests {
     fn manual_compaction_projects_without_fabricating_an_attempt_identity() {
         let mut projection = projection();
         projection.apply(ConversationObservation::ManualCompactionEvent {
-            request_id: Some("test-request".to_owned()),
+            request_id: Some("test-request".to_owned().try_into().unwrap()),
             event: RuntimeEvent::CompactionStarted,
         });
         let admitted = projection
@@ -4953,10 +4953,16 @@ mod tests {
             .manual_compaction
             .as_ref()
             .unwrap();
-        assert_eq!(admitted.request_id.as_deref(), Some("test-request"));
+        assert_eq!(
+            admitted
+                .request_id
+                .as_ref()
+                .map(crate::runtime::identity::ManualCompactionRequestId::as_str),
+            Some("test-request")
+        );
         assert!(!admitted.released);
         projection.apply(ConversationObservation::ManualCompactionEvent {
-            request_id: Some("test-request".to_owned()),
+            request_id: Some("test-request".to_owned().try_into().unwrap()),
             event: RuntimeEvent::CompactionCompleted {
                 generation: 1,
                 summary_message_id: MessageId::new(
@@ -4977,7 +4983,13 @@ mod tests {
             .manual_compaction
             .as_ref()
             .unwrap();
-        assert_eq!(released.request_id.as_deref(), Some("test-request"));
+        assert_eq!(
+            released
+                .request_id
+                .as_ref()
+                .map(crate::runtime::identity::ManualCompactionRequestId::as_str),
+            Some("test-request")
+        );
         assert!(released.released);
         assert!(released.error.is_none());
         let events = collect(&mut projection, RuntimeClientCursor::new(0));

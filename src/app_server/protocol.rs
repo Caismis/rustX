@@ -150,7 +150,7 @@ pub enum Method {
     #[serde(rename = "context/compact")]
     CompactContext {
         target: AttachmentTarget,
-        request_id: String,
+        request_id: crate::runtime::identity::ManualCompactionRequestId,
     },
     #[serde(rename = "goal/control")]
     Goal {

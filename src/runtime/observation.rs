@@ -153,7 +153,7 @@ pub(crate) enum ConversationObservation {
     /// variants are legal in this lane.
     ManualCompactionEvent {
         /// Client correlation, retained only for this runtime incarnation.
-        request_id: Option<String>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
         /// The compaction lifecycle fact.
         event: RuntimeEvent,
     },

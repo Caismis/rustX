@@ -13,25 +13,37 @@ async function observe(context: RuntimeClientContextView) {
 }
 function compact() { act(() => { expect(server.client.compact('A')).toBe(true); }); }
 const count = () => server.requests.filter(item => item.request.method === 'context/compact').length;
-it('claims one request synchronously, survives remount and awaits release despite a committed checkpoint', async () => {
+it.each([null, 'Exact pre-commit failure'])('exact native release frees only A while its RPC remains held: %s', async error => {
   server.held.add('context/compact');
+  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   compact(); expect(server.client.compact('A')).toBe(false);
-  const pending = await server.waitFor('context/compact', 1);
+  const a = await server.waitFor('context/compact', 1);
   expect(screen.getByRole('status').textContent).toContain('Submitting');
   const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
   await observe({ ...base, compaction_in_progress: true, manual_compaction: { request_id: requestId, released: false, error: null } });
+  view.unmount(); render(<ContextSeat client={server.client} sessionId="A"/>);
   expect(screen.getByRole('status').textContent).toContain('Compacting');
   await observe({ ...base, compaction_count: 1, compaction_in_progress: true, manual_compaction: { request_id: requestId, released: false, error: null } });
   expect(screen.getByRole('status').textContent).toBe('Compacting context…');
-  view.unmount(); render(<ContextSeat client={server.client} sessionId="A"/>);
-  expect(screen.getByRole('status').textContent).toContain('Compacting');
-  await observe({ ...base, compaction_count: 1, manual_compaction: { request_id: requestId, released: true, error: null } });
-  expect(screen.getByRole('status').textContent).toBe('Context compacted');
-  expect(server.client.compact('A')).toBe(false); // transport reply still held
+  expect(server.client.compact('A')).toBe(false);
+  await observe({ ...base, compaction_count: 2, manual_compaction: { request_id: 'other-client', released: true, error: null } });
+  expect(server.client.compact('A')).toBe(false); // Neither idle nor unrelated release owns A.
   expect(count()).toBe(1);
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
-  await act(async () => server.reply(pending));
+  await observe({ ...base, compaction_count: error ? 0 : 1, manual_compaction: { request_id: requestId, released: true, error } });
+  expect(screen.getByRole('status').textContent).toContain(error ?? 'Context compacted');
+  compact(); const b = await server.waitFor('context/compact', 2);
+  const current = server.client.getSnapshot().views.A.compactionRequest!;
+  expect(current.requestId).not.toBe(requestId);
+  expect(current.status).toBe('submitting');
+  await act(async () => {
+    if (error) server.socket.deliver({ jsonrpc: '2.0', id: a.id, error: { code: -32000, message: error } });
+    else server.reply(a);
+  });
+  expect(server.client.getSnapshot().views.A.compactionRequest).toBe(current);
+  expect(server.client.compact('A')).toBe(false); // A's transport settlement must not release B.
+  expect(count()).toBe(2);
+  await act(async () => server.reply(b));
 });
 it.each(['missing', 'other-client', 'matching', 'failed'] as const)('lost reply repairs only exact surviving correlation: %s', async evidence => {
   server.held.add('context/compact');
@@ -112,4 +124,19 @@ it('confirmed commit survives a failed refresh', async () => {
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
   await server.client.disconnect();
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
+});
+
+it('real acknowledgement frees the gesture guard before its held read repair', async () => {
+  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
+  server.held.add('session/snapshot');
+  compact(); await server.waitFor('session/snapshot', 1);
+  const a = server.client.getSnapshot().views.A.compactionRequest!;
+  expect(a.status).toBe('succeeded');
+  server.held.add('context/compact');
+  compact(); await server.waitFor('context/compact', 2);
+  const b = server.client.getSnapshot().views.A.compactionRequest!;
+  expect(b.requestId).not.toBe(a.requestId);
+  expect(b.status).toBe('submitting');
+  expect(server.client.compact('A')).toBe(false);
+  expect(count()).toBe(2);
 });

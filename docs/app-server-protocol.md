@@ -1468,3 +1468,16 @@ The internal Runtime Client vocabulary is v57. Only App Server v33 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. Event envelope 1, SQLite 49, Session catalog 13 and subagent IPC v29
 remain unchanged. Present is root-only until a real child delivery owner exists.
+
+
+### Manual compaction correlation boundary
+
+`context/compact.params.request_id` is a `ManualCompactionRequestId`: 1–64 ASCII
+letters, digits, underscores or hyphens. UUID strings are accepted. The same native
+type validates JSON deserialization before runtime dispatch and describes the
+v33 schema's length/pattern constraints. Invalid IDs return invalid params without
+admission, lifecycle publication or provider execution. This ID correlates native
+read evidence only; it does not authorize execution or provide exactly-once replay.
+An exact correlated native release frees Web's gesture guard independently of the
+original transport acknowledgement. The unresolved RPC still settles normally,
+with its callbacks fenced from any later explicit request.

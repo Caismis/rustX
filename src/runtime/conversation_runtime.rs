@@ -2566,7 +2566,7 @@ impl RuntimeInner {
         self: &Arc<Self>,
         task: ManualCompactionTaskResult,
         completion: &ManualCompactionCompletion,
-        request_id: Option<String>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) {
         let ManualCompactionTaskResult {
             conversation,
@@ -4719,7 +4719,7 @@ impl ConversationRuntime {
     #[allow(clippy::too_many_lines)] // Admission and terminal settlement remain visible in one transaction.
     pub async fn compact_context(
         &self,
-        request_id: Option<String>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<ManualCompactionOutcome, ManualCompactionError> {
         let completion = {
             let mut state = self.inner.lock_state();
@@ -8353,7 +8353,7 @@ mod tests {
         let requester = runtime.clone();
         let request = tokio::spawn(async move {
             requester
-                .compact_context(Some("manual-request-435".to_owned()))
+                .compact_context(Some("manual-request-435".to_owned().try_into().unwrap()))
                 .await
         });
         release_gate.wait_entered();
@@ -8376,7 +8376,7 @@ mod tests {
         assert!(
             matches!(before_release.as_slice(), [ConversationObservation::ManualCompactionEvent {
             request_id: Some(id), event: RuntimeEvent::CompactionStarted,
-        }] if id == "manual-request-435")
+        }] if id.as_str() == "manual-request-435")
         );
         release_gate.release();
         let outcome = request.await.unwrap().expect("manual compaction");
@@ -8414,7 +8414,7 @@ mod tests {
             Some(ConversationObservation::ManualCompactionEvent {
                 request_id: Some(id),
                 event: RuntimeEvent::CompactionCompleted { generation: 1, .. }
-            }) if id == "manual-request-435"
+            }) if id.as_str() == "manual-request-435"
         ));
     }
 

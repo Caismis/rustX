@@ -1277,6 +1277,8 @@ export class AppServerClient {
       } else {
         const evidence = snapshot.context?.manual_compaction;
         if (evidence?.request_id === request.requestId && evidence.released) {
+          // Native release ends gesture ownership independently of the RPC reply.
+          if (this.compactionRequests.get(id)?.requestId === request.requestId) this.compactionRequests.delete(id);
           if (request.status !== 'succeeded') this.setSession(id, { compactionRequest: { ...request, status: evidence.error ? 'failed' : 'succeeded', diagnostic: evidence.error ?? undefined } });
           if (this.state.uncertain.some(item => item.compactionRequestId === request.requestId && item.sessionId === id)) {
             this.publish({ uncertain: this.state.uncertain.filter(item => item.compactionRequestId !== request.requestId || item.sessionId !== id) });
@@ -1452,17 +1454,20 @@ export class AppServerClient {
     consume();
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
       && this.state.views[id]?.compactionRequest?.requestId === operation.requestId;
+    const release = () => { if (this.compactionRequests.get(id) === operation) this.compactionRequests.delete(id); };
     void this.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, 'context', undefined, current)
       .then(async () => {
+        release();
         if (!current()) return;
         // The response follows native release. Read failure cannot erase this fact.
         this.setSession(id, { compactionRequest: { ...operation, status: 'succeeded' } });
         await this.refresh(id).catch(() => {});
       }, error => {
+        release();
         if (this.state.views[id]?.compactionRequest !== operation) return;
         if (!current() && (this.state.views[id]?.target || this.state.authorityId !== operation.authorityId)) return;
         this.setSession(id, { compactionRequest: { ...operation, status: isOutcomeUncertain(error) ? 'uncertain' : 'failed', diagnostic: String(error) } });
-      }).finally(() => { if (this.compactionRequests.get(id) === operation) this.compactionRequests.delete(id); });
+      });
     return true;
   }
 
