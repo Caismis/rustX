@@ -1,3 +1,4 @@
+import { capabilities as nativeCapabilities } from './fixture';
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -23,7 +24,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       for (const waiter of state.waiters.splice(0)) waiter();
-      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 33, capabilities: { multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [] } } }));
+      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 34, capabilities: nativeCapabilities } }));
       return Promise.resolve();
     }
     onMessage(listener: (record: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }

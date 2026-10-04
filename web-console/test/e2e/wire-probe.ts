@@ -8,7 +8,7 @@ export async function wireProbe(page: Page) {
   const notifications: { method: string; params: any }[] = [];
   let lose: string | undefined;
   let lost = 0;
-  await page.routeWebSocket(/ws:\/\//, socket => {
+  await page.routeWebSocket(/^wss?:\/\/[^/]+\/?$/, socket => {
     const server = socket.connectToServer();
     const methods = new Map<string | number, string>();
     socket.onMessage(message => {

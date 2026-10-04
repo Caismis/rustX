@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v33';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v34';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/app-server';
@@ -20,7 +20,7 @@ async function mount() {
 }
 it('eligible double Escape sends exactly one native target; a gated reply and settlement preserve drafts/receipts', async () => {
   await mount(); const receipt = { session_id: 'A', batch_id: 'batch', token: 'token' };
-  server.handlers.set('session/upload', () => ({ type: 'session_uploaded', files: [{ receipt, file: { batch_id: 'batch', name: 'kept.txt' }, path: '/kept.txt' }] }));
+  server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: 'ready', files: [{ receipt, file: { batch_id: 'batch', name: 'kept.txt' }, path: '/kept.txt' }] } }));
   await act(async () => fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [new File(['kept'], 'kept.txt')] } }));
   fireEvent.change(input(), { target: { value: 'keep draft' } }); act(() => input().focus()); input().setSelectionRange(2, 5);
   server.held.add('turn/cancel'); escape(); expect(cancels()).toHaveLength(0);

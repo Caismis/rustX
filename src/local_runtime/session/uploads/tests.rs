@@ -13,29 +13,58 @@ use std::cell::RefCell;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::sync::Arc;
 
-type Checkpoint = (&'static str, Box<dyn FnOnce() -> io::Result<()>>);
+type Checkpoint =
+    Arc<std::sync::Mutex<Option<(&'static str, Box<dyn FnOnce() -> io::Result<()> + Send>)>>>;
 thread_local! {
-    /// One armed action for a native `materialize` stage. It lives on the
-    /// arming test's thread, so no concurrently running test can consume it.
     static CHECKPOINT: RefCell<Option<Checkpoint>> = const { RefCell::new(None) };
 }
-/// Deterministic fault/substitution seam called by native `materialize`.
+pub(crate) fn capture_checkpoint() -> Option<Checkpoint> {
+    CHECKPOINT.with(|slot| slot.borrow().clone())
+}
+pub(crate) fn with_checkpoint<T>(checkpoint: Option<Checkpoint>, action: impl FnOnce() -> T) -> T {
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            CHECKPOINT.with(|slot| {
+                slot.take();
+            });
+        }
+    }
+    CHECKPOINT.with(|slot| assert!(slot.replace(checkpoint).is_none()));
+    let _clear = Clear;
+    action()
+}
 pub(super) fn materialize_checkpoint(stage: &str) -> io::Result<()> {
     let armed = CHECKPOINT.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.as_ref().is_some_and(|(armed, _)| *armed == stage) {
-            slot.take()
+        let slot = slot.borrow();
+        let mut checkpoint = slot.as_ref()?.lock().unwrap();
+        if checkpoint
+            .as_ref()
+            .is_some_and(|(armed, _)| *armed == stage)
+        {
+            checkpoint.take()
         } else {
             None
         }
     });
     armed.map_or(Ok(()), |(_, action)| action())
 }
-fn arm_checkpoint(stage: &'static str, action: impl FnOnce() -> io::Result<()> + 'static) {
-    CHECKPOINT.with(|slot| assert!(slot.replace(Some((stage, Box::new(action)))).is_none()));
+fn arm_checkpoint(stage: &'static str, action: impl FnOnce() -> io::Result<()> + Send + 'static) {
+    CHECKPOINT.with(|slot| {
+        assert!(
+            slot.replace(Some(Arc::new(std::sync::Mutex::new(Some((
+                stage,
+                Box::new(action)
+            ))))))
+            .is_none()
+        );
+    });
 }
 fn checkpoint_consumed() -> bool {
-    CHECKPOINT.with(|slot| slot.borrow().is_none())
+    CHECKPOINT.with(|slot| {
+        slot.take()
+            .is_none_or(|checkpoint| checkpoint.lock().unwrap().is_none())
+    })
 }
 fn tempdir() -> std::io::Result<tempfile::TempDir> {
     tempfile::tempdir_in(std::env::temp_dir().canonicalize()?)
@@ -218,6 +247,15 @@ async fn commit_gate_receipts_restart_concurrency_and_failed_turn_are_independen
     assert_ne!(one[0].path, two[0].path);
     drop(controller);
     let controller = SessionController::open(root.path()).unwrap();
+    assert_eq!(
+        controller
+            .upload_status(&a.id, allocation.operation_id.as_ref().unwrap())
+            .await
+            .unwrap(),
+        UploadOutcome::Ready {
+            files: uploaded.clone()
+        }
+    );
     let next = controller
         .upload(&a.id, None, vec![file("a.txt", b"restart")])
         .await
@@ -1166,6 +1204,13 @@ async fn native_sync_failures_never_commit_ready() {
             panic!("{stage}: exactly one durable claim");
         };
         assert!(!allocation.ready, "{stage}");
+        assert_eq!(
+            controller
+                .upload_status(&id, allocation.operation_id.as_ref().unwrap())
+                .await
+                .unwrap(),
+            UploadOutcome::Failed
+        );
         assert_eq!(allocation.workspace, workspace.path());
         assert_eq!(allocation.files[0].name, "payload.txt");
         let path = file_path(workspace.path(), &id, batch, "payload.txt");
@@ -1230,6 +1275,14 @@ async fn ready_registry_commit_failure_never_issues_a_receipt() {
         panic!("exactly one durable claim");
     };
     assert!(!allocation.ready);
+    assert!(allocation.failed);
+    assert_eq!(
+        controller
+            .upload_status(&id, allocation.operation_id.as_ref().unwrap())
+            .await
+            .unwrap(),
+        UploadOutcome::Failed
+    );
     assert_eq!(
         std::fs::read(file_path(workspace.path(), &id, batch, "synced.txt")).unwrap(),
         b"complete"
@@ -1298,6 +1351,13 @@ async fn declared_path_substitution_during_materialization_never_commits_ready()
             panic!("{component}: exactly one durable claim");
         };
         assert!(!allocation.ready, "{component}");
+        assert_eq!(
+            controller
+                .upload_status(&id, allocation.operation_id.as_ref().unwrap())
+                .await
+                .unwrap(),
+            UploadOutcome::Failed
+        );
         assert!(registry.receipts(&id, batch).is_err(), "{component}");
         let suffix = match component {
             "workspace" => Path::new(".agents/uploads").join(id.as_str()).join(batch),
@@ -1434,4 +1494,351 @@ fn materialized_modes_and_leaf_types_are_verified() {
         std::fs::read(outside.path().join("outside")).unwrap(),
         b"keep"
     );
+}
+
+#[test]
+fn native_policy_boundaries_are_independent_of_json_and_images() {
+    let metadata = |sizes: &[usize]| {
+        sizes
+            .iter()
+            .enumerate()
+            .map(|(i, size)| UploadMetadata {
+                name: format!("document-{i}.md"),
+                size: *size,
+            })
+            .collect::<Vec<_>>()
+    };
+    for size in [
+        UPLOAD_POLICY.max_file_bytes - 1,
+        UPLOAD_POLICY.max_file_bytes,
+    ] {
+        assert!(validate_metadata(&metadata(&[size])).is_ok());
+    }
+    assert!(validate_metadata(&metadata(&[UPLOAD_POLICY.max_file_bytes + 1])).is_err());
+    for total in [
+        UPLOAD_POLICY.max_transfer_bytes - 1,
+        UPLOAD_POLICY.max_transfer_bytes,
+    ] {
+        assert!(
+            validate_metadata(&metadata(&[
+                UPLOAD_POLICY.max_file_bytes,
+                total - UPLOAD_POLICY.max_file_bytes
+            ]))
+            .is_ok()
+        );
+    }
+    assert!(
+        validate_metadata(&metadata(&[
+            UPLOAD_POLICY.max_file_bytes,
+            UPLOAD_POLICY.max_file_bytes,
+            1
+        ]))
+        .is_err()
+    );
+    for count in [
+        UPLOAD_POLICY.max_files_per_transfer - 1,
+        UPLOAD_POLICY.max_files_per_transfer,
+    ] {
+        assert!(validate_metadata(&metadata(&vec![0; count])).is_ok());
+    }
+    for count in [0, UPLOAD_POLICY.max_files_per_transfer + 1] {
+        assert!(validate_metadata(&metadata(&vec![0; count])).is_err());
+    }
+}
+
+#[tokio::test]
+async fn deletion_loses_to_native_upload_exclusion_at_each_materialization_boundary() {
+    for stage in [
+        "allocation claim",
+        "batch directory",
+        "file write",
+        "file sync",
+        "directory sync",
+    ] {
+        let root = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let id = controller
+            .create_session(settings(workspace.path()))
+            .await
+            .unwrap()
+            .session
+            .id;
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::sync_channel(0);
+        arm_checkpoint(stage, move || {
+            entered.send(()).unwrap();
+            released.recv().unwrap();
+            Ok(())
+        });
+        let operation = "a".repeat(32);
+        let upload = controller.upload_correlated(
+            &id,
+            None,
+            operation.clone(),
+            vec![file("document.md", b"# durable document")],
+        );
+        let deletion = async {
+            observed.await.unwrap();
+            let registry = controller
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&id)
+                .unwrap();
+            let (batch, _) = registry.allocations.iter().next().unwrap();
+            assert!(registry.receipts(&id, batch).is_err(), "{stage}");
+            assert_eq!(
+                controller.upload_status(&id, &operation).await.unwrap(),
+                UploadOutcome::Unresolved
+            );
+            let SessionDeleteResult::Preview { preview } = controller.delete_preview(&id).await
+            else {
+                panic!("read-only preview")
+            };
+            assert!(
+                matches!(
+                    controller
+                        .delete_session(&id, &preview.target_revision)
+                        .await
+                        .unwrap(),
+                    SessionDeleteResult::Blocked {
+                        reason: super::super::deletion::DeletionBlocker::ResourceConflict,
+                        ..
+                    }
+                ),
+                "{stage}"
+            );
+            release.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(upload, deletion);
+        assert!(checkpoint_consumed(), "{stage} was not consumed");
+        let files = result.unwrap();
+        assert_eq!(
+            controller.upload_status(&id, &operation).await.unwrap(),
+            UploadOutcome::Ready { files }
+        );
+        delete(&controller, &id).await;
+        assert!(
+            controller
+                .upload_correlated(&id, None, "b".repeat(32), vec![file("late.md", b"late")])
+                .await
+                .is_err()
+        );
+        assert!(
+            !workspace
+                .path()
+                .join(".agents/uploads")
+                .join(id.as_str())
+                .exists()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_materialization_verification_failure_is_durable_failed_and_retryable() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let id = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session
+        .id;
+    let gate = Arc::new(Gate::default());
+    let release = gate.arm_scoped();
+    *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+    let worker = controller.clone();
+    let addressed = id.clone();
+    let operation = "b".repeat(32);
+    let correlation = operation.clone();
+    let upload = tokio::spawn(async move {
+        worker
+            .upload_correlated(
+                &addressed,
+                None,
+                correlation,
+                vec![file("verified.txt", b"synced")],
+            )
+            .await
+    });
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    let registry = controller
+        .catalog
+        .lock()
+        .await
+        .upload_registry(&id)
+        .unwrap();
+    let batch = registry.allocations.keys().next().unwrap();
+    let path = file_path(workspace.path(), &id, batch, "verified.txt");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    drop(release);
+    assert!(upload.await.unwrap().is_err());
+    *controller.upload_commit_gate.lock().unwrap() = None;
+    assert_eq!(
+        controller.upload_status(&id, &operation).await.unwrap(),
+        UploadOutcome::Failed
+    );
+    let registry = controller
+        .catalog
+        .lock()
+        .await
+        .upload_registry(&id)
+        .unwrap();
+    assert!(registry.receipts(&id, batch).is_err());
+    assert!(registry.allocations[batch].failed);
+    controller
+        .upload_correlated(
+            &id,
+            None,
+            "c".repeat(32),
+            vec![file("retry.txt", b"explicit retry")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&id)
+            .unwrap()
+            .allocations
+            .len(),
+        2
+    );
+    drop(controller);
+    let reopened = SessionController::open(root.path()).unwrap();
+    assert_eq!(
+        reopened.upload_status(&id, &operation).await.unwrap(),
+        UploadOutcome::Failed
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_publication_durability_uncertainty_is_never_reclassified_failed() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let id = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session
+        .id;
+    let gate = Arc::new(Gate::default());
+    let release = gate.arm_scoped();
+    *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+    let worker = controller.clone();
+    let addressed = id.clone();
+    let upload = tokio::spawn(async move {
+        worker
+            .upload_correlated(
+                &addressed,
+                None,
+                "d".repeat(32),
+                vec![file("ready.txt", b"synced")],
+            )
+            .await
+    });
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    controller
+        .catalog
+        .lock()
+        .await
+        .arm_write_fault_after_rename();
+    drop(release);
+    assert!(
+        matches!(
+            upload.await.unwrap(),
+            Err(SessionError::CatalogCommit {
+                error: super::super::CatalogCommitError::CommittedButDurabilityUncertain { .. }
+            })
+        ),
+        "fault consumed at ready publication"
+    );
+    let registry = controller
+        .catalog
+        .lock()
+        .await
+        .upload_registry(&id)
+        .unwrap();
+    let (batch, allocation) = registry.allocations.iter().next().unwrap();
+    assert!(allocation.ready && !allocation.failed);
+    assert_eq!(
+        controller
+            .upload_status(&id, &"d".repeat(32))
+            .await
+            .unwrap(),
+        UploadOutcome::Ready {
+            files: registry.receipts(&id, batch).unwrap()
+        }
+    );
+}
+
+#[tokio::test]
+async fn catalog_reopen_validates_durable_upload_admission_bounds() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let id = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session
+        .id;
+    let uploaded = controller
+        .upload(&id, None, vec![file("original", b"mutable")])
+        .await
+        .unwrap();
+    drop(controller);
+    let path = root.path().join("sessions/catalog.json");
+    let original: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let batch = &uploaded[0].receipt.batch_id;
+    for (sizes, valid) in [
+        (vec![], false),
+        (vec![UPLOAD_POLICY.max_file_bytes + 1], false),
+        (vec![UPLOAD_POLICY.max_file_bytes; 3], false),
+        (vec![0; UPLOAD_POLICY.max_files_per_transfer + 1], false),
+        (vec![UPLOAD_POLICY.max_file_bytes], true),
+        (vec![UPLOAD_POLICY.max_file_bytes; 2], true),
+        (vec![0; UPLOAD_POLICY.max_files_per_transfer], true),
+    ] {
+        let mut document = original.clone();
+        let files =
+            &mut document["sessions"][id.as_str()]["uploads"]["allocations"][batch]["files"];
+        let template = files[0].clone();
+        *files = serde_json::Value::Array(
+            sizes
+                .iter()
+                .enumerate()
+                .map(|(index, size)| {
+                    let mut entry = template.clone();
+                    entry["name"] = format!("entry-{index}").into();
+                    entry["token"] = identity().unwrap().into();
+                    entry["admitted_bytes"] = (*size).into();
+                    entry
+                })
+                .collect(),
+        );
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        let reopened = SessionController::open(root.path());
+        assert_eq!(reopened.is_ok(), valid, "admitted sizes {sizes:?}");
+        if let Err(error) = reopened {
+            assert!(matches!(error, super::super::SessionError::Catalog { .. }));
+        }
+    }
+    // Workspace content is mutable; a valid admitted fact is not recomputed on reopen.
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    std::fs::write(&uploaded[0].path, b"changed after admission").unwrap();
+    let reopened = SessionController::open(root.path()).unwrap();
+    let registry = reopened.catalog.lock().await.upload_registry(&id).unwrap();
+    assert_eq!(registry.allocations[batch].files[0].admitted_bytes, 7);
 }

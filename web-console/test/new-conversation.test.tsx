@@ -7,7 +7,7 @@ import { NavigationEpoch } from '../src/client/navigation';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v33';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v34';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -121,7 +121,7 @@ it('confirmed create survives a transport replacement: it opens the exact commit
   // before the client owner starts its next, separately fenced continuation.
   await act(async () => { server.reply(request); await Promise.resolve(); server.socket.close(); });
   await waitFor(() => expect(opened).toHaveBeenCalledWith('native-committed'));
-  expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'session/upload', 'turn/start'].includes(r.request.method))).toHaveLength(0);
+  expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'session/uploadPrepare', 'turn/start'].includes(r.request.method))).toHaveLength(0);
   expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
   server.snapshots.set('native-committed', snapshot('native-committed'));
   await act(async () => server.connect());

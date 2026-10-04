@@ -329,18 +329,21 @@ and reconnect diagnostics remain visible.
 
 ## Uploads
 
-User uploads are Session-owned workspace uploads on App Server **v8**. The stack
-wraps `app/agent/AgentComposer` and the pinned Harness card/footer seats: a draft transfers
-through `session/upload` first, and either delivery action carries the resulting
-typed `UploadReceipt`s as ordinary content.
+User uploads are native Session-owned files under App Server v34. The dedicated
+intake owner normalizes picker/drop/paste, preserves duplicate selections through
+local identities, and keeps per-file accepted/rejected outcomes. Raw over-count
+selections are atomically rejected with one summary. Directory entries are detected
+through DataTransfer items; paste reads file items once and inserts plain text at
+the textarea selection. IME and existing command/Enter/Escape ownership remain.
+The attachment button tooltip exposes server policy in English and Chinese.
 
-```text
-send(sessionId, text, uploadReceipts, delivery) -> turn/start or turn/steer
-```
-
-There is no `artifact/upload` user path or upload compatibility path. Upload receipts are content only:
-they never participate in the accepted-`MessageId` identity contract above, and an
-uncertain upload leaves its draft card uncertain rather than being replayed.
+Ready cards carry native receipts. All other outcomes gate submission except
+accepted draft files owned by the retained first-submission lifecycle. Retry needs
+authoritative no-commit evidence; Check status only reads the original operation.
+A ready repair reuses its receipt without uploading again. The first-submission
+owner retains operation identities and receipts outside React; recovery never
+creates another Session or automatically sends a turn. Continue is a separate
+explicit gesture after reconciliation. Removal never claims native rollback.
 
 ## Commands (WEB-05)
 
@@ -458,3 +461,20 @@ introducing resident Turn presentation. The inspected diff establishes that chan
 but not a separate meter-specific rationale. The restored capability lives in the
 current Composer context seat; cumulative ConversationStats and Turn tails retain
 their present roles.
+
+The selected Composer has one retained intake owner. Only committed semantic
+Composer activation retires an incompatible Session, Conversation or draft binding.
+Speculative/abandoned render cannot clear, rebind or retire the committed File owner.
+Native authority replacement explicitly retires obsolete owners;
+same-binding remount/reconnect retains recovery state. Client disposal clears all
+intakes. First-submit sealing transfers ownership to FirstSubmissions before create;
+admission/discard releases those files. A known rejected create returns files to the original live intake for editing.
+User-input count/byte limits are distinct from transfer limits and are independently
+validated by the native receipt collection owner before turn admission.
+
+Upload recovery preserves typed evidence in both immediate and first-submission
+owners: native Absent/Failed permits an explicit fresh-operation Retry; Unresolved
+or unrepairable response loss permits only exact-operation Check status. A queued
+file stopped before dispatch is known retryable, not uncertain. Rebinding never
+restarts it automatically. Failed browser file extraction displays a removable
+rejection without creating an empty File.

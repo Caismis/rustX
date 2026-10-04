@@ -1,3 +1,6 @@
+import { fixtures as uploadFixtures } from "../../../protocol/app-server/fixtures.ts";
+const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
+const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
 /**
  * One connected App Server client, host and attached Session, over a scripted
  * transport.
@@ -27,7 +30,7 @@ import { FakeTransport } from "./app-server-peer.ts";
 import { runtimeCursor, snapshot as defaultSnapshot } from "./fixtures.ts";
 
 export const SERVER_CAPABILITIES = {
-  multi_session: true,
+  upload_policy: nativeUploadPolicy, multi_session: true,
   single_writable_controller: true,
   headless_interactions: true,
   experimental_methods: [],
@@ -72,6 +75,7 @@ export async function harness(
     capabilities: SERVER_CAPABILITIES,
   });
   const client = await connecting;
+  client.uploadCarrier = async () => {};
   const host = new AppServerHost({ client, ownership: "external" });
 
   const target: AttachmentTarget = {

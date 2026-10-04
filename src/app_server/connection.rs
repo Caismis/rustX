@@ -103,7 +103,7 @@ impl Drop for AttachReservation {
     }
 }
 
-fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
+fn release_route(host: &AppServerHost, table: &Mutex<RouteTable>, route: &Arc<Route>) {
     let mut routes = table.lock().expect("routes mutex");
     if routes
         .active
@@ -112,6 +112,7 @@ fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
     {
         routes.active.remove(&route.target.session_id);
         route.attachment.detach();
+        host.uploads().revoke_route(route);
         route.external.release();
         route.capacity.release();
     }
@@ -206,6 +207,7 @@ impl AppServerConnection {
         routes.closed = true;
         for (_, route) in std::mem::take(&mut routes.active) {
             route.attachment.detach();
+            self.host.uploads().revoke_route(&route);
             route.external.release();
             route.capacity.release();
         }
@@ -350,6 +352,7 @@ impl AppServerConnection {
             let changed = self.changed.clone();
             let sessions = self.sessions.clone();
             let manager = self.host.manager().clone();
+            let upload_host = self.host.clone();
             let receiver = {
                 let routes = self.routes.lock().expect("routes mutex");
                 if routes.closed
@@ -377,6 +380,7 @@ impl AppServerConnection {
                                     changed,
                                     sessions,
                                     manager,
+                                    upload_host,
                                 )
                                 .await
                             }
@@ -398,7 +402,7 @@ impl AppServerConnection {
             Method::SessionDetach { target } => {
                 // Removing a connection relationship needs no live-runtime lease.
                 let route = self.route(&target)?;
-                release_route(&self.routes, &route);
+                release_route(&self.host, &self.routes, &route);
                 self.changed.notify_one();
                 Ok(MethodResult::Detached {})
             }
@@ -424,6 +428,7 @@ impl AppServerConnection {
             Method::SessionSwitchNode { target, node_id } => {
                 let route = self.route(&target)?;
                 let manager = self.host.manager().clone();
+                let host = self.host.clone();
                 let routes = self.routes.clone();
                 let changed = self.changed.clone();
                 let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -447,7 +452,7 @@ impl AppServerConnection {
                         Ok(MethodResult::Session { session })
                     }
                     .await;
-                    release_route(&routes, &route);
+                    release_route(&host, &routes, &route);
                     changed.notify_one();
                     let _ = sender.send(result);
                 });
@@ -875,7 +880,7 @@ impl AppServerConnection {
                     continue;
                 }
                 EventDelivery::Closed | EventDelivery::Exhausted => {
-                    release_route(&self.routes, &route);
+                    release_route(&self.host, &self.routes, &route);
                     NotificationMethod::Closed { target }
                 }
                 EventDelivery::Pending => unreachable!("async delivery never returns Pending"),
@@ -904,7 +909,8 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::ModelSet { target, .. }
         | Method::Capability { target, .. }
         | Method::ArtifactRead { target, .. }
-        | Method::SessionUpload { target, .. }
+        | Method::SessionUploadPrepare { target, .. }
+        | Method::SessionUploadStatus { target, .. }
         | Method::Trace { target, .. }
         | Method::TraceDetail { target, .. }
         | Method::Transcript { target, .. }
@@ -944,6 +950,7 @@ async fn dispatch_runtime(
     changed: Arc<tokio::sync::Notify>,
     sessions: SessionController,
     manager: crate::local_runtime::session_runtime_manager::SessionRuntimeManager,
+    upload_host: AppServerHost,
 ) -> Result<MethodResult, RpcError> {
     match method {
         Method::ConfigurationGet { target } => {
@@ -962,47 +969,26 @@ async fn dispatch_runtime(
                 .artifact_read(&artifact_id)
                 .map_err(client_error)?,
         }),
-        Method::SessionUpload { target, files } => {
-            use base64::Engine;
-            // 512 KiB decoded per batch -> <=699,072 base64 bytes for eight
-            // files, leaving >300 KiB of the 1 MiB frame for JSON/routing.
-            const FILE_MAX: usize = 256 * 1024;
-            const BATCH_MAX: usize = 512 * 1024;
-            if files.is_empty() || files.len() > 8 {
-                return Err(domain(ErrorData::InvalidParams));
-            }
-            let mut total = 0usize;
-            let files = files
-                .into_iter()
-                .map(|file| {
-                    if file.name.len() > 255 || file.data.len() > FILE_MAX.div_ceil(3) * 4 {
-                        return Err(domain(ErrorData::InvalidParams));
-                    }
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(file.data)
-                        .map_err(|_| domain(ErrorData::InvalidParams))?;
-                    total += bytes.len();
-                    if bytes.len() > FILE_MAX || total > BATCH_MAX {
-                        return Err(domain(ErrorData::InvalidParams));
-                    }
-                    Ok(crate::local_runtime::session::uploads::UploadFile {
-                        name: file.name,
-                        bytes,
-                    })
-                })
-                .collect::<Result<Vec<_>, RpcError>>()?;
-            let node = sessions
-                .catalog
-                .lock()
-                .await
-                .conversation_lineage(&target.session_id, &target.conversation_id)
-                .map_err(session_error)?
-                .0;
-            let files = sessions
-                .upload(&target.session_id, Some(&node.id), files)
-                .await
-                .map_err(session_error)?;
-            Ok(MethodResult::SessionUploaded { files })
+        Method::SessionUploadPrepare {
+            target: _,
+            operation_id,
+            files,
+        } => {
+            let transfer =
+                super::upload_transfer::prepare(&upload_host, route, operation_id, files)
+                    .await
+                    .map_err(|_| domain(ErrorData::InvalidParams))?;
+            Ok(MethodResult::UploadPrepared { transfer })
+        }
+        Method::SessionUploadStatus {
+            target,
+            operation_id,
+        } => {
+            let outcome =
+                super::upload_transfer::status(&upload_host, &target.session_id, &operation_id)
+                    .await
+                    .map_err(|_| domain(ErrorData::InvalidParams))?;
+            Ok(MethodResult::UploadStatus { outcome })
         }
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),
@@ -1113,18 +1099,27 @@ async fn dispatch_runtime(
             Ok(MethodResult::Subscribed { after_cursor })
         }
         Method::TurnStart { target, content } | Method::TurnSteer { target, content } => {
+            let receipts: Vec<_> = content
+                .iter()
+                .filter_map(|block| match block {
+                    UserInputBlock::Upload(receipt) => Some(receipt.clone()),
+                    UserInputBlock::Text(_) => None,
+                })
+                .collect();
+            let mut uploads = sessions
+                .uploaded_content(&target.session_id, &receipts)
+                .await
+                .map_err(session_error)?
+                .into_iter();
             let mut canonical = Vec::with_capacity(content.len());
             for block in content {
                 match block {
                     UserInputBlock::Text(text) => {
                         canonical.push(crate::message::types::UserContentBlock::Text(text));
                     }
-                    UserInputBlock::Upload(receipt) => canonical.extend(
-                        sessions
-                            .uploaded_content(&target.session_id, &[receipt])
-                            .await
-                            .map_err(session_error)?,
-                    ),
+                    UserInputBlock::Upload(_) => {
+                        canonical.push(uploads.next().expect("validated receipt collection"));
+                    }
                 }
             }
             native_result(authority.submit_session_inbound(canonical))

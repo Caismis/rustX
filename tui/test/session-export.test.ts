@@ -1,3 +1,6 @@
+import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
+const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
+const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, readFile, rm, access } from 'node:fs/promises';
@@ -85,8 +88,8 @@ test('native generated preparation failures survive the remote client and create
   const transport = new FakeTransport();
   const initializing = AppServerClient.initialize({ transport });
   const [initialize] = await transport.log.awaitMethod('initialize');
-  transport.respond(initialize!.id, { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 33, capabilities: {
-    multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [],
+  transport.respond(initialize!.id, { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 34, capabilities: {
+    upload_policy: nativeUploadPolicy, multi_session: true, single_writable_controller: true, headless_interactions: true, experimental_methods: [],
   } });
   const client = await initializing;
   const host = new AppServerHost({ client, ownership: 'external', endpoint: 'ws://remote.example/' });

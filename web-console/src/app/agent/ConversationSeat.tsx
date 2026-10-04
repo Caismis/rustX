@@ -1,11 +1,11 @@
 import { useTranslation } from '../../locale/react';
 import { useState } from 'react';
-import type { AppServerClient } from '../../client/app-server';
+import { sameTarget, type AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v33';
+import type { UserInputBlock } from '../../../../protocol/app-server/v34';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
@@ -33,6 +33,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
+  const uploadCurrent = () => current() && state.generation === client.getSnapshot().generation && sameTarget(view?.target, sessionId ? client.getSnapshot().views[sessionId]?.target : undefined);
   const cancellation = view && current() ? client.cancellationTarget(view.id) : undefined;
   const [sending, setSending] = useState<string>();
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
@@ -50,10 +51,11 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           consumed, cancellationAvailable: !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
           onCancel: () => { setFailure(undefined); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure({ owner, message: String(cause) })); },
-          onUpload: files => client.upload(view.id, files),
-          onSend: async (text, receipts, delivery) => {
+          onUpload: (files, operation) => client.upload(view.id, files, { current: uploadCurrent, acknowledged: () => {} }, operation),
+          onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!uploadCurrent()) throw new Error('Upload view replaced'); return result; },
+          onSend: async (text, receipts, delivery, acknowledged) => {
             const generation = client.getSnapshot().generation; setFailure(undefined); setSending(owner);
-            try { await client.send(view.id, text, receipts, delivery); return generation === client.getSnapshot().generation; }
+            try { await client.send(view.id, text, receipts, delivery, acknowledged); return generation === client.getSnapshot().generation; }
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>

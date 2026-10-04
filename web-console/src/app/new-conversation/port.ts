@@ -1,7 +1,8 @@
+import { UploadFailure } from '../../client/uploads';
 import { modelPreferences } from '../model-preference';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v33';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v34';
 import type { FirstSubmitPort } from './first-submit';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, opened: (id: string) => (() => boolean) | void): FirstSubmitPort {
@@ -14,6 +15,11 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       && (!target || sameTarget(state.views[target.session_id]?.target, target));
   };
   const requireCurrent = () => { if (!current()) throw new Error('New Conversation authority changed. Inspect Sessions; do not replay.'); };
+  const bindSession = (session: { id: string; conversation: string }) => {
+    requireCurrent(); const attached = client.target(session.id);
+    if (attached.conversation_id !== session.conversation) throw new Error('Retained upload belongs to another Conversation');
+    target = attached;
+  };
   return {
     current,
     async create(draft, acknowledged) {
@@ -42,7 +48,8 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       // Attach consumes the established native model/configuration. No second
       // selection, provider probe, model repair or catalog refresh owns startup.
     },
-    async upload(session, file, acknowledged) { const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
-    async send(session, draft, receipts, acknowledged) { await client.send(session.id, draft.text, receipts, 'send', acknowledged, current); },
+    async upload(session, file, acknowledged, operation) { try { bindSession(session); } catch (error) { throw new UploadFailure('failed', error); } const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }, operation); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
+    status: async (session, operation) => { bindSession(session); const result = await client.uploadStatus(session.id, operation); requireCurrent(); return result; },
+    async send(session, draft, receipts, acknowledged) { bindSession(session); await client.send(session.id, draft.text, receipts, 'send', acknowledged, current); },
   };
 }

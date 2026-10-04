@@ -1,6 +1,6 @@
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v33';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v33';
+import type { TraceDetail } from '../../protocol/app-server/v34';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v34';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -75,16 +75,17 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 33;
+  version = 34;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v33' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v34' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
-  client = new AppServerClient(this.socketFactory);
+  carrierTransfers = 0;
+  client = new AppServerClient(this.socketFactory, 30_000, async () => { this.carrierTransfers++; });
   constructor() { this.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true })); } // Protocol-only fixture; App installs real Host admission.
   get socket() { return this.sockets[this.sockets.length - 1]; }
   target(id: string, socket = this.socket): AttachmentTarget {
@@ -135,12 +136,18 @@ export class Server {
     if (!this.snapshots.has(id)) throw new RpcFailure({ code: -32000, message: 'Unknown Session', data: { kind: 'unknown_session', session_id: id } });
     return { id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}`, ...this.summaries.get(id) };
   }
+  readonly uploads = new Map<string, Extract<MethodResult, { type: 'upload_status' }>['outcome']>();
   private execute(request: Request, socket: FakeSocket): MethodResult {
     const params = request.params;
     const id = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : 'A';
     if (socket.closed || ('target' in params && 'session_id' in params.target && !sameTarget(this.targets.get(socket)?.get(id), params.target))) {
       throw new RpcFailure({ code: -32000, message: 'Stale attachment', data: { kind: 'stale_attachment' } });
     }
+    if (request.method === 'session/uploadPrepare') {
+      this.uploads.set(request.params.operation_id, { state: 'ready', files: request.params.files.map((file, index) => ({ receipt: { session_id: id, batch_id: request.params.operation_id, token: `file-${index}` }, file: { name: file.name, batch_id: request.params.operation_id }, path: `/workspace/${id}/${file.name}` })) });
+      return { type: 'upload_prepared', transfer: { path: '/session-upload/' + 'a'.repeat(43), loopback_port: null, expires_in_seconds: 60 } };
+    }
+    if (request.method === 'session/uploadStatus' && !this.handlers.has(request.method)) return { type: 'upload_status', outcome: this.uploads.get(request.params.operation_id) ?? { state: 'absent' } };
     const handler = this.handlers.get(request.method);
     if (handler) return handler(request);
     let result: MethodResult;
@@ -226,4 +233,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v33').RuntimeClientTranscriptPage, conversation_id = 'conv-A') { return { page, cut: { conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, newer_cursor: null, target: null, target_cursor: null }; }
+export function readingWindow(page: import('../../protocol/app-server/v34').RuntimeClientTranscriptPage, conversation_id = 'conv-A') { return { page, cut: { conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, newer_cursor: null, target: null, target_cursor: null }; }

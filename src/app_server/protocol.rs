@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v33 envelope and method vocabulary.
+//! Rust authority for the App Server v34 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 33;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 34;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -71,13 +71,6 @@ pub struct Request {
     pub call: Method,
 }
 
-/// Bounded JSON carrier. The Session domain accepts decoded bytes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct UploadBytes {
-    pub name: String,
-    pub data: String,
-}
 pub use crate::local_runtime::session::uploads::UserInputBlock;
 
 /// A single public method space, with no nested Runtime Client envelope.
@@ -90,10 +83,16 @@ pub enum Method {
         target: AttachmentTarget,
         artifact_id: crate::runtime::identity::ArtifactId,
     },
-    #[serde(rename = "session/upload")]
-    SessionUpload {
+    #[serde(rename = "session/uploadPrepare")]
+    SessionUploadPrepare {
         target: AttachmentTarget,
-        files: Vec<UploadBytes>,
+        operation_id: String,
+        files: Vec<crate::local_runtime::session::uploads::UploadMetadata>,
+    },
+    #[serde(rename = "session/uploadStatus")]
+    SessionUploadStatus {
+        target: AttachmentTarget,
+        operation_id: String,
     },
     #[serde(rename = "session/switchNode")]
     SessionSwitchNode {
@@ -486,8 +485,11 @@ pub enum MethodResult {
     ArtifactBytes {
         data: String,
     },
-    SessionUploaded {
-        files: Vec<crate::local_runtime::session::uploads::UploadedFile>,
+    UploadPrepared {
+        transfer: super::upload_transfer::UploadDescriptor,
+    },
+    UploadStatus {
+        outcome: crate::local_runtime::session::uploads::UploadOutcome,
     },
     Diagnostics {
         snapshot: crate::app_server::host::ServerDiagnostics,
@@ -649,6 +651,7 @@ pub enum MethodResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ServerCapabilities {
+    pub upload_policy: crate::local_runtime::session::uploads::UploadPolicy,
     pub multi_session: bool,
     pub single_writable_controller: bool,
     pub headless_interactions: bool,
@@ -658,6 +661,7 @@ pub struct ServerCapabilities {
 impl Default for ServerCapabilities {
     fn default() -> Self {
         Self {
+            upload_policy: crate::local_runtime::session::uploads::UPLOAD_POLICY,
             multi_session: true,
             single_writable_controller: true,
             headless_interactions: true,

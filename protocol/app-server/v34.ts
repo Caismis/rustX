@@ -25,10 +25,18 @@ export type Request1 =
       };
     }
   | {
-      method: 'session/upload';
+      method: 'session/uploadPrepare';
       params: {
         target: AttachmentTarget;
-        files: UploadBytes[];
+        operation_id: string;
+        files: UploadMetadata[];
+      };
+    }
+  | {
+      method: 'session/uploadStatus';
+      params: {
+        target: AttachmentTarget;
+        operation_id: string;
       };
     }
   | {
@@ -1005,8 +1013,12 @@ export type MethodResult =
       type: 'artifact_bytes';
     }
   | {
-      files: UploadedFile[];
-      type: 'session_uploaded';
+      transfer: UploadDescriptor;
+      type: 'upload_prepared';
+    }
+  | {
+      outcome: UploadOutcome;
+      type: 'upload_status';
     }
   | {
       snapshot: ServerDiagnostics;
@@ -1235,6 +1247,20 @@ export type PendingMutationOutcome =
     }
   | {
       status: 'invalid_item';
+    };
+export type UploadOutcome =
+  | {
+      state: 'absent';
+    }
+  | {
+      state: 'unresolved';
+    }
+  | {
+      state: 'failed';
+    }
+  | {
+      files: UploadedFile[];
+      state: 'ready';
     };
 export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
 /**
@@ -3524,12 +3550,9 @@ export interface AttachmentTarget {
   runtime_incarnation: RuntimeIncarnationId;
   attachment_id: AttachmentId;
 }
-/**
- * Bounded JSON carrier. The Session domain accepts decoded bytes.
- */
-export interface UploadBytes {
+export interface UploadMetadata {
   name: string;
-  data: string;
+  size: number;
 }
 /**
  * Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
@@ -4288,6 +4311,11 @@ export interface ArchiveDownloadDescriptor {
   filename: string;
   expires_in_seconds: number;
   loopback_port?: number | null;
+}
+export interface UploadDescriptor {
+  path: string;
+  loopback_port?: number | null;
+  expires_in_seconds: number;
 }
 /**
  * A successful ordered file allocation. Paths are a presentation of ownership,
@@ -7460,10 +7488,23 @@ export interface RuntimeClientAgentWorkspace1 {
   handoff?: RuntimeClientWorkspaceHandoff | null;
 }
 export interface ServerCapabilities {
+  upload_policy: UploadPolicy;
   multi_session: boolean;
   single_writable_controller: boolean;
   headless_interactions: boolean;
   experimental_methods: string[];
+}
+/**
+ * Finite native storage admission, independent of image and control-frame limits.
+ */
+export interface UploadPolicy {
+  max_file_bytes: number;
+  max_transfer_bytes: number;
+  max_files_per_transfer: number;
+  max_uploads_per_user_input: number;
+  max_upload_bytes_per_user_input: number;
+  max_concurrent_transfers: number;
+  max_chunk_bytes: number;
 }
 /**
  * Bounded authoritative metadata for one Session.

@@ -14,3 +14,5 @@ pub mod host;
 pub mod archive_download;
 
 pub(crate) mod product_host;
+
+pub mod upload_transfer;

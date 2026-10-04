@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v33';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v34';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); });
 it('bounded native marks retain focus preview when the pointer leaves and keyboard focus never navigates alone', async () => {

@@ -4,7 +4,7 @@ The dev launcher owns the App Server, exact endpoint, transport credential, brow
 launch credential, Host config, carrier and private scratch lifetime. Carrier
 authentication hands admission material to the browser; it adds no App Server RPC,
 proxy, native configuration or Workspace authority. The browser connects directly
-with the existing AppServerClient and App Server protocol **v33**.
+with the existing AppServerClient and App Server protocol **v34**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
@@ -203,3 +203,13 @@ Harness `ddefc45fbc7f8e46dd73185e68295696d1297887` was inspected as a product/se
 reference. Authentication and launcher code are independently implemented. Unlike
 Harness's persistent signing credential and 30-day cookie, rustX has no durable
 browser secret or expiry database. Existing adapted Settings provenance is retained.
+
+## Native upload data lane
+
+App Server v34 advertises ordinary file policy at initialization. Upload prepare
+is authenticated through the exact native attachment; a short-lived single-use
+capability authorizes a separate binary socket at the same selected native origin.
+No transport key, Product Host credential or local path appears in the descriptor.
+Remote descriptors cannot select loopback ports or foreign origins. The binary
+carrier never writes files or issues receipts; status reads use native operation
+correlation. Control JSON limits and image/preview policy remain independent.

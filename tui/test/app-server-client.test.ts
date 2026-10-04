@@ -1,3 +1,6 @@
+import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
+const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
+const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
 /**
  * The one typed App Server client, proved at its own boundary.
  *
@@ -43,7 +46,7 @@ import {
 import { backgroundExecution, subagent, runtimeCursor, snapshot } from "./support/fixtures.ts";
 
 const CAPABILITIES = {
-  multi_session: true,
+  upload_policy: nativeUploadPolicy, multi_session: true,
   single_writable_controller: true,
   headless_interactions: true,
   experimental_methods: [],
@@ -103,8 +106,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 33);
-    assert.equal(params.protocol_version, 33);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 34);
+    assert.equal(params.protocol_version, 34);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -140,7 +143,7 @@ describe("initialization", () => {
       protocol_version: 28,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 28, this client speaks 33/);
+    await assert.rejects(pending, /negotiated protocol 28, this client speaks 34/);
   });
 });
 
@@ -632,7 +635,7 @@ describe("generated-contract ingress", () => {
     ["wrong correlated mutation result tag", { jsonrpc: "2.0", id: 3, result: { type: "detached" } }],
     ["invalid result DTO", { jsonrpc: "2.0", id: 2, result: { type: "sessions", sessions: "invalid" } }],
     ["nested result bounds", { jsonrpc: "2.0", id: 2, result: { type: "snapshot", cursor: runtimeCursor(6), snapshot: snapshot({ context: { compaction_in_progress: false, compaction_count: -1 } }) } }],
-    ["no nested boolean coercion", { jsonrpc: "2.0", id: 2, result: { type: "server_info", capabilities: { ...CAPABILITIES, multi_session: "true" } } }],
+    ["no nested boolean coercion", { jsonrpc: "2.0", id: 2, result: { type: "server_info", capabilities: { ...CAPABILITIES, upload_policy: nativeUploadPolicy, multi_session: "true" } } }],
     ["invalid RPC error", { jsonrpc: "2.0", id: 2, error: { code: "bad", message: null } }],
     ["invalid nested RPC error", { jsonrpc: "2.0", id: 2, error: { code: -1, message: "failure", data: { kind: "stale_settings", expected: "not-a-revision", actual: "1" } } }],
     ["unexpected request", { jsonrpc: "2.0", id: 2, method: "server/info", params: {} }],

@@ -1,3 +1,4 @@
+import { UploadFailure, AttachmentIntakes } from './uploads';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import { NavigationEpoch } from './navigation';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
@@ -7,10 +8,10 @@ import type {
   ConfigurationApplication, RuntimeClientSessionDeletionResult, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v33';
-import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
+} from '../../../protocol/app-server/v34';
+import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage, ConversationWindowAt } from '../../../protocol/app-server/v33';
+import type { ConversationTurn, ConversationTurnPage, ConversationWindowAt } from '../../../protocol/app-server/v34';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 /** Expected observed cancellation identity; never substituted with a successor Attempt. */
@@ -86,6 +87,7 @@ export type GoalControlOutcome =
   | { status: 'uncertain' }
   | { status: 'obsolete' };
 export interface UncertainOperation {
+  uploadOperationId?: string;
   compactionRequestId?: string;
   id: string;
   method: Request1['method'];
@@ -151,6 +153,12 @@ interface Pending {
   reject: (error: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
 }
+/** The request owner proves that transport dispatch never began. */
+export class RequestNotDispatched extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
 export class OutcomeUncertain extends Error {
   constructor() { super('Response lost after transmission. Outcome uncertain; the request was not replayed. Reconnect and inspect authoritative state.'); }
 }
@@ -191,7 +199,7 @@ function goalRefusal(error: unknown) {
   return error.message;
 }
 const READS = new Set<Request1['method']>([
-  'session/turns',
+  'session/turns', 'session/uploadStatus',
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
   'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
   'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'session/boundaries',
@@ -222,11 +230,12 @@ export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a &&
 /** One native rustX connection. All retained snapshots are replaceable read caches.
  * Runtime events fold below React; snapshots initialize or repair exact attachments. */
 export class AppServerClient {
+  readonly attachmentIntakes = new AttachmentIntakes();
   readonly log = new ProtocolLog();
   readonly navigation = new NavigationEpoch();
   readonly firstSubmissions = new FirstSubmissions();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
-  dispose() { this.firstSubmissions.dispose(); return this.disconnect(); }
+  dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
   private socket?: Socket;
   private initialized = false;
   private nextId = 0;
@@ -265,7 +274,7 @@ export class AppServerClient {
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
-  constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000) {
+  constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000, private readonly uploadCarrier = transferUpload) {
     // Navigation retires admission proofs; release their reservations outside the caller's stack.
     this.navigation.subscribe(() => queueMicrotask(() => this.pump()));
   }
@@ -309,6 +318,7 @@ export class AppServerClient {
   }
   private retireAuthority() {
     this.navigation.invalidate();
+    this.attachmentIntakes.retireAll();
     this.firstSubmissions.retireAuthority();
     const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
       .map(({ id, error, modelMutation, cancellation, deleting, deletionCommitted }) => ({ id, error, modelMutation, cancellation,
@@ -348,7 +358,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v33', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v34', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -366,12 +376,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 33, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 34, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 33 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v33 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 34 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v34 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -451,11 +461,14 @@ export class AppServerClient {
         const params = pending.request.params;
         uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId,
           generation: this.state.generation,
+          ...(pending.request.method === 'session/uploadPrepare' ? { uploadOperationId: pending.request.params.operation_id } : {}),
           ...(pending.request.method === 'context/compact' ? { compactionRequestId: pending.request.params.request_id } : {}),
           ...('interaction' in params ? { interactionKey: interactionKey(params.interaction) } : {}),
         });
         pending.reject(new OutcomeUncertain());
-      } else pending.reject(new Error('Disconnected before a response. Unsent operations were discarded.'));
+      } else pending.reject(pending.sent
+        ? new Error('Disconnected before a response.')
+        : new RequestNotDispatched('Disconnected before a response. Unsent operations were discarded.'));
     }
     this.pending.clear();
     this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attachmentChanges.clear();
@@ -479,20 +492,22 @@ export class AppServerClient {
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission): Promise<Extract<MethodResult, { type: T }>> {
-    if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
-    if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
-    if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
+    if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
+    if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new RequestNotDispatched('Session deletion has disabled controls. Verify its outcome before continuing.');
+    if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
     const lane = requestLane(operation.method);
     if (lane !== 'rpc' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
-      throw new Error(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
+      throw new RequestNotDispatched(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
     }
-    if (this.pending.size >= 64) throw new Error('Client request capacity reached.');
+    if (this.pending.size >= 64) throw new RequestNotDispatched('Client request capacity reached.');
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
-    if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new Error('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
+    if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new RequestNotDispatched('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
     const generation = this.state.generation;
     const id = `${generation}:${++this.nextId}`;
     const request: Request = { jsonrpc: '2.0', id, ...operation };
-    if (new TextEncoder().encode(JSON.stringify(request)).length > 1_048_576) throw new Error('Request exceeds the App Server 1 MiB limit.');
+    try {
+      if (new TextEncoder().encode(JSON.stringify(request)).length > 1_048_576) throw new Error('Request exceeds the App Server 1 MiB limit.');
+    } catch (cause) { throw new RequestNotDispatched(cause); }
     const result = await new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
       const context = { method: operation.method,
@@ -508,16 +523,20 @@ export class AppServerClient {
     }
     return result as Extract<MethodResult, { type: T }>;
   }
+  private dispatchAllowed(pending: Pending): boolean {
+    try { return dispatchCurrent(pending); }
+    catch (cause) { this.refuse(pending, cause); return false; }
+  }
   private pump() {
     // An obsolete proof releases its reservation now, never after its Host read.
-    for (const pending of this.pending.values()) if (pending.validation && !dispatchCurrent(pending)) this.refuse(pending);
+    for (const pending of this.pending.values()) if (pending.validation && !this.dispatchAllowed(pending)) this.refuse(pending);
     let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
     let validating = [...this.pending.values()].filter(p => p.validation).length;
     for (const pending of this.pending.values()) {
       if (!this.socket) break;
       const lane = requestLane(pending.request.method);
       if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY)) continue;
-      if (!dispatchCurrent(pending)) { this.refuse(pending); continue; }
+      if (!this.dispatchAllowed(pending)) { this.refuse(pending); continue; }
       const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
       // A waiting validation holds nothing, so later requests are never blocked behind it.
       if (proof && validating >= VALIDATION_CAPACITY) continue;
@@ -533,9 +552,12 @@ export class AppServerClient {
           this.refuse(pending, new Error('Operation admission validation timed out. No operation was sent.')); this.pump();
         }, this.timeoutMs);
         // Only the settlement that still owns the reservation may act on it.
-        void proof.validate(validation.signal).then(allowed => {
+        let checked: Promise<boolean>;
+        try { checked = proof.validate(validation.signal); }
+        catch (cause) { this.refuse(pending, cause); occupied--; validating--; continue; }
+        void checked.then(allowed => {
           if (pending.validation !== validation) return;
-          if (!allowed || !dispatchCurrent(pending)) this.refuse(pending);
+          if (!allowed || !this.dispatchAllowed(pending)) this.refuse(pending);
           else { pending.validation = undefined; clearTimeout(pending.timer); this.sendPending(pending); }
         }, cause => {
           if (pending.validation === validation) this.refuse(pending, cause);
@@ -544,13 +566,15 @@ export class AppServerClient {
     }
   }
   private refuse(pending: Pending, cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) {
+    if (pending.sent || !this.pending.delete(String(pending.request.id))) return;
     clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
-    this.pending.delete(String(pending.request.id));
-    pending.reject(cause instanceof Error ? cause : new Error(String(cause)));
+    pending.reject(new RequestNotDispatched(cause));
     if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
   }
   private sendPending(pending: Pending) {
-    const raw = JSON.stringify(pending.request);
+    let raw: string;
+    try { raw = JSON.stringify(pending.request); }
+    catch (cause) { this.refuse(pending, cause); return; }
     const generation = this.state.generation;
     pending.sent = true;
     this.log.observe('out', generation, raw, pending.context);
@@ -1311,25 +1335,53 @@ export class AppServerClient {
   rememberNode(target: AttachmentTarget, nodeId: string) {
     if (sameTarget(this.state.views[target.session_id]?.target, target)) this.setSession(target.session_id, { nodeId });
   }
-  async upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }): Promise<UploadedFile[]> {
-    const target = this.target(id);
-    const generation = this.state.generation;
-    if (!files.length || files.length > DRAFT_MAX_FILES || files.some(file => file.size > UPLOAD_MAX_BYTES)
-      || files.reduce((sum, file) => sum + file.size, 0) > UPLOAD_BATCH_MAX_BYTES) throw new Error('Choose at most 8 files, 256 KiB each and 512 KiB per batch.');
-    const encoded = [];
-    for (const file of files) {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let binary = '';
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      encoded.push({ name: file.name, data: btoa(binary) });
+  async uploadStatus(id: string, operationId: string) {
+    const target = this.target(id), generation = this.state.generation;
+    const { outcome } = await this.request({ method: 'session/uploadStatus', params: { target, operation_id: operationId } }, 'upload_status');
+    if (outcome.state !== 'unresolved' && this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+      && this.state.uncertain.some(item => item.sessionId === id && item.uploadOperationId === operationId)) {
+      this.publish({ uncertain: this.state.uncertain.filter(item => item.sessionId !== id || item.uploadOperationId !== operationId) });
     }
-    if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target) || evidence && !evidence.current()) throw new Error('Upload target changed before transfer.');
-    const uploaded = await this.request({ method: 'session/upload', params: { target, files: encoded } }, 'session_uploaded', result => evidence?.acknowledged(result.files), evidence?.current);
-    if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) throw new Error('Upload outcome belongs to an obsolete view. Remove this draft selection; do not replay it.');
-    return uploaded.files;
+    return outcome;
   }
+  async upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }, operationId = uploadOperationId()): Promise<UploadedFile[]> {
+    let target: AttachmentTarget;
+    try { target = this.target(id); } catch (error) { throw new UploadFailure('failed', error); }
+    const generation = this.state.generation;
+    const policy = this.state.capabilities?.upload_policy;
+    if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
+    if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target) && (!evidence || evidence.current());
+    if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
+    const read = async () => {
+      const outcome = await this.uploadStatus(id, operationId).catch(error => { throw new UploadFailure('uncertain', error); });
+      if (outcome.state !== 'ready') throw new UploadFailure(outcome.state === 'unresolved' ? 'uncertain' : 'failed');
+      evidence?.acknowledged(outcome.files);
+      if (!current()) throw new UploadFailure('uncertain', 'Upload belongs to a retired view');
+      return outcome.files;
+    };
+    let transfer;
+    try {
+      ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current));
+    } catch (error) {
+      if (error instanceof RequestNotDispatched) throw new UploadFailure('failed', error);
+      // A server refusal published no new preparation, but the exact operation
+      // may already exist. Read its authority before permitting a fresh Retry.
+      if (error instanceof RpcFailure && !isOutcomeUncertain(error) && current()) return read();
+      throw new UploadFailure('uncertain', error);
+    }
+    try {
+      if (!current()) throw new Error('Upload authority changed');
+      await this.uploadCarrier(transfer, files, policy, this.state.endpoint);
+    } catch {
+      // No retransmission: the authoritative read below repairs carrier loss.
+    }
+    if (!current()) throw new UploadFailure('uncertain', 'Upload authority changed');
+    return read();
+  }
+
   async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
-    if (receipts.length > DRAFT_MAX_FILES || receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
+    if (receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
       ...(text ? [{ type: 'text' as const, text }] : []),
@@ -1427,7 +1479,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v33').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v34').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);

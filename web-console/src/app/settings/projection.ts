@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v33';
+} from '../../../../protocol/app-server/v34';
 import type { ConnectionState } from '../../client/app-server';
 
 /** The single owner a Settings instance is bound to for its whole lifetime.

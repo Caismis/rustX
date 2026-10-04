@@ -2,7 +2,7 @@ import { message, displayText, searchVocabulary, type DisplayText } from '../../
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { CompletedResponseView, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v33';
+import type { CompletedResponseView, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v34';
 import type { AppServerClient } from '../../client/app-server';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
