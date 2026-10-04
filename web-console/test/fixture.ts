@@ -84,7 +84,8 @@ export class Server {
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
-  client = new AppServerClient(this.socketFactory, 30_000, async () => {});
+  carrierTransfers = 0;
+  client = new AppServerClient(this.socketFactory, 30_000, async () => { this.carrierTransfers++; });
   constructor() { this.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true })); } // Protocol-only fixture; App installs real Host admission.
   get socket() { return this.sockets[this.sockets.length - 1]; }
   target(id: string, socket = this.socket): AttachmentTarget {

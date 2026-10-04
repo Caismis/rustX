@@ -153,6 +153,12 @@ interface Pending {
   reject: (error: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
 }
+/** The request owner proves that transport dispatch never began. */
+export class RequestNotDispatched extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
 export class OutcomeUncertain extends Error {
   constructor() { super('Response lost after transmission. Outcome uncertain; the request was not replayed. Reconnect and inspect authoritative state.'); }
 }
@@ -460,7 +466,9 @@ export class AppServerClient {
           ...('interaction' in params ? { interactionKey: interactionKey(params.interaction) } : {}),
         });
         pending.reject(new OutcomeUncertain());
-      } else pending.reject(new Error('Disconnected before a response. Unsent operations were discarded.'));
+      } else pending.reject(pending.sent
+        ? new Error('Disconnected before a response.')
+        : new RequestNotDispatched('Disconnected before a response. Unsent operations were discarded.'));
     }
     this.pending.clear();
     this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attachmentChanges.clear();
@@ -484,20 +492,22 @@ export class AppServerClient {
   }
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission): Promise<Extract<MethodResult, { type: T }>> {
-    if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
-    if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
-    if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
+    if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
+    if ('target' in operation.params && 'session_id' in operation.params.target && this.state.views[operation.params.target.session_id]?.deleting && !READS.has(operation.method) && operation.method !== 'session/detach') throw new RequestNotDispatched('Session deletion has disabled controls. Verify its outcome before continuing.');
+    if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
     const lane = requestLane(operation.method);
     if (lane !== 'rpc' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
-      throw new Error(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
+      throw new RequestNotDispatched(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
     }
-    if (this.pending.size >= 64) throw new Error('Client request capacity reached.');
+    if (this.pending.size >= 64) throw new RequestNotDispatched('Client request capacity reached.');
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
-    if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new Error('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
+    if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new RequestNotDispatched('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
     const generation = this.state.generation;
     const id = `${generation}:${++this.nextId}`;
     const request: Request = { jsonrpc: '2.0', id, ...operation };
-    if (new TextEncoder().encode(JSON.stringify(request)).length > 1_048_576) throw new Error('Request exceeds the App Server 1 MiB limit.');
+    try {
+      if (new TextEncoder().encode(JSON.stringify(request)).length > 1_048_576) throw new Error('Request exceeds the App Server 1 MiB limit.');
+    } catch (cause) { throw new RequestNotDispatched(cause); }
     const result = await new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
       const context = { method: operation.method,
@@ -513,16 +523,20 @@ export class AppServerClient {
     }
     return result as Extract<MethodResult, { type: T }>;
   }
+  private dispatchAllowed(pending: Pending): boolean {
+    try { return dispatchCurrent(pending); }
+    catch (cause) { this.refuse(pending, cause); return false; }
+  }
   private pump() {
     // An obsolete proof releases its reservation now, never after its Host read.
-    for (const pending of this.pending.values()) if (pending.validation && !dispatchCurrent(pending)) this.refuse(pending);
+    for (const pending of this.pending.values()) if (pending.validation && !this.dispatchAllowed(pending)) this.refuse(pending);
     let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
     let validating = [...this.pending.values()].filter(p => p.validation).length;
     for (const pending of this.pending.values()) {
       if (!this.socket) break;
       const lane = requestLane(pending.request.method);
       if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY)) continue;
-      if (!dispatchCurrent(pending)) { this.refuse(pending); continue; }
+      if (!this.dispatchAllowed(pending)) { this.refuse(pending); continue; }
       const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
       // A waiting validation holds nothing, so later requests are never blocked behind it.
       if (proof && validating >= VALIDATION_CAPACITY) continue;
@@ -538,9 +552,12 @@ export class AppServerClient {
           this.refuse(pending, new Error('Operation admission validation timed out. No operation was sent.')); this.pump();
         }, this.timeoutMs);
         // Only the settlement that still owns the reservation may act on it.
-        void proof.validate(validation.signal).then(allowed => {
+        let checked: Promise<boolean>;
+        try { checked = proof.validate(validation.signal); }
+        catch (cause) { this.refuse(pending, cause); occupied--; validating--; continue; }
+        void checked.then(allowed => {
           if (pending.validation !== validation) return;
-          if (!allowed || !dispatchCurrent(pending)) this.refuse(pending);
+          if (!allowed || !this.dispatchAllowed(pending)) this.refuse(pending);
           else { pending.validation = undefined; clearTimeout(pending.timer); this.sendPending(pending); }
         }, cause => {
           if (pending.validation === validation) this.refuse(pending, cause);
@@ -549,13 +566,15 @@ export class AppServerClient {
     }
   }
   private refuse(pending: Pending, cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) {
+    if (pending.sent || !this.pending.delete(String(pending.request.id))) return;
     clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
-    this.pending.delete(String(pending.request.id));
-    pending.reject(cause instanceof Error ? cause : new Error(String(cause)));
+    pending.reject(new RequestNotDispatched(cause));
     if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
   }
   private sendPending(pending: Pending) {
-    const raw = JSON.stringify(pending.request);
+    let raw: string;
+    try { raw = JSON.stringify(pending.request); }
+    catch (cause) { this.refuse(pending, cause); return; }
     const generation = this.state.generation;
     pending.sent = true;
     this.log.observe('out', generation, raw, pending.context);
@@ -1345,8 +1364,9 @@ export class AppServerClient {
     try {
       ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current));
     } catch (error) {
-      // A refusal published no new preparation, but the exact operation may
-      // already exist. Read its authority before permitting a fresh Retry.
+      if (error instanceof RequestNotDispatched) throw new UploadFailure('failed', error);
+      // A server refusal published no new preparation, but the exact operation
+      // may already exist. Read its authority before permitting a fresh Retry.
       if (error instanceof RpcFailure && !isOutcomeUncertain(error) && current()) return read();
       throw new UploadFailure('uncertain', error);
     }

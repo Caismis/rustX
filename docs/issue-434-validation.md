@@ -158,10 +158,10 @@ coverage was enabled; no ignore was added for this issue.
 | `pnpm --dir dev test` | 38 passed |
 | `uv sync --frozen --project test-support/fake-provider` / `uv run --frozen --project test-support/fake-provider pytest test-support/fake-provider` | Passed / 51 passed |
 | `pnpm --dir web-console typecheck` | Passed |
-| `pnpm --dir web-console test` | 1,518 passed |
+| `pnpm --dir web-console test` | 1,528 passed |
 | `pnpm --dir web-console check:i18n` | Passed |
 | `pnpm --dir web-console check:provenance` | Passed; 148 source records and 132 production package notices |
-| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 166 passed (10.5 minutes) |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | 165 passed; one Settings focus failure (11.0 minutes); see follow-up evidence below |
 | `git diff --check` | Passed |
 
 The full native run includes App Server process, stdio/WebSocket conformance,
@@ -289,3 +289,47 @@ The first browser invocation was deliberately interrupted because the new native
 binary build had not completed; that run is not counted. Browser and TUI validation
 were started again after the final binary build. Current logs use
 `/tmp/rustx-448-r3-*.log`.
+
+## Request dispatch certainty follow-up
+
+Started from PR HEAD `6672d055eb1437adc920a1b827b96d82436eacb8`.
+The request owner now structurally distinguishes definite non-dispatch from
+transmitted mutation response loss. Local capacity/admission/serialization refusal,
+validation refusal/timeout, and disconnect of an unsent queued request are known
+no-effect failures. Once send begins, even a synchronous transport exception
+remains conservatively uncertain. Upload consumes this evidence without inspecting
+error text: definite non-dispatch requires neither status read nor carrier.
+Explicit server refusals retain exact-operation native read-repair.
+
+Ten new deterministic tests in `upload-dispatch.test.ts` cover a queued unsent
+prepare, immediate request-capacity refusal, sent response loss, synchronous send
+failure, and six admission-validation refusal cases. The queue regression holds
+eight ordinary RPCs, registers prepare, fills the remaining 55 pending slots, and
+proves the next registration is refused. Closing that transport yields typed known
+failure with zero prepare sends, zero status reads and zero carriers. The real
+AttachmentIntake exposes failed recovery, rejects reconciliation, and duplicate
+explicit Retry gestures dispatch only one fresh operation identity. Sent-loss
+cases retain the original diagnostic identity and reconnect sends nothing again.
+Controlled time advances only the validation deadline; no sleeps prove ordering.
+
+Focused Web validation: 93 tests passed across upload-dispatch, workspace-admission,
+artifacts, first-submit and upload-intake. Full validation logs for this follow-up
+use `/tmp/rustx-448-r4-*.log`; previous-head hosted checks are not evidence for it.
+
+
+Full follow-up validation: all commands in the table above passed except the
+browser aggregate. Native: 4,106 passed / eight existing ignores; TUI: 895;
+dev: 38; provider: 51; Web unit: 1,528. Protocol generation/check has no drift;
+both Linux CI discovery selectors passed.
+
+The browser aggregate ran all 166 cases: 165 passed, including both upload E2Es;
+`settings-presentation.spec.ts:580` failed its remove-trigger focus assertion
+after closing/reopening Settings, before any configuration write. Its trace shows
+the programmatic focus call followed by an inactive trigger. The test and
+DialogSurface implementation are unchanged from main. One isolated diagnostic
+execution, `CONTAINER_ENGINE=podman bash web-console/scripts/browser-tests.sh
+test/e2e/settings-presentation.spec.ts -g 'confirming a removal settles focus'`,
+passed (one test). This does not replace the failed aggregate or establish a
+root cause. No unrelated Settings change, timeout, retry, assertion relaxation
+or baseline update was made. The full-run failure remains a validation limitation;
+macOS and fresh-head hosted CI are not claimed as locally executed.

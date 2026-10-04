@@ -265,7 +265,11 @@ first-submission owner keeps the intent until admission/discard.
 Both immediate intake and retained first submission preserve typed upload evidence.
 Ready captures the original receipt; Absent/Failed permits explicit Retry with a
 fresh operation ID. Unresolved or an unrepairable transport loss permits only
-Check status for the original operation, never byte replay. A prepare refusal
+Check status for the original operation, never byte replay. Before transport
+dispatch, local refusal or loss of a queued prepare is a known no-side-effect
+failure: Retry is legal with a fresh operation ID, with no status read or carrier.
+Once mutation dispatch begins, response loss remains uncertain (including a send
+exception without proof of non-dispatch). An explicit server prepare refusal
 publishes no new intent; the client reads the exact operation to distinguish no
 commit from a previously known operation. A captured receipt survives subsequent
 local authority loss and pauses continuation without allocating again.
