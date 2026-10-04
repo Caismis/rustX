@@ -554,7 +554,15 @@ jobs:
           pnpm typecheck
           pnpm test
       - name: Install isolated document conversion runtime
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap libreoffice-writer libreoffice-impress fonts-liberation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap apparmor-profiles libreoffice-writer libreoffice-impress fonts-liberation
+          # Ubuntu restricts capabilities in unprivileged user namespaces.
+          # Load its packaged bwrap-specific profile, which grants setup
+          # capabilities to bwrap but denies them to its executed children.
+          # Keep system-wide restrictions and converter network isolation.
+          sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          sysctl kernel.apparmor_restrict_unprivileged_userns
       - name: Verify document sandbox namespace admission
         run: >-
           bwrap --unshare-all --unshare-user --die-with-parent --new-session

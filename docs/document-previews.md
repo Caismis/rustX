@@ -131,6 +131,16 @@ this registry; distributions storing it under `/usr` need no extra mount.
 No other Host `/etc` configuration is exposed. This does not relax namespace,
 macro, temporary-disk, process or network restrictions.
 
+Ubuntu 24.04 also requires its packaged AppArmor Bubblewrap profile to be
+loaded: install `apparmor-profiles`, then have the operator load
+`/usr/share/apparmor/extra-profiles/bwrap-userns-restrict` with
+`apparmor_parser -r`. This grants namespace-setup capabilities to
+`/usr/bin/bwrap` and denies capabilities to its executed children. CI provisions
+that profile and checks namespace admission before running real conversion.
+System-wide unprivileged-user-namespace restrictions remain enabled. rustX does
+not change AppArmor policy, run conversion as root, share the Host network or
+fall back to an unsandboxed converter if the prerequisite is unavailable.
+
 Conversion writes only into the private tmpfs. Its PDF is streamed over stdout,
 bounded, and checked for a PDF signature before the PDF viewer validates it.
 Timeout, cancellation and oversize output kill Bubblewrap; destruction of its PID
