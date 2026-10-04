@@ -20,7 +20,7 @@ export async function convertOffice(bytes: Buffer, extension: 'docx' | 'pptx', s
     await writeFile(join(directory, 'registrymodifications.xcu'), '<oor:items xmlns:oor="http://openoffice.org/2001/registry"><item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item></oor:items>', { mode: 0o600, flag: 'wx', signal });
     signal.throwIfAborted();
     const args = [
-      '--unshare-all', '--unshare-user', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
+      '--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
       '--clearenv', '--setenv', 'PATH', '/usr/bin', '--setenv', 'HOME', '/tmp/home', '--setenv', 'LANG', 'C.UTF-8',
       '--setenv', 'SAL_USE_VCLPLUGIN', 'svp', '--setenv', 'TMPDIR', '/tmp',
       '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',

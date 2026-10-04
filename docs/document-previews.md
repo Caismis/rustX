@@ -115,7 +115,8 @@ ActiveX, embeddings, external links/relationships and DTDs are rejected. Only
 DOCX and PPTX are submitted to the converter. A fresh private profile sets macro
 security to level 3. This setting alone is not the sandbox boundary.
 
-Bubblewrap unshares user, network, PID, IPC and UTS namespaces, drops capabilities,
+Bubblewrap unshares user, network, PID, IPC and UTS namespaces, disables further
+user namespace creation inside the sandbox with `--disable-userns`, drops capabilities,
 creates a new session and uses `--die-with-parent`. It mounts `/usr` read-only,
 the private input/profile seed read-only, a new `/proc` and `/dev`, and one
 size-limited `/tmp`. It never mounts the user's home, Workspace, runtime store,
@@ -136,8 +137,9 @@ loaded: install `apparmor-profiles`, then have the operator load
 `/usr/share/apparmor/extra-profiles/bwrap-userns-restrict` with
 `apparmor_parser -r`. This grants namespace-setup capabilities to
 `/usr/bin/bwrap` and denies capabilities to its executed children. CI provisions
-that profile and checks namespace admission before running real conversion.
-System-wide unprivileged-user-namespace restrictions remain enabled. rustX does
+that profile, separately asserts that
+`kernel.apparmor_restrict_unprivileged_userns` equals `1`, and checks actual
+Bubblewrap namespace admission before running real conversion. rustX does
 not change AppArmor policy, run conversion as root, share the Host network or
 fall back to an unsandboxed converter if the prerequisite is unavailable.
 
@@ -170,7 +172,7 @@ not performed: inspection shows the stored representation.
 | Dependency | Exact version / license | Placement and behavior |
 | --- | --- | --- |
 | `pdfjs-dist` | 6.4.299 / Apache-2.0 | Lazy browser renderer and explicitly owned Vite-emitted local worker; no CDN, XFA or PDF scripting. WASM decoders disabled. Selected upstream text-layer CSS is scoped locally. |
-| `dompurify` | 3.4.12 / Apache-2.0 OR MPL-2.0 | Browser HTML defense in depth; does not grant iframe authority |
+| `dompurify` | 3.4.16 / Apache-2.0 OR MPL-2.0 | Browser HTML defense in depth; does not grant iframe authority |
 | `saxes` | 6.0.0 / ISC | Node worker, strict XML events; no DTD/entity/network loader or execution engine |
 | Node `zlib` | Node 24 runtime | Host-only bounded raw inflate and CRC; no archive-path extraction |
 | LibreOffice | Tested 26.2.6.3; MPL-2.0/LGPL-3.0 with bundled-component licenses | Operator-installed Linux converter; expands admitted OOXML inside the sandbox; macros disabled/rejected; network namespace isolated |

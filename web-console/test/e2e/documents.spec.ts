@@ -68,7 +68,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
         const frame = panel.frameLocator('iframe'); await expect(frame.getByRole('heading')).toBeVisible();
         if (name === 'hostile.html') {
           await frame.getByText('External', { exact: true }).click();
-          await expect(frame.locator('script,form,iframe,meta[http-equiv="refresh"],a[href]')).toHaveCount(0);
+          await expect(frame.locator('script,form,iframe,meta[http-equiv="refresh"],[href],[src],[srcset],[action],[formaction],[style]')).toHaveCount(0);
           const isolation = await frame.locator('body').evaluate(() => {
             let parentDenied = false, storageDenied = false;
             try { void parent.document; } catch { parentDenied = true; }
@@ -79,7 +79,9 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
           expect(await page.evaluate(() => (window as any).PWNED)).toBeUndefined();
           expect(external).toEqual([]); expect(popups).toEqual([]);
         }
-        await panel.getByRole('button', { name: 'Source', exact: true }).click(); await expect(panel.locator('pre')).toContainText('<');
+        await panel.getByRole('button', { name: 'Source', exact: true }).click();
+        await expect(panel.locator('pre')).toHaveText(readFileSync(join(fixture.workspaceA, name), 'utf8'));
+        await expect(panel.locator('pre *')).toHaveCount(0);
         await panel.getByRole('button', { name: 'Rendered preview', exact: true }).click();
       } else if (name === 'malformed.pdf') {
         await expect(panel.getByRole('alert')).toContainText('malformed');

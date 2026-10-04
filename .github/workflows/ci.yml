@@ -562,10 +562,10 @@ jobs:
           # capabilities to bwrap but denies them to its executed children.
           # Keep system-wide restrictions and converter network isolation.
           sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
-          sysctl kernel.apparmor_restrict_unprivileged_userns
+          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
       - name: Verify document sandbox namespace admission
         run: >-
-          bwrap --unshare-all --unshare-user --die-with-parent --new-session
+          bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session
           --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib
           --symlink usr/lib64 /lib64 -- /usr/bin/true
       - name: Typecheck

@@ -20,7 +20,7 @@ it('owns isolation arguments and retains temporary files until process-tree sett
   await ready;
   const [exe, args, options] = boundary.spawn.mock.calls[0];
   expect(exe).toBe('/usr/bin/bwrap');
-  for (const required of ['--unshare-all', '--unshare-user', '--die-with-parent', '--new-session', '--clearenv', '--size', '67108864', '--as=1073741824', '--fsize=8388608', '--cpu=15']) expect(args).toContain(required);
+  for (const required of ['--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--clearenv', '--size', '67108864', '--as=1073741824', '--fsize=8388608', '--cpu=15']) expect(args).toContain(required);
   expect(args).not.toContain('--share-net'); expect(options.env).toEqual({});
   const registry = args.indexOf('/etc/libreoffice/registry');
   expect(args.slice(registry - 1, registry + 2)).toEqual(['--ro-bind-try', '/etc/libreoffice/registry', '/etc/libreoffice/registry']);
