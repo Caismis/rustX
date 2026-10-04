@@ -555,6 +555,11 @@ jobs:
           pnpm test
       - name: Install isolated document conversion runtime
         run: sudo apt-get update && sudo apt-get install -y bubblewrap libreoffice-writer libreoffice-impress fonts-liberation
+      - name: Verify document sandbox namespace admission
+        run: >-
+          bwrap --unshare-all --unshare-user --die-with-parent --new-session
+          --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib
+          --symlink usr/lib64 /lib64 -- /usr/bin/true
       - name: Typecheck
         working-directory: web-console
         run: pnpm typecheck
