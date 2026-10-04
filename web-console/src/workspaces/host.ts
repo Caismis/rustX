@@ -1,5 +1,6 @@
 import type { SourceMutation, SourceSettings } from '../../../protocol/app-server/v34.ts';
 import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v34.ts';
+import type { DocumentRequest, DocumentResult } from '../client/document-types.ts';
 export interface DeliveryRead { target: AttachmentTarget; message_id: string; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
 export type WorkspaceConfigurationOperation = { kind: 'read' | 'reconcile' } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
@@ -55,7 +56,7 @@ export class WorkspaceHostError extends Error {
   }
 }
 export interface ProductHostWorkspaces {
-  previewDocument?(scope: WorkspaceAuthorityScope, request: import('../client/document-types').DocumentRequest, signal?: AbortSignal): Promise<import('../client/document-types').DocumentResult>;
+  previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;
   readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;
