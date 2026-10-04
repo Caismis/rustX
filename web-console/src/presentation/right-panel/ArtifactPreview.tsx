@@ -1,10 +1,10 @@
 import { useTranslation } from '../../locale/react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from '../primitives/Button';
 import { MarkdownText } from '../markdown/MarkdownText';
 import css from './ArtifactPreview.module.css';
 /** Finite artifact presentation only; the app supplies bytes from its native resource API. */
-export function ArtifactPreview({ name, text, url, image, markdown = false, error, loading, retry, decodeError }: { name: string; text?: string; url?: string; image: boolean; markdown?: boolean; decodeError?: () => void; error?: string; loading: boolean; retry: () => void }) {
+export function ArtifactPreview({ name, text, url, image, markdown = false, error, loading, retry, decodeError, children }: { children?: ReactNode; name: string; text?: string; url?: string; image: boolean; markdown?: boolean; decodeError?: () => void; error?: string; loading: boolean; retry: () => void }) {
   const tx = useTranslation();
   const [wrap, setWrap] = useState(true);
   return <section className={css.preview} aria-label={tx('artifacts:artifact-preview.artifact-preview')}><header className={css.header}><strong title={name}>{name}</strong>{text !== undefined && <Button size="sm" aria-pressed={wrap} onClick={() => setWrap(value => !value)}>{tx('artifacts:artifact-preview.wrap-lines')}</Button>}</header>
@@ -12,7 +12,8 @@ export function ArtifactPreview({ name, text, url, image, markdown = false, erro
     {error && <div role="alert"><p>{error}</p><Button onClick={retry}>{tx('artifacts:artifact-preview.retry-preview')}</Button></div>}
     {text !== undefined && (markdown ? <div className={css.body}><MarkdownText text={text}/></div> : <pre className={css.body} data-wrap={wrap}>{text}</pre>)}
     {image && url && !error && <img key={url} onError={decodeError} className={css.image} src={url} alt={name} />}
-    {!image && text === undefined && !error && !loading && <p>{tx('artifacts:artifact-preview.this-artifact-has-no-supported-inline-viewer')}</p>}
+    {children}
+    {!children && !image && text === undefined && !error && !loading && <p>{tx('artifacts:artifact-preview.this-artifact-has-no-supported-inline-viewer')}</p>}
     {url && <a href={url} download={name}>{tx('artifacts:artifact-preview.download-artifact')}</a>}
   </section>;
 }

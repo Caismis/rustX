@@ -34,11 +34,12 @@ export class ArtifactResources {
     });
   }
   /** Rendering and Download share one authorized original byte source. */
-  load(id: string, mimeType?: string, image = false, signal?: AbortSignal): Promise<{ url: string; text?: string; error?: string }> {
+  load(id: string, mimeType?: string, image = false, signal?: AbortSignal, retainBytes = false): Promise<{ url: string; bytes?: Uint8Array<ArrayBuffer>; text?: string; error?: string }> {
     return this.transfer(id, bytes => {
       signal?.throwIfAborted();
       const url = URL.createObjectURL(new Blob([bytes], { type: safeArtifactMime(mimeType) }));
       this.urls.add(url);
+      if (retainBytes) return { url, bytes };
       if (isTextMime(mimeType)) {
         try { return { url, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) }; }
         catch { return { url, error: 'File is not valid UTF-8' }; }

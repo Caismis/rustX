@@ -15,7 +15,7 @@ use std::{io, path::PathBuf, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const PATH: &str = "/product-host/file-read";
-pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v1";
+pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v2";
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -129,9 +129,19 @@ where
 #[serde(remote = "Self", deny_unknown_fields)]
 pub(crate) struct FileRead {
     pub target: AttachmentTarget,
-    pub message_id: crate::runtime::identity::MessageId,
-    pub delivery_index: usize,
+    pub source: ReadSource,
     pub roots: Vec<PathBuf>,
+}
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ReadSource {
+    SessionFile {
+        message_id: crate::runtime::identity::MessageId,
+        delivery_index: usize,
+    },
+    Artifact {
+        artifact_id: crate::runtime::ArtifactId,
+    },
 }
 fn check_authorization(authorization: &CancellationToken) -> io::Result<()> {
     if authorization.is_cancelled() {
@@ -210,11 +220,29 @@ async fn read_admitted(
             .expect("read authority probe") = Some(authorization.clone());
     }
     let FileRead {
-        message_id,
-        delivery_index,
+        source,
         roots: allowed_roots,
         ..
     } = request;
+    let (message_id, delivery_index) = match source {
+        ReadSource::SessionFile {
+            message_id,
+            delivery_index,
+        } => (message_id, delivery_index),
+        ReadSource::Artifact { artifact_id } => {
+            let _permit = host.file_reads().try_acquire_owned().map_err(|_| {
+                domain(ErrorData::SessionFileRead {
+                    reason: FileFailure::Capacity,
+                })
+            })?;
+            let data = authority
+                .artifact_read(&artifact_id)
+                .map_err(client_error)?;
+            route.attachment.read_authority().map_err(client_error)?;
+            check_rpc_authorization(&authorization)?;
+            return Ok(MethodResult::ArtifactBytes { data });
+        }
+    };
     let failed = |reason| domain(ErrorData::SessionFileRead { reason });
     if delivery_index >= crate::tools::session_files::PRESENT_MAX_FILES
         || allowed_roots.is_empty()

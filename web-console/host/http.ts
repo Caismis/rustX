@@ -37,6 +37,16 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           if (!host.openWorkspace) throw new Error('Desktop unavailable on this Product Host');
           if (Object.keys(body).some(key => !['scope', 'target', 'application'].includes(key))) throw new Error('Invalid desktop request');
           value = await host.openWorkspace(scope(), body.target, body.application); break;
+        case 'document-preview':
+          if (!host.previewDocument) throw new Error('preview_unavailable');
+          {
+            const operation = new AbortController();
+            const closed = () => { if (!response.writableFinished) operation.abort(); };
+            response.on('close', closed);
+            try { value = await host.previewDocument(scope(), body.request, operation.signal); }
+            finally { response.off('close', closed); }
+          }
+          break;
         case 'file-read':
           if (!host.readDelivery) throw new Error('Session file reads unavailable on this Product Host');
           {

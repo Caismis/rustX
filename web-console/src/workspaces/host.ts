@@ -55,6 +55,7 @@ export class WorkspaceHostError extends Error {
   }
 }
 export interface ProductHostWorkspaces {
+  previewDocument?(scope: WorkspaceAuthorityScope, request: import('../client/document-types').DocumentRequest, signal?: AbortSignal): Promise<import('../client/document-types').DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;
   readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;

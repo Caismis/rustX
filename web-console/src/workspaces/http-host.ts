@@ -27,6 +27,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     }
   };
   listWorkspaces = (signal?: AbortSignal) => this.call<WorkspaceCatalog>('list', {}, signal);
+  previewDocument = (scope: WorkspaceAuthorityScope, request: import('../client/document-types').DocumentRequest, signal?: AbortSignal) => this.call<import('../client/document-types').DocumentResult>('document-preview', { scope, request }, signal);
   readDelivery = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal) => this.call<DeliveryBytes>('file-read', { scope, read }, signal);
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });

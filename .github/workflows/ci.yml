@@ -525,7 +525,7 @@ jobs:
       # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
       - name: Desktop adapter and Host boundaries
         working-directory: web-console
-        run: pnpm exec vitest run test/desktop-host.test.ts
+        run: pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts
 
   web-console:
     name: Full Web conformance
@@ -553,6 +553,8 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm typecheck
           pnpm test
+      - name: Install isolated document conversion runtime
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap libreoffice-writer libreoffice-impress fonts-liberation
       - name: Typecheck
         working-directory: web-console
         run: pnpm typecheck

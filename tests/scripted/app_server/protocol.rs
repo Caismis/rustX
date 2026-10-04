@@ -1632,7 +1632,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         rejected(
             &connection,
             Method::ArtifactRead {
-                target: other,
+                target: other.clone(),
                 artifact_id: artifact_id.clone(),
             },
         )
@@ -1647,6 +1647,17 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         .await;
         let uploaded = binary_upload(&connection, target.clone(), "hello.txt", b"hi").await;
         assert_eq!(uploaded.len(), 1);
+        let product_host = TrustedFileHost::new(&f).await;
+        let host_read = |target| crate::app_server::product_host::FileRead {
+            target,
+            source: crate::app_server::product_host::ReadSource::Artifact {
+                artifact_id: artifact_id.clone(),
+            },
+            roots: vec![],
+        };
+        assert_eq!(product_host.success(host_read(target.clone())).await, read);
+        product_host.rejected(host_read(other.clone())).await;
+
         rejected(
             &connection,
             Method::SessionUploadPrepare {
@@ -1671,6 +1682,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
             },
         )
         .await;
+        product_host.rejected(host_read(target.clone())).await;
         rejected(
             &connection,
             Method::ArtifactRead {
@@ -1703,6 +1715,7 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
                 .unwrap()
         };
         assert_ne!(artifact_id, next);
+        product_host.close().await;
         connection.close();
         f.close().await;
     })
@@ -4319,14 +4332,14 @@ impl TrustedFileHost {
         let mut request = self.endpoint.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v1, rustx-product-host.{credential}")
+            format!("rustx.product-host.file-read.v2, rustx-product-host.{credential}")
                 .parse()
                 .unwrap(),
         );
         let (socket, reply) = tokio_tungstenite::connect_async(request).await?;
         assert_eq!(
             reply.headers()["sec-websocket-protocol"],
-            "rustx.product-host.file-read.v1"
+            "rustx.product-host.file-read.v2"
         );
         Ok(socket)
     }
@@ -4379,8 +4392,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
             target: target.clone(),
-            message_id,
-            delivery_index: 0,
+            source: crate::app_server::product_host::ReadSource::SessionFile { message_id, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
         };
         assert_eq!(
@@ -4495,7 +4507,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
         let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
-            target: fork_target, message_id: inherited.id.clone(), delivery_index: 0, roots: vec![f.workspaces[0].clone()],
+            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { message_id: inherited.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
         assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original);
@@ -4503,7 +4515,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
         assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
-            target: unrelated, message_id: tool.id.clone(), delivery_index: 0, roots: vec![f.workspaces[1].clone()],
+            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { message_id: tool.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
         denied.roots = vec![f.workspaces[1].clone()];

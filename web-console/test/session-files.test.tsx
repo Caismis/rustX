@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { FilePreviewResources, SESSION_FILE_MAX_BYTES, type PreviewSource } from '../src/client/session-files';
@@ -28,7 +29,7 @@ async function fixture() {
   const authority = new WorkspaceAuthority(host); await authority.observe();
   const resources = new FilePreviewResources(server.client, 'A', host, authority);
   const reply = (at: number, data = encoded(bytes), delivered = file) => calls[at].response.resolve({ file: delivered, data });
-  return { resources, authority, calls, reply, replaceHost: async () => { hostId = 'host-2'; await authority.observe(); } };
+  return { resources, authority, host, calls, reply, replaceHost: async () => { hostId = 'host-2'; await authority.observe(); } };
 }
 it('one authorized byte read supplies rendered Markdown and original-byte Download; no model request or ArtifactId', async () => {
   const f = await fixture(); const before = server.requests.length;
@@ -122,4 +123,22 @@ it('raster dimension inspection bounds decoded pixels and rejects active SVG bef
   new DataView(png.buffer).setUint32(16, 4096); new DataView(png.buffer).setUint32(20, 4096);
   expect(4096 ** 2).toBeGreaterThan(RASTER_MAX_PIXELS); expect(() => validateRaster(png)).toThrow('dimensions');
   expect(() => validateRaster(new TextEncoder().encode('<svg width="1" height="1"/>'))).toThrow('Unsupported');
+});
+
+it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('advanced source %s retirement fences gated derived publication', async change => {
+  vi.stubGlobal('crypto', webcrypto);
+  const f = await fixture(), controller = new AbortController();
+  const entered = deferred<void>(), held = deferred<import('../src/client/document-types').DocumentResult>();
+  let request!: import('../src/client/document-types').DocumentRequest;
+  f.host.previewDocument = async (_scope, value) => { request = value; entered.resolve(); return held.promise; };
+  const work = f.resources.derive(source, 'xlsx', new Uint8Array([1]), controller.signal);
+  const rejected = expect(work).rejects.toThrow('obsolete');
+  await entered.promise;
+  if (change === 'Host') await f.replaceHost();
+  if (change === 'attachment') { await server.client.release('A'); await server.client.attach('A'); }
+  if (change === 'authority') server.client.disconnect();
+  if (change === 'close') f.resources.dispose();
+  if (change === 'abort') controller.abort();
+  held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } });
+  await rejected; expect(create).not.toHaveBeenCalled(); f.resources.dispose();
 });
