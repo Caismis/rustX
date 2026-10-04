@@ -274,7 +274,11 @@ def test_every_registered_scenario_builds():
     for name in SCENARIOS:
         scenario = build(name, "/tmp/rustx-test-workspace")
         assert scenario.name == name
-        assert scenario.steps
+        if name == "web_artifact_document":
+            # This preview-only fixture must reject every model request.
+            assert scenario.steps == ()
+        else:
+            assert scenario.steps
         declared_gates(scenario)
 
 
