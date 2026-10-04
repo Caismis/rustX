@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DocumentPreview } from '../src/app/components/documents/DocumentPreview';
 import type { FilePreviewResources } from '../src/client/session-files';
-import type { DerivedDocument } from '../src/client/document-types';
+import type { DerivedDocument } from '../shared/documents.ts';
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (cause: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 afterEach(cleanup);
 it.each(['result', 'error'] as const)('A followed by B discards late A %s and loading completion', async terminal => {

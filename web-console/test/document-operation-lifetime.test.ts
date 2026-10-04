@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('node:worker_threads', () => ({ Worker: class { constructor(...args: unknown[]) { return boundary.create(...args); } } }));
 import { deriveDocument } from '../host/documents/operation';
-import type { DocumentRequest } from '../src/client/document-types';
+import type { DocumentRequest } from '../shared/documents.ts';
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 afterEach(() => { boundary.create.mockReset(); vi.useRealTimers(); });
 it.each(['cancel', 'timeout', 'failure'] as const)('parser %s retains settlement until worker termination, then releases timers/listeners', async mode => {

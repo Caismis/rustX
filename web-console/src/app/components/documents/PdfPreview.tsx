@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { PdfDocumentOwner } from '../../../client/pdf-document';
-import { DOCUMENT_LIMITS } from '../../../client/document-types';
+import { PDF_LIMITS } from '../../../client/pdf-limits';
 import { useTranslation } from '../../../locale/react';
 import { documentFailure } from './errors';
 import './pdf-text.css';
@@ -12,7 +12,7 @@ export default function PdfPreview({ bytes, retry }: { bytes: Uint8Array<ArrayBu
   useEffect(() => {
     let live = true, owned: PdfDocumentOwner | undefined;
     const fail = (code: string) => { clearTimeout(timer); if (live) { setError(code); setLoading(false); owned?.dispose(); } };
-    const timer = setTimeout(() => fail('parser_timeout'), DOCUMENT_LIMITS.timeout);
+    const timer = setTimeout(() => fail('parser_timeout'), PDF_LIMITS.loadWatchdogMs);
     setLoading(true); setError(''); setNumber(1); setZoom(1); setPages(0);
     try {
       owned = new PdfDocumentOwner(bytes, fail); setOwner(owned);
@@ -24,7 +24,7 @@ export default function PdfPreview({ bytes, retry }: { bytes: Uint8Array<ArrayBu
     if (!owner || !pages || !canvas.current || !text.current) return;
     const abort = new AbortController(), rendered = canvas.current, layer = text.current;
     setLoading(true);
-    const timer = setTimeout(() => { if (!abort.signal.aborted) { setError('parser_timeout'); setLoading(false); abort.abort(); owner.dispose(); } }, DOCUMENT_LIMITS.timeout);
+    const timer = setTimeout(() => { if (!abort.signal.aborted) { setError('parser_timeout'); setLoading(false); abort.abort(); owner.dispose(); } }, PDF_LIMITS.renderWatchdogMs);
     void owner.render(number, zoom, rendered, layer, abort.signal).then(() => {
       if (!abort.signal.aborted) setLoading(false);
     }, cause => { if (!abort.signal.aborted) { setError(documentFailure(cause)); setLoading(false); owner.dispose(); } }).finally(() => clearTimeout(timer));

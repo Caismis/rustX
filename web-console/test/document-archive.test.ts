@@ -4,7 +4,7 @@ import { zip } from './document-fixtures';
 import { expect, it } from 'vitest';
 import { admitOoxml, OOXML_LIMITS } from '../host/documents/archive';
 import { inspectOoxml } from '../host/documents/ooxml';
-import { documentKind } from '../src/client/document-types';
+import { documentKind } from '../shared/documents.ts';
 
 const fixture = (ext: string) => readFileSync(new URL(`./fixtures/documents/sample.${ext}`, import.meta.url));
 it('uses a closed extension matrix, never MIME/basename authority', () => {

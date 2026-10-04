@@ -1,4 +1,5 @@
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
+import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +14,7 @@ import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspa
 import { NativeFileReadError, readNativeDelivery, readNativeSource } from './file-read.ts';
 
 import { deriveDocument } from './documents/operation.ts';
-import type { DocumentRequest, DocumentResult } from '../src/client/document-types.ts';
+import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
 
 export interface LocalHostConfig {
   /** Operator attests native runtime and Host share the same filesystem namespace. */
@@ -129,6 +130,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (!this.config.productHostToken) throw new Error('preview_unavailable');
     if (this.documentReads.size) throw new Error('capacity');
     const operation = new AbortController(); this.documentReads.add(operation);
+    let settled = true;
     const abort = () => operation.abort(); signal?.addEventListener('abort', abort, { once: true });
     try {
       signal?.throwIfAborted();
@@ -139,13 +141,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
       }, operation.signal);
     } catch (cause) {
+      if (cause instanceof OfficeSettlementError) settled = false;
       if (cause instanceof NativeFileReadError && cause.error.data?.kind === 'session_file_read') {
         const reason = cause.error.data.reason;
         throw new Error(({ missing: 'source_missing', unauthorized: 'authorization_revoked', unavailable: 'source_unavailable',
           not_regular: 'source_unavailable', replaced: 'source_changed', too_large: 'too_large', capacity: 'capacity', read_failed: 'failure' } as const)[reason]);
       }
       throw cause;
-    } finally { signal?.removeEventListener('abort', abort); this.documentReads.delete(operation); }
+    } finally { signal?.removeEventListener('abort', abort); if (settled) this.documentReads.delete(operation); }
   }
   async desktopCatalog(scope: WorkspaceAuthorityScope, refresh = false): Promise<DesktopCatalog> {
     this.mutationScope(scope);

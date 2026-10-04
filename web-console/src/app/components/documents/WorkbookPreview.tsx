@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from '../../../locale/react';
-import type { WorkbookPreview as Workbook } from '../../../client/document-types';
+import type { WorkbookPreview as Workbook } from '../../../../shared/documents.ts';
 
 /** A bounded window mounts at most 100 rows, independent of admitted cell count. */
 export function WorkbookPreview({ workbook }: { workbook: Workbook }) {

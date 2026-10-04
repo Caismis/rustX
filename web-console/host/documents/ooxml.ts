@@ -1,7 +1,8 @@
+import { WORKBOOK_LIMITS as limits } from './limits.ts';
 import { SaxesParser, type SaxesTagNS } from 'saxes';
 import { posix } from 'node:path';
 import { admitOoxml } from './archive.ts';
-import { DOCUMENT_LIMITS as limits, type WorkbookCell, type WorkbookPreview } from '../../src/client/document-types.ts';
+import type { WorkbookCell, WorkbookPreview } from '../../shared/documents.ts';
 
 function fail(code = 'malformed'): never { throw new Error(code); }
 const attribute = (tag: SaxesTagNS, local: string) => {

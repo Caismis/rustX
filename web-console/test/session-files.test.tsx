@@ -128,8 +128,8 @@ it('raster dimension inspection bounds decoded pixels and rejects active SVG bef
 it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('advanced source %s retirement fences gated derived publication', async change => {
   vi.stubGlobal('crypto', webcrypto);
   const f = await fixture(), controller = new AbortController();
-  const entered = deferred<void>(), held = deferred<import('../src/client/document-types').DocumentResult>();
-  let request!: import('../src/client/document-types').DocumentRequest;
+  const entered = deferred<void>(), held = deferred<import('../shared/documents.ts').DocumentResult>();
+  let request!: import('../shared/documents.ts').DocumentRequest;
   f.host.previewDocument = async (_scope, value) => { request = value; entered.resolve(); return held.promise; };
   const work = f.resources.derive(source, 'xlsx', new Uint8Array([1]), controller.signal);
   const rejected = expect(work).rejects.toThrow('obsolete');

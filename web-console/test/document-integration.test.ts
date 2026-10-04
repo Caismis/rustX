@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { deriveDocument } from '../host/documents/operation';
-import type { DocumentRequest } from '../src/client/document-types';
+import type { DocumentRequest } from '../shared/documents.ts';
 
 function fixture(extension: DocumentRequest['extension']) {
   const bytes = readFileSync(new URL(`./fixtures/documents/sample.${extension}`, import.meta.url));
@@ -34,3 +34,13 @@ it('real sandbox converts real DOCX and PPTX and reauthorizes all three reads', 
     if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data, 'base64').subarray(0, 5).toString()).toBe('%PDF-');
   }
 }, 40000);
+
+it('reauthorization compares Session-file fields, not their JSON property order', async () => {
+  const { request, source } = fixture('xlsx');
+  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a.xlsx', name: 'a.xlsx', mime_type: 'application/xlsx' };
+  const reordered = { mime_type: file.mime_type, name: file.name, path: file.path, scope: { inode: '2', device: '1', conversation_id: 'c' } };
+  let reads = 0;
+  await expect(deriveDocument(request, async () => ({ ...source, file: ++reads === 1 ? file : reordered }), new AbortController().signal)).resolves.toMatchObject({ preview: { kind: 'xlsx' } });
+  reads = 0;
+  await expect(deriveDocument(request, async () => ({ ...source, file: ++reads === 1 ? file : { ...reordered, scope: { ...reordered.scope, inode: '3' } } }), new AbortController().signal)).rejects.toThrow('source_changed');
+});

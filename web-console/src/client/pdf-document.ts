@@ -1,7 +1,8 @@
+import { DERIVED_PDF_MAX_BYTES } from '../../shared/documents.ts';
 import { getDocument, PDFWorker, TextLayer, type PDFDocumentProxy, type RenderTask } from 'pdfjs-dist';
 import type { BaseFilterFactory } from 'pdfjs-dist/types/src/display/filter_factory';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { DOCUMENT_LIMITS as limits } from './document-types';
+import { PDF_LIMITS as limits } from './pdf-limits';
 
 type CanvasEntry = { canvas: HTMLCanvasElement | null; context: CanvasRenderingContext2D | null };
 /** Bounds PDF.js scratch canvases separately from the single presentation canvas. */
@@ -59,7 +60,7 @@ export class PdfDocumentOwner {
   private cancelPage?: () => void;
   private presentation?: { canvas: HTMLCanvasElement; container: HTMLDivElement };
   constructor(bytes: Uint8Array<ArrayBuffer>, failed: (code: string) => void) {
-    if (bytes.length > limits.pdfBytes) throw new Error('too_large');
+    if (bytes.length > DERIVED_PDF_MAX_BYTES) throw new Error('too_large');
     if (workers >= limits.workers) throw new Error('capacity');
     try { this.worker = new Worker(workerUrl, { type: 'module' }); }
     catch { throw new Error('worker_failure'); }

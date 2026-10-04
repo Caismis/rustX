@@ -1,3 +1,4 @@
+import { sameSessionFile } from '../../shared/session-file-identity.ts';
 import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
 import { sameTarget } from './app-server';
@@ -38,9 +39,7 @@ export class FilePreviewResources {
       const result = await this.host.readDelivery(observation.scope, { target, message_id: source.messageId, delivery_index: source.index }, signal ? AbortSignal.any([read.signal, signal]) : read.signal);
       if (this.disposed || read.signal.aborted || signal?.aborted || !observation.current() || revision !== this.client.getSnapshot().authorityRevision
         || !sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, target)) throw new Error('Obsolete file response');
-      const expected = source.file, actual = result.file;
-      if (actual.scope.conversation_id !== expected.scope.conversation_id || actual.scope.device !== expected.scope.device || actual.scope.inode !== expected.scope.inode
-        || actual.path !== expected.path || actual.name !== expected.name || actual.mime_type !== expected.mime_type || (actual.description ?? null) !== (expected.description ?? null)) throw new Error('Delivery identity changed');
+      if (!sameSessionFile(result.file, source.file)) throw new Error('Delivery identity changed');
       if (result.data.length > SESSION_FILE_MAX_BASE64) throw new Error('Session file exceeds 512 KiB');
       const decoded = atob(result.data);
       if (decoded.length > SESSION_FILE_MAX_BYTES) throw new Error('Session file exceeds 512 KiB');
@@ -78,7 +77,7 @@ export class FilePreviewResources {
       }, AbortSignal.any([read.signal, signal]));
       current();
       if (result.digest !== digest) throw new Error('source_changed');
-      if (source.kind === 'session_file' && JSON.stringify(result.file) !== JSON.stringify(source.file)) throw new Error('source_changed');
+      if (source.kind === 'session_file' && !sameSessionFile(result.file, source.file)) throw new Error('source_changed');
       return result.preview;
     } finally { this.reads.delete(read); }
   }

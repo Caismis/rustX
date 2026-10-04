@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import type { FilePreviewResources, PreviewSource } from '../../../client/session-files';
-import { DOCUMENT_LIMITS, type DocumentKind, type DerivedDocument } from '../../../client/document-types';
+import { DERIVED_PDF_MAX_BYTES, type DocumentKind, type DerivedDocument } from '../../../../shared/documents.ts';
 import { useTranslation } from '../../../locale/react';
 import { HtmlPreview } from './HtmlPreview';
 import { WorkbookPreview } from './WorkbookPreview';
@@ -16,9 +16,9 @@ export function DocumentPreview({ kind, bytes, source, resources, retry }: { kin
     void resources.derive(source, kind, bytes, abort.signal).then(result => {
       if (abort.signal.aborted) return;
       if (result.kind === 'pdf') {
-        if (result.data.length > Math.ceil(DOCUMENT_LIMITS.pdfBytes / 3) * 4) throw new Error('too_large');
+        if (result.data.length > Math.ceil(DERIVED_PDF_MAX_BYTES / 3) * 4) throw new Error('too_large');
         const decoded = atob(result.data);
-        if (decoded.length > DOCUMENT_LIMITS.pdfBytes) throw new Error('too_large');
+        if (decoded.length > DERIVED_PDF_MAX_BYTES) throw new Error('too_large');
         setPdf(Uint8Array.from(decoded, c => c.charCodeAt(0)));
       } else setDerived(result);
     }).catch(cause => { if (!abort.signal.aborted) setError(documentFailure(cause)); });

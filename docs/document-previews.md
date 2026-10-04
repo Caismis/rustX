@@ -14,7 +14,7 @@ conversion exists. Page, zoom, sheet and HTML mode belong to the selected view.
 | Extensions | Sources | Presentation | Runtime | Passwords | Fidelity |
 | --- | --- | --- | --- | --- | --- |
 | `.pdf` | Artifact, Session file | PDF.js canvas and selectable text, one selected page | Browser module Worker | Rejected, original download retained | No scripting, XFA, interactive forms, annotations or embedded attachments; no OCR |
-| `.docx`, `.pptx` | Artifact, Session file | Product Host converts a private authorized snapshot to PDF, then the same PDF viewer | Linux with `/usr/bin/bwrap`, `prlimit`, system LibreOffice, fonts and working user/network/PID namespaces | Encrypted ZIP/OOXML rejected | Fonts, layout and pagination can differ; a visible derived-preview warning is mandatory |
+| `.docx`, `.pptx` | Artifact, Session file | Product Host converts a private authorized snapshot to PDF, then the same PDF viewer | Linux with `/usr/bin/bwrap`, `prlimit`, system LibreOffice, fonts, working user/network/PID namespaces and a systemd user manager with cgroup v2 CPU/memory/pids controllers | Encrypted ZIP/OOXML rejected | Fonts, layout and pagination can differ; a visible derived-preview warning is mandatory |
 | `.xlsx` | Artifact, Session file | Product Host parser produces a bounded sheet/cell inspection model | Node 24 Product Host, Linux or macOS | Encrypted packages rejected | Stored values and literal formulas only; no formatting, charts, images, merged-cell layout, calculation or editing |
 | `.html`, `.htm` | Artifact, Session file | Opaque-origin sandbox plus inert UTF-8 source inspection | Browser | Not applicable | External resources, active content, links and forms removed/blocked |
 
@@ -48,7 +48,7 @@ disposes the complete selected preview, including its original URL.
 | Total admitted canvas pixels | 20,971,520 page + scratch, plus one 300 × 150 text-measurement canvas; hardware/OffscreenCanvas/image decoders disabled |
 | PDF decoded image policy | 4,194,304 pixels; larger images are omitted by PDF.js |
 | PDF text layer | 10,000 items, 100,000 characters, current page only |
-| PDF parse / selected-page deadline | 15 seconds each; expiry retires the worker |
+| PDF load / selected-page cooperative watchdog | 15 seconds each; when the browser event loop dispatches expiry, retire the worker |
 | ZIP entries / path bytes | 256 / 240 |
 | ZIP individual / total expansion | 4 MiB / 16 MiB |
 | ZIP declared expansion ratio | 200:1 |
@@ -60,9 +60,10 @@ disposes the complete selected preview, including its original URL.
 | XML depth / elements per part | 64 / 200,000 |
 | Serialized workbook model | 2 MiB |
 | Mounted spreadsheet cells | 100 per inspection window |
-| Office conversion wall / CPU deadline | 15 seconds / 15 CPU seconds |
-| Converter writable filesystem | 64 MiB private tmpfs; original snapshot ≤512 KiB in private Host directory |
-| Converter address-space / output-file / open-FD limits | 1 GiB per process / 8 MiB per file / 128 |
+| Office service runtime / aggregate CPU rate | 15 seconds (external systemd timer); one CPU quota, 100 ms per 100 ms period across the complete cgroup |
+| Converter writable filesystem | One 64 MiB private tmpfs at `/tmp`, including `/dev/shm`; root and input read-only. Private Host snapshot ≤512 KiB plus fixed profile seed |
+| Converter aggregate memory / swap / tasks | 512 MiB cgroup memory, zero swap, 64 tasks including threads and descendants; whole-cgroup OOM kill |
+| Converter per-file / per-process FD limits | 8 MiB / 128 (supplementary; not aggregate limits) |
 | Converter stdout accepted as PDF | 4 MiB, overflow kills the sandbox |
 
 Original source buffers are retained only by the selected view and its original Blob; a derived PDF has one selected-view byte buffer plus its transferred worker copy. HTML has no resource URLs or persistent derived cache.
@@ -71,6 +72,10 @@ V8 heap limits do not include external ArrayBuffers; ZIP expansion and source
 buffers have independent byte bounds. PDF.js internal decoding allocations are
 not a browser-enforceable process heap limit. The canvas, image, page, text and
 owner-retention limits above must not be described as a hard cap on browser RSS.
+PDF main-thread timers are cooperative watchdogs, not hard CPU/preemption
+limits. Synchronous render/text work can delay their dispatch. Worker termination
+retires worker execution once requested; it cannot preempt synchronous browser
+main-thread work. This deliberately differs from the external Office service timer.
 PDF fonts use the built-in glyph-path renderer (`disableFontFace`); previews do not register document FontFaces in application state. Text selection uses a fallback font layer and can differ in glyph appearance. Public PDF filter resources, selected-page buffers and owner references are released explicitly even when a failed worker cannot acknowledge PDF.js destruction.
 
 Oversized sheet coordinates/cell counts produce a visibly truncated inspection.
@@ -115,16 +120,37 @@ ActiveX, embeddings, external links/relationships and DTDs are rejected. Only
 DOCX and PPTX are submitted to the converter. A fresh private profile sets macro
 security to level 3. This setting alone is not the sandbox boundary.
 
+`office-sandbox.ts` starts one transient **user** systemd service, without a
+persistent rustX worker or a new daemon. Its unique unit owns Bubblewrap and every
+descendant in one cgroup v2 domain before document-controlled execution begins.
+MemoryMax=512 MiB, MemorySwapMax=0, TasksMax=64 and CPUQuota=100% apply to the
+whole tree. OOMPolicy=kill sets memory.oom.group=1. These are not UID-scoped
+RLIMIT_NPROC or per-child RLIMIT_AS limits. Before releasing the trusted stdin admission gate, the Host reads the
+actual service cgroup's memory.max, memory.swap.max, pids.max, cpu.max and
+memory.oom.group and requires the exact values before accepting a stdin permit.
+Missing controllers, unsupported properties or an unavailable manager fail closed
+as `converter_unavailable`; no conversion payload is admitted.
+
+The operator must provide `/usr/bin/systemd-run`, a reachable
+systemd user manager and delegated cgroup v2 CPU/memory/pids controllers. The Host
+uses only XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS to contact that manager.
+It never changes global cgroup policy or starts a privileged conversion service.
+CI provisions the runner's user manager with loginctl enable-linger and verifies
+the actual production admission path before tests. macOS remains unsupported for
+Office; there is no alternate conversion mode.
+
 Bubblewrap unshares user, network, PID, IPC and UTS namespaces, disables further
-user namespace creation inside the sandbox with `--disable-userns`, drops capabilities,
-creates a new session and uses `--die-with-parent`. It mounts `/usr` read-only,
-the private input/profile seed read-only, a new `/proc` and `/dev`, and one
-size-limited `/tmp`. It never mounts the user's home, Workspace, runtime store,
-socket directory or credentials. Environment variables are explicitly supplied;
-proxy/token/desktop variables are not inherited. The network namespace has no
-Host network connection. `prlimit` supplies the limits listed above; core dumps
-are disabled. The exact fixed argument vector lives in
-`web-console/host/documents/converter.ts`.
+user namespaces, drops capabilities, creates a new session and uses die-with-parent.
+The root filesystem and procfs are remounted read-only. `/usr` and the private
+input/profile seed are read-only. The only writable filesystem is the size-limited
+`/tmp`; `/dev/shm` is a symlink into it. `/dev` itself is on the read-only root;
+only null, zero, random and urandom devices are individually bound, with no extra
+dev tmpfs or devpts mount. Tmpfs data is bounded to 64 MiB and its memory/metadata
+is also charged to the operation cgroup. No home, Workspace, runtime store, socket
+directory or credentials are mounted. Payload environment is cleared and explicitly
+supplied, with no proxy/token/desktop variables. The network namespace has no Host
+connection. prlimit supplies only supplementary file-size/FD/core-dump limits.
+The exact fixed boundary lives in `web-console/host/documents/office-sandbox.ts`.
 
 `/etc` is empty except for a read-only `/etc/libreoffice/registry` mount when
 that system directory exists. Debian/Ubuntu's `/usr` package symlinks require
@@ -145,10 +171,37 @@ fall back to an unsandboxed converter if the prerequisite is unavailable.
 
 Conversion writes only into the private tmpfs. Its PDF is streamed over stdout,
 bounded, and checked for a PDF signature before the PDF viewer validates it.
-Timeout, cancellation and oversize output kill Bubblewrap; destruction of its PID
-namespace terminates descendants. Settlement waits for process/pipe close before
-removing the private input directory and releasing capacity. stderr is discarded
-rather than exposing converter internals or filesystem paths to the browser.
+Before permitting payload execution, the Host opens the actual cgroup.kill and
+watches cgroup.events outside the sandbox. Cancellation/oversize uses cgroup.kill
+to SIGKILL the complete tree. No process can migrate out because the sandbox has
+no cgroup mount or inherited control descriptor.
+RuntimeMaxSec=15 is enforced by the external manager, even if the Node event loop
+is blocked; the Node timer provides an additional cooperative error watchdog.
+KillMode=control-group, KillSignal=SIGKILL and ExitType=cgroup prevent a main-process
+exit from hiding surviving descendants. A late-starting service cannot receive
+its stdin permit after cancellation. The systemd-run wait client is never killed
+to simulate settlement: --wait waits for service/cgroup retirement, and its close
+also waits for forwarded pipe closure. The Host also kills and awaits kernel populated=0 (or removal of the empty
+cgroup) before closing its control handles. Thus even an unexpectedly failed wait
+client cannot hide surviving descendants. If retirement cannot be established, the
+Host retains its admission slot and reports converter_unavailable; it does not
+admit another operation on an unknown outcome.
+Only then is the private input directory removed; only after that awaited cleanup
+does LocalWorkspaceHost release the one derivation slot. Failed/oversized output
+never publishes. --collect retires the transient unit; no derived cache remains.
+stderr is discarded rather than exposing converter internals or filesystem paths.
+
+## Document contract ownership
+
+`web-console/shared/documents.ts` owns environment-neutral source/request/result
+DTOs and the explicit shared derived-PDF carrier byte bound. Browser canvas/page/
+text limits and independent load/render watchdog values live in
+`src/client/pdf-limits.ts`. Host workbook/parser/converter limits live in
+`host/documents/limits.ts`; OOXML admission limits remain with the Host archive
+owner. Host code does not import document policies from the browser client.
+`shared/session-file-identity.ts` compares each typed Session-file identity field
+including the original scope, path/name/MIME and normalized optional description.
+This is only stale-source detection; equality never grants read authorization.
 
 ## HTML and spreadsheet semantics
 
@@ -176,6 +229,7 @@ not performed: inspection shows the stored representation.
 | `saxes` | 6.0.0 / ISC | Node worker, strict XML events; no DTD/entity/network loader or execution engine |
 | Node `zlib` | Node 24 runtime | Host-only bounded raw inflate and CRC; no archive-path extraction |
 | LibreOffice | Tested 26.2.6.3; MPL-2.0/LGPL-3.0 with bundled-component licenses | Operator-installed Linux converter; expands admitted OOXML inside the sandbox; macros disabled/rejected; network namespace isolated |
+| systemd | Tested 259.9 locally; requires ExitType=cgroup support and cgroup v2 delegation; LGPL-2.1-or-later core | Transient service cgroup ownership, aggregate controls, external runtime deadline and settlement; no document parsing |
 | Bubblewrap | Tested 0.12.0; LGPL-2.1-or-later | Operator-installed Linux namespace/process/filesystem boundary; no document parsing |
 | util-linux `prlimit` | Tested 2.41.5; GPL-2.0 family (system package includes BSD/public-domain components) | Operator-installed process resource limiter; no document parsing |
 
@@ -220,3 +274,15 @@ Bubblewrap 0.9.0 package layout, including its external system registry.
   stable reading during a gated live response. Existing basic file-delivery,
   geometry, native root/leaf replacement and historical ownership suites remain
   part of the full validation lane.
+
+The aggregate boundary regressions execute controlled Python helpers in the actual
+production sandbox: writes outside `/tmp` fail, `/dev/shm` shares its quota,
+concurrent descendants hit pids.max and memory.max, and cancellation, external
+runtime expiry (with the Node watchdog clock held), and wait-client failure retire
+all cgroup tasks. Gated Host tests keep capacity occupied through process and input
+cleanup, reject unknown retirement, and admit the next operation only after success.
+The native Artifact browser seam seeds a real XLSX through ArtifactStore using a
+fixture-only Cargo example, then exercises the actual HTTP Host, private v2 socket,
+native Artifact read owner, digest/reauthorization, workbook publication and original
+download. Held publication is rejected after native attachment replacement; no
+model request is made. No product Artifact write API is introduced.

@@ -10,7 +10,7 @@ export class NativeFileReadError extends Error {
 export function readNativeDelivery(endpoint: string, credential: string, read: DeliveryRead, roots: string[], signal: AbortSignal): Promise<DeliveryBytes> {
   return readNativeSource(endpoint, credential, read.target, { kind: 'session_file', message_id: read.message_id, delivery_index: read.delivery_index }, roots, signal) as Promise<DeliveryBytes>;
 }
-export function readNativeSource(endpoint: string, credential: string, target: AttachmentTarget, source: import('../src/client/document-types.ts').DocumentSource, roots: string[], signal: AbortSignal): Promise<{ data: string; file?: DeliveryBytes['file'] }> {
+export function readNativeSource(endpoint: string, credential: string, target: AttachmentTarget, source: import('../shared/documents.ts').DocumentSource, roots: string[], signal: AbortSignal): Promise<{ data: string; file?: DeliveryBytes['file'] }> {
   signal.throwIfAborted();
   const url = new URL(endpoint);
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('Invalid Product Host native endpoint');

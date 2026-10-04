@@ -2,7 +2,7 @@ import { createContext, useEffect, useState } from 'react';
 import { useTranslation } from '../../locale/react';
 import type { FilePreviewResources, LoadedFile, PreviewSource } from '../../client/session-files';
 import { ArtifactPreview as Preview } from '../../presentation/right-panel/ArtifactPreview';
-import { documentKind } from '../../client/document-types';
+import { documentKind } from '../../../shared/documents.ts';
 import { DocumentPreview } from './documents/DocumentPreview';
 export interface PreviewArtifact { source: PreviewSource; name: string; image: boolean; mimeType?: string; download?: boolean }
 export const PreviewContext = createContext<((artifact: PreviewArtifact) => void) | undefined>(undefined);

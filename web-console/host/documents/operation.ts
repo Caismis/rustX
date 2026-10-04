@@ -1,10 +1,11 @@
+import { sameSessionFile } from '../../shared/session-file-identity.ts';
+import { PARSER_TIMEOUT_MS } from './limits.ts';
 import { Worker } from 'node:worker_threads';
 import { createHash } from 'node:crypto';
-import { DOCUMENT_LIMITS, type DocumentRequest, type DocumentResult, type WorkbookPreview } from '../../src/client/document-types.ts';
-import type { DeliveryBytes } from '../../src/workspaces/host.ts';
+import type { DocumentRequest, DocumentResult, WorkbookPreview } from '../../shared/documents.ts';
 import { convertOffice } from './converter.ts';
 
-type SourceBytes = { data: string; file?: DeliveryBytes['file'] };
+type SourceBytes = { data: string; file?: DocumentResult['file'] };
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 export async function deriveDocument(request: DocumentRequest, read: () => Promise<SourceBytes>, signal: AbortSignal): Promise<DocumentResult> {
   const decode = (source: SourceBytes) => {
@@ -28,7 +29,7 @@ export async function deriveDocument(request: DocumentRequest, read: () => Promi
   try {
     workbook = await new Promise<WorkbookPreview | undefined>((resolve, reject) => {
       const abort = () => reject(new Error('obsolete'));
-      const timer = setTimeout(() => reject(new Error('parser_timeout')), DOCUMENT_LIMITS.timeout);
+      const timer = setTimeout(() => reject(new Error('parser_timeout')), PARSER_TIMEOUT_MS);
       const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
       cleanup = finish;
       signal.addEventListener('abort', abort, { once: true });
@@ -43,7 +44,7 @@ export async function deriveDocument(request: DocumentRequest, read: () => Promi
   const reauthorize = async () => {
     signal.throwIfAborted();
     const current = await read(); decode(current);
-    if (JSON.stringify(current.file) !== JSON.stringify(source.file)) throw new Error('source_changed');
+    if (!sameSessionFile(current.file, source.file)) throw new Error('source_changed');
     signal.throwIfAborted();
   };
   await reauthorize();

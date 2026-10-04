@@ -294,3 +294,6 @@ def web_advanced_documents() -> Scenario:
     )
 
 SCENARIOS['web_advanced_documents'] = web_advanced_documents
+
+
+SCENARIOS['web_artifact_document'] = lambda: Scenario('web_artifact_document')
