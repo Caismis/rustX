@@ -3252,7 +3252,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup.",
       "destination": "web-console/src/locale/dictionaries/artifacts.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3263,7 +3263,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "0277912866f942905efa5289117bb9a13620dba0d537a2c88c58d38789238135"
+      "local_sha256": "b865dd542488544f6b1c549dfd8c8e4c275bfb4d33800a7e40e9a7308c42dbaa"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4288,6 +4288,72 @@
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
       "upstream_sha256": "9f582ccf0e0db7c65eaa911bcde1974e3579b860a274181d4b842aeec8d56f1a",
       "treatment": "Issue 432 behavioral reference only; rustX uses a closed three-application catalog and Session identities instead of browser paths. No source copied."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/package.json",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "4ea2db009dfd41cb3830a073849ded96d2a6636b334a50d78d6127f68836ebae",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/document/contract.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "4af0752858bede4d19c7e45cb9bb446196238d0cecf808a606e2269fbcfa75fe",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/document.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "580881e2d93332089f2eb6f4a7851fd03e78fcfcdd876901bd49b5f2d7380936",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/runtime.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "ebb28e4a1748ce8ff1493713b2d66df855beaf22adf0d77db174acbcc1760425",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx-archive.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "ffd99f6b2424122b427754e53f6c2cc9f68ff7fa783e0f1816b3998ceb3b6618",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/basic-document.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "d229243c4fc237c4a6a423a9c73b29153b7a2ab4cc0f29b9d1a715044ef82922",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/office/OfficeBody.tsx",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "8f4f13519e3938b1f4d74d5aa1ac6e53f7798b7aa2fce553aa8835dfa4e8da27",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/document/office-to-pdf/README.md",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "f0686e9ab6b04b7269fe1443ab517d3ca634b49b6d444d8e904356e003c3311f",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/document/office-to-pdf/src/index.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "5e7030469a5ec1f432c6a2e8a2de10b5fb3b02d76bf27d3c8c59da00e913fbfb",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/document/office-to-pdf/src/identity.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "dce6a64cbfde995c36b1c56288e17d804d63a1bfd1e68fabdea62cc512c2dd13",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
+    },
+    {
+      "upstream": "packages/document/office-to-pdf/src/queue.ts",
+      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+      "upstream_sha256": "aea7f8a7e81efef2a118b1bde6f1a6add7f446d2371731af10d9102f05dca1c9",
+      "treatment": "Issue #440 inspected for lifecycle, bounded conversion and isolation concepts. No source copied. Cordis, registry/slots, cache, eager unzip, workbook engine and libreoffice-kit excluded."
     }
   ],
   "historical_inspection": {

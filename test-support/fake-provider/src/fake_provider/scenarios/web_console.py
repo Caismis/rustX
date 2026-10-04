@@ -283,3 +283,17 @@ def web_compaction() -> Scenario:
 
 
 SCENARIOS["web_compaction"] = web_compaction
+
+
+def web_advanced_documents() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Preview advanced files',))
+    files = [{'path': name} for name in ['sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'hostile.html', 'malformed.pdf', 'encrypted.pdf']]
+    return Scenario('web_advanced_documents',
+        Step(expected, Stream(ToolCall('documents-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
+        Step(expected, Stream(Text('Documents delivered.'), Gate('document-stream'), Text(' Streaming continues.'), Finish())),
+    )
+
+SCENARIOS['web_advanced_documents'] = web_advanced_documents
+
+
+SCENARIOS['web_artifact_document'] = lambda: Scenario('web_artifact_document')

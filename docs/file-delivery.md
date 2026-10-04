@@ -88,7 +88,7 @@ unavailable. Native startup rejects reuse of the ordinary credential, symlink or
 non-regular secret files, and files readable by other users.
 
 Only `/product-host/file-read` WebSocket admission accepts the private
-`rustx.product-host.file-read.v1` subprotocol plus `rustx-product-host.<secret>`.
+`rustx.product-host.file-read.v2` subprotocol plus `rustx-product-host.<secret>`.
 The response selects only the public subprotocol name, never the secret. Ordinary
 transport credentials cannot authenticate this lane, and this credential cannot
 authenticate the ordinary App Server lane. Handshake admission creates a native
@@ -195,3 +195,7 @@ Same-authority display refresh does not recreate the owner.
 The existing #430/#443 RightPanel and ChatViewport remain the geometry and scroll
 owners. Delivery opens no second sidebar or automatic scroll effect. Width is
 presentation-only; the existing turn navigator and reading-anchor contract apply.
+
+The closed PDF, OOXML and HTML viewer families extend this ownership contract;
+see [advanced document previews](document-previews.md) for their admission,
+conversion, isolation, resource and platform limits.

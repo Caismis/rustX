@@ -1,0 +1,2 @@
+minimumReleaseAgeExclude:
+  - pdfjs-dist@6.4.299
