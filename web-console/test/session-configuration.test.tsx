@@ -83,6 +83,47 @@ it('C16 late success A cannot hide newly observed candidate B; acknowledgement a
  expect(writes(s)[1][0]).toMatchObject({ params: { candidate: { input_revision: 'B', attempt: '4' }, expected_binding: '2' } });
 });
 
+it.each([false, true])('background configuration refresh does not flash unavailable (candidate: %s)', async candidate => {
+ let release!: (value: MethodResult) => void;
+ let refreshing = false;
+ const s = cfg3Client(async op => {
+   if (refreshing && op.method === 'session/configuration') return new Promise<MethodResult>(resolve => { release = resolve; });
+ });
+ s.source.application = { ...cfg3Application(), candidate: candidate ? cfg3Application().candidate : null, units: {} };
+ render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
+ await act(async () => {});
+ for (let i = 0; i < 2; i++) {
+   refreshing = true;
+   snapshotChanged(s);
+   expect(screen.queryByText(/Configuration status unavailable/)).toBeNull();
+   if (candidate) expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
+   else expect(screen.queryByRole('region', { name: 'Session configuration' })).toBeNull();
+   await act(async () => { release({ type: 'session_configuration', application: s.source.application! }); });
+   expect(screen.queryByText(/Configuration status unavailable/)).toBeNull();
+   if (candidate) expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false);
+ }
+});
+
+it('disconnect keeps the stale warning until the reconnect read succeeds', async () => {
+ let release!: (value: MethodResult) => void;
+ let reconnecting = false;
+ const s = cfg3Client(async op => {
+   if (reconnecting && op.method === 'session/configuration') return new Promise<MethodResult>(resolve => { release = resolve; });
+ });
+ s.source.application = cfg3Application();
+ render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
+ await screen.findByRole('button', { name: 'Adopt configuration' });
+ act(() => s.publish({ connection: 'reconnecting' }));
+ expect(screen.getByText(/Configuration status unavailable/)).toBeTruthy();
+ reconnecting = true;
+ act(() => s.publish({ connection: 'connected', generation: 2 }));
+ expect(screen.getByText(/Configuration status unavailable/)).toBeTruthy();
+ expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
+ await act(async () => { release({ type: 'session_configuration', application: s.source.application! }); });
+ expect(screen.queryByText(/Configuration status unavailable/)).toBeNull();
+ expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false);
+});
+
 it('C13 failed refresh retains pending observation and never asserts up to date', async () => {
  let unavailable = false;
  const s = cfg3Client(async op => { if (unavailable && op.method === 'session/configuration') throw new Error('unavailable'); });

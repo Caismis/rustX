@@ -31,12 +31,17 @@ function ConfigurationObservation({ actor, connection, openOwningSettings }: { a
   const tx = useTranslation();
   // The current connected span's observation, or — while no span has observed
   // since the last one ended — that span's observation as explicitly stale
-  // presentation data. `known` is what says which of the two this is; the
-  // retained value is never a comparison baseline for a later span.
+  // presentation data. The retained value is never a comparison baseline for
+  // a later span. Background reads do not make the displayed value unavailable.
   const application = useSelector(actor, snapshot => snapshot.context.application ?? snapshot.context.staleApplication);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const adoptionError = useSelector(actor, snapshot => snapshot.context.adoptionError);
   const known = useSelector(actor, applicationKnown);
+  const unavailable = useSelector(actor, snapshot =>
+    snapshot.matches({ observation: 'offline' })
+    || snapshot.matches({ observation: { connected: 'failed' } })
+    || Boolean(snapshot.context.readError)
+    || snapshot.context.staleApplication !== undefined);
   const busy = useSelector(actor, snapshot => snapshot.matches({ adoption: 'submitting' }));
   const candidate = application?.candidate;
   // Per-unit native observations. Independent units may simultaneously be
@@ -45,13 +50,13 @@ function ConfigurationObservation({ actor, connection, openOwningSettings }: { a
   const observations = observedUnits.map(unit => ({ unit, result: observedResult(unitApplication(application, unit)) })).filter(row => row.result.state !== 'unavailable');
   const preparing = observations.filter(row => row.result.state === 'preparing');
   const failed = observations.filter(row => row.result.state === 'failed');
-  if (known && !candidate && !preparing.length && !failed.length && !adoptionError) return null;
+  if (!unavailable && !candidate && !preparing.length && !failed.length && !adoptionError) return null;
   const eligibility = application?.eligibility.status;
   // Presentation only: which line of the banner each native fact is. Nothing
   // here decides eligibility, adoption, ownership or residency.
   const owners = openOwningSettings ? applicationOwners(application) : [];
   return <section aria-label={tx('common:session-configuration.session-configuration')} className={css.banner}>
-    {!known && <Line state="unavailable" text={tx('common:copy.configuration-status-unavailable-retaining-the-last-observation')} />}
+    {unavailable && <Line state="unavailable" text={tx('common:copy.configuration-status-unavailable-retaining-the-last-observation')} />}
     {preparing.length > 0 && <Line state="preparing" text={tx('common:copy.preparing-configuration')}
       detail={preparing.map(row => tx('common:copy.value-preparing', { p0: observedUnitLabel(tx, row.unit) }))} />}
     {candidate && <Line state={eligibility === 'eligible' ? 'ready' : 'blocked'} text={tx('common:copy.prepared-configuration-is-waiting-for-this-session')}
