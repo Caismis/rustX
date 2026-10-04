@@ -1,3 +1,4 @@
+import { flushSync } from 'react-dom';
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArtifactPreview } from './ArtifactPreview';
 import { PreviewWorkspaceOwner, clampSplit, splitBounds, splitFits, type PreviewPane, type PreviewWorkspaceSnapshot } from '../preview-workspace';
@@ -24,15 +25,16 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus }:
   owner: PreviewWorkspaceOwner; snapshot: PreviewWorkspaceSnapshot; focusRequest: number; returnFocus: () => void;
 }) {
   const tx = useTranslation(), root = useRef<HTMLDivElement>(null), pendingFocus = useRef<number | undefined>(undefined);
-  const [width, setWidth] = useState(0);
+  const width = snapshot.width;
   const workspace = snapshot.workspace, visible = snapshot.mode === 'preview' && !!workspace;
   const split = !!workspace && workspace.panes.length === 2 && splitFits(width);
   useLayoutEffect(() => {
-    const element = root.current!;
-    const measure = () => { const width = element.getBoundingClientRect().width; if (width > 0) { setWidth(width); owner.measure(width); } };
+    if (!visible) return;
+    const element = root.current!, epoch = snapshot.geometryEpoch;
+    const measure = () => { if (!element.hidden) owner.measure(element.getBoundingClientRect().width, epoch); };
     measure(); const observer = new ResizeObserver(measure); observer.observe(element);
     return () => observer.disconnect();
-  }, [owner]);
+  }, [owner, visible, snapshot.geometryEpoch]);
   useLayoutEffect(() => {
     if (!visible) return;
     const id = workspace.panes.find(pane => pane.id === workspace.activePane)?.selected;
@@ -52,14 +54,14 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus }:
     if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault(); event.stopPropagation();
     if (event.repeat) return;
-    if (workspace?.fullscreen) owner.toggleFullscreen();
+    if (workspace?.fullscreen) owner.toggleFullscreen(flushSync);
     else { owner.collapse(); returnFocus(); }
   };
   return <div ref={root} className={css.workspace} data-preview-workspace hidden={!visible} onKeyDown={escape}>
     {workspace && <>
       <div className={css.toolbar}>
         <Button size="sm" aria-label={tx('artifacts:workspace.split')} aria-disabled={!!reason} aria-describedby={reason ? separatorId : undefined} title={reason ?? tx('artifacts:workspace.split')} onClick={() => { if (!reason) { owner.split(); pendingFocus.current = owner.getSnapshot().workspace?.panes.find(p => p.id === owner.getSnapshot().workspace?.activePane)?.selected; } }}>{tx('artifacts:workspace.split')}</Button>
-        <Button size="sm" aria-label={tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')} onClick={() => owner.toggleFullscreen()}>{tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')}</Button>
+        <Button size="sm" aria-label={tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')} onClick={() => owner.toggleFullscreen(flushSync)}>{tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')}</Button>
         {workspace.panes.length === 2 && !split && <Button size="sm" onClick={() => focusPane(workspace.panes.find(pane => pane.id !== workspace.activePane)!)}>{tx('artifacts:workspace.switch-pane')}</Button>}
         {reason && <span id={separatorId} className={css.reason}>{reason}</span>}
       </div>

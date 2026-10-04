@@ -296,3 +296,131 @@ and attachments into `web-console/test-results/`. All required local Linux
 prerequisites were available. macOS and browsers outside the repository's pinned
 Chromium runner were not run locally. The committed three-dot whitespace check
 (`git diff origin/main...HEAD --check`) and final HEAD are recorded at PR delivery.
+
+
+## PR #450 contract repair (2026-10-05)
+
+Starting PR HEAD: `776323a42fb02c61d0e6a674860e152fd3bf74ec`.
+Fetched main and merge base: `3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`.
+The existing `issue-441-multi-preview-workspace` branch in
+`/home/caismis/Documents/codes/rustX-issue-441` was clean before editing.
+Both reviewed defects remained present at that HEAD. The primary checkout was
+not edited; its pre-existing untracked `.playwright-mcp/` directory was retained.
+
+The repair adds current-presentation measurement epochs, conservatively admitting
+only the active pane after hidden presentation or Session changes. Old observer
+callbacks cannot authorize the new presentation. Fullscreen commits use the same
+keyed tree and a synchronous layout witness; a missing witness conservatively
+retires the second lease before the transaction returns. Explicit Close persists
+`expanded: false` even in Inspector, independently of temporary Inspector toggles.
+See [preview-workspace.md](preview-workspace.md) for the complete contract.
+
+Controlled geometry tests cover collapse and Inspector wide-to-hidden-narrow
+interleavings, including delivery from the obsolete observer, exact acquisition
+counts before fresh measurement, narrow/wide delivery, Session epochs, zero
+measurement, and fullscreen without a layout witness. Explicit Inspector Close
+is exercised across native refresh, Session round-trip, widening and subsequent
+Inspector toggles; explicit Reopen restores tabs and metadata.
+
+The real browser test adds both hidden-narrow directions, counts original reads
+and peak PDF workers, and proves that a selected hidden Office pane sends no
+new derivation demand. It also uses the actual Close Inspector button, switches
+Sessions, resizes while closed, explicitly reopens and verifies occurrence IDs,
+text scroll and wrap. Existing hidden-widen coverage remains. The focused pinned
+browser run passed (20.8 seconds for the test; 23.8 seconds total).
+
+View state still commits on scroll/control interactions, independently of lease
+retirement and React cleanup. The seven focused test files passed all 73 tests:
+
+```sh
+pnpm --dir web-console exec vitest run \
+  test/preview-workspace.test.tsx test/preview-scroll.test.tsx \
+  test/preview-view-state.test.tsx test/session-files.test.tsx \
+  test/document-view-lifetime.test.tsx test/pdf-view-lifetime.test.tsx \
+  test/document-http-lifetime.test.ts
+CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e preview-workspace.spec.ts
+```
+
+The repair does not change `ChatViewport` or the five reviewed native/Product
+Host settlement files. Exact operation cancellation, admitted native read join,
+terminal response/clean settlement witness and unknown-settlement fail-closed
+behavior are preserved byte-for-byte relative to the starting PR HEAD.
+
+All of these commands passed:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo build --bins --all-features --locked
+pnpm --dir protocol/app-server check
+pnpm --dir protocol/app-server typecheck
+pnpm --dir tui typecheck
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test
+pnpm --dir dev typecheck
+pnpm --dir dev test
+pnpm --dir web-console typecheck
+pnpm --dir web-console test
+pnpm --dir web-console build
+pnpm --dir web-console check:i18n
+pnpm --dir web-console check:provenance
+bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session \
+  --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib \
+  --symlink usr/lib64 /lib64 -- /usr/bin/true
+node web-console/scripts/check-office-sandbox.ts
+git diff --check
+git diff origin/main...HEAD --check
+```
+
+Web unit validation passed 100 files / 1667 tests; TUI passed 895 tests and dev
+passed 38. Rust uses the repository-pinned 1.98.1 toolchain. The initial unqualified
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked`
+failed 32 configuration-discovery tests: live inspection found an ambient
+`/tmp/.git` and `/tmp/rustx.toml`. The clean-environment invocation passed 4106 tests across 20 binaries (8 existing
+ignored tests):
+
+```sh
+TMPDIR=/var/tmp/r450 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked
+```
+
+Two browser authoring failures were retained in the local logs: an Inspector
+overlay intercepted navigation at phone width, and the new close-button locator
+used the wrong case. The Inspector path now uses a real 1200px viewport whose
+normal preview column cannot fit two panes while navigation remains reachable;
+the collapse path still uses 390px. The close locator matches the actual
+`Close Inspector` accessible name. No deadline, assertion, screenshot tolerance,
+reference or runner retry policy was relaxed.
+
+Full pinned browser validation:
+
+```sh
+CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e
+```
+
+Result: **167 passed, 2 failed (10.1 minutes)**. The complete preview-workspace
+case passed in 20.0 seconds. The retained failures were:
+
+- `agent.spec.ts:96`, light/390 Composer: 15 changed pixels in
+  `composer-running-draft-light-390-linux.png`, all within x=24..33, y=117..120
+  on the input's upper-left edge; dimensions remain 334x244, maximum channel
+  delta 13. No noise policy exists for this reference; strict comparison failed.
+- `settings-presentation.spec.ts:540`: the enabled `Remove Provider transport`
+  button was not focused after the test's explicit focus operation at line 553.
+
+For a controlled comparison, only the two changed production source files were
+sourced from the reviewed HEAD in this same worktree, with automatic restoration
+in a `finally` block. The two failed cases passed in isolation on that baseline.
+After restoring the repair, the same two cases plus preview-workspace passed
+(3 tests, 28.5 seconds):
+
+```sh
+CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e \
+  agent.spec.ts settings-presentation.spec.ts preview-workspace.spec.ts \
+  --grep 'composer primary seat, uploads and context stack light 390|confirming a removal settles focus|bounded preview workspace' \
+  --output=/var/tmp/rustx-450-repair-evidence/repair-control
+```
+
+The isolated passes do **not** erase the full-suite failures or establish their
+cause. Full browser validation is not reported green. These failures remain
+outside the two repaired contract paths; no speculative product changes were
+made to Composer or Settings. Evidence, including the full failed screenshots
+and traces, is retained under `/var/tmp/rustx-450-repair-evidence/`.

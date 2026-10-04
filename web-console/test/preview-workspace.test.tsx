@@ -32,7 +32,7 @@ const live = () => leases.created.filter(lease => !lease.signal.aborted);
 beforeEach(async () => {
   server = new Server(); await server.attached('A', 'B');
   const authority = new WorkspaceAuthority(server.workspaceHost); await authority.observe();
-  owner = new PreviewWorkspaceOwner(server.client, server.workspaceHost, authority); stop = owner.start(); owner.selectSession('A'); owner.measure(1000);
+  owner = new PreviewWorkspaceOwner(server.client, server.workspaceHost, authority); stop = owner.start(); owner.selectSession('A');
   leases.created.length = 0; leases.downloads.length = 0; width = 1000; disconnect = vi.fn();
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect = disconnect; });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width, height: 500, x: 0, y: 0, top: 0, bottom: 500, left: 0, right: width, toJSON() {} }));
@@ -53,7 +53,7 @@ it('exact closed sources distinguish names, namespaces, declarations, indices an
   for (const change of [{ name: 'else.txt' }, { mime_type: 'text/markdown' }, { description: '' }]) expect(samePreviewSource(file, { ...file, file: { ...file.file, ...change } })).toBe(false);
 });
 it('duplicate opens reveal the existing other-pane occurrence; close and reopen allocate a new lifetime', () => {
-  const first = owner.openPreview(artifact('first'))!, second = owner.openPreview(artifact('second'))!; owner.split();
+  const first = owner.openPreview(artifact('first'))!, second = owner.openPreview(artifact('second'))!; owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split();
   const pane = workspace().activePane; owner.selectTab(first);
   expect(owner.openPreview(artifact('second'))).toBe(second); expect(workspace().activePane).toBe(pane); expect(workspace().tabs).toHaveLength(2);
   const old = owner.getSnapshot().leases.get(second)!; owner.closeTab(second); const reopened = owner.openPreview(artifact('second'))!;
@@ -73,18 +73,18 @@ it('selected close prefers right then left; unselected close preserves selection
   expect(owner.getSnapshot().workspace).toBeUndefined(); expect(owner.getSnapshot().mode).toBe('collapsed'); expect(live()).toHaveLength(0);
 });
 it('split, active-pane open, explicit move and third-pane rejection share one membership contract', () => {
-  const a = owner.openPreview(artifact('a'))!, b = owner.openPreview(artifact('b'))!; owner.split(); const second = workspace().activePane;
+  const a = owner.openPreview(artifact('a'))!, b = owner.openPreview(artifact('b'))!; owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const second = workspace().activePane;
   const c = owner.openPreview(artifact('c'))!; expect(workspace().tabs.find(tab => tab.id === c)?.pane).toBe(second);
-  owner.split(); expect(workspace().panes).toHaveLength(2); expect(live()).toHaveLength(2);
+  owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); expect(workspace().panes).toHaveLength(2); expect(live()).toHaveLength(2);
   owner.move(c); expect(workspace().tabs.find(tab => tab.id === c)?.pane).not.toBe(second); expect(workspace().panes.find(pane => pane.id === second)?.selected).toBe(b);
   owner.closeTab(b); expect(workspace().panes).toHaveLength(1); expect(workspace().tabs.map(tab => tab.id)).toEqual([a,c]);
 });
 it('fullscreen preserves leases; narrow presents active pane and wide restores split; collapse stays closed', () => {
-  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.split(); const before = [...owner.getSnapshot().leases.values()]; const ids = workspace().tabs.map(tab => tab.id);
-  owner.toggleFullscreen(); owner.toggleFullscreen(); expect([...owner.getSnapshot().leases.values()]).toEqual(before);
-  owner.measure(390); expect(live()).toHaveLength(1); expect(workspace().panes).toHaveLength(2);
-  owner.measure(1000); expect(live()).toHaveLength(2); expect(workspace().tabs.map(tab => tab.id)).toEqual(ids);
-  owner.collapse(); owner.measure(390); owner.measure(1200); expect(owner.getSnapshot().mode).toBe('collapsed'); expect(live()).toHaveLength(0);
+  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const before = [...owner.getSnapshot().leases.values()]; const ids = workspace().tabs.map(tab => tab.id);
+  owner.toggleFullscreen(publish => { publish(); owner.measure(width, owner.getSnapshot().geometryEpoch); }); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.toggleFullscreen(publish => { publish(); owner.measure(width, owner.getSnapshot().geometryEpoch); }); owner.measure(1000, owner.getSnapshot().geometryEpoch); expect([...owner.getSnapshot().leases.values()]).toEqual(before);
+  owner.measure(390, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(1); expect(workspace().panes).toHaveLength(2);
+  owner.measure(1000, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(2); expect(workspace().tabs.map(tab => tab.id)).toEqual(ids);
+  owner.collapse(); owner.measure(390, owner.getSnapshot().geometryEpoch); owner.measure(1200, owner.getSnapshot().geometryEpoch); expect(owner.getSnapshot().mode).toBe('collapsed'); expect(live()).toHaveLength(0);
 });
 it('Inspector retains logical state and reacquires only selected visible bodies', () => {
   const id = owner.openPreview(artifact('a'))!; owner.updateView(id, { bodyScrollTop: 44 }); const lease = owner.getSnapshot().leases.get(id)!;
@@ -108,7 +108,7 @@ it('four retained Sessions reject a fifth without evicting unrelated logical sta
 });
 it('Download does not create, select, reveal or change pane/presentation state', async () => {
   await owner.download(artifact('download')); expect(owner.getSnapshot().workspace).toBeUndefined(); expect(owner.getSnapshot().mode).toBe('collapsed');
-  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.split(); owner.collapse(); const before = owner.getSnapshot();
+  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); owner.collapse(); const before = owner.getSnapshot();
   await owner.download(artifact('original', '原始.txt')); expect(owner.getSnapshot()).toBe(before); expect(leases.downloads).toHaveLength(2);
 });
 it('real tabs keyboard path is manual activation; focus returns deterministically on close', () => {
@@ -149,7 +149,7 @@ it('keyboard focus reveals a clipped tab through only its bounded strip without 
   expect(strip.scrollLeft).toBe(300.5); expect(a.parentElement!.getBoundingClientRect().right).toBeLessThanOrEqual(viewportWidth);
 });
 it('pointer divider captures, coalesces visual frames, commits once and cancellation restores', () => {
-  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.split(); const ui = render(<Shell/>), divider = ui.getByRole('separator');
+  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const ui = render(<Shell/>), divider = ui.getByRole('separator');
   let frame: FrameRequestCallback | undefined; const capture = vi.fn(), release = vi.fn();
   divider.setPointerCapture = capture; divider.hasPointerCapture = () => true; divider.releasePointerCapture = release;
   vi.stubGlobal('PointerEvent', MouseEvent); vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; }); vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
@@ -159,15 +159,15 @@ it('pointer divider captures, coalesces visual frames, commits once and cancella
   fireEvent.pointerDown(divider, { button: 0, clientX: 500 }); fireEvent.pointerUp(divider, { clientX: 900 }); expect(workspace().ratio).toBeCloseTo(1-300/992); expect(release).toHaveBeenCalledTimes(2);
 });
 it('Escape respects composition, repeat and modifiers; fullscreen restores before collapse', () => {
-  owner.openPreview(artifact('a')); owner.toggleFullscreen(); const returnFocus = vi.fn(), ui = render(<Shell returnFocus={returnFocus}/>); const tab = ui.getByRole('tab');
+  owner.openPreview(artifact('a')); owner.toggleFullscreen(publish => { publish(); owner.measure(width, owner.getSnapshot().geometryEpoch); }); const returnFocus = vi.fn(), ui = render(<Shell returnFocus={returnFocus}/>); const tab = ui.getByRole('tab');
   fireEvent.keyDown(tab, { key: 'Escape', isComposing: true }); fireEvent.keyDown(tab, { key: 'Escape', repeat: true }); fireEvent.keyDown(tab, { key: 'Escape', ctrlKey: true }); expect(workspace().fullscreen).toBe(true);
   fireEvent.keyDown(tab, { key: 'Escape' }); expect(workspace().fullscreen).toBe(false); expect(owner.getSnapshot().mode).toBe('preview');
   fireEvent.keyDown(tab, { key: 'Escape' }); expect(owner.getSnapshot().mode).toBe('collapsed'); expect(returnFocus).toHaveBeenCalledOnce();
-  ui.unmount(); expect(disconnect).toHaveBeenCalledOnce();
+  ui.unmount(); expect(disconnect).toHaveBeenCalledTimes(2);
 });
 
 it('divider geometry replacement retires pointer capture and pending paint; keyboard cannot alter an active gesture', () => {
-  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.split(); const ui = render(<Shell/>);
+  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const ui = render(<Shell/>);
   let frame: FrameRequestCallback | undefined; const capture = vi.fn(), release = vi.fn();
   const divider = ui.getByRole('separator'); divider.setPointerCapture = capture; divider.hasPointerCapture = () => true; divider.releasePointerCapture = release;
   vi.stubGlobal('PointerEvent', MouseEvent); vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
@@ -194,7 +194,7 @@ it('tab and divider navigation leave IME and modified keys alone, and held Delet
 });
 
 it.each(['Inspector', 'collapse'] as const)('hiding a captured divider via %s retires its frame and capture before hidden input can commit', mode => {
-  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.split(); const ui = render(<Shell/>);
+  owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const ui = render(<Shell/>);
   const divider = ui.getByRole('separator'); let frame: FrameRequestCallback | undefined; const release = vi.fn();
   divider.setPointerCapture = vi.fn(); divider.hasPointerCapture = () => true; divider.releasePointerCapture = release;
   vi.stubGlobal('PointerEvent', MouseEvent); vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
@@ -205,7 +205,7 @@ it.each(['Inspector', 'collapse'] as const)('hiding a captured divider via %s re
   act(() => oldFrame?.(0)); fireEvent.pointerUp(divider, { clientX: 700 }); expect(workspace().ratio).toBe(.5);
 });
 it('restoring fullscreen into one visible pane transfers divider focus to the active occurrence', () => {
-  owner.openPreview(artifact('a','A')); owner.openPreview(artifact('b','B')); owner.split(); owner.toggleFullscreen(); const ui = render(<Shell/>);
+  owner.openPreview(artifact('a','A')); owner.openPreview(artifact('b','B')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); owner.toggleFullscreen(publish => { publish(); owner.measure(width, owner.getSnapshot().geometryEpoch); }); const ui = render(<Shell/>);
   const divider = ui.getByRole('separator'); divider.focus();
   fireEvent.keyDown(divider, { key: 'Escape', keyCode: 229 }); expect(workspace().fullscreen).toBe(true);
   fireEvent.keyDown(divider, { key: 'Escape' }); expect(workspace().fullscreen).toBe(false);
@@ -213,10 +213,63 @@ it('restoring fullscreen into one visible pane transfers divider focus to the ac
 });
 
 it('Download inside an inactive pane leaves pane activation and tab selection unchanged for pointer and keyboard focus', async () => {
-  owner.openPreview(artifact('a','A')); owner.openPreview(artifact('b','B')); owner.split(); const ui = render(<Shell/>);
+  owner.openPreview(artifact('a','A')); owner.openPreview(artifact('b','B')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const ui = render(<Shell/>);
   const before = workspace(), control = ui.getByRole('button', { name: 'Download A' });
   fireEvent.pointerDown(control, { button: 0 }); act(() => control.focus()); fireEvent.click(control);
   expect(workspace()).toBe(before); expect(document.activeElement).toBe(control); expect(leases.downloads).toHaveLength(1);
   fireEvent.pointerDown(control.closest('[data-preview-pane]')!);
   expect(workspace().activePane).not.toBe(before.activePane);
+});
+
+it.each(['collapse', 'Inspector'] as const)('%s invalidates hidden wide geometry before reveal can admit the second pane', mode => {
+  owner.openPreview(artifact('a')); owner.openPreview(artifact('b'));
+  const ui = render(<Shell/>);
+  act(() => owner.split()); expect(live()).toHaveLength(2);
+  const retained = workspace(), oldDelivery = resize;
+  act(() => mode === 'collapse' ? owner.collapse() : owner.toggleInspector());
+  expect(live()).toHaveLength(0);
+  width = 390; // external layout changes while hidden; no positive hidden measurement
+  const createdBeforeReveal = leases.created.length;
+  act(() => {
+    mode === 'collapse' ? owner.reveal() : owner.toggleInspector();
+    expect(live().map(lease => lease.id)).toEqual([retained.panes.find(p => p.id === retained.activePane)!.selected]);
+    expect(leases.created.slice(createdBeforeReveal)).toHaveLength(1);
+    // Even a queued callback from the old visible presentation cannot authorize it.
+    width = 1000; oldDelivery(); width = 390;
+    expect(live()).toHaveLength(1);
+    expect(leases.created.slice(createdBeforeReveal)).toHaveLength(1);
+  });
+  act(() => resize()); expect(live()).toHaveLength(1);
+  expect(workspace().panes).toEqual(retained.panes); expect(workspace().ratio).toBe(retained.ratio);
+  width = 1000; act(() => resize()); expect(live()).toHaveLength(2);
+  expect(ui.container.querySelectorAll('[data-live-document]')).toHaveLength(2);
+});
+
+it('explicit Inspector Close persists closed intent across refresh, Session round-trip and widening', async () => {
+  const id = owner.openPreview(artifact('a'))!; owner.updateView(id, { bodyScrollTop: 83, wrap: false });
+  expect(workspace().expanded).toBe(true);
+  owner.toggleInspector(); owner.collapse();
+  expect(owner.getSnapshot().mode).toBe('collapsed'); expect(workspace().expanded).toBe(false);
+  await server.client.refresh('A');
+  owner.selectSession('B'); owner.selectSession('A');
+  owner.measure(1200, owner.getSnapshot().geometryEpoch);
+  expect(owner.getSnapshot().mode).toBe('collapsed'); expect(live()).toHaveLength(0);
+  owner.toggleInspector(); owner.toggleInspector(); expect(owner.getSnapshot().mode).toBe('collapsed');
+  owner.reveal(); expect(owner.getSnapshot().mode).toBe('preview'); expect(workspace().expanded).toBe(true);
+  expect(workspace().tabs[0].view).toEqual({ bodyScrollTop: 83, wrap: false });
+  owner.toggleInspector(); owner.toggleInspector(); expect(owner.getSnapshot().mode).toBe('preview');
+});
+
+it('Session epochs reject old measurements and fullscreen without a layout witness cannot retain a second lease', () => {
+  owner.openPreview(artifact('a')); owner.openPreview(artifact('b'));
+  owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split();
+  const oldEpoch = owner.getSnapshot().geometryEpoch;
+  owner.selectSession('B'); owner.selectSession('A');
+  expect(live()).toHaveLength(1);
+  owner.measure(1000, oldEpoch); expect(live()).toHaveLength(1);
+  owner.measure(1000, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(2);
+  owner.toggleFullscreen(publish => publish());
+  expect(live()).toHaveLength(1);
+  owner.measure(1000, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(2);
+  owner.measure(0, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(1);
 });

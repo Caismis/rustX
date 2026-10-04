@@ -10,20 +10,21 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
   const fixture = await startDogfood('web_preview_workspace');
   let passed = false;
   const errors: string[] = [];
-  const reads: string[] = [];
+  const reads: string[] = [], derivations: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().endsWith('/product-host/file-read')) reads.push(request.postData() ?? ''); });
+  page.on('request', request => { if (request.url().endsWith('/product-host/document-preview')) derivations.push(request.postData() ?? ''); });
   const wire = await wireProbe(page);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => {
     if (window !== window.top) return;
     const urls = new Set<string>(), workers = new Set<Worker>();
     const created = URL.createObjectURL, revoked = URL.revokeObjectURL, NativeWorker = Worker;
-    const observation = { urls, workers, maximumUrls: 0, maximumWorkers: 0, duplicateRevocations: 0 };
+    const observation = { urls, workers, maximumUrls: 0, maximumWorkers: 0, revealMaximumWorkers: 0, duplicateRevocations: 0 };
     URL.createObjectURL = blob => { const url = created(blob); urls.add(url); observation.maximumUrls = Math.max(observation.maximumUrls, urls.size); return url; };
     URL.revokeObjectURL = url => { if (!urls.delete(url)) observation.duplicateRevocations++; revoked(url); };
     class ObservedWorker extends NativeWorker {
-      constructor(url: string | URL, options?: WorkerOptions) { super(url, options); workers.add(this); observation.maximumWorkers = Math.max(observation.maximumWorkers, workers.size); }
+      constructor(url: string | URL, options?: WorkerOptions) { super(url, options); workers.add(this); observation.maximumWorkers = Math.max(observation.maximumWorkers, workers.size); observation.revealMaximumWorkers = Math.max(observation.revealMaximumWorkers, workers.size); }
       terminate() { workers.delete(this); super.terminate(); }
     }
     Object.assign(window, { Worker: ObservedWorker, previewObservation: observation });
@@ -113,6 +114,24 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.setViewportSize({ width: 1920, height: 1000 });
     await expect(workspace.locator('[data-preview-pane]:visible')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
 
+    // Wide -> hidden narrow -> reveal is the stale-admission direction.
+    for (const hiddenMode of ['collapse', 'Inspector']) {
+      if (hiddenMode === 'collapse') await panel.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
+      else await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click();
+      await expect.poll(liveWorkers).toBe(0);
+      await page.setViewportSize({ width: hiddenMode === 'Inspector' ? 1200 : 390, height: 844 });
+      const readsBeforeReveal = reads.length;
+      await page.evaluate(() => { (window as any).previewObservation.revealMaximumWorkers = 0; });
+      if (hiddenMode === 'collapse') await page.getByRole('button', { name: 'Reopen previews', exact: true }).click();
+      else await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click();
+      await expect(workspace.locator('[data-preview-pane]:visible')).toHaveCount(1);
+      await expect(panel.locator('.textLayer')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
+      expect(reads.length - readsBeforeReveal).toBe(1);
+      expect(await page.evaluate(() => (window as any).previewObservation.revealMaximumWorkers)).toBe(1);
+      await page.setViewportSize({ width: 1920, height: 1000 });
+      await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+    }
+
     await open('notes.txt'); await expect(tabs).toHaveCount(3); await expect.poll(liveWorkers).toBe(1);
     const textPaneId = await panes.filter({ has: page.locator('pre', { hasText: 'Saved view position 0' }) }).getAttribute('data-preview-pane');
     const textPane = workspace.locator(`[data-preview-pane="${textPaneId}"]`);
@@ -151,6 +170,22 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await expect(page.getByRole('complementary', { name: 'Developer inspector', exact: true })).toBeVisible(); await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
     await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click(); await expect(panel).toBeVisible();
     await expect(tabs).toHaveCount(8); await expect.poll(liveWorkers).toBe(2);
+
+    // Keep the PDF active and the Office tab selected in the other logical pane.
+    // Reopening narrow must not even send hidden Office derivation demand.
+    await pdfPane.getByRole('tab', { name: 'sample.pdf', exact: true }).click();
+    await panel.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
+    await expect.poll(liveWorkers).toBe(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const readsBeforeOfficeReveal = reads.length, derivationsBeforeReveal = derivations.length;
+    expect(derivationsBeforeReveal).toBeGreaterThan(0);
+    await page.getByRole('button', { name: 'Reopen previews', exact: true }).click();
+    await expect(panel.locator('.textLayer')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
+    expect(reads.length - readsBeforeOfficeReveal).toBe(1);
+    expect(derivations.length).toBe(derivationsBeforeReveal);
+    await page.setViewportSize({ width: 1920, height: 1000 });
+    await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+    await officePane.getByRole('tab', { name: 'sample.docx', exact: true }).click();
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(workspace.locator('[data-preview-pane]:visible')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
@@ -201,11 +236,29 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     expect(wire.requests.filter(request => request.method === 'turn/cancel')).toHaveLength(0);
     const beforeSession = await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')));
     const readsBeforeSession = reads.length;
-    await openEmptySession(page, fixture, 'Workspace B');
+    const sessionB = await openEmptySession(page, fixture, 'Workspace B');
     await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
     await page.locator(`button[data-session-id="${sessionA}"]`).click();
     await expect(panel).toBeVisible(); await expect.poll(liveWorkers).toBe(2);
     expect(await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')))).toEqual(beforeSession);
+    await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click();
+    await page.getByRole('button', { name: 'Close Inspector', exact: true }).click();
+    await expect.poll(liveWorkers).toBe(0);
+    await page.locator(`button[data-session-id="${sessionB}"]`).click();
+    await page.locator(`button[data-session-id="${sessionA}"]`).click();
+    await expect(panel).not.toBeVisible(); await expect.poll(liveWorkers).toBe(0);
+    await page.setViewportSize({ width: 1800, height: 1000 }); await expect(panel).not.toBeVisible();
+    await page.getByRole('button', { name: 'Reopen previews', exact: true }).click();
+    await expect(panel).toBeVisible(); await expect.poll(liveWorkers).toBe(2);
+    expect(await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')))).toEqual(beforeSession);
+
+    const retainedTextPane = panes.filter({ has: page.getByRole('tab', { name: 'notes.txt', exact: true }) });
+    const selectedBeforeViewCheck = await retainedTextPane.locator('[role="tab"][aria-selected="true"]').getAttribute('data-preview-tab');
+    await retainedTextPane.getByRole('tab', { name: 'notes.txt', exact: true }).click();
+    await expect(retainedTextPane.getByRole('button', { name: 'Wrap lines', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(() => retainedTextPane.locator('[data-preview-scroll="body"]').evaluate(element => element.scrollTop)).toBe(420);
+    await retainedTextPane.locator(`[data-preview-tab="${selectedBeforeViewCheck}"]`).click();
+    await expect.poll(liveWorkers).toBe(2);
     expect(reads.length).toBeGreaterThan(readsBeforeSession);
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();

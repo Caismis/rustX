@@ -119,7 +119,7 @@ it.each(['following', 'detached', 'historical'] as const)('actual preview geomet
   expect(f.owner.getSnapshot().workspace!.tabs.map(tab => tab.id)).toEqual(occurrences);
   expect(f.server.requests).toHaveLength(f.requests);
   f.ui.unmount(); expect(f.frames.size).toBe(0);
-  expect(f.observers).toHaveLength(2); f.observers.forEach(observer => expect(observer.disconnect).toHaveBeenCalledOnce());
+  expect(f.observers).toHaveLength(6); f.observers.forEach(observer => expect(observer.disconnect).toHaveBeenCalledOnce());
 });
 
 it('a user scroll between preview reflow and the owned correction frame wins and remains detached during streaming', async () => {
@@ -129,7 +129,7 @@ it('a user scroll between preview reflow and the owned correction frame wins and
   const writes = f.writes(); expect(f.frames.size).toBeGreaterThan(0);
   f.scroll(240); f.flush();
   expect(f.top()).toBe(240); expect(f.writes()).toBe(writes);
-  act(() => { f.owner.toggleFullscreen(); f.stream(800); }); f.flush();
+  act(() => { fireEvent.click(f.ui.getByRole('button', { name: 'Fullscreen preview' })); f.stream(800); }); f.flush();
   expect(f.top()).toBe(240); expect(f.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
   expect(f.server.requests).toHaveLength(f.requests);
 });

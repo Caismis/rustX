@@ -91,6 +91,16 @@ generic scheduler or automatic conversion retry is added.
 
 ## Pane geometry and presentation
 
+The owner carries a presentation geometry epoch separately from logical panes.
+Collapse, Inspector, Session selection, loss of the current workspace and zero
+visible measurement invalidate geometry. Hidden callbacks cannot authorize a
+measurement; callbacks captured in an older epoch are rejected. On reveal,
+unknown geometry admits only the active pane. A fresh positive layout or
+ResizeObserver measurement of the visible workspace in the current epoch is
+required before `splitFits` can admit the second pane. No hidden stored width
+is resource authority. Logical membership, ratio, selections and view metadata
+survive invalidation unchanged.
+
 The actual workspace is measured by ResizeObserver. Splitting requires two open
 documents and at least 608 px: two 300 px working panes plus an 8 px divider. Each
 pane has a horizontally scrolling, min-width-zero tab strip and a fixed move
@@ -110,8 +120,16 @@ and current value; Left/Right adjust by five percentage points, Home/End choose
 measured bounds. Escape cancels an active divider gesture before panel handling.
 
 Requested fullscreen is logical Session state. Normal/fullscreen changes the
-geometry of the same keyed content subtree; it neither changes occurrences nor
-reacquires file/document resources solely due to presentation. The existing
+geometry of the same keyed content subtree. It requests a layout commit in a new
+epoch without acquiring any resources from the prior width. The synchronous
+layout effect measures the new coordinate system before reconciling leases;
+existing bodies remain keyed through this commit. The caller uses `flushSync`;
+if no positive layout witness is supplied, the owner conservatively reconciles
+before the fullscreen transaction returns. If the measured visible set
+is unchanged, its leases are retained without rereading. A zero measurement
+retires the second lease; a narrow measurement does likewise. This synchronous
+visible-to-visible commit is distinct from hiding/revealing, which retires leases
+before publication and always starts conservatively. The existing
 AppFrame normal right-column track remains reserved while fullscreen is requested.
 At narrow geometry only the active pane is visible. A Switch preview pane control
 reaches the other document; hidden resources retire. Logical membership and ratio
@@ -120,8 +138,12 @@ reversed merely by widening.
 
 Opening Preview selects the preview mode. Inspector toggles between its existing
 content and the retained preview workspace. Inspector keeps its existing behavior
-across Session selection. Collapse hides the panel and releases active resources;
-Reopen previews restores the retained tabs and view metadata. Only explicit tab
+across Session selection. Preview/Inspector toggle is a temporary content-mode
+switch and retains the workspace's expanded intent. Explicit Close/Collapse, including Close inspector,
+always records `expanded: false` for the current Session and releases resources.
+Session switching, authority-stable refresh, Inspector toggle-off and widening
+cannot reopen that explicitly closed panel. Explicit Preview/Reopen intent sets
+expanded again and restores the retained tabs and view metadata. Only explicit tab
 close deletes an occurrence (scope invalidation also retires incompatible state).
 
 ## View metadata, keyboard and focus
@@ -130,7 +152,8 @@ Tab records contain only inert display/source metadata, pane ID and finite view
 fields: text/Markdown/image body scroll, wrap preference, PDF page/zoom/page scroll,
 Workbook sheet/row window/scroll, and HTML rendered/source mode/source scroll.
 Opaque-origin HTML iframe internals remain inaccessible; HTML source and the
-outer document scrollport are retained without weakening the sandbox. View state
+outer document scrollport are retained without weakening the sandbox. Scroll and control interactions continuously commit these fields; preservation
+does not depend on unmount cleanup after synchronous lease retirement. View state
 is bounded metadata rather than live document runtime. Reactivation can reflect
 changed mutable file content, so viewer selections clamp to the current document.
 

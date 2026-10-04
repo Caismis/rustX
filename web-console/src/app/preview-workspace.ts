@@ -21,7 +21,7 @@ export interface SessionPreviewWorkspace {
 }
 export type PreviewProblem = 'tabs' | 'sessions' | 'unavailable';
 export interface PreviewWorkspaceSnapshot {
-  workspace?: SessionPreviewWorkspace; mode: 'collapsed' | 'preview' | 'inspector';
+  geometryEpoch: number; width: number; workspace?: SessionPreviewWorkspace; mode: 'collapsed' | 'preview' | 'inspector';
   leases: ReadonlyMap<number, FilePreviewLease>; problem?: PreviewProblem; downloadError?: string;
 }
 export const splitBounds = (width: number) => {
@@ -43,11 +43,12 @@ export class PreviewWorkspaceOwner {
   private occurrence = 0;
   private paneSequence = 0;
   private width = 0;
+  private geometryEpoch = 0;
   private coordinator?: FilePreviewCoordinator;
   private resourceScope?: PreviewScope;
   private leases = new Map<number, FilePreviewLease>();
   private listeners = new Set<() => void>();
-  private snapshot: PreviewWorkspaceSnapshot = { mode: 'collapsed', leases: new Map() };
+  private snapshot: PreviewWorkspaceSnapshot = { mode: 'collapsed', leases: new Map(), geometryEpoch: 0, width: 0 };
   private problem?: PreviewProblem;
   private downloadError?: string;
   constructor(private client: AppServerClient, private host: ProductHostWorkspaces, private authority: WorkspaceAuthority) {}
@@ -97,18 +98,30 @@ export class PreviewWorkspaceOwner {
       }
     }
   }
-  private publish() {
-    this.reconcile();
-    this.snapshot = { workspace: this.current(), mode: this.mode, leases: new Map(this.leases), problem: this.problem, downloadError: this.downloadError };
+  private invalidateGeometry() { this.width = 0; this.geometryEpoch++; }
+  private publish(reconcile = true, layoutWidth?: number) {
+    if (this.mode !== 'preview' || !this.current()) this.invalidateGeometry();
+    if (reconcile) this.reconcile();
+    this.snapshot = { geometryEpoch: this.geometryEpoch, width: layoutWidth ?? this.width, workspace: this.current(), mode: this.mode, leases: new Map(this.leases), problem: this.problem, downloadError: this.downloadError };
     this.listeners.forEach(listener => listener());
   }
   selectSession(id?: string) {
     if (this.selected === id) return;
-    this.retireResources(); this.selected = id; this.problem = undefined; this.downloadError = undefined;
+    this.retireResources(); this.invalidateGeometry(); this.selected = id; this.problem = undefined; this.downloadError = undefined;
     this.invalidate();
     if (this.mode !== 'inspector') this.mode = this.current()?.expanded ? 'preview' : 'collapsed'; this.publish();
   }
-  measure(width: number) { if (width === this.width || width <= 0) return; this.width = width; this.publish(); }
+  measure(width: number, epoch: number) {
+    if (epoch !== this.geometryEpoch || this.mode !== 'preview' || !this.current()) return;
+    const measured = Number.isFinite(width) && width > 0 ? width : 0;
+    if (measured === this.width) {
+      if (!measured && this.leases.size > 1) this.publish();
+      return;
+    }
+    if (!measured) this.invalidateGeometry();
+    else this.width = measured;
+    this.publish();
+  }
   openPreview(artifact: PreviewArtifact): number | undefined {
     this.invalidate();
     const scope = this.selected ? this.scope(this.selected) : undefined;
@@ -166,8 +179,18 @@ export class PreviewWorkspaceOwner {
     // A body can flush its last scroll position while hidden, never after occurrence deletion.
     this.replace({ ...w, tabs: w.tabs.map(tab => tab.id === id ? { ...tab, view: { ...tab.view, ...patch } } : tab) });
   }
-  toggleFullscreen() { const w = this.current(); if (w) this.replace({ ...w, fullscreen: !w.fullscreen }); }
-  collapse() { const w = this.current(); if (w && this.mode === 'preview') this.sessions.set(w.scope.sessionId, { ...w, expanded: false }); this.mode = 'collapsed'; this.publish(); }
+  toggleFullscreen(commitPresentation: (publish: () => void) => void) {
+    const w = this.current(); if (!w) return;
+    // Same keyed visible tree: request a synchronous layout commit, without
+    // acquiring against the old coordinate system. Its layout effect measures
+    // the new presentation before reconciling the existing leases.
+    this.sessions.set(w.scope.sessionId, { ...w, fullscreen: !w.fullscreen });
+    const layoutWidth = this.width;
+    this.invalidateGeometry();
+    try { commitPresentation(() => this.publish(false, layoutWidth)); }
+    finally { if (!this.width) this.publish(); }
+  }
+  collapse() { const w = this.current(); if (w) this.sessions.set(w.scope.sessionId, { ...w, expanded: false }); this.mode = 'collapsed'; this.publish(); }
   reveal() { const w = this.current(); if (!w) return; this.mode = 'preview'; this.replace({ ...w, expanded: true }); }
   toggleInspector() { this.mode = this.mode === 'inspector' ? this.current()?.expanded ? 'preview' : 'collapsed' : 'inspector'; this.publish(); }
   dismissProblem() { this.problem = undefined; this.downloadError = undefined; this.publish(); }

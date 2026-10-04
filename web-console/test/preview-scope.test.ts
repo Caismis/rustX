@@ -14,7 +14,7 @@ async function fixture() {
   } };
   const authority = new WorkspaceAuthority(host); await authority.observe();
   const owner = new PreviewWorkspaceOwner(server.client, host, authority), stop = owner.start();
-  owner.selectSession('A'); owner.measure(1000);
+  owner.selectSession('A');
   const artifact = { source: { kind: 'artifact' as const, id: 'same-exact-artifact' }, name: 'same.txt', image: false };
   const occurrence = owner.openPreview(artifact)!;
   owner.updateView(occurrence, { bodyScrollTop: 120, wrap: false });
