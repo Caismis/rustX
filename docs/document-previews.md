@@ -125,6 +125,12 @@ Host network connection. `prlimit` supplies the limits listed above; core dumps
 are disabled. The exact fixed argument vector lives in
 `web-console/host/documents/converter.ts`.
 
+`/etc` is empty except for a read-only `/etc/libreoffice/registry` mount when
+that system directory exists. Debian/Ubuntu's `/usr` package symlinks require
+this registry; distributions storing it under `/usr` need no extra mount.
+No other Host `/etc` configuration is exposed. This does not relax namespace,
+macro, temporary-disk, process or network restrictions.
+
 Conversion writes only into the private tmpfs. Its PDF is streamed over stdout,
 bounded, and checked for a PDF signature before the PDF viewer validates it.
 Timeout, cancellation and oversize output kill Bubblewrap; destruction of its PID
@@ -178,7 +184,9 @@ The exact `pdfjs-dist@6.4.299` release-age exception is intentional: the
 [upstream release](https://github.com/mozilla/pdf.js/releases/tag/v6.4.299) includes
 a CPU-denial-of-service fix in text-field sizing. The exception admits only this
 locked version, not a package wildcard. Reviewed local Linux prerequisites were
-LibreOffice 26.2.6.3, Bubblewrap 0.12.0 and util-linux 2.41.5.
+LibreOffice 26.2.6.3, Bubblewrap 0.12.0 and util-linux 2.41.5. Real DOCX/PPTX
+conversion is also exercised with Ubuntu 24.04's LibreOffice 24.2.7 and
+Bubblewrap 0.9.0 package layout, including its external system registry.
 
 ## Contract regressions
 

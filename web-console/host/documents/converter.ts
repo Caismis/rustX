@@ -24,7 +24,11 @@ export async function convertOffice(bytes: Buffer, extension: 'docx' | 'pptx', s
       '--clearenv', '--setenv', 'PATH', '/usr/bin', '--setenv', 'HOME', '/tmp/home', '--setenv', 'LANG', 'C.UTF-8',
       '--setenv', 'SAL_USE_VCLPLUGIN', 'svp', '--setenv', 'TMPDIR', '/tmp',
       '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
-      '--proc', '/proc', '--dev', '/dev', '--dir', '/etc', '--ro-bind', directory, '/input',
+      '--proc', '/proc', '--dev', '/dev', '--dir', '/etc',
+      // Debian/Ubuntu package the system registry outside /usr and symlink it
+      // from LibreOffice's share directory. Expose only that runtime data.
+      '--ro-bind-try', '/etc/libreoffice/registry', '/etc/libreoffice/registry',
+      '--ro-bind', directory, '/input',
       '--size', '67108864', '--tmpfs', '/tmp', '--chdir', '/tmp',
       '--', '/usr/bin/prlimit', '--as=1073741824', '--fsize=8388608', '--cpu=15', '--nofile=128', '--core=0',
       '/usr/bin/sh', '-ec',

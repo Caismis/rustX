@@ -22,6 +22,12 @@ it('owns isolation arguments and retains temporary files until process-tree sett
   expect(exe).toBe('/usr/bin/bwrap');
   for (const required of ['--unshare-all', '--unshare-user', '--die-with-parent', '--new-session', '--clearenv', '--size', '67108864', '--as=1073741824', '--fsize=8388608', '--cpu=15']) expect(args).toContain(required);
   expect(args).not.toContain('--share-net'); expect(options.env).toEqual({});
+  const registry = args.indexOf('/etc/libreoffice/registry');
+  expect(args.slice(registry - 1, registry + 2)).toEqual(['--ro-bind-try', '/etc/libreoffice/registry', '/etc/libreoffice/registry']);
+  // Only package-owned registry data may cross /etc; never the Host's entire
+  // configuration directory. Distros with their registry in /usr need no mount.
+  expect(args.filter((arg: string) => arg === '/etc')).toEqual(['/etc']);
+  expect(args[args.indexOf('/etc') - 1]).toBe('--dir');
   const directory = args[args.indexOf('/input') - 1];
   expect(existsSync(directory)).toBe(true);
   abort.abort(); expect(child.kill).toHaveBeenCalledWith('SIGKILL'); expect(existsSync(directory)).toBe(true);
