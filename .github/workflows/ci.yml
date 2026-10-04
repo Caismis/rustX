@@ -605,8 +605,8 @@ jobs:
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
-      - name: Build the real App Server and native Tool supervisors
-        run: cargo build --bins
+      - name: Build the real App Server, native Tool supervisors and Artifact fixture
+        run: cargo build --bins --example document_artifact_fixture --locked
       # `pnpm test:e2e` is `pnpm build && bash scripts/browser-tests.sh`: the one
       # production build of this job (Vite plus the artifact provenance check)
       # runs from checked-in source immediately before browser acceptance, so
