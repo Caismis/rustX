@@ -1,5 +1,17 @@
 # Runtime Invariants
 
+Preview tabs are browser presentation metadata, never native file authority.
+An occurrence and its active lease must both be current before bytes or derived
+content can publish. Closing, hiding or replacing their scope retires the lease;
+reopening the same exact source cannot adopt the old occurrence's completion.
+At most two selected visible preview bodies own resources, and hidden tabs own
+no workers, URLs or bytes. Office derivation remains one active Host operation.
+Cancellation removes waiting demand immediately but releases an admitted permit
+only on proven physical settlement. In particular, the private native file-read
+socket joins its canceled read before acknowledging clean close; unknown transport
+settlement keeps admission unavailable. The public authority/protocol contract is
+unchanged. See [preview workspace invariants](preview-workspace.md).
+
 Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
 MessageId)` identifies one occurrence, and its native revision is a compare-and-set
 precondition. Mutation and canonical claim are ordered by the durable transaction.

@@ -1,23 +1,28 @@
 import { webcrypto } from 'node:crypto';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { FilePreviewResources, SESSION_FILE_MAX_BYTES, type PreviewSource } from '../src/client/session-files';
+import { FilePreviewCoordinator, SESSION_FILE_MAX_BYTES, samePreviewSource, type PreviewSource } from '../src/client/session-files';
 import { ArtifactPreview, PreviewContext } from '../src/app/components/ArtifactPreview';
 import { ToolDeliveries } from '../src/app/components/Artifact';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
-import type { DeliveryBytes, DeliveryRead, ProductHostWorkspaces } from '../src/workspaces/host';
+import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
+import type { DocumentRequest, DocumentResult } from '../shared/documents';
 import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v34';
 import { Server } from './fixture';
 const file: SessionFileReference = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'sub/报告 file.md', name: '报告 file.md', description: 'Explicit report', mime_type: 'text/markdown' };
 const source: PreviewSource = { kind: 'session_file', messageId: 'canonical-tool', index: 0, file };
 const bytes = '# Report\r\n\r\n**Native** bytes\r\n';
-const encoded = (value: string) => btoa(value);
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (cause: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 let server: Server;
+const owners: FilePreviewCoordinator[] = [];
 const create = vi.fn<(blob: Blob) => string>(), revoke = vi.fn();
-beforeEach(() => { server = new Server(); create.mockReset().mockImplementation(() => `blob:${create.mock.calls.length}`); revoke.mockReset(); vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke })); });
-afterEach(() => { cleanup(); server.client.disconnect(); vi.unstubAllGlobals(); });
+const viewState = { viewState: {}, onViewStateChange: () => {}, onDownload: vi.fn() };
+beforeEach(() => {
+  server = new Server(); create.mockReset().mockImplementation(() => `blob:${create.mock.calls.length}`); revoke.mockReset();
+  vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke })); vi.stubGlobal('crypto', webcrypto);
+});
+afterEach(() => { cleanup(); owners.splice(0).forEach(owner => owner.dispose()); server.client.disconnect(); vi.unstubAllGlobals(); });
 async function fixture() {
   await server.attached('A', 'B');
   let hostId = 'host-1';
@@ -27,37 +32,34 @@ async function fixture() {
     readDelivery: async (_scope, read, signal) => { const response = deferred<DeliveryBytes>(); calls.push({ read, signal, response }); return response.promise; },
   };
   const authority = new WorkspaceAuthority(host); await authority.observe();
-  const resources = new FilePreviewResources(server.client, 'A', host, authority);
-  const reply = (at: number, data = encoded(bytes), delivered = file) => calls[at].response.resolve({ file: delivered, data });
-  return { resources, authority, host, calls, reply, replaceHost: async () => { hostId = 'host-2'; await authority.observe(); } };
+  const resources = new FilePreviewCoordinator(server.client, 'A', host, authority); owners.push(resources);
+  const lease = resources.acquire(1, source);
+  const reply = (at: number, data = btoa(bytes), delivered = file) => calls[at].response.resolve({ file: delivered, data });
+  return { resources, lease, authority, host, calls, reply, replaceHost: async () => { hostId = 'host-2'; await authority.observe(); } };
 }
-it('one authorized byte read supplies rendered Markdown and original-byte Download; no model request or ArtifactId', async () => {
-  const f = await fixture(); const before = server.requests.length;
-  const ui = render(<ArtifactPreview artifact={{ source, name: file.name, image: false, mimeType: file.mime_type }} resources={f.resources}/>);
+it('one authorized original read supplies Markdown; Download invokes its distinct intent', async () => {
+  const f = await fixture(), onDownload = vi.fn(), before = server.requests.length;
+  const ui = render(<ArtifactPreview artifact={{ source, name: file.name, image: false, mimeType: file.mime_type }} resources={f.lease} {...viewState} onDownload={onDownload}/>);
   expect(f.calls[0].read).toEqual({ target: server.client.target('A'), message_id: 'canonical-tool', delivery_index: 0 });
   expect(JSON.stringify(f.calls[0].read)).not.toContain(file.path);
   await act(async () => f.reply(0));
-  expect(ui.getByRole('heading', { name: 'Report' })).toBeTruthy();
-  expect(ui.getByText('Native').tagName).toBe('STRONG');
-  expect(ui.getByRole('link', { name: 'Download artifact' }).getAttribute('download')).toBe(file.name);
-  expect(ui.getByRole('link').getAttribute('href')).toBe('blob:1');
-  expect(create.mock.calls[0][0].size).toBe(bytes.length);
-  expect(server.requests).toHaveLength(before);
+  expect(ui.getByRole('heading', { name: 'Report' })).toBeTruthy(); expect(ui.getByText('Native').tagName).toBe('STRONG');
+  fireEvent.click(ui.getByRole('button', { name: 'Download artifact' })); expect(onDownload).toHaveBeenCalledOnce();
+  expect(create.mock.calls[0][0].size).toBe(bytes.length); expect(server.requests).toHaveLength(before);
   ui.unmount(); f.resources.dispose(); expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:1');
 });
-it.each(['text/plain', 'text/markdown'] as const)('managed %s uses artifact/read once and retains a download URL', async mime => {
+it.each(['text/plain', 'text/markdown'] as const)('managed %s remains artifact/read with its exact target and original bytes', async mime => {
   const f = await fixture(); server.held.add('artifact/read');
-  const work = f.resources.load({ kind: 'artifact', id: 'immutable-artifact' }, mime);
-  const request = await server.waitFor('artifact/read', 1);
+  const lease = f.resources.acquire(2, { kind: 'artifact', id: 'immutable-artifact' });
+  const work = lease.load(mime), request = await server.waitFor('artifact/read', 1);
   expect(request.params).toEqual({ target: server.client.target('A'), artifact_id: 'immutable-artifact' });
-  server.socket.success(request, { type: 'artifact_bytes', data: encoded(bytes) });
-  expect(await work).toEqual({ text: bytes, url: 'blob:1' });
-  expect(f.calls).toHaveLength(0); f.resources.dispose(); expect(revoke).toHaveBeenCalledOnce();
+  server.socket.success(request, { type: 'artifact_bytes', data: btoa(bytes) });
+  expect(await work).toEqual({ text: bytes, url: 'blob:1' }); expect(f.calls).toHaveLength(0);
+  f.resources.dispose(); expect(revoke).toHaveBeenCalledOnce();
 });
 it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('gated obsolete %s response cannot allocate bytes or a URL', async change => {
-  const f = await fixture(); const controller = new AbortController();
-  const work = f.resources.load(source, file.mime_type, false, controller.signal);
-  const rejected = expect(work).rejects.toThrow(/Obsolete/);
+  const f = await fixture(), controller = new AbortController();
+  const work = f.lease.load(file.mime_type, false, controller.signal), rejected = expect(work).rejects.toThrow(/Obsolete/);
   if (change === 'Host') await f.replaceHost();
   if (change === 'attachment') { await server.client.release('A'); await server.client.attach('A'); }
   if (change === 'authority') server.client.disconnect();
@@ -65,74 +67,98 @@ it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('gated o
   if (change === 'abort') controller.abort();
   f.reply(0); await rejected; expect(create).not.toHaveBeenCalled(); f.resources.dispose(); expect(revoke).not.toHaveBeenCalled();
 });
-it.each(['bytes', 'error'] as const)('selecting B before A completes ignores stale A %s and reclaims B on close', async completion => {
-  const f = await fixture(); const a = { source, name: file.name, image: false, mimeType: file.mime_type };
-  const bFile = { ...file, name: 'B.txt', path: 'B.txt', mime_type: 'text/plain' };
-  const b = { source: { ...source, index: 1, file: bFile } as PreviewSource, name: bFile.name, image: false, mimeType: bFile.mime_type };
-  const ui = render(<ArtifactPreview artifact={a} resources={f.resources}/>);
-  ui.rerender(<ArtifactPreview artifact={b} resources={f.resources}/>);
+it.each(['bytes', 'error'] as const)('close then reopen source gets a new lease; late old %s cannot publish', async terminal => {
+  const f = await fixture(), artifact = { source, name: file.name, image: false, mimeType: file.mime_type };
+  const ui = render(<ArtifactPreview key="1" artifact={artifact} resources={f.lease} {...viewState}/>);
+  f.lease.dispose(); const next = f.resources.acquire(2, source);
+  ui.rerender(<ArtifactPreview key="2" artifact={artifact} resources={next} {...viewState}/>);
   expect(f.calls[0].signal?.aborted).toBe(true);
-  await act(async () => f.reply(1, encoded('B current'), bFile));
-  await act(async () => completion === 'bytes' ? f.reply(0) : f.calls[0].response.reject(new Error('A stale error')));
-  expect(ui.getByText('B current')).toBeTruthy(); expect(ui.queryByRole('alert')).toBeNull();
+  await act(async () => f.reply(1, btoa('current occurrence')));
+  await act(async () => terminal === 'bytes' ? f.reply(0) : f.calls[0].response.reject(new Error('old failure')));
+  expect(ui.getByText('current occurrence')).toBeTruthy(); expect(ui.queryByRole('alert')).toBeNull();
   expect(create).toHaveBeenCalledOnce(); ui.unmount(); f.resources.dispose(); expect(revoke).toHaveBeenCalledOnce();
 });
-it('two pending reads and two retained URLs are finite; release permits retry', async () => {
-  const f = await fixture(); const a = f.resources.load(source), b = f.resources.load(source);
-  await expect(f.resources.load(source)).rejects.toThrow('capacity'); expect(f.calls).toHaveLength(2);
-  f.reply(0); f.reply(1); const [one, two] = await Promise.all([a, b]);
-  await expect(f.resources.load(source)).rejects.toThrow('capacity');
-  f.resources.release(source, one.url); const retry = f.resources.load(source); f.reply(2); await retry;
-  f.resources.release(source, two.url); f.resources.dispose(); expect(revoke).toHaveBeenCalledTimes(3);
+it('two pane URLs plus one transient original Download are bounded and released exactly once', async () => {
+  const f = await fixture(), second = f.resources.acquire(2, { ...source, index: 1 });
+  expect(() => f.resources.acquire(3, source)).toThrow('capacity');
+  const firstRead = f.lease.load(), secondRead = second.load(); f.reply(0); f.reply(1); await Promise.all([firstRead, secondRead]);
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    expect(this.download).toBe('报告 file.md'); expect(this.href).toBe('blob:3');
+  });
+  try {
+    const download = f.resources.download(source, file.name, file.mime_type);
+    await expect(f.resources.download(source, 'second')).rejects.toThrow('capacity');
+    f.reply(2); await download; expect(create).toHaveBeenCalledTimes(3); expect(click).toHaveBeenCalledOnce();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:3');
+    expect(f.lease.current() && second.current()).toBe(true);
+    f.resources.dispose(); expect(revoke.mock.calls.map(call => call[0]).sort()).toEqual(['blob:1', 'blob:2', 'blob:3']);
+  } finally { click.mockRestore(); }
+});
+it('Download waits behind two active reads without increasing native transfer admission', async () => {
+  const f = await fixture(), second = f.resources.acquire(2, { ...source, index: 1 });
+  const firstRead = f.lease.load(), secondRead = second.load();
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  try {
+    const download = f.resources.download(source, file.name);
+    expect(f.calls).toHaveLength(2); f.reply(0); await firstRead;
+    expect(f.calls).toHaveLength(3); f.reply(1); f.reply(2); await Promise.all([secondRead, download]);
+    f.resources.dispose(); expect(revoke).toHaveBeenCalledTimes(3);
+  } finally { click.mockRestore(); }
 });
 it('the Session policy admits 300 KiB and rejects >512 KiB before creating a Blob', async () => {
-  const f = await fixture(); const work = f.resources.load(source, 'text/plain'); f.reply(0, encoded('x'.repeat(300 * 1024)));
-  expect((await work).text).toHaveLength(300 * 1024); f.resources.release(source, 'blob:1');
-  const oversized = f.resources.load(source); f.reply(1, 'A'.repeat(Math.ceil((SESSION_FILE_MAX_BYTES + 3) / 3) * 4));
-  await expect(oversized).rejects.toThrow('512 KiB'); expect(create).toHaveBeenCalledOnce(); f.resources.dispose();
+  const f = await fixture(), work = f.lease.load('text/plain'); f.reply(0, btoa('x'.repeat(300 * 1024)));
+  expect((await work).text).toHaveLength(300 * 1024); f.lease.release('blob:1');
+  const oversized = f.lease.load(); f.reply(1, 'A'.repeat(Math.ceil((SESSION_FILE_MAX_BYTES + 3) / 3) * 4));
+  await expect(oversized).rejects.toThrow('512 KiB'); expect(create).toHaveBeenCalledOnce();
 });
-it('UTF-8 and image decode failures retain only original-byte Download; read failure has no URL and can retry', async () => {
-  const f = await fixture(); const invalid = f.resources.load(source, 'text/plain'); f.reply(0, '/w==');
-  expect(await invalid).toEqual({ url: 'blob:1', error: 'File is not valid UTF-8' }); f.resources.release(source, 'blob:1');
-  const image = f.resources.load(source, 'image/png', true); f.reply(1, 'aGk=');
-  expect(await image).toMatchObject({ url: 'blob:2', error: expect.any(String) }); f.resources.release(source, 'blob:2');
-  const failed = f.resources.load(source); f.calls[2].response.reject(new Error('file deleted'));
+it('UTF-8/image decode failures retain bounded original bytes; failed reads allocate no URL and permit explicit retry', async () => {
+  const f = await fixture(), invalid = f.lease.load('text/plain'); f.reply(0, '/w==');
+  expect(await invalid).toEqual({ url: 'blob:1', error: 'File is not valid UTF-8' }); f.lease.release('blob:1');
+  const image = f.lease.load('image/png', true); f.reply(1, 'aGk=');
+  expect(await image).toMatchObject({ url: 'blob:2', error: expect.any(String) }); f.lease.release('blob:2');
+  const failed = f.lease.load(); f.calls[2].response.reject(new Error('file deleted'));
   await expect(failed).rejects.toThrow('deleted'); expect(create).toHaveBeenCalledTimes(2);
-  const retry = f.resources.load(source); f.reply(3); await retry; f.resources.dispose(); expect(revoke).toHaveBeenCalledTimes(3);
+  const retry = f.lease.load(); f.reply(3); await retry; f.resources.dispose(); expect(revoke).toHaveBeenCalledTimes(3);
 });
-it('Markdown HTML, executable URLs, local and remote embedded images are inert in the existing renderer', async () => {
-  const f = await fixture(); const ui = render(<ArtifactPreview artifact={{ source, name: file.name, image: false, mimeType: file.mime_type }} resources={f.resources}/>);
-  await act(async () => f.reply(0, encoded('<script>globalThis.PWNED=1</script>\n\n<img src="/private" onerror="alert(1)">\n\n[x](javascript:alert(1))\n\n![local](file:///etc/passwd) ![remote](https://example.org/track)')));
+it('Markdown HTML, executable URLs and embedded images remain inert', async () => {
+  const f = await fixture(), ui = render(<ArtifactPreview artifact={{ source, name: file.name, image: false, mimeType: file.mime_type }} resources={f.lease} {...viewState}/>);
+  await act(async () => f.reply(0, btoa('<script>globalThis.PWNED=1</script>\n\n<img src="/private" onerror="alert(1)">\n\n[x](javascript:alert(1))\n\n![local](file:///etc/passwd) ![remote](https://example.org/track)')));
   expect(ui.container.querySelector('script,img,iframe,object,svg')).toBeNull();
   expect([...ui.container.querySelectorAll('a')].some(a => a.href.startsWith('javascript:'))).toBe(false);
-  expect((globalThis as { PWNED?: number }).PWNED).toBeUndefined(); ui.unmount(); f.resources.dispose();
+  expect((globalThis as { PWNED?: number }).PWNED).toBeUndefined();
 });
-it('cards require typed successful facts; prose, basenames and arbitrary JSON remain unprivileged', () => {
-  const preview = vi.fn(); const result: ToolExecutionResult = { status: { type: 'success' }, duration_ms: 0, content: [{ type: 'json', value: { deliveries: [file], path: file.path } }] };
-  const ui = render(<PreviewContext.Provider value={preview}><ToolDeliveries messageId="canonical-tool" result={result}/></PreviewContext.Provider>);
+it('typed committed cards distinguish Preview and Download; prose/JSON/failed facts cannot grant access', () => {
+  const openPreview = vi.fn(), download = vi.fn(), intents = { openPreview, download };
+  const result: ToolExecutionResult = { status: { type: 'success' }, duration_ms: 0, content: [{ type: 'json', value: { deliveries: [file], path: file.path } }] };
+  const ui = render(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={result}/></PreviewContext.Provider>);
   expect(ui.queryAllByRole('button')).toHaveLength(0);
-  ui.rerender(<PreviewContext.Provider value={preview}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file] }}/></PreviewContext.Provider>);
+  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file] }}/></PreviewContext.Provider>);
   fireEvent.click(ui.getByRole('button', { name: `Preview ${file.name}` }));
-  expect(preview).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name }));
-  ui.rerender(<PreviewContext.Provider value={preview}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file], status: { type: 'failed', error: 'bad declaration' } }}/></PreviewContext.Provider>);
+  expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name }));
+  fireEvent.click(ui.getByRole('button', { name: `Download ${file.name}` }));
+  expect(download).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name })); expect(openPreview).toHaveBeenCalledOnce();
+  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file], status: { type: 'failed', error: 'bad declaration' } }}/></PreviewContext.Provider>);
   expect(ui.queryAllByRole('button')).toHaveLength(0);
 });
-it('raster dimension inspection bounds decoded pixels and rejects active SVG before decoding', () => {
-  const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6pAAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
-  expect(() => validateRaster(png)).not.toThrow();
-  new DataView(png.buffer).setUint32(16, 4096); new DataView(png.buffer).setUint32(20, 4096);
-  expect(4096 ** 2).toBeGreaterThan(RASTER_MAX_PIXELS); expect(() => validateRaster(png)).toThrow('dimensions');
-  expect(() => validateRaster(new TextEncoder().encode('<svg width="1" height="1"/>'))).toThrow('Unsupported');
+it('typed source equality preserves declarations, delivery indexes, namespaces and managed Artifact distinction', () => {
+  expect(samePreviewSource(source, { ...source, file: { ...file } })).toBe(true);
+  for (const other of [
+    { ...source, messageId: 'another-declaration' }, { ...source, index: 1 },
+    { ...source, file: { ...file, path: 'other/report.md' } },
+    { ...source, file: { ...file, scope: { ...file.scope, conversation_id: 'other' } } },
+    { kind: 'artifact' as const, id: file.name },
+  ]) expect(samePreviewSource(source, other)).toBe(false);
 });
-
-it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('advanced source %s retirement fences gated derived publication', async change => {
-  vi.stubGlobal('crypto', webcrypto);
-  const f = await fixture(), controller = new AbortController();
-  const entered = deferred<void>(), held = deferred<import('../shared/documents.ts').DocumentResult>();
-  let request!: import('../shared/documents.ts').DocumentRequest;
+it('raster dimensions bound decoded pixels and reject SVG before decoding', () => {
+  const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6pAAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+  expect(() => validateRaster(png)).not.toThrow(); new DataView(png.buffer).setUint32(16, 4096); new DataView(png.buffer).setUint32(20, 4096);
+  expect(() => validateRaster(png)).toThrow(); expect(RASTER_MAX_PIXELS).toBe(4194304);
+  expect(() => validateRaster(new TextEncoder().encode('<svg/>'))).toThrow();
+});
+it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('gated derived %s response cannot publish to a retired lease', async change => {
+  const f = await fixture(), entered = deferred<void>(), held = deferred<DocumentResult>(); let request!: DocumentRequest;
   f.host.previewDocument = async (_scope, value) => { request = value; entered.resolve(); return held.promise; };
-  const work = f.resources.derive(source, 'xlsx', new Uint8Array([1]), controller.signal);
-  const rejected = expect(work).rejects.toThrow('obsolete');
+  const controller = new AbortController(), work = f.lease.derive('xlsx', new Uint8Array([1]), controller.signal), rejected = expect(work).rejects.toThrow('obsolete');
   await entered.promise;
   if (change === 'Host') await f.replaceHost();
   if (change === 'attachment') { await server.client.release('A'); await server.client.attach('A'); }
@@ -140,5 +166,65 @@ it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('advance
   if (change === 'close') f.resources.dispose();
   if (change === 'abort') controller.abort();
   held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } });
-  await rejected; expect(create).not.toHaveBeenCalled(); f.resources.dispose();
+  await rejected; expect(create).not.toHaveBeenCalled();
+});
+it('two visible Office intents serialize; cancel waiting demand immediately, active demand holds until settlement', async () => {
+  const f = await fixture(), entered = deferred<void>(), secondEntered = deferred<void>(), held = deferred<DocumentResult>();
+  const calls: { request: DocumentRequest; signal?: AbortSignal }[] = [];
+  f.host.previewDocument = async (_scope, request, signal) => {
+    calls.push({ request, signal });
+    if (calls.length === 1) { entered.resolve(); return held.promise; }
+    secondEntered.resolve(); return { digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } };
+  };
+  const first = f.lease.derive('docx', new Uint8Array([1]), new AbortController().signal), rejected = expect(first).rejects.toThrow('obsolete');
+  await entered.promise;
+  const waiting = f.resources.acquire(2, source), next = waiting.derive('pptx', new Uint8Array([1]), new AbortController().signal);
+  const waitingRejected = expect(next).rejects.toThrow('Obsolete'); waiting.dispose(); await waitingRejected; expect(calls).toHaveLength(1);
+  f.lease.dispose(); expect(calls[0].signal?.aborted).toBe(true);
+  const replacement = f.resources.acquire(3, source), final = replacement.derive('docx', new Uint8Array([1]), new AbortController().signal);
+  expect(calls).toHaveLength(1); held.resolve({ digest: calls[0].request.digest, file, preview: { kind: 'xlsx', sheets: [] } });
+  await rejected; await secondEntered.promise; await final; expect(calls).toHaveLength(2);
+});
+it('a new Session coordinator waits for old aborted Office physical settlement', async () => {
+  const f = await fixture(), entered = deferred<void>(), held = deferred<DocumentResult>(); let request!: DocumentRequest;
+  const derive = vi.fn<ProductHostWorkspaces['previewDocument'] & {}>().mockImplementation(async (_scope, value) => {
+    request = value; entered.resolve(); return held.promise;
+  });
+  f.host.previewDocument = derive;
+  const old = f.lease.derive('docx', new Uint8Array([1]), new AbortController().signal), oldRejected = expect(old).rejects.toThrow('obsolete'); await entered.promise;
+  f.resources.dispose();
+  const replacement = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(replacement);
+  const lease = replacement.acquire(2, source), next = lease.derive('docx', new Uint8Array([1]), new AbortController().signal);
+  expect(derive).toHaveBeenCalledOnce();
+  held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }); await oldRejected; await next;
+  expect(derive).toHaveBeenCalledTimes(2);
+});
+
+it.each(['file', 'document'] as const)('unknown %s settlement fails subsequent admission closed without retry', async kind => {
+  const f = await fixture();
+  const failure = new WorkspaceHostError('lost settlement', `${kind}_settlement_unknown`);
+  if (kind === 'file') {
+    const read = vi.fn().mockRejectedValue(failure); f.host.readDelivery = read;
+    await expect(f.lease.load()).rejects.toBe(failure);
+    await expect(f.lease.load()).rejects.toThrow('File settlement unavailable'); expect(read).toHaveBeenCalledOnce();
+  } else {
+    const derive = vi.fn().mockRejectedValue(failure); f.host.previewDocument = derive;
+    await expect(f.lease.derive('docx', new Uint8Array([1]), new AbortController().signal)).rejects.toBe(failure);
+    await expect(f.lease.derive('docx', new Uint8Array([1]), new AbortController().signal)).rejects.toThrow('converter_unavailable'); expect(derive).toHaveBeenCalledOnce();
+  }
+});
+it('active derivation reserves a shared read slot so pane and Download transfers cannot race Host reauthorization', async () => {
+  const f = await fixture(), entered = deferred<void>(), held = deferred<DocumentResult>(); let request!: DocumentRequest;
+  f.host.previewDocument = async (_scope, value) => { request = value; entered.resolve(); return held.promise; };
+  const derive = f.lease.derive('docx', new Uint8Array([1]), new AbortController().signal); await entered.promise;
+  const second = f.resources.acquire(2, source), read = second.load();
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  try {
+    const download = f.resources.download(source, file.name);
+    expect(f.calls).toHaveLength(1); // derivation reserves the other Host/native read permit
+    f.reply(0); await read; expect(f.calls).toHaveLength(2);
+    f.reply(1); await download;
+    held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }); await derive;
+    expect(click).toHaveBeenCalledOnce();
+  } finally { held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }); click.mockRestore(); }
 });

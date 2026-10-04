@@ -19,6 +19,6 @@ export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
     });
     if (write) await writeGate?.observed();
-    await route.fulfill({ status: response.status, contentType: response.headers.get('content-type') ?? 'application/json', body: await response.text() });
+    await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() });
   });
 }

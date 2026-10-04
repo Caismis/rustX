@@ -22,10 +22,11 @@ beforeEach(() => {
 afterEach(() => { for (const owner of owners.splice(0)) owner.dispose(); workers.splice(0); vi.unstubAllGlobals(); });
 function owner() { const value = new PdfDocumentOwner(new Uint8Array([1]), vi.fn()); owners.push(value); return value; }
 function view() { return { canvas: window.document.createElement('canvas'), layer: window.document.createElement('div'), signal: new AbortController() }; }
-it('admits one worker and releases it once on repeated disposal and worker failure', () => {
-  const first = owner(); expect(() => owner()).toThrow('capacity'); first.dispose(); first.dispose();
+it('admits two visible PDF workers, rejects a third and releases each once on disposal or worker failure', () => {
+  const first = owner(), second = owner(); expect(() => owner()).toThrow('capacity'); first.dispose(); first.dispose();
   expect(workers[0].terminate).toHaveBeenCalledOnce(); expect(destroy).toHaveBeenCalledOnce();
-  const second = owner(); workers[1].onerror!(new Event('error'));  second.dispose(); expect(workers[1].terminate).toHaveBeenCalledOnce();
+  const replacement = owner(); workers[1].onerror!(new Event('error')); second.dispose(); expect(workers[1].terminate).toHaveBeenCalledOnce();
+  replacement.dispose(); expect(workers[2].terminate).toHaveBeenCalledOnce();
 });
 it('rejects a huge page before canvas allocation or rendering', async () => {
   page.getViewport.mockReturnValue({ width: 1e9, height: 1e9 });

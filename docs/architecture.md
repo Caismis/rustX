@@ -16,6 +16,19 @@ managed ArtifactIds remain immutable ArtifactStore identities.
 See [the delivery and safe-preview contract](file-delivery.md) for authorization,
 descriptor containment, mutable history, bounds, and resource lifetimes.
 
+## Session preview workspaces (#441)
+
+The browser `PreviewWorkspaceOwner` owns bounded Session-local logical tabs,
+occurrences, pane selection, geometry, presentation and inert view metadata.
+Only selected tabs in visible panes acquire occurrence-scoped resource leases;
+two visible panes admit at most two PDF-backed owners. A separate Download intent
+uses one transient lease. Native file authority and document security remain with
+their existing owners. The private native file-read carrier acknowledges clean
+close only after joining its exact canceled read; browser/Host admission cannot
+reuse that permit on an unproven transport outcome. No public protocol schema or
+server-side layout registry is introduced. See [preview workspaces](preview-workspace.md)
+for identity, lifetime, finite budgets, focus and responsive restoration.
+
 ## Native conversation reading (#430)
 
 ConversationStore owns Attempt turn identity/order/location and finite outline/

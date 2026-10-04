@@ -9,7 +9,9 @@ normative there. A document suffix selects presentation; it never grants access.
 
 All views are read-only. No viewer calls a model or activates an Agent. No
 document registry, persisted view preferences, conversion cache or background
-conversion exists. Page, zoom, sheet and HTML mode belong to the selected view.
+conversion exists. Page, zoom, sheet and HTML mode belong to the logical tab
+occurrence in the bounded in-memory Session preview workspace. Inactive tabs
+retain metadata only; their document runtimes are unmounted.
 
 | Extensions | Sources | Presentation | Runtime | Passwords | Fidelity |
 | --- | --- | --- | --- | --- | --- |
@@ -26,9 +28,9 @@ download is performed. The operator installs and maintains LibreOffice and fonts
 
 Every Download remains the original authorized source bytes and original name,
 including Unicode/spaces. A generated PDF or workbook projection never replaces
-that source. Conversion/parser failures preserve an already authorized original
-download; read failures allocate no download URL. Existing authority retirement
-disposes the complete selected preview, including its original URL.
+that source. Conversion/parser failures preserve the original Download action,
+which reauthorizes when invoked; read failures allocate no download URL. Authority retirement
+retires every incompatible active occurrence lease, including its original URL.
 
 ## Exact budgets
 
@@ -36,16 +38,17 @@ disposes the complete selected preview, including its original URL.
 | --- | --- |
 | Original Artifact bytes | 256 KiB, existing owner policy |
 | Original Session-file bytes | 512 KiB, existing owner policy |
-| Session-file transfers / retained URLs | 2 / 2, unchanged |
-| Artifact transfers / retained URLs | 2 / 16, unchanged |
-| Active derived operations per Product Host | 1; capacity rejects, no queue/retry loop |
+| Preview original transfers / URLs | 2 active transfers; 2 visible occurrence URLs plus 1 transient Download URL (3 aggregate) |
+| Inline Conversation Artifact transfers / retained URLs | Existing separate 2 / 16 owner, unchanged |
+| Active preview bodies / browser derivation demand | 2 visible bodies; 1 active Host derivation with at most 2 visible intents waiting during retirement |
+| Active derived operations per Product Host | 1; browser serializes visible demand, no automatic retries |
 | Retained derived cache entries | 0 |
 | Derived PDF / admitted PDF data | 4 MiB |
 | PDF pages | 100 |
-| Browser PDF workers / active renders / presentation canvases | 1 / 1 / 1 |
+| Browser PDF workers / active renders / presentation canvases | 2 / 2 / 2 aggregate; 1 of each per visible PDF-backed occurrence |
 | Each page or scratch canvas | 4096 per side / 4,194,304 pixels; checked before allocation |
-| PDF.js scratch canvases | At most 8, aggregate 16,777,216 pixels; bounded factory rejects before create/reset |
-| Total admitted canvas pixels | 20,971,520 page + scratch, plus one 300 × 150 text-measurement canvas; hardware/OffscreenCanvas/image decoders disabled |
+| PDF.js scratch canvases | At most 8 per document (16 aggregate), 16,777,216 pixels per document; bounded factory rejects before create/reset |
+| Total admitted canvas pixels | 20,971,520 page + scratch per document (41,943,040 for two); plus one shared 300 × 150 text-measurement canvas (normalized null language); hardware/OffscreenCanvas/image decoders disabled |
 | PDF decoded image policy | 4,194,304 pixels; larger images are omitted by PDF.js |
 | PDF text layer | 10,000 items, 100,000 characters, current page only |
 | PDF load / selected-page cooperative watchdog | 15 seconds each; when the browser event loop dispatches expiry, retire the worker |
@@ -66,7 +69,13 @@ disposes the complete selected preview, including its original URL.
 | Converter per-file / per-process FD limits | 8 MiB / 128 (supplementary; not aggregate limits) |
 | Converter stdout accepted as PDF | 4 MiB, overflow kills the sandbox |
 
-Original source buffers are retained only by the selected view and its original Blob; a derived PDF has one selected-view byte buffer plus its transferred worker copy. HTML has no resource URLs or persistent derived cache.
+Original source buffers are retained only by the selected tab in each visible pane
+and its original Blob. Each derived PDF has one occurrence-owned byte buffer plus
+its transferred worker copy. Two visible PDF-backed documents are valid, including
+PDF + PDF or converted Office + PDF. Hidden tabs own zero workers, canvases,
+original URLs, derived buffers or derivation demand. HTML has no additional resource
+URLs or persistent derived cache. A transient Download reauthorizes original bytes
+and revokes its separate URL exactly once after dispatching the browser download.
 
 V8 heap limits do not include external ArrayBuffers; ZIP expansion and source
 buffers have independent byte bounds. PDF.js internal decoding allocations are
@@ -88,8 +97,16 @@ ever extracted as a filesystem path.
 
 ## Source and lifecycle ownership
 
-`FilePreviewResources` owns original byte reads, identity verification, original
-URLs and the selected derivation request. The browser sends only an attachment
+`FilePreviewCoordinator` coordinates original reads and Host admission for one
+compatible Session/runtime/authority/target scope. Each `FilePreviewLease` is
+bound to one exact source and occurrence and owns its cancellation signal,
+original URL and active derivation demand. The logical workspace never holds bytes
+or URLs. The coordinator admits at most two visible leases and one independent
+transient Download. Original read admission stays at two with at most three
+current intents waiting during settlement; no native transfer bound changes.
+The one active derivation reserves one of those two read permits for its complete
+lifetime, because its internal reauthorization uses the same Host/native read
+budget. This leaves one original pane/Download transfer while conversion runs. The browser sends only an attachment
 target, a closed Artifact or committed-delivery coordinate, an extension and the
 SHA-256 of its authorized original bytes. It never uploads raw Office bytes or
 supplies a Host pathname. The Host authenticates to the private native read seam
@@ -107,11 +124,34 @@ There is no path-keyed cache and no result that can bypass a fresh authorization
 An operation consumes an immutable private snapshot while the original Session
 file retains mutable-reopen semantics. Converter updates need no cache migration.
 
-Selection, unmount, reconnect, attachment or authority replacement retire the
-existing owner. Abort fences stale successes, failures and loading completion.
+Tab selection, hide/collapse, unmount, reconnect, attachment or authority
+replacement retire the active lease before stale completion can publish. The lease
+checks client generation, Session, authority revision, exact target, source and
+its own active identity. Close/reopen creates another occurrence and lease; source
+equality does not revive retired work. Abort fences stale successes, failures and
+loading completion.
 Host retirement aborts parser/converter work. Its slot is held until the worker
 terminates and the process pipes close and temporary directory cleanup completes.
 There are no automatic retries or unknown-outcome conversion joins.
+
+A small browser admission primitive coordinates the two visible derivation
+intents. A waiting occurrence leaves immediately on abort. An active operation
+keeps admission until Host settlement, including after Session replacement. The
+HTTP carrier acknowledges an exact ephemeral operation token in response headers
+before accepting cancellation. Cancellation sends that token and its exact Host
+scope on a separate request; the original terminal response stays open until
+physical cleanup completes. Thus aborting a browser fetch is never mistaken for
+Host settlement. The Host retains only its single active cancellation handle, no
+tab registry, queue, document cache or persisted operation. Unknown settlement
+fails closed for that Host authority; it never starts a competing conversion.
+The private native file-read socket also waits for its admitted read to retire
+before acknowledging a clean close. This repairs an existing cancellation gap:
+dropping the transport's receiver left its detached native descriptor read and
+permit alive. The Node Host waits for that exact close acknowledgement or a
+terminal read response; an abnormal close leaves admission unavailable. Office
+source-read uncertainty also retains its document slot. Browser-only coordination
+cannot prove retirement of that native permit. No public App Server Method,
+schema, authority or filesystem policy changes.
 
 ## Office boundary
 
@@ -298,6 +338,9 @@ Bubblewrap 0.9.0 package layout, including its external system registry.
 - `test/document-integration.test.ts` runs the real sandbox and real DOCX/PPTX
   bytes on Linux. macOS explicitly checks converter unavailability; it does not
   silently skip an unsandboxed conversion path.
+- `test/document-http-lifetime.test.ts` gates real HTTP header acknowledgement,
+  exact cancellation and physical settlement; cancellation-before-ACK and wrong
+  scope/token cannot race Host capacity.
 - `test/pdf-document.test.ts`, `test/document-view-lifetime.test.tsx` and
   `test/session-files.test.tsx` cover worker/render limits, backing-store cleanup,
   obsolete results/errors and existing source/attachment/authority fences.
