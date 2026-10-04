@@ -33,6 +33,69 @@ async function empty(path: string) {
   try { expect(await readFile(join(path, 'cgroup.events'), 'utf8')).toContain('populated 0'); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 }
+it('records the upstream clearenv kernel-memory behavior using only a synthetic environment', async () => {
+  if (process.platform !== 'linux') return;
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  // Deliberately bypass the clean exec only in this harmless upstream probe.
+  // No manager or Host environment enters this control process.
+  const { stdout } = await promisify(execFile)('/usr/bin/bwrap', ['--unshare-all', '--unshare-user', '--disable-userns',
+    '--die-with-parent', '--new-session', '--cap-drop', 'ALL', '--ro-bind', '/usr', '/usr',
+    '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64', '--proc', '/proc', '--clearenv',
+    '--', '/usr/bin/python3', '-c', `import os
+secret=b'RUSTX_OFFICE_SECRET_SENTINEL=synthetic-upstream-probe'
+assert 'RUSTX_OFFICE_SECRET_SENTINEL' not in os.environ
+assert secret not in open('/proc/self/environ','rb').read()
+print('retained' if secret in open('/proc/1/environ','rb').read() else 'erased')`],
+  { env: { RUSTX_OFFICE_SECRET_SENTINEL: 'synthetic-upstream-probe' } });
+  // Either upstream behavior is acceptable; the production regression below
+  // must pass independently of whether the installed bwrap fixes issue #725.
+  expect(['retained', 'erased']).toContain(stdout.trim());
+  process.stdout.write(`Bubblewrap #725 probe: initial sentinel ${stdout.trim()}\n`);
+});
+it('manager secrets cannot survive the pre-bwrap exec in any kernel-visible sandbox environment', async () => {
+  if (process.platform !== 'linux') return;
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const { randomUUID } = await import('node:crypto');
+  const exec = promisify(execFile);
+  // Unique synthetic keys avoid changing or printing any existing manager secret.
+  const key = `RUSTX_OFFICE_SECRET_SENTINEL_${randomUUID().replaceAll('-', '_')}`;
+  const secret = 'must-not-enter-office-sandbox';
+  const connection = Object.fromEntries(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].flatMap(name => process.env[name] ? [[name, process.env[name]!]] : []));
+  const service = async () => exec('/usr/bin/systemd-run', ['--user', '--quiet', '--wait', '--pipe', '--collect',
+    '--', '/usr/bin/python3', '-c', `import os;print(int(os.environ.get('${key}')=='${secret}'))`], { env: connection });
+  try {
+    await exec('/usr/bin/systemctl', ['--user', 'set-environment', `${key}=${secret}`], { env: connection });
+    // Positive control: the secret reaches a real user service, although the
+    // systemd-run client's environment contains only connection inputs.
+    expect((await service()).stdout.trim()).toBe('1');
+    const output = await run(`import os,glob,json
+expected={'PATH':'/usr/bin','HOME':'/tmp/home','LANG':'C.UTF-8','SAL_USE_VCLPLUGIN':'svp','TMPDIR':'/tmp','PWD':'/tmp'}
+def environment(path):
+ raw=open(path,'rb').read()
+ assert b'${secret}' not in raw,'manager sentinel leaked'
+ entries=dict(entry.split(b'=',1) for entry in raw.split(b'\\0') if entry)
+ assert b'DBUS_SESSION_BUS_ADDRESS' not in entries,'manager bus leaked'
+ assert b'XDG_RUNTIME_DIR' not in entries,'manager runtime leaked'
+ return {key.decode():value.decode() for key,value in entries.items()}
+assert environment('/proc/1/environ')=={},'bwrap initial environment was not empty'
+assert environment('/proc/self/environ')==expected,'payload initial environment differs'
+assert dict(os.environ)==expected,'payload effective environment differs'
+# No trusted admission shell/env intermediary survives exec in this namespace.
+for path in glob.glob('/proc/[0-9]*/environ'):
+ try:
+  actual=environment(path)
+  assert all(key in expected and value==expected[key] for key,value in actual.items()),'unexpected inherited environment'
+ except FileNotFoundError: pass
+print('kernel environments clean')`);
+    expect(output.toString().trim()).toBe('kernel environments clean');
+  } finally {
+    await exec('/usr/bin/systemctl', ['--user', 'unset-environment', key], { env: connection });
+    // Await the manager operation and prove the next service no longer inherits it.
+    expect((await service()).stdout.trim()).toBe('0');
+  }
+});
 it('all writable paths share one 64 MiB tmpfs; root, dev and input cannot supply another filesystem', async () => {
   if (process.platform !== 'linux') return;
   const result = await run(`import os,errno,json

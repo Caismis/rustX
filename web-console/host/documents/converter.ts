@@ -11,7 +11,7 @@ export async function convertOffice(bytes: Buffer, extension: 'docx' | 'pptx', s
   if (process.platform !== 'linux') throw new Error('converter_unavailable');
   if (bytes.length > OOXML_LIMITS.source) throw new Error('too_large');
   signal.throwIfAborted();
-  try { await Promise.all(['/usr/bin/bwrap', '/usr/bin/prlimit', '/usr/bin/libreoffice', '/usr/bin/systemd-run'].map(path => access(path, constants.X_OK))); }
+  try { await Promise.all(['/usr/bin/env', '/usr/bin/bwrap', '/usr/bin/prlimit', '/usr/bin/libreoffice', '/usr/bin/systemd-run'].map(path => access(path, constants.X_OK))); }
   catch { throw new Error('converter_unavailable'); }
   signal.throwIfAborted();
   const directory = await mkdtemp(join(tmpdir(), 'rustx-document-'));

@@ -21,7 +21,10 @@ export async function runOfficeSandbox(directory: string, command: string[], sig
     `--property=TasksMax=${limits.tasks}`, '--property=CPUQuota=100%', '--property=CPUQuotaPeriodSec=100ms',
     `--property=RuntimeMaxSec=${limits.runtimeSeconds}`, '--property=TimeoutStopSec=1',
     '--property=KillMode=control-group', '--property=KillSignal=SIGKILL',
-    '--', '/usr/bin/sh', '-ec', gate, 'rustx-document', '/usr/bin/bwrap',
+    // The user manager can supply secrets independently of the client's env.
+    // exec env -i gives bwrap an EMPTY initial environment, including the bytes
+    // exposed through /proc/1/environ. bwrap --clearenv alone cannot promise this.
+    '--', '/usr/bin/sh', '-ec', gate, 'rustx-document', '/usr/bin/env', '-i', '/usr/bin/bwrap',
     '--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
     '--clearenv', '--setenv', 'PATH', '/usr/bin', '--setenv', 'HOME', '/tmp/home', '--setenv', 'LANG', 'C.UTF-8',
     '--setenv', 'SAL_USE_VCLPLUGIN', 'svp', '--setenv', 'TMPDIR', '/tmp',

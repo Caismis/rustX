@@ -134,7 +134,40 @@ as `converter_unavailable`; no conversion payload is admitted.
 The operator must provide `/usr/bin/systemd-run`, a reachable
 systemd user manager and delegated cgroup v2 CPU/memory/pids controllers. The Host
 uses only XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS to contact that manager.
-It never changes global cgroup policy or starts a privileged conversion service.
+These are client control-plane inputs, not payload variables. The already-running
+user manager can independently supply its own imported environment to the
+transient service; that inheritance is not trusted for secret isolation.
+
+After the existing cgroup admission permit, the trusted shell execs
+`/usr/bin/env -i /usr/bin/bwrap`. The external exec constructs an **empty initial
+Bubblewrap environment**, replacing the admission shell's address space before
+Bubblewrap starts. Neither the shell nor env remains as an ancestor inside the
+sandbox PID namespace. `/usr/bin/env` is a required local runtime prerequisite;
+there is no alternate path when it is missing.
+
+Bubblewrap's `--clearenv` remains defense in depth only. It is not relied upon to
+erase inherited strings from kernel-visible `/proc/PID/environ`: this deliberately
+avoids depending on upstream [issue #725](https://github.com/containers/bubblewrap/issues/725)
+or its proposed [fix #800](https://github.com/containers/bubblewrap/pull/800).
+The Host supplies exactly `PATH=/usr/bin`, `HOME=/tmp/home`, `LANG=C.UTF-8`,
+`SAL_USE_VCLPLUGIN=svp`, and `TMPDIR=/tmp` through explicit Bubblewrap `--setenv`
+arguments. Bubblewrap's `--chdir /tmp` additionally generates `PWD=/tmp`.
+The fixed conversion shell may maintain its own shell bookkeeping; no Host or
+manager variables are forwarded. There is no configurable environment passthrough.
+
+A real Linux regression sets a unique synthetic secret through
+`systemctl --user set-environment` and first proves a separate user service
+inherits it despite a restricted systemd-run client environment. The production
+sandbox must then expose an empty `/proc/1/environ`, and precisely the six values
+above in `/proc/self/environ` and the effective payload environment. It also
+inspects every visible process environment. Assertions run inside the probe so
+failure diagnostics never print inherited secrets. Finally, awaited
+`unset-environment` and a fresh service prove removal of the test's unique key.
+A separate harmless probe records whether the installed Bubblewrap retains a
+synthetic initial secret with `--clearenv` alone; production assertions do not
+depend on whether an upstream release has fixed that behavior.
+
+The Host never changes global cgroup policy or starts a privileged conversion service.
 CI provisions the runner's user manager with loginctl enable-linger and verifies
 the actual production admission path before tests. macOS remains unsupported for
 Office; there is no alternate conversion mode.

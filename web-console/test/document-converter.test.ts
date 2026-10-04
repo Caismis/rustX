@@ -3,15 +3,15 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { existsSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
-const boundary = vi.hoisted(() => ({ spawn: vi.fn(), kill: vi.fn(), retire: vi.fn() }));
-vi.mock('../host/documents/office-cgroup.ts', async original => ({ ...await original<typeof import('../host/documents/office-cgroup.ts')>(), observeOfficeCgroup: async () => ({ kill: boundary.kill, retire: boundary.retire }) }));
+const boundary = vi.hoisted(() => ({ spawn: vi.fn(), admit: vi.fn(), kill: vi.fn(), retire: vi.fn() }));
+vi.mock('../host/documents/office-cgroup.ts', async original => ({ ...await original<typeof import('../host/documents/office-cgroup.ts')>(), observeOfficeCgroup: async () => { await boundary.admit(); return { kill: boundary.kill, retire: boundary.retire }; } }));
 vi.mock('node:child_process', () => ({ spawn: boundary.spawn }));
 import { convertOffice } from '../host/documents/converter';
 function gate() {
   const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stdin: new PassThrough(), kill: vi.fn() });
   let spawned!: () => void; const ready = new Promise<void>(resolve => { spawned = resolve; });
   boundary.spawn.mockImplementation(() => { spawned(); return child; });
-  boundary.kill.mockResolvedValue(undefined); boundary.retire.mockResolvedValue(undefined);
+  boundary.admit.mockResolvedValue(undefined); boundary.kill.mockResolvedValue(undefined); boundary.retire.mockResolvedValue(undefined);
   return { child, ready };
 }
 afterEach(() => { vi.useRealTimers(); boundary.spawn.mockReset(); });
@@ -22,6 +22,7 @@ it('owns isolation arguments and retains temporary files until process-tree sett
   await ready;
   const [exe, args, options] = boundary.spawn.mock.calls[0];
   expect(exe).toBe('/usr/bin/systemd-run');
+  expect(args.slice(args.indexOf('/usr/bin/env'), args.indexOf('/usr/bin/bwrap') + 1)).toEqual(['/usr/bin/env', '-i', '/usr/bin/bwrap']);
   child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve));
   for (const required of ['--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--clearenv', '--size', '67108864', '--property=MemoryMax=536870912', '--property=TasksMax=64', '--property=ExitType=cgroup', '--remount-ro', '--fsize=8388608']) expect(args).toContain(required);
   expect(args).not.toContain('--share-net'); expect(Object.keys(options.env).every(key => ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].includes(key))).toBe(true);
@@ -72,4 +73,22 @@ it('oversized output cannot publish a PDF and waits for service closure', async 
   const result = expect(work).rejects.toThrow('too_large'); await ready;
   child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve)); child.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1));
   child.emit('close', 0); await result;
+});
+
+it('holds the stdin permit until kernel admission; cancellation while admission is held never grants it', async () => {
+  for (const cancel of [false, true]) {
+    const { child, ready } = gate(), controller = new AbortController();
+    let release!: () => void;
+    boundary.admit.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+    const work = convertOffice(Buffer.from('input'), 'docx', controller.signal);
+    const result = expect(work).rejects.toThrow(cancel ? 'obsolete' : 'converter_failure');
+    await ready;
+    const finished = new Promise<void>(resolve => child.stdin.once('finish', resolve));
+    child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n');
+    expect(child.stdin.read()).toBeNull();
+    if (cancel) controller.abort();
+    release(); await finished;
+    expect(child.stdin.read()?.toString() ?? null).toBe(cancel ? null : 'run\n');
+    child.emit('close', 1); await result;
+  }
 });
