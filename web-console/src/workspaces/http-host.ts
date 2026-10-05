@@ -1,6 +1,6 @@
 /** Browser HTTP adapter. Never imported by the Node Product Host. */
 import { carrierFetch } from '../carrier/http.ts';
-import { WorkspaceHostError, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult, type DeliveryRead, type DeliveryBytes } from './host.ts';
+import { WorkspaceHostError, settlementFailureKind, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult, type DeliveryRead, type DeliveryBytes } from './host.ts';
 
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   constructor(private readonly base = '/product-host') {}
@@ -44,7 +44,13 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       let result: { ok: boolean; value?: T } & HostFailure;
       try { result = await response.json(); }
       catch { throw new WorkspaceHostError('File operation settlement unavailable', unknown); }
-      if (result.kind === unknown) throw new WorkspaceHostError('File operation settlement unavailable', unknown);
+      if (!result || typeof result.ok !== 'boolean' || (result.ok && result.value === undefined)) {
+        throw new WorkspaceHostError('File operation settlement unavailable', unknown);
+      }
+      // Physical uncertainty outranks canceled publication, regardless of which
+      // nested owner reported it. A valid terminal envelope preserves that fact.
+      const failure = hostFailure(result);
+      if (settlementFailureKind(failure)) throw failure;
       signal?.throwIfAborted();
       if (!result.ok || result.value === undefined) throw hostFailure(result);
       return result.value;

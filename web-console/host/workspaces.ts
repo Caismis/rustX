@@ -145,9 +145,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
       }, operation.signal);
     } catch (cause) {
-      if (cause instanceof OfficeSettlementError || cause instanceof WorkspaceHostError && cause.kind === 'file_settlement_unknown') {
+      if (cause instanceof OfficeSettlementError) {
         settled = false;
-        throw new WorkspaceHostError('converter_unavailable', 'document_settlement_unknown');
+        throw new WorkspaceHostError('converter_unavailable', 'converter_settlement_unknown');
+      }
+      if (cause instanceof WorkspaceHostError && cause.kind === 'file_settlement_unknown') {
+        settled = false;
+        throw cause;
       }
       if (cause instanceof NativeFileReadError && cause.error.data?.kind === 'session_file_read') {
         const reason = cause.error.data.reason;

@@ -6,7 +6,7 @@ import { HttpWorkspaceHost } from '../src/workspaces/http-host';
 import { FilePreviewCoordinator } from '../src/client/session-files';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import type { AppServerClient } from '../src/client/app-server';
-import type { ProductHostWorkspaces } from '../src/workspaces/host';
+import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest } from '../shared/documents';
 function gate<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const scope = { authorityId: 'host', endpoint: 'ws://127.0.0.1:7777' };
@@ -75,11 +75,11 @@ it('cancellation requires the exact operation token and authority scope; final r
     expect(await host.previewDocument(scope, request)).toEqual(result);
   } finally { settled.resolve(); await work; }
 });
-it('lost terminal transport is typed as unknown settlement instead of reusable admission', async () => {
+it.each(['lost body', 'invalid envelope'] as const)('%s is typed as unknown settlement instead of reusable admission', async failure => {
   vi.stubGlobal('location', { href: 'http://127.0.0.1', origin: 'http://127.0.0.1' });
   vi.stubGlobal('fetch', vi.fn(async (_input, init) => {
     const { operationId } = JSON.parse(init.body);
-    return { ok: true, headers: new Headers({ 'X-Rustx-Document-Operation': operationId }), json: async () => { throw new Error('lost body'); } };
+    return { ok: true, headers: new Headers({ 'X-Rustx-Document-Operation': operationId }), json: async () => { if (failure === 'invalid envelope') return {}; throw new Error('lost body'); } };
   }));
   await expect(new HttpWorkspaceHost().previewDocument(scope, request)).rejects.toMatchObject({ kind: 'document_settlement_unknown' });
 });
@@ -111,4 +111,20 @@ it('two original reads keep their physical slots after abort; queued Download st
     expect(clicked).toHaveBeenCalledOnce(); expect(urls).toBe(2); expect(revoked).toHaveBeenCalledOnce();
     coordinator.dispose(); expect(revoked).toHaveBeenCalledTimes(2);
   } finally { releases.forEach(release => release.resolve()); coordinator.dispose(); await Promise.allSettled([first, second]); }
+});
+
+
+it.each(['converter', 'file', 'document'] as const)('canceled document carrier preserves %s physical uncertainty through the terminal envelope', async kind => {
+  const entered = gate(), aborted = gate(), settle = gate();
+  const host = await serve(async (_scope, _request, signal) => {
+    entered.resolve(); signal!.addEventListener('abort', () => aborted.resolve(), { once: true });
+    await settle.promise;
+    throw new WorkspaceHostError('physical owner unknown', `${kind}_settlement_unknown`);
+  });
+  const abort = new AbortController(), work = host.previewDocument(scope, request, abort.signal);
+  const rejected = expect(work).rejects.toMatchObject({ kind: `${kind}_settlement_unknown` });
+  try {
+    await entered.promise; abort.abort(); await aborted.promise;
+    settle.resolve(); await rejected;
+  } finally { settle.resolve(); await rejected; }
 });

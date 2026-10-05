@@ -228,3 +228,43 @@ it('active derivation reserves a shared read slot so pane and Download transfers
     expect(click).toHaveBeenCalledOnce();
   } finally { held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }); click.mockRestore(); }
 });
+
+it.each(['converter', 'file', 'document'] as const)('%s uncertainty closes only its physical admission domains across Sessions and resets only for new Host authority', async kind => {
+  const f = await fixture(), failure = new WorkspaceHostError('unknown physical settlement', `${kind}_settlement_unknown`);
+  const derive = vi.fn<NonNullable<ProductHostWorkspaces['previewDocument']>>().mockRejectedValue(failure);
+  f.host.previewDocument = derive;
+  const signal = new AbortController().signal;
+  await expect(f.lease.derive('docx', new Uint8Array([1]), signal)).rejects.toBe(failure);
+  await expect(f.lease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
+  expect(derive).toHaveBeenCalledOnce();
+  const next = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(next);
+  const lease = next.acquire(2, source);
+  await expect(lease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  try {
+    if (kind === 'converter') {
+      const read = f.lease.load(); expect(f.calls).toHaveLength(1); f.reply(0); await read;
+      const download = f.resources.download(source, file.name); expect(f.calls).toHaveLength(2); f.reply(1); await download;
+      const otherSession = lease.load(); expect(f.calls).toHaveLength(3); f.reply(2); await otherSession;
+      expect(click).toHaveBeenCalledOnce(); expect(create).toHaveBeenCalledTimes(3);
+      expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:2');
+    } else {
+      await expect(f.lease.load()).rejects.toThrow('File settlement unavailable');
+      await expect(f.resources.download(source, file.name)).rejects.toThrow('File settlement unavailable');
+      await expect(lease.load()).rejects.toThrow('File settlement unavailable');
+      await expect(next.download(source, file.name)).rejects.toThrow('File settlement unavailable');
+      expect(f.calls).toHaveLength(0); expect(create).not.toHaveBeenCalled(); expect(click).not.toHaveBeenCalled();
+    }
+    expect(derive).toHaveBeenCalledOnce();
+    await f.replaceHost();
+    await expect(lease.load()).rejects.toThrow('Obsolete');
+    await expect(f.lease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('obsolete');
+    const fresh = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(fresh);
+    const freshLease = fresh.acquire(3, source), count = f.calls.length, read = freshLease.load();
+    expect(f.calls).toHaveLength(count + 1); f.reply(count); await read;
+    derive.mockImplementation(async (_scope, request) => ({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }));
+    await freshLease.derive('xlsx', new Uint8Array([1]), signal); expect(derive).toHaveBeenCalledTimes(2);
+    owners.forEach(owner => owner.dispose());
+    expect(revoke.mock.calls.map(([url]) => url).sort()).toEqual(create.mock.results.map(result => result.value).sort());
+  } finally { click.mockRestore(); }
+});

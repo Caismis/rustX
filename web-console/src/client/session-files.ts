@@ -5,7 +5,7 @@ import { sameTarget } from './app-server';
 import { ArtifactResources, isTextMime, safeArtifactMime } from './artifacts';
 import type { SessionFileReference } from '../../../protocol/app-server/v34';
 import type { ProductHostWorkspaces } from '../workspaces/host';
-import { WorkspaceHostError } from '../workspaces/host';
+import { settlementFailureKind } from '../workspaces/host';
 import type { WorkspaceAuthority } from '../workspaces/authority';
 import { PREVIEW_POLICY } from './preview-policy';
 
@@ -30,7 +30,8 @@ class PreviewDemand {
   private active = 0;
   private waiting: { start: () => void; cancel: () => void }[] = [];
   private unavailable = false;
-  constructor(private readonly capacity: number, private readonly waitingLimit: number, private readonly unavailableCode: string) {}
+  constructor(private readonly capacity: number, private readonly waitingLimit: number, private readonly unavailableCode: string,
+    private readonly settlementUnknown: (cause: unknown) => boolean) {}
   run<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
     if (signal.aborted) return Promise.reject(new Error('Obsolete preview demand'));
     if (this.unavailable) return Promise.reject(new Error(this.unavailableCode));
@@ -44,7 +45,7 @@ class PreviewDemand {
           void (async () => {
             try { resolve(await work()); }
             catch (cause) {
-              if (cause instanceof WorkspaceHostError && (cause.kind === 'document_settlement_unknown' || cause.kind === 'file_settlement_unknown')) this.unavailable = true;
+              if (this.settlementUnknown(cause)) this.unavailable = true;
               reject(cause);
             } finally {
               this.active--;
@@ -71,8 +72,9 @@ const hostDemand = new WeakMap<ProductHostWorkspaces, { revision: number; reads:
 function demands(host: ProductHostWorkspaces, authority: WorkspaceAuthority) {
   let value = hostDemand.get(host);
   if (!value || value.revision !== authority.getRevision()) {
-    value = { revision: authority.getRevision(), reads: new PreviewDemand(SESSION_FILE_MAX_TRANSFERS, PREVIEW_POLICY.activeBodies + PREVIEW_POLICY.downloads, 'File settlement unavailable'),
-      documents: new PreviewDemand(1, PREVIEW_POLICY.activeBodies, 'converter_unavailable') };
+    value = { revision: authority.getRevision(), reads: new PreviewDemand(SESSION_FILE_MAX_TRANSFERS, PREVIEW_POLICY.activeBodies + PREVIEW_POLICY.downloads, 'File settlement unavailable',
+      cause => { const kind = settlementFailureKind(cause); return kind === 'file_settlement_unknown' || kind === 'document_settlement_unknown'; }),
+      documents: new PreviewDemand(1, PREVIEW_POLICY.activeBodies, 'converter_unavailable', cause => settlementFailureKind(cause) !== undefined) };
     hostDemand.set(host, value);
   }
   return value;

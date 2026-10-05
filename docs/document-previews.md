@@ -134,6 +134,32 @@ Host retirement aborts parser/converter work. Its slot is held until the worker
 terminates and the process pipes close and temporary directory cleanup completes.
 There are no automatic retries or unknown-outcome conversion joins.
 
+Physical settlement failures preserve the owner whose obligation is unknown:
+
+| Private failure kind | Physical fact | Browser admission made unavailable |
+| --- | --- | --- |
+| `converter_settlement_unknown` | Office cgroup/converter cleanup did not prove retirement; preceding native reads settled | Document conversion only |
+| `file_settlement_unknown` | A native/raw read did not prove retirement, including a document reauthorization read | Raw reads; also the enclosing document demand when raised during derivation |
+| `document_settlement_unknown` | The document HTTP carrier lost its terminal witness; either a nested raw read or converter may remain | Both raw reads and document conversion |
+
+`LocalWorkspaceHost` maps `OfficeSettlementError` to converter-only uncertainty
+and preserves a nested `file_settlement_unknown` unchanged. The document path
+reads the source, settles its parser, reauthorizes, runs Office for DOCX/PPTX,
+then reauthorizes again; those sequential owners must not be conflated. The
+browser HTTP adapter preserves every typed settlement failure even after caller
+cancellation. Unknown document transport cannot be narrowed to converter-only
+uncertainty because the missing response could conceal a native read.
+
+Each finite demand domain supplies its own settlement-failure predicate.
+`PreviewDemand` itself knows no Host error taxonomy. Converter-only failure
+releases the composed read reservation, so ordinary reads and original Download
+remain usable, including in another Session under the same Host authority.
+Unknown read ownership keeps raw admission unavailable across coordinator
+replacement; an enclosing derivation also remains unavailable. A new Host
+authority creates fresh domains and old coordinators remain obsolete. Ordinary
+cancellation with proven physical settlement releases capacity normally and
+never poisons a domain merely because publication was retired.
+
 A small browser admission primitive coordinates the two visible derivation
 intents. A waiting occurrence leaves immediately on abort. An active operation
 keeps admission until Host settlement, including after Session replacement. The

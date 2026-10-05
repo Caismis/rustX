@@ -214,7 +214,10 @@ active cancellation handles. Cancellation sends the token and exact Host scope;
 the browser keeps the original response open until the native/Host read finally
 settles. Waiting current intents are finite (two pane demands and one Download)
 and removed immediately when their lease retires. Unknown transport settlement
-fails admission closed for that Host authority. This avoids treating an aborted
+fails raw-read admission closed for that Host authority. Converter-only
+settlement uncertainty belongs to document admission and does not disable raw
+reads or original Download; a lost document terminal witness can conceal a
+native read and therefore still fails raw-read admission closed. This avoids treating an aborted
 fetch as physical read completion; no public native Method, authority or tab
 registry is introduced.
 

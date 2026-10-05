@@ -128,7 +128,7 @@ it.each(['session_file', 'artifact'] as const)('unknown original %s settlement r
   const { host, read } = fixture(), scope = await host.listWorkspaces(), abort = new AbortController();
   const source = kind === 'artifact' ? { kind, artifact_id: 'original' } : { kind, message_id: read.message_id, delivery_index: read.delivery_index };
   const request = { target: read.target, source, extension: 'xlsx' as const, digest: '0'.repeat(64) };
-  const work = host.previewDocument(scope, request, abort.signal), rejected = expect(work).rejects.toMatchObject({ kind: 'document_settlement_unknown' });
+  const work = host.previewDocument(scope, request, abort.signal), rejected = expect(work).rejects.toMatchObject({ kind: 'file_settlement_unknown' });
   const socket = GatedSocket.instances[0]; socket.open(); abort.abort(); socket.acknowledge(false);
   await rejected; await expect(host.previewDocument(scope, request)).rejects.toThrow('capacity'); host.close();
 });

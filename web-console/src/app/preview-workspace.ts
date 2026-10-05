@@ -195,6 +195,7 @@ export class PreviewWorkspaceOwner {
   toggleInspector() { this.mode = this.mode === 'inspector' ? this.current()?.expanded ? 'preview' : 'collapsed' : 'inspector'; this.publish(); }
   dismissProblem() { this.problem = undefined; this.downloadError = undefined; this.publish(); }
   async download(artifact: PreviewArtifact) {
+    if (this.downloadError !== undefined) { this.downloadError = undefined; this.publish(); }
     const scope = this.selected ? this.scope(this.selected) : undefined;
     if (!scope) { this.problem = 'unavailable'; this.publish(); return; }
     this.resourceScope = scope;

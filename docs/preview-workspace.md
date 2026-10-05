@@ -76,6 +76,8 @@ active pane nor opens/collapses/fullscreens the panel. It reacquires original
 bytes with current authorization and original filename, clicks one transient
 anchor, and revokes its URL in an owned finally path. Derived Office PDF is never
 the canonical download. Download remains available with two populated panes.
+A new Download intent clears the previous Download error notice without changing
+logical tabs, pane selection or presentation.
 
 Office demand is bounded and serial across selected Session coordinator changes.
 Waiting canceled demand disappears immediately. Active canceled demand retains
@@ -85,7 +87,10 @@ original terminal response through cleanup; a fetch abort is not settlement.
 The private native file-read socket joins its exact admitted read after cancellation
 before acknowledging clean close. The Node carrier waits for that acknowledgement;
 closing a socket alone cannot prove that the native read permit was released.
-Unknown transport/physical retirement fails admission closed. This narrow native
+Unknown transport/physical retirement fails closed in the affected domain:
+converter-only uncertainty closes document admission, native read uncertainty
+closes raw reads (and an enclosing derivation), and a lost document terminal
+witness closes both. See [the settlement taxonomy](document-previews.md). This narrow native
 lifecycle repair changes no public protocol method/schema or file authority. No
 generic scheduler or automatic conversion retry is added.
 

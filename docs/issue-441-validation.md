@@ -424,3 +424,128 @@ cause. Full browser validation is not reported green. These failures remain
 outside the two repaired contract paths; no speculative product changes were
 made to Composer or Settings. Evidence, including the full failed screenshots
 and traces, is retained under `/var/tmp/rustx-450-repair-evidence/`.
+
+
+## Settlement-domain repair (starting HEAD 966d7fbe)
+
+The repair started from PR HEAD `966d7fbe2b1978f2e3e09c772787cb777541b544`
+on the clean existing `issue-441-multi-preview-workspace` worktree. Starting
+`origin/main` and merge base were both
+`3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`. All eight hosted jobs for that starting
+HEAD were successful; they are historical evidence, not validation of this repair.
+
+The defect crossed two physical failure domains: the Host mapped both an Office
+retirement failure and an uncertain native read to `document_settlement_unknown`,
+then the shared finite-demand primitive poisoned both composed domains for either
+settlement error. A converter-only failure could thus disable original reads and
+Download across Sessions.
+
+The final private taxonomy and owner-to-domain mapping are normative in
+[document-previews.md](document-previews.md): converter-only uncertainty closes
+only document admission; native read uncertainty closes raw-read admission and
+any enclosing document demand; an unknown document carrier terminal witness
+closes both because its physical phase is not known. The primitive receives each
+domain's explicit predicate instead of interpreting arbitrary Host errors.
+HTTP preserves all three physical facts before inspecting cancellation, and a
+malformed terminal envelope does not count as a settlement witness. No public
+App Server schema changes or error aliases are introduced.
+
+Deterministic regressions:
+
+- `session-files`: converter-only failure followed by successful original load,
+  Download and another Session's read; exact calls and URL revocation; file and
+  whole-document uncertainty refuse subsequent reads/Download/derive locally
+  across coordinators; Host authority replacement alone creates fresh domains.
+- `document-http-lifetime`: gated cancellation preserves each typed physical
+  failure through the terminal envelope; lost body/invalid envelope fail closed.
+  Existing cancellation gates still prove replacement starts only after exact
+  settlement, without marking canceled operations unavailable.
+- `product-host-file-read`: real private socket seam preserves native-read
+  uncertainty through document derivation for Session files and Artifacts.
+- `product-host-document-settlement`: real document orchestration and OOXML
+  parser, with only native read and converter boundaries controlled, prove two
+  settled reads precede Office admission; converter failure preserves raw reads,
+  while reread failure prevents conversion and retains its exact error kind.
+- `preview-workspace`: a failed Download followed by a successful explicit retry
+  clears the notice at new intent without changing retained workspace identity,
+  selection, presentation or active leases. `preview-intents` remains covered.
+
+The six focused files passed 93 tests:
+
+```sh
+pnpm --dir web-console exec vitest run \
+  test/session-files.test.tsx test/document-http-lifetime.test.ts \
+  test/product-host-file-read.test.ts test/product-host-document-settlement.test.ts \
+  test/preview-workspace.test.tsx test/preview-intents.test.tsx
+```
+
+Final source Web unit validation passed 101 files / 1677 tests. Typecheck, build,
+i18n and provenance checks passed. The native private file-read join, Node socket
+settlement, Office cgroup/sandbox limits, geometry epoch/fullscreen witness,
+explicit Close semantics and sole Conversation scroll ownership remain intact.
+The final source browser run uses the existing pinned container without changing
+screenshots, tolerances, retries or deadlines.
+
+Linux validation uses `TMPDIR=/var/tmp/p450s` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The short clean temporary root avoids the
+previously observed ambient `/tmp` ancestor configuration. macOS-specific
+execution is left to the hosted macOS jobs, not claimed as a local run.
+
+Exact final-source Linux commands and results (the environment above applies to
+the native/repository lane commands):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo build --bins --all-features --locked` | PASS |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS |
+| `cargo test --test contracts --test provider --all-features --locked` | PASS |
+| `cargo run --locked --example check_test_lanes -- --job rust-contracts` | PASS |
+| `cargo test --lib --all-features --locked -- boundary_suites::` | PASS |
+| `cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | PASS |
+| `cargo run --locked --example check_test_lanes -- --job rust-boundaries` | PASS |
+| `pnpm --dir protocol/app-server check` | PASS |
+| `pnpm --dir protocol/app-server typecheck` | PASS |
+| `pnpm --dir tui typecheck` | PASS |
+| `pnpm --dir tui test` | PASS |
+| `pnpm --dir dev typecheck` | PASS |
+| `pnpm --dir dev test` | PASS |
+| `bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 -- /usr/bin/true` | PASS |
+| `node web-console/scripts/check-office-sandbox.ts` | PASS |
+| `cd test-support/fake-provider && uv sync --frozen && uv run --frozen pytest` | PASS, 52 tests |
+| `pnpm --dir web-console typecheck` | PASS |
+| `pnpm --dir web-console test` | PASS, 101 files / 1677 tests |
+| `pnpm --dir web-console build` | PASS |
+| `pnpm --dir web-console check:i18n` | PASS |
+| `pnpm --dir web-console check:provenance` | PASS |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | FAIL: 165 passed, 4 failed (12.4m) |
+| `git diff --check` | PASS |
+| `git diff origin/main...HEAD --check` | PASS |
+
+The single full browser run against frozen final production/test source failed:
+
+- `agent.spec.ts:96`, light 390 and dark 390: stable 334×244 Composer captures
+  differ by 15 and 16 pixels respectively, outside any registered noise region
+  (maximum channel delta 13 and 18). Strict screenshot assertions remain intact.
+- `locale.spec.ts:6`: selecting English timed out after the option detached from
+  the DOM; trace points to `shell-actions.ts:79` from `locale.spec.ts:25`.
+- `settings-presentation.spec.ts:540`: the Remove Provider transport trigger was
+  inactive when dismissal expected it to regain focus.
+
+These required acceptance failures remain unresolved in the excluded
+Composer/Settings paths. They are not waived or claimed to be caused by the
+settlement repair. No retry, deadline, assertion, baseline or tolerance changes
+were made. The PR is **not ready** on this local validation evidence. The real
+preview-workspace, document, original Download and reading acceptance paths
+passed within this run. No browser source changed after the run began.
+
+Logs and browser traces/screenshots are retained locally under
+`/var/tmp/rustx-450-settlement-evidence/`. Final hosted status is reported in the
+PR description, separately from these local results. The starting SHA's green
+hosted run is historical evidence only.
+
+Before committing/pushing, main was fetched again and remained
+`3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`, also the merge base. No integration was
+required. The primary checkout remained at that SHA with only its pre-existing
+untracked `.playwright-mcp/` directory.

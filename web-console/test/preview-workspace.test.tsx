@@ -9,7 +9,7 @@ import type { PreviewArtifact } from '../src/app/components/ArtifactPreview';
 import type { PreviewSource } from '../src/client/session-files';
 import { Server, snapshot as nativeSnapshot } from './fixture';
 
-const leases = vi.hoisted(() => ({ created: [] as { id: number; signal: AbortSignal }[], downloads: [] as unknown[] }));
+const leases = vi.hoisted(() => ({ created: [] as { id: number; signal: AbortSignal }[], downloadFailure: undefined as Error | undefined, downloads: [] as unknown[] }));
 vi.mock('../src/client/session-files', async original => {
   const actual = await original<typeof import('../src/client/session-files')>();
   return { ...actual, FilePreviewCoordinator: class {
@@ -19,7 +19,7 @@ vi.mock('../src/client/session-files', async original => {
       return { source, signal: abort.signal, dispose: () => abort.abort(), current: () => !abort.signal.aborted };
     }
     dispose() { this.owned.forEach(abort => abort.abort()); }
-    async download(...args: unknown[]) { leases.downloads.push(args); }
+    async download(...args: unknown[]) { leases.downloads.push(args); if (leases.downloadFailure) throw leases.downloadFailure; }
   } };
 });
 vi.mock('../src/app/components/ArtifactPreview', () => ({ ArtifactPreview: ({ artifact, onDownload }: { artifact: PreviewArtifact; onDownload: () => void }) => <div data-live-document>{artifact.name}<button data-preview-download onClick={onDownload}>Download {artifact.name}</button></div> }));
@@ -33,7 +33,7 @@ beforeEach(async () => {
   server = new Server(); await server.attached('A', 'B');
   const authority = new WorkspaceAuthority(server.workspaceHost); await authority.observe();
   owner = new PreviewWorkspaceOwner(server.client, server.workspaceHost, authority); stop = owner.start(); owner.selectSession('A');
-  leases.created.length = 0; leases.downloads.length = 0; width = 1000; disconnect = vi.fn();
+  leases.created.length = 0; leases.downloads.length = 0; leases.downloadFailure = undefined; width = 1000; disconnect = vi.fn();
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect = disconnect; });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width, height: 500, x: 0, y: 0, top: 0, bottom: 500, left: 0, right: width, toJSON() {} }));
 });
@@ -272,4 +272,20 @@ it('Session epochs reject old measurements and fullscreen without a layout witne
   expect(live()).toHaveLength(1);
   owner.measure(1000, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(2);
   owner.measure(0, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(1);
+});
+
+
+it('Download failure followed by successful retry clears the obsolete notice without changing workspace intent', async () => {
+  owner.openPreview(artifact('a')); owner.collapse();
+  const retained = workspace();
+  leases.downloadFailure = new Error('first download failed');
+  await owner.download(artifact('original'));
+  expect(owner.getSnapshot().downloadError).toContain('first download failed');
+  leases.downloadFailure = undefined;
+  const retry = owner.download(artifact('original'));
+  expect(owner.getSnapshot().downloadError).toBeUndefined();
+  await retry;
+  expect(owner.getSnapshot().downloadError).toBeUndefined();
+  expect(workspace()).toBe(retained); expect(owner.getSnapshot().mode).toBe('collapsed');
+  expect(live()).toHaveLength(0); expect(leases.downloads).toHaveLength(2);
 });
