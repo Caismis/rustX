@@ -500,6 +500,7 @@ the native/repository lane commands):
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
 | `cargo build --bins --all-features --locked` | PASS |
 | `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS on final original source: 3,275 + 20 example tests; 3 existing ignores |
 | `cargo test --test contracts --test provider --all-features --locked` | PASS |
 | `cargo run --locked --example check_test_lanes -- --job rust-contracts` | PASS |
 | `cargo test --lib --all-features --locked -- boundary_suites::` | PASS |
@@ -632,6 +633,7 @@ Exact final-source commands and results (native lane environment above):
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
 | `cargo build --bins --all-features --locked` | PASS |
 | `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | FAIL, exit 101; workspace handoff assertion above |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS on final original source: 3,275 + 20 example tests; 3 existing ignores |
 | `cargo test --test contracts --test provider --all-features --locked` | PASS |
 | `cargo run --locked --example check_test_lanes -- --job rust-contracts` | PASS |
 | `cargo test --lib --all-features --locked -- boundary_suites::` | PASS |
@@ -740,6 +742,7 @@ Exact final-source commands and results (native lane environment above):
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
 | `cargo build --bins --all-features --locked` | PASS |
 | `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS on final original source: 3,275 + 20 example tests; 3 existing ignores |
 | `cargo test --test contracts --test provider --all-features --locked` | PASS |
 | `cargo run --locked --example check_test_lanes -- --job rust-contracts` | PASS |
 | `cargo test --lib --all-features --locked -- boundary_suites::` | PASS |
@@ -780,3 +783,195 @@ Before commit/push, fetched main again: unchanged at
 Primary checkout remained untouched with its original `.playwright-mcp/` entry.
 The new final-head hosted CI snapshot is reported in the PR description and
 supersedes run 37250618905; previous SHA green checks are not final validation.
+
+
+## Final CI stabilization (starting HEAD 5a64b19c)
+
+Fetched origin/PR before editing: clean issue worktree, branch
+`issue-441-multi-preview-workspace`, HEAD
+`5a64b19c48d93dc683bf64c5d0d663e96d181d77`. Starting main and merge base were
+`3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd` (0 behind / 5 ahead).
+PR #450 was OPEN, non-draft, auto-merge disabled. Run 37256269069 was the only
+workflow for this HEAD: seven successful jobs, Full Web conformance failed with
+167 passed / two Composer corner screenshot failures. Exact logs and artifact
+`web-console-browser-evidence` were downloaded before changes.
+
+### Historical failure audit
+
+| Evidence | Classification and action |
+| --- | --- |
+| Hosted 37220678851 (776323a4), 37244688689 (966d7fbe), 37248411259 (7ad59d7d) | All jobs passed; historical only, not final-head evidence |
+| Hosted 37250618905 (30c2be8c): Composer native Goal disclosure | Proven deterministic test projection race; 5a64b19c now waits for the exact historical activity and its exact TurnProcess before revelation; that implementation remains unchanged and passed the new focused audit |
+| Hosted 37256269069 (5a64b19c): light/dark 390 running-draft screenshots | Stable cross-context rounded-border AA variants, measured below; reference-local 1×1 policy only |
+| Earlier local locale failure | Trace shows English option detaching before click; it does not establish why. No repeat in later hosted runs or the new focused audit. No demonstrated uncorrected deterministic race, no speculative Settings change |
+| Earlier local Settings focus failure | Trace actually fails at settings-presentation.spec.ts:553, the initial explicit Remove button focus before opening confirmation, not the later dismissal/restoration assertions. Cause is not exposed by the trace. New focused audit and later hosted runs pass; all focus assertions retained |
+| Earlier local workspace handoff failure | expect("source handoff") omitted the underlying settlement error. It cannot honestly be attributed to ambient /tmp or declared fixed by an unrelated patch. One new exact test under clean TMPDIR passed (1 test, 1.29s), with subsequent full-lane results below. Not currently reproduced; no runtime change or retry used to erase the original result |
+
+The ambient `/tmp/.git` and `/tmp/rustx.toml` still exist. Native validation uses
+`TMPDIR=/var/tmp/p450s` and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`; that avoids known
+ancestor pollution but is not asserted to explain the separate handoff failure.
+
+### Fresh-context rasterizer investigation
+
+Used the same pinned browser/container authority as CI:
+`mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7`.
+A temporary investigation spec replayed agent.spec.ts's exact initial actions,
+including stabilized idle-empty, idle-draft and running-empty captures, then
+`running(true)`, textarea `Queue the next review.`, Queue primary and no Stop
+control. Each test had a fresh independent Playwright context, fixed clock,
+390×844 viewport, reduced motion and its theme. It used the existing
+`captureStable` algorithm and identical capture adapter/schedule from
+`screenshot.ts`: exact consecutive RGBA equality, then one final comparison.
+No new timing waits or test retries were used. The temporary spec was removed
+before the final validation cycle; its exact source/raw PNGs/JSON are archived at
+`/var/tmp/pr450-raster-investigation/`.
+
+First set: 30 light + 30 dark contexts. Light produced both variants; dark
+produced only baseline, so no dark allowance was inferred. A second predetermined
+30-context dark investigation supplied the missing variant. Total: **90 fresh
+contexts**, all stable. Light baseline/variant counts: **27/3**. Dark: **59/1**.
+The fresh variant pixel tuples match the hosted failure artifacts exactly.
+
+[Committed complete evidence](evidence/issue-441-composer-rasterizer.json) records
+every context's final stable PNG/RGBA hash, capture count, fingerprint hash and
+variant's raw pixel tuples. Full fingerprints are losslessly compacted: node
+style/before/after indices refer to `computedStyleBase` plus one delta table row.
+A unit test inflates them and verifies the exact original SHA-256. Each node,
+pseudo-element and ancestor retains all 477 non-custom computed CSS properties.
+Only generated opaque React Aria IDs and their references are canonicalized;
+classes, data attributes, structure, text and other attributes remain exact.
+
+All same-theme fingerprints were byte-identical across both PNG variants:
+viewport/DPR/visual viewport scale, screenshot dimensions, every floating-point
+bounding box, borders/radius/colors/backgrounds/transforms/zoom, scroll offsets,
+focused textarea, its value, running/Queue state, DOM structure/attributes and
+all computed styles. No geometry was rounded. Key geometry: stack
+`[56,600,334,244]`, card `[72,718,302,98]`, editor `[72,726,298,36]`, primary
+`[332,774,34,34]`; DPR/scale 1, page scroll `[0,0]`. The complete evidence also
+includes fractional descendant geometry, not only these summary boxes.
+
+| Theme / variant | Stable PNG SHA-256 | Contexts |
+| --- | --- | --- |
+| light / baseline | `ce4bdfa85f439f2e7a1d70ae72d49c6cbd713fdc3dff168f6a4c85a5abd14581` | 27 |
+| light / AA variant | `4bd17123a3537871bf6eaddde1e9a4db9088e260188059a9138f8fcd127eb877` | 3 |
+| dark / baseline | `7373bdfec4aee05f3af0a5978ef2b6421e328df83e8d4f36db6a657e15554346` | 59 |
+| dark / AA variant | `027e6ea73a1145033fb556d6c4a6bf33e101745ba698836c22966d54ec11468e` | 1 |
+
+Full fingerprint SHA-256: light `16c98ae57293cad8793cb55406d7d5f6f5643b7ff68c4963d072037b4c36ade1`; dark `154ae8d4f42426d2e73738ea68a8bc4b83e78fcf6403bf6c0b0cda4ee274d12d`.
+
+Exact observed union / registered maximum channel deltas (dash means **no allowance**):
+
+| x | y | light max Δ | dark max Δ |
+| --- | --- | --- | --- |
+| 30 | 117 | 3 | 4 |
+| 31 | 117 | 4 | 5 |
+| 32 | 117 | 12 | 14 |
+| 33 | 117 | 9 | 11 |
+| 26 | 118 | 13 | 18 |
+| 27 | 118 | 5 | 6 |
+| 28 | 118 | 6 | 5 |
+| 29 | 118 | 10 | 10 |
+| 30 | 118 | 12 | 12 |
+| 31 | 118 | — | 1 |
+| 32 | 118 | 8 | 9 |
+| 33 | 118 | 9 | 9 |
+| 24 | 119 | 1 | 1 |
+| 25 | 119 | 10 | 9 |
+| 26 | 119 | 10 | 11 |
+| 24 | 120 | 12 | 13 |
+
+Every region is 1×1 with maxChangedPixels=1 and exactly its measured maximum;
+no broad rectangle, adjacent coordinate, margin, baseline replacement or global
+threshold. Global maxima are 13 light / 18 dark. Live negative tests reject every
+unregistered neighbor, every registered-site delta above its own maximum, wrong
+reference identity, text/control changes, geometry mismatch and a one-pixel
+layout shift. Both measured variants individually pass their own reference, but
+an alternating sequence still fails exact stabilization. Global comparator and
+stability implementation remain unchanged; the former no-policy assertion was
+replaced by exact per-site evidence plus stronger negative proofs, retaining its
+existing outside-site/text/control assertions.
+
+### Final frozen-source validation
+
+Before the full cycle, focused comparator/stability tests passed **49 tests**:
+
+```sh
+pnpm --dir web-console exec vitest run \
+  test/screenshot-comparison.test.ts test/screenshot-stability.test.ts
+```
+
+Five fresh-context focused browser tests passed (23.1s): both affected references,
+Composer historical owner, locale General, and Settings initial/dismissal focus:
+
+```sh
+CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e \
+  agent.spec.ts composer.spec.ts locale.spec.ts settings-presentation.spec.ts \
+  --grep 'composer primary seat, uploads and context stack (light|dark) 390|native Todo, Goal and Queue docks|Chinese General switches|confirming a removal settles focus'
+```
+
+Production, tests, policy and evidence were frozen before the final full cycle;
+only this validation record and PR metadata are completed from its outcomes.
+
+The full frozen-source browser run passed **169/169 (10.5m)** on its first and
+only full invocation. Web validation passed **1,688 tests / 101 files**. No full
+browser retry was used.
+
+A new local-only anomaly occurred in the first native contracts aggregate:
+`unreferenced_mcp_is_inert_and_repeated_source_demand_materializes_once` and
+`mcp_commit_wins_later_notification_belongs_to_the_next_refresh` rejected MCP
+preparation with the redacted `source preparation failed`. That run is retained
+as a failure (3,273 passed / 2 failed), not superseded silently. Temporary
+`cfg(test)` diagnostics exposed the underlying preparation error if it recurred;
+all 15 MCP race tests and the diagnostic full aggregate (3,275 passed) then
+passed without producing it. Kernel logs show only the Office tests' expected
+own-cgroup limit probes, not an MCP kill. The cause is **not established**;
+neither an environmental explanation nor a runtime fix is claimed. The diagnostic
+was removed completely, and the unmodified native source was validated again
+below. No runtime semantics, deadlines, test concurrency or assertions changed.
+
+Commands use `TMPDIR=/var/tmp/p450s` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1` for native/TUI lanes. The clean temporary root
+avoids the locally present `/tmp/.git` and `/tmp/rustx.toml`; it is not a test
+exclusion. Existing ignored opt-in live tests remain unchanged.
+
+| Final command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo build --bins --all-features --locked` | PASS |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS on final original source: 3,275 + 20 example tests; 3 existing ignores |
+| `cargo test --test contracts --test provider --all-features --locked` | PASS: 28 + 168; 5 existing opt-in ignores |
+| `cargo run --locked --example check_test_lanes -- --job rust-contracts` | PASS |
+| `cargo test --lib --all-features --locked -- boundary_suites::` | PASS: 195 |
+| `cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | PASS: 420 |
+| `cargo run --locked --example check_test_lanes -- --job rust-boundaries` | PASS |
+| `pnpm --dir protocol/app-server check` | PASS |
+| `pnpm --dir protocol/app-server typecheck` | PASS |
+| `pnpm --dir tui typecheck` | PASS |
+| `pnpm --dir tui test` | PASS: 895 |
+| `pnpm --dir dev typecheck` | PASS |
+| `pnpm --dir dev test` | PASS: 38 |
+| `uv sync --frozen && uv run --frozen pytest` in `test-support/fake-provider` | PASS: 52 |
+| `bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 -- /usr/bin/true` | PASS |
+| `node web-console/scripts/check-office-sandbox.ts` | PASS: cgroup and filesystem admission |
+| `pnpm --dir web-console typecheck` | PASS |
+| `pnpm --dir web-console test` | PASS: 1,688 / 101 files |
+| `pnpm --dir web-console build` | PASS |
+| `pnpm --dir web-console check:i18n` | PASS |
+| `pnpm --dir web-console check:provenance` | PASS: 148 source records / 136 production packages |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | PASS: 169 / 10.5m; one full run |
+
+Both `git diff --check` and `git diff origin/main...HEAD --check` passed. A final fetch confirmed main unchanged at `3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`; no integration was needed. The primary checkout retains its original untracked `.playwright-mcp/` and was not modified.
+
+### Final hosted CI receipt
+
+The immutable final commit SHA and its eight-job hosted receipt are published in
+[PR #450's current validation table](https://github.com/Caismis/rustX/pull/450).
+[Current branch CI](https://github.com/Caismis/rustX/actions/workflows/ci.yml?query=branch%3Aissue-441-multi-preview-workspace)
+is the live authority; the earlier failed runs `37250618905` and `37256269069`
+are historical evidence, not final validation. Delivery requires all eight jobs
+on the exact pushed HEAD to complete successfully, including both macOS jobs.
+This committed record intentionally does not invent a future run ID or count
+an earlier SHA's green run as validation of this repair. The PR receipt is filled
+from the actual final run after completion without creating another unvalidated
+source commit solely to embed its own SHA.
