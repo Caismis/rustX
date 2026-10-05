@@ -346,10 +346,12 @@ export function applicationCurrent(snapshot: SnapshotFrom<typeof sessionConfigur
   return snapshot.matches({ observation: { connected: 'ready' } });
 }
 
-/** Whether native status is genuinely unavailable while something is shown:
+/** Whether native status is genuinely unavailable: the transport cannot read,
  * the span's read failed, or only an ended span's observation is retained. A
- * span's first read in flight claims nothing, and neither does a reread. */
+ * connected span's first read in flight claims nothing, and a reread is
+ * known. */
 export function observationUnavailable(snapshot: SnapshotFrom<typeof sessionConfigurationMachine>): boolean {
   const { readError, staleApplication } = snapshot.context;
-  return !applicationKnown(snapshot) && (!!readError || staleApplication !== undefined);
+  return !applicationKnown(snapshot)
+    && (snapshot.matches({ observation: 'offline' }) || !!readError || staleApplication !== undefined);
 }

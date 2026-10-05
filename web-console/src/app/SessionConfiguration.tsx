@@ -48,8 +48,9 @@ function ConfigurationObservation({ actor, connection, eligibility, openOwningSe
   const application = useSelector(actor, snapshot => snapshot.context.application ?? snapshot.context.staleApplication);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const adoptionError = useSelector(actor, snapshot => snapshot.context.adoptionError);
-  // Distinct facts, never one boolean: status is *unavailable* only when the
-  // span's read failed or only an ended span's observation is retained; a
+  // Distinct facts, never one boolean: status is *unavailable* only while the
+  // transport cannot read, the span's read failed, or only an ended span's
+  // observation is retained; a
   // reread in flight is still known, merely not *current*, and only a current
   // observation offers adoption — still subject to native eligibility.
   const unavailable = useSelector(actor, observationUnavailable);

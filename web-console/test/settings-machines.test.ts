@@ -2093,6 +2093,12 @@ it('R13d an authoritative answer that the Session has no application is a known 
   expect(applicationKnown(snapshot)).toBe(true);
   expect(applicationCurrent(snapshot)).toBe(true);
   expect(observationUnavailable(snapshot)).toBe(false);
+  // Once the transport cannot read, status is unavailable even though nothing
+  // was retained.
+  transport(actor, 'stale', 2);
+  await flush();
+  expect(applicationKnown(actor.getSnapshot())).toBe(false);
+  expect(observationUnavailable(actor.getSnapshot())).toBe(true);
 });
 
 it('R13d an owed reread keeps the observation known but not current, and only a genuine read failure makes it unavailable', async () => {

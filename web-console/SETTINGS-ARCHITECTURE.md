@@ -395,8 +395,9 @@ native authority once it has observed it and no later read failure is
 outstanding, so an owed reread never presents as "unavailable"; the observation
 is *current* only in `ready`; adoption is *actionable* only for a current
 observation, a connected transport and the runtime's published `eligible`. The
-unavailable line appears only for a genuine read failure or a retained stale
-observation — a span's first read in flight claims nothing.
+unavailable line appears only while the transport cannot read, for a genuine
+read failure, or for a retained stale observation — a connected span's first
+read in flight claims nothing.
 
 The span-ending transition is deliberately not `reenter`: a re-entering
 transition from a region to its own descendant takes the machine root as its
