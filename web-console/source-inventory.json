@@ -1202,7 +1202,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "82882fbe1ef414bed5e525966780af0bcd81d6822a4e230243d84eb3ff65a1b3"
+      "local_sha256": "1d4228e3bcccffda3bceba5aa76fcb1b16368c3d6983a1e8f49a8fc556419301"
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
@@ -2078,10 +2078,10 @@
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/TextPreview.module.css",
       "destination": "web-console/src/presentation/right-panel/ArtifactPreview.module.css",
-      "treatment": "Adapted header, bounded scrolling text and wrap styling; excludes Host filesystem, slots, registry and automatic reload.",
+      "treatment": "Adapted header, bounded scrolling text and wrap styling; excludes Host filesystem, slots, registry and automatic reload. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "792d87ed962b3fcbe39a50fca6f29faf4ca92dec4b63b6b260b14b74378e1e82",
-      "local_sha256": "ca616fa89fa860fb4db4d4bc123abffc6355dee497dba6a3170498551752eb97",
+      "local_sha256": "dfbff76badd80bb93e4e8dd13c10dea34a81511a0a7945221a780fce609c47dd",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2094,7 +2094,7 @@
       "destination": "web-console/src/presentation/right-panel/RightPanel.tsx",
       "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection WEB-RESET-03: accessible close label follows the supplied occupant; same single right-panel seat. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection WEB-RESET-03: accessible close label follows the supplied occupant; same single right-panel seat. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged.",
       "upstream_sha256": "718c0b7d21d48d32dba1676c91c9715c524a6ed23d9fdbe29d7b2c24bce55c60",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2108,14 +2108,14 @@
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "0551f1f51de54c7a2994d29e64257d761854fbc274c6698cdde61e3fa3b1a956",
+      "local_sha256": "842ee3d39398e54655eb00766623eec5bb51b5dcee74f87e206987bbeb324729",
       "classification": "B"
     },
     {
       "destination": "web-console/src/presentation/right-panel/SidebarRight.module.css",
       "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged.",
       "upstream_sha256": "faa7ed08b9e57e8e97bb5f5f728b0e7f172daf6fe0a72432c001b3345038330e",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2124,7 +2124,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "f0806ba3fea33bc1befde9919535ac426208431f3511baee309aff6c8cf728e3",
+      "local_sha256": "af1ea13edeba84fb7f4c477bb5bb607d42e6426bac976e0f604728c541b66556",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -3252,7 +3252,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged.",
       "destination": "web-console/src/locale/dictionaries/artifacts.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3263,7 +3263,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "b865dd542488544f6b1c549dfd8c8e4c275bfb4d33800a7e40e9a7308c42dbaa"
+      "local_sha256": "ce90f8ee9e2b21fb2c0b076f22f6b8119f06fc1ed9ad46197336dc7870fbb49c"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",

@@ -100,6 +100,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (this.fileReads.size >= 2) throw new Error('Session file read capacity reached');
     const operation = new AbortController();
     this.fileReads.add(operation);
+    let settled = true;
     const abort = () => operation.abort();
     signal?.addEventListener('abort', abort, { once: true });
     try {
@@ -112,7 +113,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       // Recheck root availability after asynchronous native work too.
       for (const row of this.registrations) this.cwd(row.location);
       return bytes;
-    } finally { signal?.removeEventListener('abort', abort); this.fileReads.delete(operation); }
+    } catch (cause) {
+      if (cause instanceof WorkspaceHostError && cause.kind === 'file_settlement_unknown') settled = false;
+      throw cause;
+    } finally { signal?.removeEventListener('abort', abort); if (settled) this.fileReads.delete(operation); }
   }
   async previewDocument(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult> {
     this.mutationScope(scope);
@@ -141,7 +145,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
       }, operation.signal);
     } catch (cause) {
-      if (cause instanceof OfficeSettlementError) settled = false;
+      if (cause instanceof OfficeSettlementError) {
+        settled = false;
+        throw new WorkspaceHostError('converter_unavailable', 'converter_settlement_unknown');
+      }
+      if (cause instanceof WorkspaceHostError && cause.kind === 'file_settlement_unknown') {
+        settled = false;
+        throw cause;
+      }
       if (cause instanceof NativeFileReadError && cause.error.data?.kind === 'session_file_read') {
         const reason = cause.error.data.reason;
         throw new Error(({ missing: 'source_missing', unauthorized: 'authorization_revoked', unavailable: 'source_unavailable',

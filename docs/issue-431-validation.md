@@ -1,5 +1,11 @@
 # Issue #431 initial validation and updated architecture audit
 
+This is the #431 implementation record. The current browser presentation policy
+is [preview-workspace.md](preview-workspace.md): #441 replaces its selected-view
+model, permits two visible preview URLs plus one transient Download URL, and
+reauthorizes each explicit Download independently. Native delivery/source
+authority and byte bounds described here remain unchanged.
+
 The validation commands/counts below describe reviewed head
 `5d24301a5999838afdba5835bcd66aec053597cf`, not the repaired head. Review then
 found that caller-supplied roots were forgeable and Present was child-advertised.

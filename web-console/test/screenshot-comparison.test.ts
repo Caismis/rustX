@@ -223,6 +223,65 @@ it('composer corner noise cannot conceal text, focus contrast, theme or layout c
   expect(compare({ ...observed, height: observed.height - 1 }, name, expected, comparatorPolicy).ok).toBe(false);
 });
 
+it.each(['light', 'dark'] as const)('live running-draft %s corner policy grants only exact measured sites and maxima', theme => {
+  const name = `composer-running-draft-${theme}-390-linux.png`, expected = reference(name);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  expect(measured).toHaveLength(theme === 'light' ? 15 : 16);
+  expect(entry.regions.map(region => [region.x, region.y])).toEqual(measured.map(([x, y]) => [x, y]));
+  const observed = copy(expected), registered = new Set(measured.map(([x, y]) => `${x},${y}`));
+  for (const [x, y, , after] of measured) paint(observed, x, y, after);
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, []).ok).toBe(false);
+  for (const [index, region] of entry.regions.entries()) {
+    const [, , before, after] = measured[index];
+    expect([region.width, region.height, region.maxChangedPixels]).toEqual([1, 1, 1]);
+    expect(region.maxChannelDelta).toBe(Math.max(...before.map((value, channel) => Math.abs(value - after[channel]))));
+    const excessive = copy(expected);
+    nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    for (const [x, y] of [[region.x - 1, region.y], [region.x + 1, region.y], [region.x, region.y - 1], [region.x, region.y + 1]]) {
+      if (registered.has(`${x},${y}`)) continue;
+      const adjacent = copy(observed); nudge(adjacent, x, y, 1);
+      const result = compare(adjacent, name, expected, noisePolicy);
+      expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+    }
+  }
+  const shifted = copy(observed);
+  for (let y = 0; y < shifted.height; y++) for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
+  expect(compare(shifted, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(observed, `composer-idle-draft-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+});
+
+it('the 90 fresh-context Composer measurements retain one complete fingerprint per theme', () => {
+  const evidence = JSON.parse(readFileSync(new URL('../../docs/evidence/issue-441-composer-rasterizer.json', import.meta.url), 'utf8')) as {
+    themes: { theme: string; fingerprintHash: string; contexts: { fingerprintHash: string; pngHash: string; rgbaHash: string; captures: number }[];
+      variants: { pngHash: string; rgbaHash: string; contexts: number; pixels: MeasuredNoisePixel[] }[];
+      fingerprint: { nodes: Record<string, unknown>[]; ancestors: Record<string, unknown>[] };
+      computedStyleBase: Record<string, string>; computedStyleDeltas: Record<string, string>[] }[];
+  };
+  for (const theme of evidence.themes) {
+    // Losslessly inflate the style table. Equality includes every float box,
+    // DOM/attribute, focus/state value and all computed CSS/pseudo/ancestor styles.
+    for (const node of [...theme.fingerprint.nodes, ...theme.fingerprint.ancestors])
+      for (const key of ['style', 'before', 'after']) if (key in node) {
+        expect(typeof node[key]).toBe('number');
+        node[key] = { ...theme.computedStyleBase, ...theme.computedStyleDeltas[node[key] as number] };
+      }
+    expect(createHash('sha256').update(JSON.stringify(theme.fingerprint)).digest('hex')).toBe(theme.fingerprintHash);
+    expect(theme.contexts).toHaveLength(theme.theme === 'light' ? 30 : 60);
+    expect(theme.variants).toHaveLength(2);
+    for (const context of theme.contexts) {
+      expect(context.fingerprintHash).toBe(theme.fingerprintHash); expect(context.captures).toBeGreaterThanOrEqual(2);
+      expect(theme.variants.some(v => v.pngHash === context.pngHash && v.rgbaHash === context.rgbaHash)).toBe(true);
+    }
+    for (const variant of theme.variants) expect(theme.contexts.filter(c => c.pngHash === variant.pngHash)).toHaveLength(variant.contexts);
+    const measured = noisePolicy.find(e => e.reference === `composer-running-draft-${theme.theme}-390-linux.png`)!.pixels;
+    expect(theme.variants.find(v => v.pixels.length > 0)!.pixels).toEqual(measured);
+  }
+});
+
 it('D: the same low-amplitude change outside every approved region fails', () => {
   const expected = fixture(NARROW);
   expect(pixel(expected, 200, 700)).toEqual([53, 54, 56, 255]); // flat panel, far from any edge
@@ -428,11 +487,12 @@ it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51]] 
   expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
 });
 
-it.each(['light', 'dark'])('integrated running Composer remains strict after remeasurement: %s', theme => {
+it.each(['light', 'dark'])('integrated running Composer stays strict outside measured sites: %s', theme => {
   const name = `composer-running-draft-${theme}-390-linux.png`;
-  expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
   const expected = reference(name);
   for (const [x, y] of [[24, 117], [33, 120], [34, 117], [50, 76], [300, 126]]) {
+    expect(entry.regions.some(region => cells(region).some(([rx, ry]) => rx === x && ry === y))).toBe(false);
     const changed = copy(expected); nudge(changed, x, y, 1);
     expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
   }

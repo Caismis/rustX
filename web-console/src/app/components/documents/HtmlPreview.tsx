@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import DOMPurify from 'dompurify';
 import { useTranslation } from '../../../locale/react';
+import type { PreviewViewStateProps } from '../../../presentation/right-panel/preview-view-state';
+import { useViewScroll } from '../../../presentation/right-panel/use-view-scroll';
 
 export const HTML_CSP = "default-src 'none'; script-src 'none'; style-src 'none'; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
 export function isolatedHtml(source: string): string {
@@ -14,13 +16,15 @@ export function isolatedHtml(source: string): string {
   });
   return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${HTML_CSP}"></head><body>${clean}</body></html>`;
 }
-export function HtmlPreview({ bytes }: { bytes: Uint8Array<ArrayBuffer> }) {
-  const tx = useTranslation(), [sourceMode, setSourceMode] = useState(false);
+export function HtmlPreview({ bytes, viewState, onViewStateChange }: PreviewViewStateProps & { bytes: Uint8Array<ArrayBuffer> }) {
+  const tx = useTranslation(), sourceMode = viewState.htmlMode === 'source';
   const source = useMemo(() => new TextDecoder('utf-8', { fatal: true }).decode(bytes), [bytes]);
   const document = useMemo(() => isolatedHtml(source), [source]);
-  return <div className="document-view"><div className="document-toolbar">
-    <button aria-pressed={!sourceMode} onClick={() => setSourceMode(false)}>{tx('artifacts:document.rendered')}</button>
-    <button aria-pressed={sourceMode} onClick={() => setSourceMode(true)}>{tx('artifacts:document.source')}</button>
+  const scroll = useViewScroll(viewState.htmlScrollTop ?? 0, viewState.htmlScrollLeft ?? 0,
+    (htmlScrollTop, htmlScrollLeft) => onViewStateChange({ htmlScrollTop, htmlScrollLeft }), sourceMode);
+  return <div className="document-view" ref={scroll.ref} onScroll={scroll.onScroll} data-preview-scroll="html"><div className="document-toolbar">
+    <button aria-pressed={!sourceMode} onClick={() => onViewStateChange({ htmlMode: 'rendered', htmlScrollTop: 0, htmlScrollLeft: 0 })}>{tx('artifacts:document.rendered')}</button>
+    <button aria-pressed={sourceMode} onClick={() => onViewStateChange({ htmlMode: 'source', htmlScrollTop: 0, htmlScrollLeft: 0 })}>{tx('artifacts:document.source')}</button>
   </div>{sourceMode ? <pre className="document-source">{source}</pre>
     : <iframe title={tx('artifacts:document.html')} sandbox="" referrerPolicy="no-referrer" srcDoc={document} />}</div>;
 }

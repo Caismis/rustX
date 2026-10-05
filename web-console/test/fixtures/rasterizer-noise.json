@@ -814,5 +814,796 @@
     [365,619,[31,31,32,255],[30,30,32,255]],
     [304,620,[44,44,46,255],[44,44,45,255]]
   ]
-}
+},
+  {
+    "reference": "composer-running-draft-light-390-linux.png",
+    "evidence": "PR #450 at 5a64b19c: 30 independent pinned v1.63.0-noble contexts, two stable RGBA/PNG variants with identical complete float geometry, DOM, focus and all computed styles (opaque React Aria IDs canonicalized only). See docs/evidence/issue-441-composer-rasterizer.json and docs/issue-441-validation.md. Exact measured corner sites; no margins.",
+    "regions": [
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 30,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 3
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 31,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 4
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 32,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 12
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 33,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 9
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 26,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 13
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 27,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 5
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 28,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 6
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 29,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 10
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 30,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 12
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 32,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 8
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 33,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 9
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 24,
+        "y": 119,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 25,
+        "y": 119,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 10
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 26,
+        "y": 119,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 10
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 24,
+        "y": 120,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 12
+      }
+    ],
+    "pixels": [
+      [
+        30,
+        117,
+        [
+          212,
+          223,
+          247,
+          255
+        ],
+        [
+          209,
+          221,
+          247,
+          255
+        ]
+      ],
+      [
+        31,
+        117,
+        [
+          188,
+          206,
+          244,
+          255
+        ],
+        [
+          192,
+          209,
+          244,
+          255
+        ]
+      ],
+      [
+        32,
+        117,
+        [
+          167,
+          191,
+          241,
+          255
+        ],
+        [
+          179,
+          199,
+          242,
+          255
+        ]
+      ],
+      [
+        33,
+        117,
+        [
+          157,
+          184,
+          240,
+          255
+        ],
+        [
+          166,
+          190,
+          241,
+          255
+        ]
+      ],
+      [
+        26,
+        118,
+        [
+          192,
+          209,
+          245,
+          255
+        ],
+        [
+          205,
+          219,
+          246,
+          255
+        ]
+      ],
+      [
+        27,
+        118,
+        [
+          148,
+          177,
+          239,
+          255
+        ],
+        [
+          153,
+          180,
+          239,
+          255
+        ]
+      ],
+      [
+        28,
+        118,
+        [
+          141,
+          172,
+          238,
+          255
+        ],
+        [
+          147,
+          177,
+          240,
+          255
+        ]
+      ],
+      [
+        29,
+        118,
+        [
+          150,
+          179,
+          241,
+          255
+        ],
+        [
+          160,
+          187,
+          243,
+          255
+        ]
+      ],
+      [
+        30,
+        118,
+        [
+          191,
+          209,
+          247,
+          255
+        ],
+        [
+          203,
+          217,
+          248,
+          255
+        ]
+      ],
+      [
+        32,
+        118,
+        [
+          241,
+          245,
+          254,
+          255
+        ],
+        [
+          233,
+          239,
+          252,
+          255
+        ]
+      ],
+      [
+        33,
+        118,
+        [
+          255,
+          255,
+          255,
+          255
+        ],
+        [
+          246,
+          248,
+          254,
+          255
+        ]
+      ],
+      [
+        24,
+        119,
+        [
+          168,
+          192,
+          242,
+          255
+        ],
+        [
+          169,
+          193,
+          242,
+          255
+        ]
+      ],
+      [
+        25,
+        119,
+        [
+          136,
+          169,
+          239,
+          255
+        ],
+        [
+          126,
+          162,
+          237,
+          255
+        ]
+      ],
+      [
+        26,
+        119,
+        [
+          205,
+          219,
+          249,
+          255
+        ],
+        [
+          195,
+          212,
+          247,
+          255
+        ]
+      ],
+      [
+        24,
+        120,
+        [
+          217,
+          227,
+          250,
+          255
+        ],
+        [
+          205,
+          219,
+          249,
+          255
+        ]
+      ]
+    ]
+  },
+  {
+    "reference": "composer-running-draft-dark-390-linux.png",
+    "evidence": "PR #450 at 5a64b19c: 60 independent pinned v1.63.0-noble contexts, two stable RGBA/PNG variants with identical complete float geometry, DOM, focus and all computed styles (opaque React Aria IDs canonicalized only). See docs/evidence/issue-441-composer-rasterizer.json and docs/issue-441-validation.md. Exact measured corner sites; no margins.",
+    "regions": [
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 30,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 4
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 31,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 5
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 32,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 14
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 33,
+        "y": 117,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 11
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 26,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 18
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 27,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 6
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 28,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 5
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 29,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 10
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 30,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 12
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 31,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 32,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 9
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 33,
+        "y": 118,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 9
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 24,
+        "y": 119,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 25,
+        "y": 119,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 9
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 26,
+        "y": 119,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 11
+      },
+      {
+        "label": "Measured running-draft Composer top-left corner coverage",
+        "x": 24,
+        "y": 120,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 13
+      }
+    ],
+    "pixels": [
+      [
+        30,
+        117,
+        [
+          36,
+          48,
+          69,
+          255
+        ],
+        [
+          37,
+          49,
+          73,
+          255
+        ]
+      ],
+      [
+        31,
+        117,
+        [
+          47,
+          65,
+          99,
+          255
+        ],
+        [
+          45,
+          62,
+          94,
+          255
+        ]
+      ],
+      [
+        32,
+        117,
+        [
+          55,
+          80,
+          124,
+          255
+        ],
+        [
+          50,
+          72,
+          110,
+          255
+        ]
+      ],
+      [
+        33,
+        117,
+        [
+          60,
+          88,
+          137,
+          255
+        ],
+        [
+          56,
+          81,
+          126,
+          255
+        ]
+      ],
+      [
+        26,
+        118,
+        [
+          44,
+          62,
+          95,
+          255
+        ],
+        [
+          39,
+          52,
+          77,
+          255
+        ]
+      ],
+      [
+        27,
+        118,
+        [
+          65,
+          95,
+          149,
+          255
+        ],
+        [
+          63,
+          92,
+          143,
+          255
+        ]
+      ],
+      [
+        28,
+        118,
+        [
+          74,
+          106,
+          163,
+          255
+        ],
+        [
+          73,
+          103,
+          158,
+          255
+        ]
+      ],
+      [
+        29,
+        118,
+        [
+          76,
+          106,
+          160,
+          255
+        ],
+        [
+          73,
+          101,
+          150,
+          255
+        ]
+      ],
+      [
+        30,
+        118,
+        [
+          63,
+          82,
+          115,
+          255
+        ],
+        [
+          59,
+          74,
+          103,
+          255
+        ]
+      ],
+      [
+        31,
+        118,
+        [
+          54,
+          65,
+          83,
+          255
+        ],
+        [
+          54,
+          64,
+          84,
+          255
+        ]
+      ],
+      [
+        32,
+        118,
+        [
+          47,
+          51,
+          60,
+          255
+        ],
+        [
+          51,
+          57,
+          69,
+          255
+        ]
+      ],
+      [
+        33,
+        118,
+        [
+          44,
+          44,
+          46,
+          255
+        ],
+        [
+          46,
+          49,
+          55,
+          255
+        ]
+      ],
+      [
+        24,
+        119,
+        [
+          55,
+          80,
+          124,
+          255
+        ],
+        [
+          55,
+          79,
+          123,
+          255
+        ]
+      ],
+      [
+        25,
+        119,
+        [
+          77,
+          111,
+          173,
+          255
+        ],
+        [
+          79,
+          116,
+          182,
+          255
+        ]
+      ],
+      [
+        26,
+        119,
+        [
+          59,
+          73,
+          100,
+          255
+        ],
+        [
+          62,
+          79,
+          111,
+          255
+        ]
+      ],
+      [
+        24,
+        120,
+        [
+          55,
+          67,
+          87,
+          255
+        ],
+        [
+          59,
+          73,
+          100,
+          255
+        ]
+      ]
+    ]
+  }
 ]

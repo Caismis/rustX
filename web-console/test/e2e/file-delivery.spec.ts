@@ -22,9 +22,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
   });
   const countUrls = () => page.evaluate(() => (window as any).deliveryUrls.size);
   const canonical = page.getByLabel(/^(Canonical conversation|规范对话)$/);
-  const panel = page.getByRole('complementary', { name: 'Artifact preview', exact: true });
+  const panel = page.getByRole('complementary', { name: 'Previews', exact: true });
   const card = (name: string) => canonical.locator('[data-delivery-card]').filter({ has: page.locator('strong', { hasText: name }) }).first();
-  const close = async () => { await panel.getByRole('button', { name: 'Close Artifact preview' }).click(); await expect.poll(countUrls).toBe(0); };
+  const close = async () => { await panel.getByRole('button', { name: /^Close preview / }).first().click(); await expect.poll(countUrls).toBe(0); };
   const download = async (link: Locator, name: string, expected: Buffer) => {
     const event = page.waitForEvent('download'); await link.click(); const file = await event;
     expect(file.suggestedFilename()).toBe(name); const path = testInfo.outputPath(`download-${encodeURIComponent(name)}`); await file.saveAs(path); expect(readFileSync(path)).toEqual(expected);
@@ -57,7 +57,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(panel.locator('strong', { hasText: 'Original' })).toBeVisible();
     expect(await page.evaluate(() => (window as any).PWNED)).toBeUndefined();
     await expect(panel.locator('script,img,iframe,object')).toHaveCount(0);
-    await download(panel.getByRole('link', { name: 'Download artifact' }), '报告 file.md', original);
+    await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), '报告 file.md', original);
     expect(deliveryRead).toBeDefined();
     const bypass = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<number>((resolve, reject) => {
       const socket = new WebSocket(endpoint, ['rustx.app-server.v34', `rustx-token.${token}`]);
@@ -76,16 +76,18 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
       if (name === 'pixel.png') { await expect(panel.getByRole('img')).toBeVisible(); expect(await panel.getByRole('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1); }
       else if (name === 'data.bin') await expect(panel.getByText('This artifact has no supported inline viewer.')).toBeVisible();
       else await expect(panel.locator('pre')).toBeVisible();
-      await download(panel.getByRole('link', { name: 'Download artifact' }), name, readFileSync(join(fixture.workspaceA, name))); await close();
+      await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), name, readFileSync(join(fixture.workspaceA, name))); await close();
     }
     // A card's direct Download uses the same owner and the native current bytes.
-    await download(card('plain 空格.txt').getByRole('button', { name: 'Download plain 空格.txt', exact: true }), 'plain 空格.txt', readFileSync(join(fixture.workspaceA, 'plain 空格.txt'))); await close();
+    await download(card('plain 空格.txt').getByRole('button', { name: 'Download plain 空格.txt', exact: true }), 'plain 空格.txt', readFileSync(join(fixture.workspaceA, 'plain 空格.txt')));
+    await expect(panel).not.toBeVisible();
+    await expect.poll(countUrls).toBe(0);
     writeFileSync(join(fixture.workspaceA, '报告 file.md'), '# Current mutable report\n');
     await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md', exact: true }).click();
     await expect(panel.getByRole('heading', { name: 'Current mutable report' })).toBeVisible(); await close();
     unlinkSync(join(fixture.workspaceA, '报告 file.md'));
     await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md', exact: true }).click();
-    await expect(panel.getByRole('alert')).toContainText('file is missing'); await expect(panel.getByRole('link')).toHaveCount(0);
+    await expect(panel.getByRole('alert')).toContainText('file is missing'); await expect(panel.getByRole('button', { name: 'Download artifact', exact: true })).toHaveCount(0);
     writeFileSync(join(fixture.workspaceA, '报告 file.md'), original);
     await panel.getByRole('button', { name: 'Retry preview' }).click();
     await expect(panel.getByRole('heading', { name: 'Delivered report' })).toBeVisible(); await close();
@@ -104,16 +106,16 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
     await page.getByRole('button', { name: '关闭设置', exact: true }).click();
     await card('source.rs').getByRole('button', { name: '预览 source.rs', exact: true }).click();
-    const chinese = page.getByRole('complementary', { name: '制品预览', exact: true });
+    const chinese = page.getByRole('complementary', { name: '预览', exact: true });
     await expect(chinese.locator('pre')).toBeVisible();
-    await download(chinese.getByRole('link', { name: '下载制品' }), 'source.rs', readFileSync(join(fixture.workspaceA, 'source.rs')));
-    await chinese.getByRole('button', { name: '关闭产物预览' }).click(); await expect.poll(countUrls).toBe(0);
+    await download(chinese.getByRole('button', { name: '下载制品', exact: true }), 'source.rs', readFileSync(join(fixture.workspaceA, 'source.rs')));
+    await chinese.getByRole('button', { name: /^关闭预览 / }).first().click(); await expect.poll(countUrls).toBe(0);
     const hostScope = await fixture.workspaceHost.host.listWorkspaces();
     await fixture.workspaceHost.host.removeWorkspace(hostScope, hostScope.workspaces.find(row => row.location === 'root-a')!.id);
     await card('source.rs').getByRole('button', { name: '预览 source.rs', exact: true }).click();
     await expect(chinese.getByRole('alert')).toContainText('not authorized');
-    await expect(chinese.getByRole('link')).toHaveCount(0);
-    await chinese.getByRole('button', { name: '关闭产物预览' }).click(); await expect.poll(countUrls).toBe(0);
+    await expect(chinese.getByRole('button', { name: '下载制品', exact: true })).toHaveCount(0);
+    await chinese.getByRole('button', { name: /^关闭预览 / }).first().click(); await expect.poll(countUrls).toBe(0);
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);
     expect(errors).toEqual([]); passed = true;
@@ -128,11 +130,11 @@ test('managed Artifact Markdown/text/code previews download original bytes throu
     await page.getByRole('button', { name: `Preview ${name}`, exact: true }).click();
     if (extension === 'md') await expect(page.getByRole('heading', { name: 'Managed report' })).toBeVisible();
     else await expect(page.locator('pre')).toContainText('Original **bytes**');
-    const event = page.waitForEvent('download'); await page.getByRole('link', { name: 'Download artifact' }).click(); const download = await event;
+    const event = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download artifact', exact: true }).click(); const download = await event;
     expect(download.suggestedFilename()).toBe(name); const path = testInfo.outputPath(`download-${extension}`); await download.saveAs(path); expect(readFileSync(path)).toEqual(bytes);
     await page.getByRole('button', { name: 'Close preview', exact: true }).click();
   }
   const methods = await page.evaluate(() => (window as any).managedPreviewRequests.map((value: any) => value.request.method));
-  expect(methods.filter((method: string) => method === 'artifact/read')).toHaveLength(3);
+  expect(methods.filter((method: string) => method === 'artifact/read')).toHaveLength(6); // Preview and Download each authorize a fresh read.
   expect(methods.filter((method: string) => method === 'session/fileRead' || method === 'turn/start')).toHaveLength(0);
 });

@@ -55,6 +55,18 @@ export class WorkspaceHostError extends Error {
     this.uncertain = uncertain;
   }
 }
+/** Private physical facts, independent of cancellation/publication intent.
+ * A lost document carrier can conceal either its native reread or converter. */
+export type SettlementFailureKind = 'file_settlement_unknown' | 'converter_settlement_unknown' | 'document_settlement_unknown';
+export function settlementFailureKind(cause: unknown): SettlementFailureKind | undefined {
+  if (!(cause instanceof WorkspaceHostError)) return;
+  switch (cause.kind) {
+    case 'file_settlement_unknown':
+    case 'converter_settlement_unknown':
+    case 'document_settlement_unknown': return cause.kind;
+  }
+}
+
 export interface ProductHostWorkspaces {
   previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;

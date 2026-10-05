@@ -10,7 +10,7 @@ import PdfPreview from '../src/app/components/documents/PdfPreview';
 afterEach(() => { cleanup(); vi.useRealTimers(); boundary.failures.splice(0); boundary.dispose.mockReset(); });
 it.each(['worker_failure', 'parser_timeout'] as const)('%s clears the load deadline even when worker destruction has no acknowledgement', async code => {
   vi.useFakeTimers();
-  const view = render(<PdfPreview bytes={new Uint8Array([1])} retry={() => {}} />);
+  const view = render(<PdfPreview bytes={new Uint8Array([1])} signal={new AbortController().signal} viewState={{}} onViewStateChange={() => {}} retry={() => {}} />);
   expect(vi.getTimerCount()).toBe(1);
   await act(async () => {
     if (code === 'worker_failure') boundary.failures[0](code);

@@ -4587,6 +4587,8 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         for revoked in ["credential", "socket", "attachment"] {
             let mut completed = probe.completed.subscribe();
             probe.completed.send_replace(None);
+            let mut retirement_waiting = probe.retirement_waiting.subscribe();
+            probe.retirement_waiting.send_replace(false);
             let gate_release = probe.before_bytes.arm_scoped();
             let mut pending = product_host.open(FILE_HOST_TOKEN).await.unwrap();
             pending.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
@@ -4599,15 +4601,31 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             } else if revoked == "socket" {
                 // This is the exact native fence used when Node aborts after
                 // registration removal or Host replacement, not a clock wait.
-                pending.close(None).await.unwrap();
+                pending.close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                    code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+                    reason: "".into(),
+                })).await.unwrap();
                 let authority = probe.authority.lock().unwrap().clone().unwrap();
                 authority.cancelled().await;
+                // Observe the exact retirement future being polled Pending
+                // while descriptor read is held. The transport cannot ACK a
+                // clean close and release Node admission before this settles.
+                retirement_waiting.wait_for(|waiting| *waiting).await.unwrap();
+                assert_eq!(*completed.borrow(), None);
+                assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS - 1);
+                assert!(futures_util::poll!(pending.next()).is_pending(), "close acknowledgement waits for the native read permit");
             } else {
                 call(&browser, 4193, Method::SessionDetach { target: target.clone() }).await;
             }
             drop(gate_release);
             completed.wait_for(Option::is_some).await.unwrap();
             assert_eq!(*completed.borrow(), Some(false), "{revoked}: native read publishes no bytes after revocation");
+            if revoked == "socket" {
+                let frame = pending.next().await.unwrap().unwrap();
+                assert!(matches!(frame, tokio_tungstenite::tungstenite::Message::Close(Some(frame)) if frame.code == tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal));
+                assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS, "clean native close is a physical permit retirement witness");
+                assert!(matches!(product_host.success(read(tool.id.clone())).await, MethodResult::SessionFileBytes { .. }), "a replacement read is admitted after the close acknowledgement");
+            }
             while let Some(frame) = pending.next().await {
                 if let Ok(tokio_tungstenite::tungstenite::Message::Text(text)) = frame {
                     let reply: Response = serde_json::from_str(&text).unwrap();

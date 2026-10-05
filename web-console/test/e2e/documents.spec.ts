@@ -25,12 +25,12 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     }
     Object.assign(window, { Worker: ObservedWorker, documentWorkers: live, documentUrls: urls });
   });
-  const panel = page.getByRole('complementary', { name: 'Artifact preview', exact: true });
+  const panel = page.getByRole('complementary', { name: 'Previews', exact: true });
   const open = async (name: string) => {
     await page.getByRole('button', { name: `Preview ${name}`, exact: true }).click(); await expect(panel).toBeVisible();
   };
   const close = async () => {
-    await panel.getByRole('button', { name: 'Close Artifact preview' }).click();
+    await panel.getByRole('button', { name: /^Close preview / }).first().click();
     await expect.poll(() => page.evaluate(() => (window as any).documentWorkers.size)).toBe(0);
     await expect.poll(() => page.evaluate(() => (window as any).documentUrls.size)).toBe(0);
     if (documentFonts !== undefined) expect(await page.evaluate(() => document.fonts.size)).toBe(documentFonts);
@@ -101,7 +101,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
           expect(selected).toContain('page 2');
         }
       }
-      const waiting = page.waitForEvent('download'); await panel.getByRole('link', { name: 'Download artifact' }).click();
+      const waiting = page.waitForEvent('download'); await panel.getByRole('button', { name: 'Download artifact', exact: true }).click();
       const downloaded = await waiting; expect(downloaded.suggestedFilename()).toBe(name);
       const destination = info.outputPath(name); await downloaded.saveAs(destination);
       expect(readFileSync(destination)).toEqual(readFileSync(join(fixture.workspaceA, name)));
@@ -109,9 +109,14 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     }
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 1000 });
+      // Establish the reading baseline after the measured responsive columns
+      // finish reflowing; a transient narrow sidebar width is not that baseline.
+      const sidebar = width === 390 ? 56 : 280;
+      await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `${sidebar}px ${width - sidebar}px 0px`);
       await page.getByRole('button', { name: 'Preview sample.pdf', exact: true }).scrollIntoViewIfNeeded();
+      await page.getByRole('button', { name: 'Preview sample.pdf', exact: true }).focus();
       const scroll = await page.locator('.conversation-scroll').evaluate(el => el.scrollTop);
-      await page.getByRole('button', { name: 'Preview sample.pdf', exact: true }).focus(); await page.keyboard.press('Enter');
+      await page.keyboard.press('Enter');
       await expect(panel.locator('.textLayer')).toContainText('page 1');
       if (width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-narrow.png') });
       await close();

@@ -172,16 +172,16 @@ it.each(['picker', 'drop', 'paste'] as const)('retains a second %s selection dur
   expect(ui.queryByRole('alert')).toBeNull();
 });
 
-it('renders inert text and downloads the same bounded native bytes through one URL', async () => {
+it('exports bounded original bytes to an occurrence without retaining a second Artifact URL', async () => {
   await server.attached('A'); server.held.add('artifact/read');
   const resources = new ArtifactResources(server.client, 'A');
-  const read = resources.load('report', 'text/plain');
+  const read = resources.readBytes('report', new AbortController().signal);
   server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: btoa('<script>inert</script>') });
-  expect(await read).toEqual({ text: '<script>inert</script>', url: create.mock.results.at(-1)?.value }); expect(create).toHaveBeenCalledOnce();
-  const obsolete = resources.load('late', 'text/plain'); resources.dispose();
+  expect(new TextDecoder().decode(await read)).toBe('<script>inert</script>'); expect(create).not.toHaveBeenCalled();
+  const obsolete = resources.readBytes('late', new AbortController().signal); resources.dispose();
   server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: 'aGk=' });
   await expect(obsolete).rejects.toThrow('Obsolete');
-  expect(revoke).toHaveBeenCalledOnce();
+  expect(revoke).not.toHaveBeenCalled();
 });
 
 it('native authority replacement and client disposal retire attachment File owners', async () => {
@@ -241,4 +241,17 @@ it('explicit prepare refusal is read as no-commit failure and never transmits a 
   server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32602, message: 'Invalid params', data: { kind: 'invalid_params' } } });
   await rejected;
   expect(server.requests.filter(item => item.request.method === 'session/uploadStatus').map(item => item.request.params)).toMatchObject([{ operation_id: operation }]);
+});
+it('retired occurrence abort refuses a queued Artifact read before native dispatch', async () => {
+  await server.attached('A'); server.held.add('session/list');
+  const occupying = Array.from({ length: 8 }, () => server.client.request({ method: 'session/list', params: { offset: 0, limit: 32 } }, 'sessions'));
+  const held = server.requests.filter(item => item.request.method === 'session/list').slice(-8).map(item => item.request);
+  expect(held).toHaveLength(8);
+  const resources = new ArtifactResources(server.client, 'A'), abort = new AbortController();
+  const read = resources.readBytes('hidden-before-dispatch', abort.signal), rejected = expect(read).rejects.toThrow();
+  expect(server.requests.filter(item => item.request.method === 'artifact/read')).toHaveLength(0);
+  abort.abort(); for (const request of held) server.reply(request);
+  await Promise.all(occupying); await rejected;
+  expect(server.requests.filter(item => item.request.method === 'artifact/read')).toHaveLength(0);
+  expect(create).not.toHaveBeenCalled(); resources.dispose();
 });

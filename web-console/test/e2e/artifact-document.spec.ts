@@ -45,7 +45,7 @@ test('real immutable Artifact crosses private v2 derivation and rejects late att
         requests.push(body.request);
         if (hold) { responseReady.release(); await publish.promise; }
       }
-      await route.fulfill({ status: response.status, contentType: 'application/json', body: text });
+      await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: text });
     });
     await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/artifact-document.html`);
     await page.evaluate(async config => { await (window as any).artifactDocument.setup(...config); }, [fixture.endpoint, fixture.token, session.id, id]);
@@ -66,7 +66,7 @@ test('real immutable Artifact crosses private v2 derivation and rejects late att
     const scope = await fixture.workspaceHost.host.listWorkspaces();
     await expect(fixture.workspaceHost.host.previewDocument(scope, { ...requests[0], digest: '0'.repeat(64) })).rejects.toThrow('source_changed');
     await expect(fixture.workspaceHost.host.previewDocument(scope, { ...requests[0], source: { kind: 'artifact', artifact_id: 'artifact_999' } })).rejects.toThrow();
-    const downloading = page.waitForEvent('download'); await page.getByRole('link', { name: 'Download artifact' }).click();
+    const downloading = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download artifact', exact: true }).click();
     const download = await downloading; expect(download.suggestedFilename()).toBe('报告 original.xlsx');
     const destination = info.outputPath('original.xlsx'); await download.saveAs(destination); expect(readFileSync(destination)).toEqual(original);
     await page.getByRole('button', { name: 'Close preview', exact: true }).click(); hold = true;
