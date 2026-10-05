@@ -678,3 +678,105 @@ Before commit/push, origin/main was fetched again and remained
 `3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`, also the merge base. No integration was
 required. The primary checkout remained untouched at that SHA with only its
 pre-existing untracked `.playwright-mcp/` directory.
+
+## Composer historical-owner synchronization repair (starting HEAD 30c2be8c)
+
+Before editing, fetched main and PR #450 and verified clean existing worktree
+`/home/caismis/Documents/codes/rustX-issue-441`, branch
+`issue-441-multi-preview-workspace`, HEAD
+`30c2be8cdfeb5e4e6852aceaa31963682abf4681`. Main/merge base remained
+`3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`. PR was OPEN, non-draft, auto-merge
+disabled. Hosted run 37250618905 had seven successful jobs (including both
+macOS lanes); only Full Web conformance failed, with 168 browser passes and one
+failure in `composer.spec.ts:10` at the Execution details click.
+
+Downloaded artifact 11322025050 (`web-console-browser-evidence`) and inspected its
+Composer trace. Browser-side `call@7775` queried globally collapsed TurnProcesses
+at 217610.852ms and returned count 0 at 217614.769ms. `call@7777` delivered
+`read_domains_updated` at 217625.542ms, including the completed human attempt
+containing native.create_goal. The GoalActivity existed below its exact
+`data-turn-process-owner`, but the process was collapsed and its body had
+`hidden`. The subsequent activity count assertion passed; the summary resolved
+but remained invisible until the whole-test timeout. Goal dock projection and
+historical transcript projection are independent: the earlier empty global
+query could not prove that a later target's owner had been revealed.
+
+Only the E2E test and this validation record change. GoalActivity, AgentTranscript,
+TurnProcess, runtime, preview workspace and all admission/settlement paths are
+unchanged. The test now waits for the unique Goal started activity, resolves its
+nearest data-turn-process-owner and direct process button, waits for exactly one
+button, expands it if collapsed, and asserts both activity and summary visible
+before testing the initially closed disclosure and its native.create_goal data.
+
+The earlier Agent Status loop had the same missing proof: visible Plan recorded
+and current Todo do not synchronize the historical Status owner. The first Status
+is anchored to the inbound message; its disclosure is beside its hidden body,
+not necessarily the containing message's TurnProcess. The test now waits for the
+Status including hidden nodes, resolves its nearest ancestor with a direct
+process button, waits for exactly one, expands if collapsed and explicitly
+asserts the Status visible. All original placement, uniqueness, content and
+interaction assertions remain. includeHidden allows synchronization on the
+historical target; the following visibility assertion still requires revelation.
+
+No timeout, retry, force-click, sleep, screenshot baseline/tolerance or product
+presentation change was introduced. Completed processes still default collapsed.
+
+Focused pinned-container acceptance passed, 1 test (8.0s; command total 11.1s):
+
+```sh
+CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e composer.spec.ts \
+  --grep 'native Todo, Goal and Queue docks'
+```
+
+The full browser command runs once on frozen final source. Native lanes use
+`TMPDIR=/var/tmp/p450s` and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`; the clean temporary
+root avoids the existing ambient `/tmp` configuration noted above.
+
+Exact final-source commands and results (native lane environment above):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo build --bins --all-features --locked` | PASS |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | PASS |
+| `cargo test --test contracts --test provider --all-features --locked` | PASS |
+| `cargo run --locked --example check_test_lanes -- --job rust-contracts` | PASS |
+| `cargo test --lib --all-features --locked -- boundary_suites::` | PASS |
+| `cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | PASS |
+| `cargo run --locked --example check_test_lanes -- --job rust-boundaries` | PASS |
+| `pnpm --dir protocol/app-server check` | PASS |
+| `pnpm --dir protocol/app-server typecheck` | PASS |
+| `pnpm --dir tui typecheck` | PASS |
+| `pnpm --dir tui test` | PASS |
+| `pnpm --dir dev typecheck` | PASS |
+| `pnpm --dir dev test` | PASS |
+| `bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 -- /usr/bin/true` | PASS |
+| `node web-console/scripts/check-office-sandbox.ts` | PASS |
+| `cd test-support/fake-provider && uv sync --frozen && uv run --frozen pytest` | PASS, 52 tests |
+| `pnpm --dir web-console typecheck` | PASS |
+| `pnpm --dir web-console test` | PASS, 101 files / 1681 tests |
+| `pnpm --dir web-console build` | PASS |
+| `pnpm --dir web-console check:i18n` | PASS |
+| `pnpm --dir web-console check:provenance` | PASS |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | FAIL: 168 passed / 1 failed (10.5m) |
+| `git diff --check` | PASS |
+| `git diff origin/main...HEAD --check` | PASS |
+
+The repaired Composer native Todo/Goal/Queue case passed in this full run (7.6s).
+The sole local failure is a different, unchanged test: `agent.spec.ts:96`,
+Composer light 390. Its stable 334×244 capture differs by 15 pixels outside any
+registered noise region (maximum channel delta 13). The strict comparator still
+rejects it. Dark 390, locale, Settings, preview workspace, Artifact/document and
+reading paths passed. No selective or full rerun replaced this full-suite result;
+no screenshot policy or production behavior was changed. Local full acceptance
+is therefore not all green even though the hosted synchronization failure is
+repaired and passed both focused and full execution.
+
+Evidence is retained at `/var/tmp/rustx-450-composer-sync-evidence/`, including
+original hosted trace evidence and current full-run failure screenshots/traces.
+Before commit/push, fetched main again: unchanged at
+`3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`, also merge base; no integration needed.
+Primary checkout remained untouched with its original `.playwright-mcp/` entry.
+The new final-head hosted CI snapshot is reported in the PR description and
+supersedes run 37250618905; previous SHA green checks are not final validation.

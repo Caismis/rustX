@@ -68,9 +68,14 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     // Real composed Agent Status, placed only by the runtime-published anchors it
     // carries: every composition renders exactly once, subordinate to its own
     // anchor row, and never repeats under later messages.
-    while (await page.locator('[data-turn-process][aria-expanded="false"]').count()) await page.locator('[data-turn-process][aria-expanded="false"]').first().click();
-    const notes = page.getByRole('note', { name: 'Agent Status' });
+    const notes = page.getByRole('note', { name: 'Agent Status', includeHidden: true });
     await expect(notes).not.toHaveCount(0);
+    // Status projection can arrive after Todo/final text. Its first annotation
+    // owns a disclosure beside its hidden body, not the adjacent message owner.
+    const statusProcess = notes.first().locator('xpath=ancestor::*[./*[@data-turn-process]][1]').locator(':scope > [data-turn-process]');
+    await expect(statusProcess).toHaveCount(1);
+    if (await statusProcess.getAttribute('aria-expanded') === 'false') await statusProcess.click();
+    await expect(notes.first()).toBeVisible();
     const placement = async () => page.locator('[data-agent-status]').evaluateAll(nodes =>
       nodes.map(node => [node.getAttribute('data-agent-status'), node.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key') ?? null] as const));
     const placed = await placement();
@@ -99,16 +104,23 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(goal).toContainText('Active Goal');
     await expect(goal).toContainText('Verify the composer docks');
     await expect(goal).toContainText('1/1 rounds');
-    while (await page.locator('[data-turn-process][aria-expanded="false"]').count()) await page.locator('[data-turn-process][aria-expanded="false"]').first().click();
     const activity = page.locator('[data-goal-activity]').filter({ hasText: 'Goal started' });
     await expect(activity).toHaveCount(1);
+    // Goal state and transcript reads publish independently. Reveal the exact
+    // historical owner only after its activity has arrived.
+    const process = activity.locator('xpath=ancestor::*[@data-turn-process-owner][1]').locator(':scope > [data-turn-process]');
+    await expect(process).toHaveCount(1);
+    if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+    await expect(activity).toBeVisible();
+    const details = activity.getByText('Execution details', { exact: true });
+    await expect(details).toBeVisible();
     await expect(activity.locator('[data-tool-renderer]')).toHaveCount(0);
     await page.screenshot({ path: test.info().outputPath('goal-activity.png') });
     await expect(activity.locator('details')).not.toHaveAttribute('open', '');
-    await activity.getByText('Execution details', { exact: true }).click();
+    await details.click();
     await expect(activity.locator('pre')).toContainText('native.create_goal');
     await expect(activity.locator('pre')).toContainText('"name": "create_goal"');
-    await activity.getByText('Execution details', { exact: true }).click();
+    await details.click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
