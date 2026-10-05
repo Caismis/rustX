@@ -61,7 +61,8 @@ owners retain their existing independent byte/security limits.
 | Selected preview original URLs | At most 2, one per visible occurrence |
 | Download | At most 1 transient original-byte lease/URL, separate from the two pane leases |
 | Aggregate original preview/Download URLs | 3; synchronous retirement/revocation, exactly once |
-| Original transfer concurrency | 2 shared permits (an active derivation reserves one); at most 3 pending visible/Download intents, removed on cancellation |
+| Private Host read admission | 2 permits shared across Sessions (derivation of either source kind reserves one); at most 3 pending visible/Download intents, removed on cancellation |
+| Ordinary Artifact original transfers | Existing ArtifactResources limit of 2 per coordinator; public artifact/read does not enter private Host admission |
 | PDF-backed owners/workers | 2; includes DOCX/PPTX derived PDF, each retaining all prior page/canvas/text/watchdog bounds |
 | Host derivation | 1 active; at most 2 visible waiting intents, no retries or background conversion |
 
@@ -89,8 +90,9 @@ before acknowledging clean close. The Node carrier waits for that acknowledgemen
 closing a socket alone cannot prove that the native read permit was released.
 Unknown transport/physical retirement fails closed in the affected domain:
 converter-only uncertainty closes document admission, native read uncertainty
-closes raw reads (and an enclosing derivation), and a lost document terminal
-witness closes both. See [the settlement taxonomy](document-previews.md). This narrow native
+closes private Host reads (and an enclosing derivation), and a lost document
+terminal witness closes both private domains. Ordinary public `artifact/read`
+preview/Download remains usable for all three failures. See [the settlement taxonomy](document-previews.md). This narrow native
 lifecycle repair changes no public protocol method/schema or file authority. No
 generic scheduler or automatic conversion retry is added.
 

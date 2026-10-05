@@ -68,11 +68,11 @@ class PreviewDemand {
 }
 // Same Host coordination survives Session changes until retiring work settles.
 // A new Host authority gets a new admission domain; no source/result cache exists.
-const hostDemand = new WeakMap<ProductHostWorkspaces, { revision: number; reads: PreviewDemand; documents: PreviewDemand }>();
+const hostDemand = new WeakMap<ProductHostWorkspaces, { revision: number; privateReads: PreviewDemand; documents: PreviewDemand }>();
 function demands(host: ProductHostWorkspaces, authority: WorkspaceAuthority) {
   let value = hostDemand.get(host);
   if (!value || value.revision !== authority.getRevision()) {
-    value = { revision: authority.getRevision(), reads: new PreviewDemand(SESSION_FILE_MAX_TRANSFERS, PREVIEW_POLICY.activeBodies + PREVIEW_POLICY.downloads, 'File settlement unavailable',
+    value = { revision: authority.getRevision(), privateReads: new PreviewDemand(SESSION_FILE_MAX_TRANSFERS, PREVIEW_POLICY.activeBodies + PREVIEW_POLICY.downloads, 'File settlement unavailable',
       cause => { const kind = settlementFailureKind(cause); return kind === 'file_settlement_unknown' || kind === 'document_settlement_unknown'; }),
       documents: new PreviewDemand(1, PREVIEW_POLICY.activeBodies, 'converter_unavailable', cause => settlementFailureKind(cause) !== undefined) };
     hostDemand.set(host, value);
@@ -125,9 +125,12 @@ export class FilePreviewCoordinator {
     if (this.downloadLease === lease) this.downloadLease = undefined;
   }
   async read(source: PreviewSource, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
-    return this.demand.reads.run(signal, async () => {
+    if (!this.current() || signal.aborted) throw new Error('Obsolete file view');
+    // Public artifact/read owns its separate ArtifactResources transfer budget;
+    // it never acquires the Product Host private native read capacity.
+    if (source.kind === 'artifact') return this.artifacts.readBytes(source.id, signal);
+    return this.demand.privateReads.run(signal, async () => {
       if (!this.current() || signal.aborted) throw new Error('Obsolete file view');
-      if (source.kind === 'artifact') return this.artifacts.readBytes(source.id, signal);
       if (!this.host.readDelivery) throw new Error('Product Host file mapping unavailable');
       const observation = this.authority.capture();
       if (!observation) throw new Error('Product Host authority unavailable');
@@ -141,10 +144,10 @@ export class FilePreviewCoordinator {
     });
   }
   async derive(source: PreviewSource, extension: 'docx' | 'pptx' | 'xlsx', bytes: Uint8Array<ArrayBuffer>, signal: AbortSignal) {
-    // Host derivation reauthorizes through the same native/Host file-read budget.
-    // Keep one read permit for its whole lifetime so Download cannot race that
+    // Both source kinds reauthorize through the private native/Host read budget.
+    // Keep one read permit for its whole lifetime so Session-file Download cannot race that
     // internal reread even while the converter itself is between read phases.
-    return this.demand.documents.run(signal, () => this.demand.reads.run(signal, async () => {
+    return this.demand.documents.run(signal, () => this.demand.privateReads.run(signal, async () => {
       const current = () => { if (!this.current() || signal.aborted) throw new Error('obsolete'); };
       current();
       if (!this.host.previewDocument) throw new Error('preview_unavailable');

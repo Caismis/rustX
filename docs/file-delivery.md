@@ -161,8 +161,8 @@ the ordinary native failure vocabulary.
 | Session-file base64 carrier | 699,052 characters; below the 1 MiB native frame cap |
 | Native Session-file reads | 2 owned reads per AppServerHost; excess fails, no unbounded queue |
 | Product Host file operations | 2 physical read obligations per Host instance; clean close/terminal response releases admission, unknown settlement keeps its slot unavailable |
-| Browser preview original transfers / retained URLs | 2 active / 3 aggregate: 2 visible panes plus 1 transient Download |
-| Managed Artifact transfers / URLs / bytes | Existing 2 / 16 / 262,144 bytes |
+| Browser private Host reads / retained preview URLs | 2 private permits / 3 aggregate URLs: 2 visible panes plus 1 transient Download |
+| Managed Artifact transfers / URLs / bytes | Existing independent 2 / 16 / 262,144 bytes; preview leases separately obey the aggregate 3-URL limit |
 | Rendered Session-file text / Markdown input | 512 KiB original bytes, fatal UTF-8 decode |
 | Raster dimensions | At most 4096 on either axis and 4,194,304 pixels |
 | Raster animation | Static only; animation fails inline but Download remains |
@@ -208,16 +208,20 @@ bytes, workers or live derivation demand. Reload persists none of this workspace
 state. The separate existing inline Conversation Artifact owner retains its
 original 16-URL policy; these are not hidden preview documents.
 
-Original browser file reads use an exact private HTTP operation token. The Host
+Browser Session-file original reads use an exact private HTTP operation token. The Host
 acknowledges the token in response headers after registering one of its two
 active cancellation handles. Cancellation sends the token and exact Host scope;
 the browser keeps the original response open until the native/Host read finally
 settles. Waiting current intents are finite (two pane demands and one Download)
 and removed immediately when their lease retires. Unknown transport settlement
-fails raw-read admission closed for that Host authority. Converter-only
+fails private Host read admission closed for that Host authority. Converter-only
 settlement uncertainty belongs to document admission and does not disable raw
-reads or original Download; a lost document terminal witness can conceal a
-native read and therefore still fails raw-read admission closed. This avoids treating an aborted
+Session-file reads or original Download; a lost document terminal witness can
+conceal a native read and therefore still fails private read admission closed.
+Ordinary managed Artifact preview/Download uses public `artifact/read` and its
+independent ArtifactResources transfer limit, so none of these private settlement
+failures disables it. Artifact document reauthorization instead uses the private
+read seam and participates in private admission for the whole derivation. This avoids treating an aborted
 fetch as physical read completion; no public native Method, authority or tab
 registry is introduced.
 

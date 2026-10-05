@@ -229,13 +229,19 @@ it('active derivation reserves a shared read slot so pane and Download transfers
   } finally { held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }); click.mockRestore(); }
 });
 
-it.each(['converter', 'file', 'document'] as const)('%s uncertainty closes only its physical admission domains across Sessions and resets only for new Host authority', async kind => {
+it.each([
+  ['converter', 'session_file'], ['file', 'session_file'], ['document', 'session_file'],
+  ['converter', 'artifact'], ['file', 'artifact'], ['document', 'artifact'],
+] as const)('%s uncertainty from %s derivation closes only its physical domains across Sessions and authority replacement', async (kind, sourceKind) => {
   const f = await fixture(), failure = new WorkspaceHostError('unknown physical settlement', `${kind}_settlement_unknown`);
   const derive = vi.fn<NonNullable<ProductHostWorkspaces['previewDocument']>>().mockRejectedValue(failure);
   f.host.previewDocument = derive;
   const signal = new AbortController().signal;
-  await expect(f.lease.derive('docx', new Uint8Array([1]), signal)).rejects.toBe(failure);
-  await expect(f.lease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
+  const artifactSource = { kind: 'artifact' as const, id: 'managed-office' };
+  const artifactLease = f.resources.acquire(2, artifactSource);
+  const derivingLease = sourceKind === 'artifact' ? artifactLease : f.lease;
+  await expect(derivingLease.derive('docx', new Uint8Array([1]), signal)).rejects.toBe(failure);
+  await expect(derivingLease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
   expect(derive).toHaveBeenCalledOnce();
   const next = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(next);
   const lease = next.acquire(2, source);
@@ -256,15 +262,84 @@ it.each(['converter', 'file', 'document'] as const)('%s uncertainty closes only 
       expect(f.calls).toHaveLength(0); expect(create).not.toHaveBeenCalled(); expect(click).not.toHaveBeenCalled();
     }
     expect(derive).toHaveBeenCalledOnce();
+    expect(derive.mock.calls[0][1].source).toEqual(sourceKind === 'artifact'
+      ? { kind: 'artifact', artifact_id: artifactSource.id }
+      : { kind: 'session_file', message_id: source.messageId, delivery_index: source.index });
+    const otherArtifact = next.acquire(3, artifactSource);
+    await expect(otherArtifact.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
+    const privateCalls = f.calls.length, urls = create.mock.calls.length, clicks = click.mock.calls.length;
+    server.held.add('artifact/read');
+    for (const [index, coordinator, artifact] of [[0, f.resources, artifactLease], [1, next, otherArtifact]] as const) {
+      const read = artifact.load('text/plain'), request = await server.waitFor('artifact/read', index * 2 + 1);
+      expect(request.params).toEqual({ target: server.client.target(index === 0 ? 'A' : 'B'), artifact_id: artifactSource.id });
+      server.socket.success(request, { type: 'artifact_bytes', data: btoa(bytes) });
+      expect((await read).text).toBe(bytes);
+      const download = coordinator.download(artifactSource, 'original.docx');
+      const downloadRequest = await server.waitFor('artifact/read', index * 2 + 2);
+      expect(downloadRequest.params).toEqual(request.params);
+      server.socket.success(downloadRequest, { type: 'artifact_bytes', data: btoa(bytes) });
+      await download;
+    }
+    expect(server.requests.map(item => item.request).filter(request => request.method === 'artifact/read')).toHaveLength(4);
+    expect(f.calls).toHaveLength(privateCalls); expect(derive).toHaveBeenCalledOnce();
+    expect(click).toHaveBeenCalledTimes(clicks + 2); expect(create).toHaveBeenCalledTimes(urls + 4);
+    expect(revoke.mock.calls.map(([url]) => url)).toEqual(kind === 'converter'
+      ? ['blob:2', 'blob:5', 'blob:7'] : ['blob:2', 'blob:4']);
     await f.replaceHost();
+    await expect(artifactLease.load()).rejects.toThrow('Obsolete');
+    await expect(otherArtifact.load()).rejects.toThrow('Obsolete');
     await expect(lease.load()).rejects.toThrow('Obsolete');
     await expect(f.lease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('obsolete');
     const fresh = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(fresh);
     const freshLease = fresh.acquire(3, source), count = f.calls.length, read = freshLease.load();
     expect(f.calls).toHaveLength(count + 1); f.reply(count); await read;
     derive.mockImplementation(async (_scope, request) => ({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }));
-    await freshLease.derive('xlsx', new Uint8Array([1]), signal); expect(derive).toHaveBeenCalledTimes(2);
+    await freshLease.derive('xlsx', new Uint8Array([1]), signal);
+    const freshArtifact = fresh.acquire(4, artifactSource);
+    await freshArtifact.derive('xlsx', new Uint8Array([1]), signal); expect(derive).toHaveBeenCalledTimes(3);
+    expect(derive.mock.calls[2][1].source).toEqual({ kind: 'artifact', artifact_id: artifactSource.id });
+    expect(f.calls).toHaveLength(count + 1);
+    expect(create).toHaveBeenCalledTimes(urls + 5);
+    expect(server.requests.map(item => item.request).filter(request => request.method === 'artifact/read')).toHaveLength(4);
     owners.forEach(owner => owner.dispose());
     expect(revoke.mock.calls.map(([url]) => url).sort()).toEqual(create.mock.results.map(result => result.value).sort());
+  } finally { click.mockRestore(); }
+});
+
+it('a failed private raw read leaves the independent two-transfer Artifact owner usable and bounded', async () => {
+  const f = await fixture(), failure = new WorkspaceHostError('private read retirement unknown', 'file_settlement_unknown');
+  const read = f.lease.load(), rejected = expect(read).rejects.toBe(failure);
+  f.calls[0].response.reject(failure); await rejected;
+  await expect(f.lease.load()).rejects.toThrow('File settlement unavailable');
+  await expect(f.resources.download(source, file.name)).rejects.toThrow('File settlement unavailable');
+  const derive = vi.fn<NonNullable<ProductHostWorkspaces['previewDocument']>>(); f.host.previewDocument = derive;
+  const other = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(other);
+  const otherLease = other.acquire(1, source), signal = new AbortController().signal;
+  await expect(otherLease.load()).rejects.toThrow('File settlement unavailable');
+  await expect(other.download(source, file.name)).rejects.toThrow('File settlement unavailable');
+  await expect(otherLease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('File settlement unavailable');
+  f.lease.dispose();
+  const artifact = { kind: 'artifact' as const, id: 'managed-office' };
+  const first = f.resources.acquire(2, artifact), second = f.resources.acquire(3, artifact);
+  await expect(first.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('File settlement unavailable');
+  server.held.add('artifact/read');
+  const firstRead = first.load(), secondRead = second.load();
+  await server.waitFor('artifact/read', 2);
+  const requests = server.requests.map(item => item.request).filter(request => request.method === 'artifact/read');
+  expect(requests).toHaveLength(2);
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  try {
+    await expect(f.resources.download(artifact, 'original.docx')).rejects.toThrow('Artifact capacity');
+    expect(server.requests.map(item => item.request).filter(request => request.method === 'artifact/read')).toHaveLength(2);
+    server.socket.success(requests[0], { type: 'artifact_bytes', data: btoa(bytes) }); await firstRead;
+    const download = f.resources.download(artifact, 'original.docx'), request = await server.waitFor('artifact/read', 3);
+    expect(request.params).toEqual({ target: server.client.target('A'), artifact_id: artifact.id });
+    server.socket.success(request, { type: 'artifact_bytes', data: btoa(bytes) }); await download;
+    server.socket.success(requests[1], { type: 'artifact_bytes', data: btoa(bytes) }); await secondRead;
+    expect(f.calls).toHaveLength(1); expect(derive).not.toHaveBeenCalled();
+    expect(server.requests.map(item => item.request).filter(request => request.method === 'artifact/read')).toHaveLength(3);
+    expect(click).toHaveBeenCalledOnce(); expect(create).toHaveBeenCalledTimes(3);
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:2');
+    f.resources.dispose(); expect(revoke.mock.calls.map(([url]) => url).sort()).toEqual(['blob:1', 'blob:2', 'blob:3']);
   } finally { click.mockRestore(); }
 });

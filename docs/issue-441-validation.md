@@ -549,3 +549,132 @@ Before committing/pushing, main was fetched again and remained
 `3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`, also the merge base. No integration was
 required. The primary checkout remained at that SHA with only its pre-existing
 untracked `.playwright-mcp/` directory.
+
+
+## Operation-path admission repair (starting HEAD 7ad59d7d)
+
+Verified before editing: PR/local HEAD
+`7ad59d7d10a14c007a37b59132ce70897e730534`, main/merge base
+`3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`, 0 behind / 3 ahead.
+The existing `issue-441-multi-preview-workspace` worktree at
+`/home/caismis/Documents/codes/rustX-issue-441` was clean. PR was OPEN,
+non-draft, auto-merge disabled. Its starting-SHA hosted run 37248411259 had six
+successful jobs and two still running; that is historical evidence only.
+
+The shared `reads` domain incorrectly wrapped public Artifact reads as well as
+private Host reads. Source identity is not the admission owner. The public
+`ArtifactRead` handler in `connection.rs` uses `authority.artifact_read` without
+`file_reads()`. The private `ReadSource::Artifact` branch in `product_host.rs`
+acquires `host.file_reads()` just like Session-file private rereads.
+
+The domain is now explicitly `privateReads`. Ordinary managed Artifact originals
+use the existing ArtifactResources owner (two transfers); Session-file originals
+use privateReads. Derivation of either source kind still composes documents and
+privateReads. File/document uncertainty closes the private read domain;
+converter/file/document uncertainty closes an enclosing document demand. None
+of those failures closes public Artifact transfer admission. No physical
+settlement joins or error taxonomy changed.
+
+The previous cross-owner two-transfer gate was not an additional physical owner.
+No replacement aggregate scheduler is added: two visible body leases, one
+Download and three original URLs remain the presentation limits. Artifact's
+two-transfer owner and the Host's two private permits retain their own finite
+bounds. A derivation reserves a private permit for its complete lifetime.
+
+The previous three-case settlement test is extended to six cases: all three
+failure kinds raised by both Session-file and Artifact derivation. Each checks
+ordinary Artifact load/Download in Sessions A and B: exactly four artifact/read
+requests, no additional readDelivery or previewDocument call, two additional
+Download clicks, four additional URLs, exact transient revocation and final
+one-for-one URL cleanup. Source coordinates and Session targets are asserted.
+Private refusal/success and authority replacement assertions are retained;
+fresh authority permits both derivation sources and old leases stay obsolete.
+A separate private raw-read failure test asserts one readDelivery call, zero
+previewDocument calls, exactly three public Artifact requests and URLs, one
+Download click, and rejection of a third concurrent Artifact transfer before any
+request. This proves the independent Artifact finite budget remains enforced.
+
+All prior gated cancellation, native/Host settlement, HTTP terminal-witness,
+geometry, collapse and Download notice regressions remain in place. No unrelated
+UI, protocol, screenshot baseline, tolerance, retry, deadline or assertion changes.
+
+Focused command passed six files / 97 tests:
+
+```sh
+pnpm --dir web-console exec vitest run \
+  test/session-files.test.tsx test/document-http-lifetime.test.ts \
+  test/product-host-file-read.test.ts test/product-host-document-settlement.test.ts \
+  test/preview-workspace.test.tsx test/preview-intents.test.tsx
+```
+
+Native lanes use `TMPDIR=/var/tmp/p450s` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`; the ambient `/tmp/.git` and `/tmp/rustx.toml`
+were verified still present, so the clean short temporary root remains necessary.
+
+
+The final-source Web suite passed 101 files / 1681 tests, and typecheck, build,
+i18n and provenance passed. The Linux contracts aggregate command failed in
+`runtime::workspace::tests::tracked_child_commit_with_overlay_still_produces_source_handoff`
+at `src/runtime/workspace.rs:6011`, `expect("source handoff")`: 3274 passed,
+1 failed, 3 ignored, 195 boundary tests filtered. The failure log does not expose
+the settlement error, so its cause is not claimed. This Rust path is unchanged
+by the repair. No retry was used to replace that failed lane result. The bin and
+example targets skipped after the aggregate library failure were subsequently
+executed once with `cargo test --bins --examples --all-features --locked` and
+passed; that is coverage of unexecuted targets, not a passing replacement for
+the library lane.
+
+Exact final-source commands and results (native lane environment above):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo build --bins --all-features --locked` | PASS |
+| `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::` | FAIL, exit 101; workspace handoff assertion above |
+| `cargo test --test contracts --test provider --all-features --locked` | PASS |
+| `cargo run --locked --example check_test_lanes -- --job rust-contracts` | PASS |
+| `cargo test --lib --all-features --locked -- boundary_suites::` | PASS |
+| `cargo test --all-features --locked --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | PASS |
+| `cargo run --locked --example check_test_lanes -- --job rust-boundaries` | PASS |
+| `pnpm --dir protocol/app-server check` | PASS |
+| `pnpm --dir protocol/app-server typecheck` | PASS |
+| `pnpm --dir tui typecheck` | PASS |
+| `pnpm --dir tui test` | PASS |
+| `pnpm --dir dev typecheck` | PASS |
+| `pnpm --dir dev test` | PASS |
+| `bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 -- /usr/bin/true` | PASS |
+| `node web-console/scripts/check-office-sandbox.ts` | PASS |
+| `cargo test --bins --examples --all-features --locked` | PASS, remaining targets after library failure |
+| `cd test-support/fake-provider && uv sync --frozen && uv run --frozen pytest` | PASS, 52 tests |
+| `pnpm --dir web-console typecheck` | PASS |
+| `pnpm --dir web-console test` | PASS, 101 files / 1681 tests |
+| `pnpm --dir web-console build` | PASS |
+| `pnpm --dir web-console check:i18n` | PASS |
+| `pnpm --dir web-console check:provenance` | PASS |
+| `CONTAINER_ENGINE=podman pnpm --dir web-console test:e2e` | FAIL, 166 passed / 3 failed (12.0m) |
+| `git diff --check` | PASS |
+| `git diff origin/main...HEAD --check` | PASS |
+
+The single full browser run used frozen final production/test source and failed:
+
+- `agent.spec.ts:96`, light 390 and dark 390: stable 334×244 Composer captures
+  differ by 15 and 16 pixels respectively, outside any registered noise region;
+  maximum channel delta is 13 and 18. No baseline or tolerance changed.
+- `composer.spec.ts:10`: the Goal started activity's Execution details summary
+  remained invisible when clicked at line 108, exhausting the existing 120-second
+  test deadline. The trace and failure screenshot are retained. No Composer or
+  scroll behavior was changed to bypass this failure.
+
+The preview-workspace, Artifact document, document/Download and reading paths
+passed in this run. Previous-run locale and Settings focus failures did not
+recur; they are historical, not counted as current failures. No selective or full
+browser retry replaced this result. Combined with the Rust library failure,
+required local validation is **not green; PR is not ready**. Hosted results are
+reported separately for the final SHA, including its macOS jobs.
+
+Evidence is retained under `/var/tmp/rustx-450-artifact-admission-evidence/`.
+Before commit/push, origin/main was fetched again and remained
+`3aeefdc771f24d1e5acfc53da16c8bcbcbba35cd`, also the merge base. No integration was
+required. The primary checkout remained untouched at that SHA with only its
+pre-existing untracked `.playwright-mcp/` directory.

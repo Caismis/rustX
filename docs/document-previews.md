@@ -38,7 +38,8 @@ retires every incompatible active occurrence lease, including its original URL.
 | --- | --- |
 | Original Artifact bytes | 256 KiB, existing owner policy |
 | Original Session-file bytes | 512 KiB, existing owner policy |
-| Preview original transfers / URLs | 2 active transfers; 2 visible occurrence URLs plus 1 transient Download URL (3 aggregate) |
+| Private Host reads / ordinary Artifact transfers | 2 private permits per Host authority / 2 public transfers per ArtifactResources owner; independent physical domains |
+| Preview original URLs | 2 visible occurrence URLs plus 1 transient Download URL (3 aggregate) |
 | Inline Conversation Artifact transfers / retained URLs | Existing separate 2 / 16 owner, unchanged |
 | Active preview bodies / browser derivation demand | 2 visible bodies; 1 active Host derivation with at most 2 visible intents waiting during retirement |
 | Active derived operations per Product Host | 1; browser serializes visible demand, no automatic retries |
@@ -102,11 +103,13 @@ compatible Session/runtime/authority/target scope. Each `FilePreviewLease` is
 bound to one exact source and occurrence and owns its cancellation signal,
 original URL and active derivation demand. The logical workspace never holds bytes
 or URLs. The coordinator admits at most two visible leases and one independent
-transient Download. Original read admission stays at two with at most three
+transient Download. Private Host read admission stays at two with at most three
 current intents waiting during settlement; no native transfer bound changes.
-The one active derivation reserves one of those two read permits for its complete
-lifetime, because its internal reauthorization uses the same Host/native read
-budget. This leaves one original pane/Download transfer while conversion runs. The browser sends only an attachment
+The one active derivation reserves one private read permit for its complete
+lifetime for either source kind, because reauthorization uses the private
+Host/native read budget. This leaves one private Session-file pane/Download
+transfer while conversion runs. Ordinary Artifact originals use public
+`artifact/read` with the independent ArtifactResources two-transfer limit. The browser sends only an attachment
 target, a closed Artifact or committed-delivery coordinate, an extension and the
 SHA-256 of its authorized original bytes. It never uploads raw Office bytes or
 supplies a Host pathname. The Host authenticates to the private native read seam
@@ -139,8 +142,8 @@ Physical settlement failures preserve the owner whose obligation is unknown:
 | Private failure kind | Physical fact | Browser admission made unavailable |
 | --- | --- | --- |
 | `converter_settlement_unknown` | Office cgroup/converter cleanup did not prove retirement; preceding native reads settled | Document conversion only |
-| `file_settlement_unknown` | A native/raw read did not prove retirement, including a document reauthorization read | Raw reads; also the enclosing document demand when raised during derivation |
-| `document_settlement_unknown` | The document HTTP carrier lost its terminal witness; either a nested raw read or converter may remain | Both raw reads and document conversion |
+| `file_settlement_unknown` | A native/raw read did not prove retirement, including a document reauthorization read | Private Host reads; also the enclosing document demand when raised during derivation |
+| `document_settlement_unknown` | The document HTTP carrier lost its terminal witness; either a nested raw read or converter may remain | Both private Host reads and document conversion |
 
 `LocalWorkspaceHost` maps `OfficeSettlementError` to converter-only uncertainty
 and preserves a nested `file_settlement_unknown` unchanged. The document path
@@ -152,13 +155,27 @@ uncertainty because the missing response could conceal a native read.
 
 Each finite demand domain supplies its own settlement-failure predicate.
 `PreviewDemand` itself knows no Host error taxonomy. Converter-only failure
-releases the composed read reservation, so ordinary reads and original Download
-remain usable, including in another Session under the same Host authority.
-Unknown read ownership keeps raw admission unavailable across coordinator
+releases the composed private read reservation, so Session-file reads and original
+Download remain usable, including in another Session under the same Host authority.
+Unknown private read ownership keeps private admission unavailable across coordinator
 replacement; an enclosing derivation also remains unavailable. A new Host
 authority creates fresh domains and old coordinators remain obsolete. Ordinary
 cancellation with proven physical settlement releases capacity normally and
 never poisons a domain merely because publication was retired.
+
+Source identity does not define the admission domain; the operation path does.
+Public `artifact/read` in `connection.rs` reads through the Artifact authority
+without acquiring `file_reads()`. Private `ReadSource::Artifact` in
+`product_host.rs` acquires that same private permit as Session-file rereads.
+Consequently every document derivation enters `documents` and `privateReads`,
+but ordinary managed Artifact preview/Download enters only ArtifactResources.
+None of the three private settlement failures poisons public Artifact transfers.
+
+There is no cross-owner two-transfer aggregate contract: the former shared gate
+conflated unrelated capacities. The presentation bounds are two active bodies,
+one independent Download and three original URLs. Each concrete transport keeps
+its own finite limit, including retired unsettled operations. No additional
+presentation queue or physical-settlement mode is introduced.
 
 A small browser admission primitive coordinates the two visible derivation
 intents. A waiting occurrence leaves immediately on abort. An active operation
