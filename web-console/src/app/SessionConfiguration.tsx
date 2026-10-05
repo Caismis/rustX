@@ -1,5 +1,6 @@
 import { useTranslation } from '../locale/react';
 import { useSelector } from '@xstate/react';
+import { useClientSelector } from '../client/selectors';
 import type { AdoptionEligibility, SourceTarget } from '../../../protocol/app-server/v35';
 import type { AppServerClient, SessionView, ConnectionState } from '../client/app-server';
 import type { ReactNode } from 'react';
@@ -30,8 +31,10 @@ import { applicationOwners, observedResult, observedUnitLabel, observedUnits, op
  * delta changes the snapshot, never the configuration observation. */
 export function SessionConfiguration({ client, view, openOwningSettings }: { client: AppServerClient; view: SessionView; openOwningSettings?: (owner: SourceTarget) => void }) {
   const { actor, transport } = useSessionConfiguration(client, view.id);
-  // Without a live runtime snapshot nothing native vouches for eligibility.
-  const eligibility = view.snapshot?.configuration_adoption_eligibility.status ?? 'unavailable';
+  // Subscribed to this one runtime fact alone, so a streamed delta re-renders
+  // nothing here. Without a live runtime snapshot nothing native vouches for
+  // eligibility.
+  const eligibility = useClientSelector(client, state => state.views[view.id]?.snapshot?.configuration_adoption_eligibility.status ?? 'unavailable');
   return actor ? <ConfigurationObservation actor={actor} connection={transport.connection} eligibility={eligibility} openOwningSettings={openOwningSettings}/> : null;
 }
 function ConfigurationObservation({ actor, connection, eligibility, openOwningSettings }: {

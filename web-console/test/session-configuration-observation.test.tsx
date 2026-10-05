@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
-import { useSyncExternalStore } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import type { AdoptionEligibility, ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v35';
 import { cfg3Application } from './cfg3-data';
 import { Server, snapshot } from './fixture';
 import { RpcFailure } from '../src/client/app-server';
+import { sameValue, selectShell, useClientSelector } from '../src/client/selectors';
 afterEach(cleanup);
 const servers: Server[] = [];
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); });
@@ -16,11 +16,12 @@ const adoptions = (s: Server) => s.requests.filter(item => item.request.method =
 const unavailableLine = () => screen.queryByText(/Configuration status unavailable/);
 const adopt = () => screen.queryByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement | null;
 
-/** App.tsx shape: the subscribed view flows back in on every client
- * publication — including every streamed delta. */
+/** App.tsx shape exactly: the shell projection's Session view, which carries
+ * no Runtime Client snapshot, so the banner must subscribe to eligibility
+ * itself. */
 function Harness({ s }: { s: Server }) {
-  const state = useSyncExternalStore(s.client.subscribe, s.client.getSnapshot);
-  return <SessionConfiguration client={s.client} view={state.views.A}/>;
+  const shell = useClientSelector(s.client, selectShell, sameValue);
+  return <SessionConfiguration client={s.client} view={shell.views.A}/>;
 }
 
 /** A Session A whose native application is `application` and whose live

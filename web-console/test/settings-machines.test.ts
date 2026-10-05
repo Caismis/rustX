@@ -2067,6 +2067,20 @@ it('R13c an obsolete result of the same connection generation still cannot regre
   expect(snapshot.matches({ observation: { connected: 'ready' } })).toBe(true);
 });
 
+it('R13c an equal-version authoritative read is not obsolete: the adoption reread replaces the observation', async () => {
+  const { actor, reads, adoptions } = scriptedSession();
+  reads[0].resolve({ ...cfg3SourceApplication(), version: '3', candidate });
+  await flush();
+  actor.send({ type: 'ADOPT', candidate });
+  await flush();
+  adoptions[0].resolve();
+  await flush();
+  reads[1].resolve({ ...cfg3SourceApplication(), version: '3', candidate: null });
+  await flush();
+  expect(actor.getSnapshot().context.application?.candidate).toBeNull();
+  expect(applicationCurrent(actor.getSnapshot())).toBe(true);
+});
+
 it('R13d an authoritative answer that the Session has no application is a known observation', async () => {
   const { actor, reads } = scriptedSession();
   expect(applicationKnown(actor.getSnapshot())).toBe(false);

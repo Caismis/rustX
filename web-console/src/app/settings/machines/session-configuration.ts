@@ -197,7 +197,8 @@ export const sessionConfigurationMachine = setup({
     adoptObservation: assign({
       application: ({ context, event }) => {
         const next = (event as unknown as { output: ConfigurationApplication | null }).output ?? undefined;
-        if (context.application && next && !newer(next, context.application)) return context.application;
+        // Only a strictly newer observation of this span outranks a read.
+        if (context.application && next && newer(context.application, next)) return context.application;
         return next;
       },
       observed: () => true,
