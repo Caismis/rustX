@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { ConversationTurn, ConversationTurnPage, ConversationWindow, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v34';
+import type { ConversationTurn, ConversationTurnPage, ConversationWindow, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v35';
 import { Server, snapshot } from './fixture';
 import { HISTORY_LIMIT, HISTORY_MAX_BYTES, turnKey } from '../src/client/transcript';
 const entry=(n:number):RuntimeClientTranscriptEntry=>({cursor:String(n),item:{type:'message',message:{role:'assistant',id:`m${n}`,content:[{type:'text',text:`answer-${n}`}]}}});

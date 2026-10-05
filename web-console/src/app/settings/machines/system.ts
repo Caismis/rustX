@@ -91,10 +91,14 @@ export class ConfigurationSystem {
    *
    * Every live actor of the current lifetime is then told the transport at
    * that same publication — attached or not, held by a presentation or not. A
-   * connection generation replacement, a reconnect reaching `connected`, a
-   * native publication and a Session snapshot change are therefore facts the
-   * actors observe directly, and whatever read they owe starts from their own
-   * transition graph, never from a presentation happening to render.
+   * connection generation replacement, a reconnect reaching `connected` and a
+   * native configuration publication are therefore facts the actors observe
+   * directly, and whatever read they owe starts from their own transition
+   * graph, never from a presentation happening to render. A Session's Runtime
+   * Client snapshot is not part of that transport: its identity changes with
+   * every streamed delta and is never a configuration invalidation signal, so
+   * a delivery caused only by runtime traffic changes nothing an actor
+   * observes and is no transition at all.
    *
    * A Settings target is told only its own publication level: its port
    * projects the client's publications to the one application scope that

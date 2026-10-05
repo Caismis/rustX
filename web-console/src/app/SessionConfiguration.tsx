@@ -1,13 +1,13 @@
 import { useTranslation } from '../locale/react';
 import { useSelector } from '@xstate/react';
-import type { SourceTarget } from '../../../protocol/app-server/v34';
+import type { AdoptionEligibility, SourceTarget } from '../../../protocol/app-server/v35';
 import type { AppServerClient, SessionView, ConnectionState } from '../client/app-server';
 import type { ReactNode } from 'react';
 import { Button } from '../presentation/primitives/Button';
 import { StateDot, type StateDotState } from '../presentation/primitives/StateDot';
 import css from '../presentation/agent/SessionConfiguration.module.css';
 import { useSessionConfiguration, type SessionConfigurationActor } from './settings/machines/react';
-import { applicationKnown } from './settings/machines/session-configuration';
+import { applicationCurrent, observationUnavailable } from './settings/machines/session-configuration';
 import { applicationOwners, observedResult, observedUnitLabel, observedUnits, openOwnerLabel, sourceTargetKey, unitApplication } from './settings/projection';
 
 /** The Session-owned configuration region.
@@ -19,24 +19,38 @@ import { applicationOwners, observedResult, observedUnitLabel, observedUnits, op
  * clear pending observations, and this component is never the adoption gate:
  * `session/adoptConfiguration` revalidates it natively.
  *
- * This component issues no read. Native publications, Session snapshot changes
- * and reconnects are transport facts the actor observes from its configuration
- * system, so a Session observation recovers after a reconnect whether or not
- * this presentation renders, and whether or not the Session is attached. */
+ * This component issues no read. Native publications and reconnects are
+ * transport facts the actor observes from its configuration system, so a
+ * Session observation recovers after a reconnect whether or not this
+ * presentation renders, and whether or not the Session is attached.
+ *
+ * Adoption eligibility is not configuration state: it is the live runtime's
+ * own advisory publication on the Session's Runtime Client snapshot, read here
+ * as-is and never derived from attempts, jobs or interactions. A streamed
+ * delta changes the snapshot, never the configuration observation. */
 export function SessionConfiguration({ client, view, openOwningSettings }: { client: AppServerClient; view: SessionView; openOwningSettings?: (owner: SourceTarget) => void }) {
   const { actor, transport } = useSessionConfiguration(client, view.id);
-  return actor ? <ConfigurationObservation actor={actor} connection={transport.connection} openOwningSettings={openOwningSettings}/> : null;
+  // Without a live runtime snapshot nothing native vouches for eligibility.
+  const eligibility = view.snapshot?.configuration_adoption_eligibility.status ?? 'unavailable';
+  return actor ? <ConfigurationObservation actor={actor} connection={transport.connection} eligibility={eligibility} openOwningSettings={openOwningSettings}/> : null;
 }
-function ConfigurationObservation({ actor, connection, openOwningSettings }: { actor: SessionConfigurationActor; connection: ConnectionState; openOwningSettings?: (owner: SourceTarget) => void }) {
+function ConfigurationObservation({ actor, connection, eligibility, openOwningSettings }: {
+  actor: SessionConfigurationActor; connection: ConnectionState; eligibility: AdoptionEligibility['status']; openOwningSettings?: (owner: SourceTarget) => void;
+}) {
   const tx = useTranslation();
   // The current connected span's observation, or — while no span has observed
   // since the last one ended — that span's observation as explicitly stale
-  // presentation data. `known` is what says which of the two this is; the
-  // retained value is never a comparison baseline for a later span.
+  // presentation data, which is then labelled unavailable; the retained value
+  // is never a comparison baseline for a later span.
   const application = useSelector(actor, snapshot => snapshot.context.application ?? snapshot.context.staleApplication);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const adoptionError = useSelector(actor, snapshot => snapshot.context.adoptionError);
-  const known = useSelector(actor, applicationKnown);
+  // Distinct facts, never one boolean: status is *unavailable* only when the
+  // span's read failed or only an ended span's observation is retained; a
+  // reread in flight is still known, merely not *current*, and only a current
+  // observation offers adoption — still subject to native eligibility.
+  const unavailable = useSelector(actor, observationUnavailable);
+  const current = useSelector(actor, applicationCurrent);
   const busy = useSelector(actor, snapshot => snapshot.matches({ adoption: 'submitting' }));
   const candidate = application?.candidate;
   // Per-unit native observations. Independent units may simultaneously be
@@ -45,19 +59,18 @@ function ConfigurationObservation({ actor, connection, openOwningSettings }: { a
   const observations = observedUnits.map(unit => ({ unit, result: observedResult(unitApplication(application, unit)) })).filter(row => row.result.state !== 'unavailable');
   const preparing = observations.filter(row => row.result.state === 'preparing');
   const failed = observations.filter(row => row.result.state === 'failed');
-  if (known && !candidate && !preparing.length && !failed.length && !adoptionError) return null;
-  const eligibility = application?.eligibility.status;
+  if (!unavailable && !candidate && !preparing.length && !failed.length && !adoptionError) return null;
   // Presentation only: which line of the banner each native fact is. Nothing
   // here decides eligibility, adoption, ownership or residency.
   const owners = openOwningSettings ? applicationOwners(application) : [];
   return <section aria-label={tx('common:session-configuration.session-configuration')} className={css.banner}>
-    {!known && <Line state="unavailable" text={tx('common:copy.configuration-status-unavailable-retaining-the-last-observation')} />}
+    {unavailable && <Line state="unavailable" text={tx('common:copy.configuration-status-unavailable-retaining-the-last-observation')} />}
     {preparing.length > 0 && <Line state="preparing" text={tx('common:copy.preparing-configuration')}
       detail={preparing.map(row => tx('common:copy.value-preparing', { p0: observedUnitLabel(tx, row.unit) }))} />}
     {candidate && <Line state={eligibility === 'eligible' ? 'ready' : 'blocked'} text={tx('common:copy.prepared-configuration-is-waiting-for-this-session')}
       reason={eligibility === 'busy' ? tx('common:copy.session-work-must-settle-before-adoption')
         : eligibility === 'unavailable' ? tx('common:copy.session-configuration-is-unavailable-for-adoption') : undefined}
-      actions={<Button size="sm" variant="primary" disabled={!known || busy || connection !== 'connected' || eligibility !== 'eligible'}
+      actions={<Button size="sm" variant="primary" disabled={!current || busy || connection !== 'connected' || eligibility !== 'eligible'}
         onClick={() => actor.send({ type: 'ADOPT', candidate })}>{tx('common:session-configuration.adopt-configuration')}</Button>} />}
     {failed.length > 0 && <Line state="failed" text={tx('common:copy.some-configuration-preparation-failed-review-the-owning-authored-source-in-settings-and-re')}
       detail={failed.map(row => tx('common:copy.value-failed-value', { p0: observedUnitLabel(tx, row.unit), p1: row.result.state === 'failed' ? row.result.diagnostic : '' }))}

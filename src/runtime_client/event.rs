@@ -56,6 +56,14 @@ pub enum RuntimeClientEvent {
     },
     /// Independent Trace invalidation; reread Trace, not the Session snapshot.
     TraceChanged,
+    /// The live runtime's configuration-adoption eligibility changed.
+    ///
+    /// Published only on an actual change of the native derivation, never for
+    /// ordinary streaming. Advisory: `session/adoptConfiguration` revalidates
+    /// the real gate at its commit boundary.
+    ConfigurationAdoptionEligibilityChanged {
+        eligibility: crate::local_runtime::configuration::application::AdoptionEligibility,
+    },
     /// Bounded authoritative durable Goal view. Every emission follows a
     /// committed durable transition; there is no activation-only form.
     GoalChanged { view: crate::goal::GoalView },

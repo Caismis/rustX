@@ -329,7 +329,7 @@ and reconnect diagnostics remain visible.
 
 ## Uploads
 
-User uploads are native Session-owned files under App Server v34. The dedicated
+User uploads are native Session-owned files under App Server v35. The dedicated
 intake owner normalizes picker/drop/paste, preserves duplicate selections through
 local identities, and keeps per-file accepted/rejected outcomes. Raw over-count
 selections are atomically rejected with one summary. Directory entries are detected

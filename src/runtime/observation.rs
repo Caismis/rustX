@@ -368,6 +368,16 @@ pub(crate) enum ConversationObservation {
         /// The human-readable failure diagnostic.
         diagnostic: String,
     },
+    /// The runtime's current configuration-adoption eligibility changed.
+    ///
+    /// Runtime-domain advisory state, never configuration application state:
+    /// it answers whether this live runtime could adopt a prepared
+    /// configuration now, derived by the adoption gate's idle rule over its
+    /// in-memory owners. The runtime publishes it only when the derived value
+    /// differs from its previous publication, so ordinary streaming never
+    /// emits it. `session/adoptConfiguration` still revalidates the real gate
+    /// at its commit boundary.
+    AdoptionEligibility(crate::local_runtime::configuration::application::AdoptionEligibility),
 }
 
 /// The tiny synchronization boundary between the conversation runtime and

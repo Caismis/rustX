@@ -89,6 +89,7 @@ export function emptyPresentationState(
     goal: null,
     runtimeShutdown: false,
     durabilityFailure: null,
+    adoptionEligibility: "unavailable",
     effectiveApprovalMode: "policy",
   };
 }
@@ -217,6 +218,7 @@ export function replaceFromSnapshot(
     settingsEvidence: snapshot.settings_evidence,
     runtimeShutdown: snapshot.shutting_down,
     durabilityFailure: snapshot.durability_failure ?? null,
+    adoptionEligibility: snapshot.configuration_adoption_eligibility.status,
     effectiveApprovalMode: snapshot.effective_approval_mode,
   };
 }
@@ -743,6 +745,12 @@ export function reduce(
         operation: event.operation,
         diagnostic: event.diagnostic,
       };
+      return next;
+
+    case "configuration_adoption_eligibility_changed":
+      // Runtime-domain advisory state, carried as published; `/session adopt`
+      // still submits the inspected candidate to the native gate.
+      next.adoptionEligibility = event.eligibility.status;
       return next;
 
     default:

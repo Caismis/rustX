@@ -276,6 +276,7 @@ export function snapshot(
     // Plugins are absent unless explicitly authored.
     effective_plugins: { goal: null, agent_status: null, todo: null },
     settings_evidence: "live_session",
+    configuration_adoption_eligibility: { status: "eligible" },
     workflows: { revision: "0", runs: [], omitted_runs: 0 },
     conversation_id: "conv_01900000-0000-7000-8000-000000000002",
     shutting_down: false,

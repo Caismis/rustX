@@ -359,20 +359,47 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })));
     }
     for result in [
-        MethodResult::UploadPrepared { transfer: super::upload_transfer::UploadDescriptor { path: format!("/session-upload/{}", "a".repeat(43)), loopback_port: None, expires_in_seconds: 60 } },
-        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Absent },
-        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Unresolved },
-        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Failed },
-        MethodResult::UploadStatus { outcome: crate::local_runtime::session::uploads::UploadOutcome::Ready { files: Vec::new() } },
+        MethodResult::UploadPrepared {
+            transfer: super::upload_transfer::UploadDescriptor {
+                path: format!("/session-upload/{}", "a".repeat(43)),
+                loopback_port: None,
+                expires_in_seconds: 60,
+            },
+        },
+        MethodResult::UploadStatus {
+            outcome: crate::local_runtime::session::uploads::UploadOutcome::Absent,
+        },
+        MethodResult::UploadStatus {
+            outcome: crate::local_runtime::session::uploads::UploadOutcome::Unresolved,
+        },
+        MethodResult::UploadStatus {
+            outcome: crate::local_runtime::session::uploads::UploadOutcome::Failed,
+        },
+        MethodResult::UploadStatus {
+            outcome: crate::local_runtime::session::uploads::UploadOutcome::Ready {
+                files: Vec::new(),
+            },
+        },
         MethodResult::SessionFileBytes {
             file: crate::tools::session_files::SessionFileReference {
-                scope: crate::tools::session_files::SessionFileScope { conversation_id: target.conversation_id.clone(), device: "1".into(), inode: "2".into() },
-                path: "报告 file.md".into(), name: "报告 file.md".into(), description: Some("Report".into()), mime_type: "text/markdown".into(),
-            }, data: "IyBSZXBvcnQK".into(),
+                scope: crate::tools::session_files::SessionFileScope {
+                    conversation_id: target.conversation_id.clone(),
+                    device: "1".into(),
+                    inode: "2".into(),
+                },
+                path: "报告 file.md".into(),
+                name: "报告 file.md".into(),
+                description: Some("Report".into()),
+                mime_type: "text/markdown".into(),
+            },
+            data: "IyBSZXBvcnQK".into(),
         },
         MethodResult::Jobs {
-            jobs: Vec::new(), returned: 0, matched: 0,
-            limit: crate::tools::background::MAX_JOB_LIST_LIMIT, truncated: false,
+            jobs: Vec::new(),
+            returned: 0,
+            matched: 0,
+            limit: crate::tools::background::MAX_JOB_LIST_LIMIT,
+            truncated: false,
         },
         MethodResult::InboundMutation {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
@@ -398,13 +425,36 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                         },
                     units: std::collections::BTreeMap::default(),
                     candidate: None,
-                    eligibility: crate::local_runtime::configuration::application::AdoptionEligibility::Unavailable,
                 },
         },
-        MethodResult::ConversationTurns { page: crate::durable::reading::ConversationTurnPage {
-            cut: reading_cut.clone(), total: 1, offset: 0, turns: vec![crate::durable::reading::ConversationTurn { id: reading_id.clone(), ordinal: 1, cursor: Some(crate::durable::TranscriptCursor::new(EXACT)), preview: "Native preview".into() }],
-        } },
-        MethodResult::TranscriptWindow { window: crate::runtime_client::snapshot::ConversationWindow { cut: reading_cut, page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage { entries: Vec::new(), next_cursor: None, statistics: None }, target: Some(reading_id), target_cursor: Some(crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT)), newer_cursor: None } },
+        MethodResult::ConversationTurns {
+            page: crate::durable::reading::ConversationTurnPage {
+                cut: reading_cut.clone(),
+                total: 1,
+                offset: 0,
+                turns: vec![crate::durable::reading::ConversationTurn {
+                    id: reading_id.clone(),
+                    ordinal: 1,
+                    cursor: Some(crate::durable::TranscriptCursor::new(EXACT)),
+                    preview: "Native preview".into(),
+                }],
+            },
+        },
+        MethodResult::TranscriptWindow {
+            window: crate::runtime_client::snapshot::ConversationWindow {
+                cut: reading_cut,
+                page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
+                    entries: Vec::new(),
+                    next_cursor: None,
+                    statistics: None,
+                },
+                target: Some(reading_id),
+                target_cursor: Some(
+                    crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT),
+                ),
+                newer_cursor: None,
+            },
+        },
         MethodResult::InboundAccepted {
             message_id: crate::runtime::identity::MessageId::new("message-fixture"),
             inbound_sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
@@ -747,9 +797,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v34.schema.json", "v34.ts"]);
+        assert_eq!(generations, ["v35.schema.json", "v35.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v34.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v35.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

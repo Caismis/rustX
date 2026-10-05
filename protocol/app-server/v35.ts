@@ -2057,19 +2057,6 @@ export type UnitApplication =
     };
 export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
 /**
- * Advisory only; adoption always revalidates the native admission gate.
- */
-export type AdoptionEligibility =
-  | {
-      status: 'eligible';
-    }
-  | {
-      status: 'busy';
-    }
-  | {
-      status: 'unavailable';
-    };
-/**
  * Which native evidence is available for the canonical settings sections.
  */
 export type SettingsEvidence = ('live_session' | 'frozen_child') | 'historical_partial';
@@ -2848,6 +2835,10 @@ export type RuntimeClientEvent =
       type: 'trace_changed';
     }
   | {
+      eligibility: AdoptionEligibility;
+      type: 'configuration_adoption_eligibility_changed';
+    }
+  | {
       view: GoalView;
       type: 'goal_changed';
     }
@@ -3539,6 +3530,23 @@ export type RuntimeClientEvent =
        */
       diagnostic: string;
       type: 'runtime_durability_failed';
+    };
+/**
+ * Whether a live runtime could adopt a prepared configuration now.
+ *
+ * Runtime-domain advisory state, published by the runtime through its Runtime
+ * Client projection; it is never part of a `ConfigurationApplication`.
+ * Adoption always revalidates the native admission gate.
+ */
+export type AdoptionEligibility =
+  | {
+      status: 'eligible';
+    }
+  | {
+      status: 'busy';
+    }
+  | {
+      status: 'unavailable';
     };
 
 /**
@@ -7809,7 +7817,6 @@ export interface ConfigurationApplication {
     shared_capacity?: UnitApplication;
   };
   candidate?: AvailableConfiguration | null;
-  eligibility: AdoptionEligibility;
 }
 export interface AvailableConfiguration {
   identity: ApplicationIdentity;
@@ -7869,6 +7876,25 @@ export interface RuntimeClientSnapshot {
    * or tool authority.
    */
   effective_approval_mode: 'policy' | 'full_access';
+  /**
+   * Whether this live runtime could adopt a prepared Session configuration
+   * now. Runtime-domain advisory state published by the runtime with its
+   * adoption gate's idle rule over in-memory owners, and changed only by the
+   * `configuration_adoption_eligibility_changed` event; it describes no
+   * candidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a
+   * durable inspection projection. `session/adoptConfiguration` revalidates
+   * the real gate at its commit boundary.
+   */
+  configuration_adoption_eligibility:
+    | {
+        status: 'eligible';
+      }
+    | {
+        status: 'busy';
+      }
+    | {
+        status: 'unavailable';
+      };
   /**
    * The runtime's durable-authority failure, when it has entered the
    * explicit degraded state. While set, no new durable admission/execution

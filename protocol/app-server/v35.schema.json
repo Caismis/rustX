@@ -14631,9 +14631,6 @@
               "type": "null"
             }
           ]
-        },
-        "eligibility": {
-          "$ref": "#/$defs/AdoptionEligibility"
         }
       },
       "required": [
@@ -14641,8 +14638,7 @@
         "sources",
         "version",
         "desired",
-        "units",
-        "eligibility"
+        "units"
       ]
     },
     "UnitApplication": {
@@ -14746,47 +14742,6 @@
         "impact"
       ]
     },
-    "AdoptionEligibility": {
-      "description": "Advisory only; adoption always revalidates the native admission gate.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "eligible"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "busy"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "const": "unavailable"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        }
-      ]
-    },
     "RuntimeClientSnapshot": {
       "description": "The authoritative Runtime Client snapshot of one conversation runtime.\n\nEvery section is a deterministic projection of one authoritative\nruntime owner. The shape belongs to the Runtime Client protocol: internal\nsnapshot types are projected into these external DTOs, never exposed\ndirectly.",
       "type": "object",
@@ -14820,6 +14775,10 @@
         "effective_approval_mode": {
           "description": "The authoritative mode used by the current attempt boundary.",
           "$ref": "#/$defs/ApprovalMode"
+        },
+        "configuration_adoption_eligibility": {
+          "description": "Whether this live runtime could adopt a prepared Session configuration\nnow. Runtime-domain advisory state published by the runtime with its\nadoption gate's idle rule over in-memory owners, and changed only by the\n`configuration_adoption_eligibility_changed` event; it describes no\ncandidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a\ndurable inspection projection. `session/adoptConfiguration` revalidates\nthe real gate at its commit boundary.",
+          "$ref": "#/$defs/AdoptionEligibility"
         },
         "durability_failure": {
           "description": "The runtime's durable-authority failure, when it has entered the\nexplicit degraded state. While set, no new durable admission/execution\nwork may begin.",
@@ -14975,6 +14934,7 @@
         "conversation_id",
         "shutting_down",
         "effective_approval_mode",
+        "configuration_adoption_eligibility",
         "messages",
         "transcript",
         "trace",
@@ -15493,6 +15453,47 @@
         "state",
         "path",
         "truncated"
+      ]
+    },
+    "AdoptionEligibility": {
+      "description": "Whether a live runtime could adopt a prepared configuration now.\n\nRuntime-domain advisory state, published by the runtime through its Runtime\nClient projection; it is never part of a `ConfigurationApplication`.\nAdoption always revalidates the native admission gate.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "eligible"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "busy"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
       ]
     },
     "RuntimeDurabilityFailure": {
@@ -20177,6 +20178,24 @@
             "type"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "The live runtime's configuration-adoption eligibility changed.\n\nPublished only on an actual change of the native derivation, never for\nordinary streaming. Advisory: `session/adoptConfiguration` revalidates\nthe real gate at its commit boundary.",
+          "type": "object",
+          "properties": {
+            "eligibility": {
+              "$ref": "#/$defs/AdoptionEligibility"
+            },
+            "type": {
+              "type": "string",
+              "const": "configuration_adoption_eligibility_changed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "eligibility"
+          ]
         },
         {
           "description": "Bounded authoritative durable Goal view. Every emission follows a\ncommitted durable transition; there is no activation-only form.",

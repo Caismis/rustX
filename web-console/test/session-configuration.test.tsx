@@ -3,18 +3,22 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { OutcomeUncertain } from '../src/client/app-server';
-import type { MethodResult } from '../../protocol/app-server/v34';
+import type { AdoptionEligibility, ConfigurationApplication, MethodResult } from '../../protocol/app-server/v35';
 import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
 import { snapshot } from './fixture';
 afterEach(cleanup);
 const writes = (s: ReturnType<typeof cfg3Client>) => s.request.mock.calls.filter(([op]) => op.method === 'session/adoptConfiguration');
 const reads = (s: ReturnType<typeof cfg3Client>) => s.request.mock.calls.filter(([op]) => op.method === 'session/configuration');
-/** The client publishes a new authoritative Session snapshot. That publication
- * alone is the observation trigger: the presentation is never re-rendered with
- * a different view to deliver it. */
-const snapshotChanged = (s: ReturnType<typeof cfg3Client>) =>
-  act(() => s.publish({ views: { ...s.state.views, [cfg3Session]: { ...s.state.views[cfg3Session], snapshot: snapshot() } } }));
+/** The live runtime publishes its adoption eligibility on the Session's
+ * Runtime Client snapshot; the subscribed view carries it to the banner. */
+const eligibilityPublished = (s: ReturnType<typeof cfg3Client>, status: AdoptionEligibility['status']) =>
+  act(() => s.publish({ views: { ...s.state.views, [cfg3Session]: { ...s.state.views[cfg3Session], snapshot: { ...snapshot(), configuration_adoption_eligibility: { status } } } } }));
+/** Native publishes this Session's complete application (`configuration/changed`). */
+const configurationPublished = (s: ReturnType<typeof cfg3Client>, application: ConfigurationApplication) =>
+  act(() => s.publish({ configuration: { ...s.state.configuration, [cfg3Session]: application } }));
+/** The Session view as the presentation receives it from the subscribed client. */
+const rendered = (s: ReturnType<typeof cfg3Client>) => <SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>;
 
 it('C13 ready native eligibility submits exactly the inspected candidate and binding', async () => {
  const s = cfg3Client(); s.source.application = cfg3Application();
@@ -26,17 +30,28 @@ it('C13 ready native eligibility submits exactly the inspected candidate and bin
  expect(writes(s)).toHaveLength(1);
 });
 
-it('C15 native Busy remains visible and becomes eligible on settlement observation without polling', async () => {
- const s = cfg3Client(); s.source.application = { ...cfg3Application(), eligibility: { status: 'busy' } };
- render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
+it('C15 native Busy remains visible and becomes eligible on the runtime\'s own publication without polling or rereading', async () => {
+ const s = cfg3Client(); s.source.application = cfg3Application();
+ eligibilityPublished(s, 'busy');
+ const ui = render(rendered(s));
  expect((await screen.findByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
  expect(screen.getByText(/Session work must settle/)).toBeTruthy();
  expect(reads(s)).toHaveLength(1);
- s.source.application = { ...s.source.application, eligibility: { status: 'eligible' } };
- snapshotChanged(s);
+ // The runtime publishes Eligible on the snapshot; configuration authority is
+ // untouched and is not read again.
+ eligibilityPublished(s, 'eligible');
+ ui.rerender(rendered(s));
  await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
- expect(reads(s)).toHaveLength(2);
+ expect(reads(s)).toHaveLength(1);
  expect(writes(s)).toHaveLength(0);
+});
+
+it('C15 without a live runtime snapshot nothing vouches for eligibility, so adoption is not actionable', async () => {
+ const s = cfg3Client(); s.source.application = cfg3Application();
+ act(() => s.publish({ views: { [cfg3Session]: { ...s.state.views[cfg3Session], snapshot: undefined } } }));
+ render(rendered(s));
+ expect((await screen.findByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.getByText(/unavailable for adoption/)).toBeTruthy();
 });
 
 it.each(['Busy', 'NotReady', 'Conflict'])('C14 %s rereads and retains the candidate without automatic replay', async rejection => {
@@ -72,10 +87,14 @@ it('C16 late success A cannot hide newly observed candidate B; acknowledgement a
  s.source.application = cfg3Application();
  render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
  fireEvent.click(await screen.findByRole('button', { name: 'Adopt configuration' }));
+ // Native publishes candidate B while A's response is outstanding: the
+ // publication is the observation, so nothing is read for it.
  s.source.application = { ...cfg3Application(), version: '4', candidate: { identity: { input_revision: 'B', attempt: '4' }, expected_binding: '2', impact: 'prefix_changed' } };
- snapshotChanged(s);
- await waitFor(() => expect(s.request.mock.calls.filter(([op]) => op.method === 'session/configuration')).toHaveLength(2));
+ configurationPublished(s, s.source.application);
+ expect(reads(s)).toHaveLength(1);
  await act(async () => { release({ type: 'configuration_application', application: { ...cfg3Application(), version: '3', candidate: null } }); await pending; });
+ // A's response owes exactly its own authoritative reread.
+ await waitFor(() => expect(reads(s)).toHaveLength(2));
  await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
  expect(writes(s)).toHaveLength(1);
  fireEvent.click(screen.getByRole('button', { name: 'Adopt configuration' }));
@@ -83,17 +102,50 @@ it('C16 late success A cannot hide newly observed candidate B; acknowledgement a
  expect(writes(s)[1][0]).toMatchObject({ params: { candidate: { input_revision: 'B', attempt: '4' }, expected_binding: '2' } });
 });
 
-it('C13 failed refresh retains pending observation and never asserts up to date', async () => {
+it('C13 a failed reconnect read retains the pending observation and never asserts up to date', async () => {
  let unavailable = false;
  const s = cfg3Client(async op => { if (unavailable && op.method === 'session/configuration') throw new Error('unavailable'); });
  s.source.application = cfg3Application();
  render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]}/>);
  await screen.findByRole('button', { name: 'Adopt configuration' }); unavailable = true;
- snapshotChanged(s);
+ // The connection is replaced; the new span's owed read genuinely fails.
+ act(() => s.publish({ connection: 'stale', generation: 2 }));
+ act(() => s.publish({ connection: 'connected' }));
  await screen.findByText(/Configuration status unavailable/);
  expect(screen.getByText(/Prepared configuration is waiting/)).toBeTruthy();
  expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
  expect(screen.queryByText(/up to date/i)).toBeNull();
+});
+
+it('C13 an authoritative answer of no application is known: the banner claims nothing', async () => {
+ const s = cfg3Client(); s.source.application = undefined;
+ render(rendered(s));
+ await waitFor(() => expect(reads(s)).toHaveLength(1));
+ await act(async () => {});
+ expect(screen.queryByLabelText('Session configuration')).toBeNull();
+ expect(screen.queryByText(/Configuration status unavailable/)).toBeNull();
+});
+
+it('C13 an owed reread keeps the observation on screen, never claims unavailability, and offers adoption again only once current', async () => {
+ let releaseRead!: () => void;
+ const held = new Promise<void>(resolve => { releaseRead = resolve; });
+ const s = cfg3Client(async (op, source) => {
+   if (op.method === 'session/adoptConfiguration') { source.application = cfg3Application(); throw new Error('NotReady'); }
+   if (op.method === 'session/configuration' && reads(s).length === 2) await held;
+ });
+ s.source.application = cfg3Application();
+ render(rendered(s));
+ fireEvent.click(await screen.findByRole('button', { name: 'Adopt configuration' }));
+ await screen.findByRole('alert');
+ await waitFor(() => expect(reads(s)).toHaveLength(2));
+ // The adoption's reread is in flight: the last authoritative observation is
+ // still shown and is not "unavailable"; it is merely not current.
+ expect(screen.getByText(/Prepared configuration is waiting/)).toBeTruthy();
+ expect(screen.queryByText(/Configuration status unavailable/)).toBeNull();
+ expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);
+ await act(async () => { releaseRead(); });
+ await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
+ expect(screen.queryByText(/Configuration status unavailable/)).toBeNull();
 });
 
 it.each(['preparing', 'failed'] as const)('C13 %s never fabricates an Adopt candidate', async status => {
@@ -133,7 +185,7 @@ it('C17 a failed authoritative reread after adoption strands neither busy nor th
  // A later native observation makes the same candidate actionable again, which
  // is only possible if the in-flight guard was released.
  unavailable = false;
- snapshotChanged(s);
+ configurationPublished(s, { ...cfg3Application(), version: '3' });
  await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
  fireEvent.click(screen.getByRole('button', { name: 'Adopt configuration' }));
  await waitFor(() => expect(writes(s)).toHaveLength(2));

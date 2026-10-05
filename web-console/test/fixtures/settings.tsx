@@ -1,10 +1,10 @@
 // Deterministic generated-protocol projection, never imported by production.
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
-import { Server, endpoint } from '../fixture';
+import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { ConfigurationApplication, SourceMutation } from '../../../protocol/app-server/v34';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v35';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -70,7 +70,6 @@ if (session) server.handlers.set('session/adoptConfiguration', () => { adopted =
 function sessionApplication(state: string): ConfigurationApplication {
   const application = cfg3Application();
   if (state === 'preparing') return { ...application, candidate: null, units: { capabilities: { status: 'preparing' }, provider: { status: 'preparing' } } };
-  if (state === 'blocked') return { ...application, eligibility: { status: 'busy' } };
   // The failed unit is authored by User and by Workspace B, while the focused
   // Session lives in /workspace/A: owner navigation must open exactly B.
   if (state === 'failed') return { ...application, candidate: null, sources: [{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/B' }], units: { capabilities: { status: 'failed', diagnostic: 'MCP server repository-index failed to start: /usr/local/bin/repository-index-mcp exited with status 127 (command not found) before completing the initialize handshake' }, execution_policy: { status: 'applied' } } };
@@ -138,6 +137,24 @@ server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_
 // The native requests this page issued, for browser assertions of exact
 // identity, ordering and request counts. Test fixture only.
 (window as unknown as { rustxNativeRequests: () => unknown[] }).rustxNativeRequests = () => server.requests.map(item => item.request);
+// Streams one long answer for Session A through the production client fold,
+// one delta per task so every delta can paint. Test fixture only.
+(window as unknown as { rustxStream: (deltas: number) => Promise<void> }).rustxStream = async deltas => {
+  const deliver = (event: RuntimeClientEvent) => {
+    server.cursor++;
+    server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(server.cursor), event } });
+  };
+  deliver({ type: 'attempt_started', attempt_id: 'streamed-attempt' });
+  deliver({ type: 'assistant_message_started', attempt_id: 'streamed-attempt', message_id: 'streamed-message' });
+  for (let delta = 0; delta < deltas; delta++) {
+    await new Promise(resolve => setTimeout(resolve));
+    deliver({ type: 'assistant_text_delta', attempt_id: 'streamed-attempt', message_id: 'streamed-message', block_index: 0, delta: 'x' });
+  }
+  await new Promise(resolve => setTimeout(resolve));
+};
+// A blocked banner is the runtime's own published Busy eligibility, never a
+// configuration application fact.
+if (session === 'blocked') server.snapshots.set('A', { ...snapshot('A'), configuration_adoption_eligibility: { status: 'busy' } });
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);

@@ -957,7 +957,7 @@ consumes its exact invoking draft, and submits one `context/compact` request dir
 The resident Composer context seat observes execution without a command modal.
 Pending inbound remains permitted; manual compaction creates no Attempt.
 
-App Server v34 requires a caller-generated `ManualCompactionRequestId` for
+App Server v35 requires a caller-generated `ManualCompactionRequestId` for
 `context/compact`: 1–64 ASCII letters, digits, underscores or hyphens. Rust
 deserialization rejects invalid values before native admission; schema bounds
 match this contract. The value is correlation only, not an exactly-once key.

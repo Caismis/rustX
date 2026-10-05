@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v34';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v35';
 import { findOnAdvanced, openSettingsPage, queryOnAdvanced, settingsReady, SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/app-server';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -30,7 +30,7 @@ class Native {
   }
   applied(version: string, status: 'preparing' | 'applied'): ConfigurationApplication {
     return { scope: 'source:user', sources: [{ kind: 'user' }], version, desired: { input_revision: 'input-1', attempt: '1' },
-      units: { process_bindings: { status } }, candidate: null, eligibility: { status: 'unavailable' } };
+      units: { process_bindings: { status } }, candidate: null };
   }
 }
 

@@ -101,8 +101,10 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    const adopt = page.getByRole('button', { name: 'Adopt configuration', exact: true });
    await expect(adopt).toBeVisible(); await expect(adopt).toBeDisabled();
    await expect(page.getByText('Session work must settle before adoption.')).toBeVisible();
+   // The disabled banner above is the runtime's own published Busy eligibility;
+   // configuration authority carries the candidate only.
    const app = (await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).application!;
-   expect(app.eligibility.status).toBe('busy'); const candidate = app.candidate!;
+   const candidate = app.candidate!;
    await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: candidate.identity, expected_binding: candidate.expected_binding }, 'configuration_application')).rejects.toThrow();
    await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: { ...candidate.identity, attempt: String(BigInt(candidate.identity.attempt) + 1n) }, expected_binding: candidate.expected_binding }, 'configuration_application')).rejects.toThrow();
    await f.release('finish-a'); await expect(adopt).toBeEnabled();

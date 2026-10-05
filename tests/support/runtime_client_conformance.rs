@@ -531,8 +531,9 @@ pub async fn receive_until(
 }
 
 /// Settlement ends execution; the publication owner can still enrich the
-/// durable read cut and invalidate Trace. Prove the suffix is contiguous and
-/// contains no additional semantic settlement or mutation.
+/// durable read cut and invalidate Trace, and the runtime publishes the
+/// adoption eligibility the released admission restores. Prove the suffix is
+/// contiguous and contains no additional semantic settlement or mutation.
 async fn receive_read_domain_suffix(
     driver: &mut dyn RuntimeClientProtocolDriver,
     after: RuntimeClientCursor,
@@ -545,7 +546,9 @@ async fn receive_read_domain_suffix(
     let suffix = receive_until(driver, after, |event| event.cursor == through).await;
     assert!(suffix.iter().all(|event| matches!(
         event.event,
-        RuntimeClientEvent::TraceChanged | RuntimeClientEvent::ReadDomainsUpdated { .. }
+        RuntimeClientEvent::TraceChanged
+            | RuntimeClientEvent::ReadDomainsUpdated { .. }
+            | RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
     )));
 }
 

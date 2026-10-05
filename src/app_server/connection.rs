@@ -738,21 +738,7 @@ impl AppServerConnection {
     /// Level-triggered against the manager's current applications and this
     /// connection's per-scope version cursor.
     fn next_configuration_change(&self) -> Option<NotificationMethod> {
-        for application in self
-            .host
-            .manager()
-            .configuration_applications()
-            .into_iter()
-            .map(|application| {
-                // Session advisory eligibility is a live native fact. Enrich a
-                // notification only from an already resident runtime; parsing a
-                // scope or reading a notification never loads a cold Session.
-                crate::runtime::identity::SessionId::parse(&application.scope)
-                    .ok()
-                    .and_then(|session| self.host.manager().configuration_application(&session))
-                    .unwrap_or(application)
-            })
-        {
+        for application in self.host.manager().configuration_applications() {
             let mut versions = self
                 .configuration_versions
                 .lock()

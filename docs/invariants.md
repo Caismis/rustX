@@ -2954,6 +2954,19 @@ Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-automatic-application-and-session-adoption).
 
+Configuration application and adoption eligibility are separate domains:
+
+```text
+ConfigurationApplication publication is configuration-domain state.
+Configuration adoption eligibility is runtime-domain advisory state, published
+by the live runtime on its Runtime Client snapshot only when it changes.
+Runtime Client snapshot identity is never a configuration invalidation signal.
+Native adoption revalidates eligibility at the actual commit boundary.
+Ordinary streaming Runtime Client deltas cause no Session-configuration RPC.
+```
+
+See [Session configuration adoption eligibility](app-server-protocol.md#session-configuration-adoption-eligibility-v35).
+
 Session/Node/Conversation/ToolExecution identities are typed UUIDv7, allocated with
 collision/no-overwrite checks. Semantic order uses explicit metadata. The fixed
 process runtime root owns Session/Conversation directories, one SQLite store per
@@ -7222,7 +7235,7 @@ never bytes.
   established. Recording it never blocks on a client and never holds the
   Catalog mutex for delivery.
 
-  The integrated App Server v34 contract preserves this catalog owner alongside
+  The integrated App Server v35 contract preserves this catalog owner alongside
   finite Jobs, durable Agents and bounded client request lanes; see the
   [PR #416 integration audit](pr-416-main-integration.md).
 

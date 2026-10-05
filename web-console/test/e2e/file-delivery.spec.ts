@@ -60,9 +60,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), '报告 file.md', original);
     expect(deliveryRead).toBeDefined();
     const bypass = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<number>((resolve, reject) => {
-      const socket = new WebSocket(endpoint, ['rustx.app-server.v34', `rustx-token.${token}`]);
+      const socket = new WebSocket(endpoint, ['rustx.app-server.v35', `rustx-token.${token}`]);
       socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
-      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 34, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
+      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 35, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
         if (reply.id === 4191) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));

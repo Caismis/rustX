@@ -1,5 +1,5 @@
 import type { Translate } from '../locale/translation';
-import type { SessionSummary } from '../../../protocol/app-server/v34';
+import type { SessionSummary } from '../../../protocol/app-server/v35';
 
 /** Native catalog metadata, never a browser-generated title or protocol identity. */
 export function sessionDisplayTitle(tx: Translate, summary?: Pick<SessionSummary, 'name' | 'preview'>): string {

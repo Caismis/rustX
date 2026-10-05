@@ -4024,7 +4024,8 @@ mod tests {
             panic!("initialized result");
         };
         let first_id = attachment_id.clone();
-        assert_eq!(*cursor, RuntimeClientCursor::new(0));
+        // Activation's first publication is the runtime's adoption eligibility.
+        assert_eq!(*cursor, RuntimeClientCursor::new(1));
 
         let second = fixture
             .host

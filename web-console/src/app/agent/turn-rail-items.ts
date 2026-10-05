@@ -1,4 +1,4 @@
-import type { ConversationTurn, ConversationTurnId, ConversationTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v34';
+import type { ConversationTurn, ConversationTurnId, ConversationTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v35';
 import { turnKey } from '../../client/transcript';
 
 /** Native identity/location only. A live identity is independent of a frozen outline. */

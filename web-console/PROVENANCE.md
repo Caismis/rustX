@@ -22,9 +22,9 @@ source, consulted-only files, exact upstream/local hashes and import closure.
 Native cancellation, Queue/Steer admission, upload gates and retained-first-submission
 semantics keep their existing rustX owners. See [COMPOSER.md](COMPOSER.md).
 
-PR #445's accepted Composer behavior is integrated with #447's mandatory App Server v34/file-delivery
+PR #445's accepted Composer behavior is integrated with #447's mandatory App Server v35/file-delivery
 contract. Inventory hashes and retained dependency closures describe this final
-source, including v34 imports; upstream reference pins are unchanged.
+source, including v35 imports; upstream reference pins are unchanged.
 
 ## #432 Host desktop opening
 
@@ -1177,7 +1177,7 @@ No Harness runtime, Session store, semantic turn derivation, scroll coordinator
 or shell was imported. Native Attempt origins own turn identity; display ordinal
 only selects a native page. Existing derived ChatViewport and conversation CSS
 retain their original provenance with updated local hashes and dependency closure.
-The current generated imports and local dependency closure use mandatory App Server v34.
+The current generated imports and local dependency closure use mandatory App Server v35.
 
 ## #431 explicit delivery reference audit
 
@@ -1187,7 +1187,7 @@ actual files. Explicit declaration, canonical action coordinates, and one shared
 preview seat informed the design. No new Harness source was copied/adapted at that
 pin, so no conceptual-only source records are added. The existing attributed
 Markdown and RightPanel descendants are reused with their original upstream
-baselines; current local hashes/import closure are refreshed for v34 and Markdown
+baselines; current local hashes/import closure are refreshed for v35 and Markdown
 preview composition. image-size is an independently pinned MIT dependency for
 encoded raster dimensions, included in generated production dependency notices.
 
