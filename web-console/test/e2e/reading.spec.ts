@@ -48,7 +48,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => {
       const NativeSocket = window.WebSocket;
-      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, located: 0 };
+      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, other: 0 };
       Object.assign(window, { readingTransport: state });
       class GatedSocket extends NativeSocket {
         private methods = new Map<string, string>();
@@ -66,7 +66,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
         send(data: Parameters<WebSocket['send']>[0]) {
           const request = JSON.parse(String(data));
           if (request.method === 'session/transcript' && request.params.at.type === 'older') { this.methods.set(String(request.id), 'older'); state.reads++; }
-          if (request.method === 'session/transcript' && request.params.at.type !== 'older') state.located++;
+          if (request.method === 'session/transcript' && request.params.at.type !== 'older') state.other++;
           super.send(data);
         }
       }
@@ -109,7 +109,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(page.getByText(/Native reading answer 0\n/).first()).toBeVisible();
     await expect.poll(async () => Math.abs(await target.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el=>el.getBoundingClientRect().top))).toBeLessThan(3);
     // Only ordinary older pages were read, and the window still reaches the live tail.
-    expect(await page.evaluate(()=>(window as any).readingTransport.located)).toBe(0);
+    expect(await page.evaluate(()=>(window as any).readingTransport.other)).toBe(0);
     expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBeGreaterThan(1);
     await expect(page.getByText(/Native reading answer 299\n/)).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Load later content' })).toHaveCount(0);

@@ -1008,12 +1008,11 @@ async fn dispatch_runtime(
         }),
         Method::ConversationTurns {
             target: _,
-            cut,
             offset,
             limit,
         } => Ok(MethodResult::ConversationTurns {
             page: authority
-                .conversation_turns(cut.as_ref(), offset, limit)
+                .conversation_turns(offset, limit)
                 .map_err(client_error)?,
         }),
         Method::Goal { target: _, control } => native_result(authority.goal_control(control)),

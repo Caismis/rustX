@@ -1206,7 +1206,7 @@ export class AppServerClient {
     const paging:OutlinePagingIntent=offset===undefined ? {type:'latest'} : {type:'page',offset};
     this.setSession(id,{ turnOutline: { ...this.state.views[id]?.turnOutline, paging, loading: true, error: undefined } });
     try {
-      const result = await this.request({ method: 'session/turns', params: { target, cut: null, offset: offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, current);
+      const result = await this.request({ method: 'session/turns', params: { target, offset: offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, current);
       if (!current()) return;
       if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
       this.setSession(id,{turnOutline:{paging,page:result.page}});
@@ -1255,7 +1255,7 @@ export class AppServerClient {
       let entries: RuntimeClientTranscriptEntry[] = [], before: string | null = head, error: string | undefined;
       try {
         do {
-          const result: { window: ConversationWindow } = await this.request({ method: 'session/transcript', params: { target, at: { type: 'older', before, cut: null }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+          const result: { window: ConversationWindow } = await this.request({ method: 'session/transcript', params: { target, at: { type: 'older', before }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
           if (!current()) return;
           const page: ConversationWindow['page'] = result.window.page;
           // No-progress guard: a page that claims more history must move the head.

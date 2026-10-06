@@ -1444,7 +1444,6 @@ impl ConversationStore for SqliteConversationStore {
 
     fn conversation_turns(
         &self,
-        expected: Option<&super::reading::ConversationReadCut>,
         offset: usize,
         limit: usize,
     ) -> Result<super::reading::ConversationTurnPage, ConversationStoreError> {
@@ -1452,7 +1451,7 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .unchecked_transaction()
             .map_err(|error| storage(error.to_string()))?;
-        reading::turns(&transaction, &self.conversation_id, expected, offset, limit)
+        reading::turns(&transaction, &self.conversation_id, offset, limit)
     }
 
     fn conversation_window(

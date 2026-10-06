@@ -291,22 +291,12 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             target: target.clone(),
             at: crate::durable::reading::ConversationWindowAt::Older {
                 before: crate::durable::TranscriptCursor::new(EXACT),
-                cut: None,
             },
             limit: 32,
         },
         Method::ConversationTurns {
             target: target.clone(),
-            cut: Some(reading_cut.clone()),
             offset: Some(64),
-            limit: 64,
-        },
-        Method::Transcript {
-            target: target.clone(),
-            at: crate::durable::reading::ConversationWindowAt::Turn {
-                id: reading_id.clone(),
-                cut: reading_cut.clone(),
-            },
             limit: 64,
         },
         Method::SessionFork {
@@ -429,11 +419,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         MethodResult::ConversationTurns {
             page: crate::durable::reading::ConversationTurnPage {
-                cut: reading_cut.clone(),
+                cut: reading_cut,
                 total: 1,
                 offset: 0,
                 turns: vec![crate::durable::reading::ConversationTurn {
-                    id: reading_id.clone(),
+                    id: reading_id,
                     ordinal: 1,
                     cursor: Some(crate::durable::TranscriptCursor::new(EXACT)),
                     prompt: "Native prompt".into(),
@@ -443,17 +433,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         MethodResult::TranscriptWindow {
             window: crate::runtime_client::snapshot::ConversationWindow {
-                cut: reading_cut,
                 page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
                     entries: Vec::new(),
                     next_cursor: None,
                     statistics: None,
                 },
-                target: Some(reading_id),
-                target_cursor: Some(
-                    crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT),
-                ),
-                newer_cursor: None,
             },
         },
         MethodResult::InboundAccepted {

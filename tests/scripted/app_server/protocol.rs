@@ -4475,13 +4475,13 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let Some(Response::Failure(denied)) = browser.handle_json(&forged.to_string()).await else { panic!("ordinary file bypass succeeded") };
         assert_eq!(denied.error.code, -32601);
         assert!(product_host.open(FILE_BROWSER_TOKEN).await.is_err(), "normal transport credential cannot authenticate private file seam");
-        // Historical paging carries the same typed fact after activity folds.
+        // Older paging carries the same typed fact after activity folds.
         let MethodResult::TranscriptWindow { window } = call(&browser, 4120, Method::Transcript {
             target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
         }).await else { panic!() };
         let MethodResult::TranscriptWindow { window: older } = call(&browser, 4121, Method::Transcript {
             target: target.clone(), at: crate::durable::reading::ConversationWindowAt::Older {
-                before: window.page.entries[0].cursor.into(), cut: Some(window.cut),
+                before: window.page.entries[0].cursor.into(),
             }, limit: 64,
         }).await else { panic!() };
         assert!(older.page.entries.iter().any(|entry| matches!(&entry.item,

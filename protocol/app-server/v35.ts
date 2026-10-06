@@ -74,7 +74,6 @@ export type Request1 =
       method: 'session/turns';
       params: {
         target: AttachmentTarget;
-        cut?: ConversationReadCut | null;
         /**
          * Absent selects the newest native outline page.
          */
@@ -465,7 +464,8 @@ export type SessionNodeId = string;
  */
 export type TraceCursor = string;
 /**
- * A single transcript read vocabulary; every selector replaces a finite window.
+ * One contiguous transcript read vocabulary: the newest page, or the page
+ * before an already-read boundary, each at the current cut.
  */
 export type ConversationWindowAt =
   | {
@@ -473,18 +473,7 @@ export type ConversationWindowAt =
     }
   | {
       before: TranscriptCursor;
-      cut?: ConversationReadCut | null;
       type: 'older';
-    }
-  | {
-      after: TranscriptCursor;
-      cut: ConversationReadCut;
-      type: 'newer';
-    }
-  | {
-      id: ConversationTurnId;
-      cut: ConversationReadCut;
-      type: 'turn';
     };
 /**
  * A durable transcript cursor.
@@ -494,10 +483,6 @@ export type ConversationWindowAt =
  * sequence, and the inbound mailbox sequence.
  */
 export type TranscriptCursor = string;
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -1311,6 +1296,10 @@ export type ModelErrorKind =
  */
 export type TraceToolOutcome =
   'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
+/**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
 /**
  * Identifies one turn within an attempt.
  */
@@ -3563,25 +3552,6 @@ export interface UploadMetadata {
   size: number;
 }
 /**
- * Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
- */
-export interface ConversationReadCut {
-  conversation_id: ConversationId;
-  journal: string;
-  transcript: string;
-  /**
-   * Edits/removals of mutable transcript bodies retire unreconstructible cuts.
-   */
-  mutation_revision: string;
-}
-/**
- * Origin survives lineage copying; ordinal never participates in identity.
- */
-export interface ConversationTurnId {
-  conversation_id: ConversationId;
-  attempt_id: AttemptId;
-}
-/**
  * The authoritative mutable model configuration of one conversation
  * session.
  *
@@ -3739,7 +3709,7 @@ export interface WorkflowRunId {
    */
   conversation_id: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * Native admitted attempt, unique across process recovery.
    */
   attempt_id: string;
   /**
@@ -7123,11 +7093,7 @@ export interface QuestionnaireSubmission1 {
   answers: QuestionnaireAnswerEntry[];
 }
 export interface ConversationWindow {
-  cut: ConversationReadCut;
   page: RuntimeClientTranscriptPage;
-  newer_cursor?: RuntimeClientTranscriptCursor | null;
-  target?: ConversationTurnId | null;
-  target_cursor?: RuntimeClientTranscriptCursor | null;
 }
 export interface ConversationTurnPage {
   cut: ConversationReadCut;
@@ -7137,6 +7103,18 @@ export interface ConversationTurnPage {
    * @maxItems 64
    */
   turns: ConversationTurn[];
+}
+/**
+ * Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
+ */
+export interface ConversationReadCut {
+  conversation_id: ConversationId;
+  journal: string;
+  transcript: string;
+  /**
+   * Advances on every edit/removal of a mutable pending transcript body.
+   */
+  mutation_revision: string;
 }
 export interface ConversationTurn {
   id: ConversationTurnId;
@@ -7153,6 +7131,13 @@ export interface ConversationTurn {
    * The turn's final text-bearing response; empty until the turn settles.
    */
   response: string;
+}
+/**
+ * Origin survives lineage copying; ordinal never participates in identity.
+ */
+export interface ConversationTurnId {
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
 }
 /**
  * The current read model; observing it never starts or authorizes work.

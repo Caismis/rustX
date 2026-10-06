@@ -1470,11 +1470,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Bounded native Attempt outline, including immutable copied origins.
     fn conversation_turns(
         &self,
-        cut: Option<&super::reading::ConversationReadCut>,
         offset: usize,
         limit: usize,
     ) -> Result<super::reading::ConversationTurnPage, ConversationStoreError>;
-    /// Direct native location/adjacency read, with no intervening history walk.
+    /// The newest transcript page, or the page before a boundary, at the current cut.
     fn conversation_window(
         &self,
         at: &super::reading::ConversationWindowAt,

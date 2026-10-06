@@ -1463,19 +1463,20 @@ this field; there is no reader for the previous result shape.
 
 App Server v35 is mandatory and replaces the v29 root transcript request/result;
 all consumers negotiate v35 and only its generated schema/TypeScript pair is retained.
-Root `session/transcript` uses `ConversationWindowAt` (`latest`, `older`, `newer`,
-`turn`) and returns `transcript_window` with a native read cut and finite page.
-`session/turns` supplies the ordered, paged native Attempt outline. See
+Root `session/transcript` uses `ConversationWindowAt` (`latest`, `older`) and
+returns `transcript_window` with one contiguous finite page. `session/turns`
+supplies the ordered, paged native Attempt outline, stamped with the
+`ConversationReadCut` it was captured at. See
 [conversation-reading.md](conversation-reading.md) for normative identity, lineage,
-read-cut validation, exact location, bounds and stale-target semantics.
+location, bounds and paging semantics.
 
 The v35 `ConversationReadCut` fields are `conversation_id`, inclusive `journal`
-and `transcript` bounds, and `mutation_revision`. Append-only growth accepts and
-returns the requested cut unchanged; it never splices newer Tool/response facts
-into that window. Surface revision and pending population/aggregate revision are
-removed from this contract. `AttachmentTarget` retains independent runtime/
-attachment authority. The current Attempt may be displayed before a historical
-cursor exists; first native location enables locate without settlement.
+and `transcript` bounds, and `mutation_revision`. Requests never name a cut;
+each read captures a fresh one. Surface revision and pending
+population/aggregate revision are removed from this contract. `AttachmentTarget`
+retains independent runtime/attachment authority. The current Attempt may be
+displayed before its cursor exists; its first native location makes it reachable
+without settlement.
 
 `TurnProcessOutcome::IncompleteAtCut` is the immutable presentation of inherited
 output whose source Attempt was live at its lineage cut. It grants no execution

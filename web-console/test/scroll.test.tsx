@@ -359,9 +359,9 @@ it('an older page prepends above the reading position and clipped ownership come
     const current = () => [...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark => mark.getAttribute('data-turn-id'));
     expect(current()).toEqual([turnAnchor(v.b).slice(5)]);
     const older = v.server.client.loadEarlier('A'), read = await v.server.waitFor('session/transcript', 1);
-    expect(read.params).toMatchObject({ at: { type: 'older', before: '120', cut: null }, limit: 64 });
+    expect(read.params).toMatchObject({ limit: 64 }); expect(read.params).toHaveProperty('at', { type: 'older', before: '120' });
     await act(async () => {
-      v.server.socket.success(read, { type: 'transcript_window', window: { cut: v.cut, page: { entries: v.entries.slice(0, 2), next_cursor: '100' }, newer_cursor: '120', target: null, target_cursor: null } });
+      v.server.socket.success(read, { type: 'transcript_window', window: { page: { entries: v.entries.slice(0, 2), next_cursor: '100' } } });
       await older;
     });
     v.flush();

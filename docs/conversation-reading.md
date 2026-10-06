@@ -14,7 +14,7 @@ Local order is indexed `AttemptStarted` Journal order. Failed, cancelled,
 interrupted, timed-out and limited Attempts retain that identity. A location is
 the first committed assistant process member, or the exact Attempt terminal when
 there is no assistant member. A just-started Attempt with neither has no location;
-the live Runtime Client still supplies its current identity; historical locate
+the live Runtime Client still supplies its current identity; navigation to it
 remains disabled.
 
 Each turn carries two native previews, matching DeepSeek Harness's turn outline.
@@ -99,61 +99,38 @@ Compaction changes the canonical Surface, not these durable origins/order.
 
 ## Typed native reads
 
-`session/turns {target, cut?, offset?, limit}` returns `ConversationTurnPage`:
-exact cut, total, offset and at most 64 ordered native turns. Omitted offset selects
-the final page; an explicit offset directly indexes history. Each mark carries its
-origin, ordinal, bounded prompt and response previews and optional exact
-transcript cursor.
+`session/turns {target, offset?, limit}` returns `ConversationTurnPage`: the
+cut it was captured at, total, offset and at most 64 ordered native turns.
+Omitted offset selects the final page; an explicit offset directly indexes
+history. Each mark carries its origin, ordinal, bounded prompt and response
+previews and optional exact transcript cursor.
 
-`session/transcript {target, at, limit}` replaces the old root `before` request
-with one selector vocabulary and returns `transcript_window`:
+`session/transcript {target, at, limit}` reads one contiguous transcript
+vocabulary and returns `transcript_window { page }`:
 
-- `latest`: newest finite page at the current cut;
-- `older {before, cut?}`: ordinary older read, or cut-bound historical adjacency;
-- `newer {after, cut}`: first finite page after a historical window;
-- `turn {id, cut}`: first finite page starting at the exact native turn location.
+- `latest`: the newest finite page;
+- `older {before}`: the finite page strictly before an already-read cursor.
 
-All root windows are 1–64 entries. The result carries the cut, page, actual
-older/newer cursors and optional exact target identity/cursor. A direct locate
-reads no intervening transcript pages. Agent/internal transcript APIs retain their
-separate registry and read-model ownership.
+All root pages are 1–64 entries; `next_cursor` is present while older history
+exists. A turn's native cursor from the outline is a position in this same
+order, so a reader reaches any turn by paging `older` until its page covers that
+cursor. Agent/internal transcript APIs retain their separate registry and
+read-model ownership.
 
-A read cut C is `(ConversationId, journal, transcript, mutation_revision)`.
-`journal` and `transcript` are inclusive historical upper bounds: only Attempt
-starts/locations and projection facts at or below C may be read. They are not
-requirements that today's frontiers equal C. `mutation_revision` is the native
-monotonic epoch of successful pending-body edits/removals. Pending adoption
-preserves its accepted body and position; new admissions and ordinary execution
-append facts. Surface compaction preserves immutable Ledger/Journal meaning.
-These append-only transitions do not invalidate C, even during a running Attempt.
+A read cut C is `(ConversationId, journal, transcript, mutation_revision)`, the
+inclusive upper bounds one read was captured at. `mutation_revision` is the
+native monotonic epoch of successful pending-body edits/removals. Pending
+adoption preserves its accepted body and position; new admissions and ordinary
+execution append facts. Surface compaction preserves immutable Ledger/Journal
+meaning. Every read captures a fresh C; no request names a past cut.
 
-SQLite accepts C when its Conversation matches, its upper bounds are no later
-than current frontiers and its mutation epoch equals the current epoch. The
-store cannot reconstruct an edited/removed pending body after a mutation, so
-that semantic change rejects the old cut rather than silently substituting a
-new body. Future/foreign cuts, a target absent at C, a target whose first native
-location did not yet exist at C, and unavailable/corrupt native references fail
-explicitly without nearest-target fallback. Attachment/runtime replacement is
-separately rejected by App Server's `AttachmentTarget` and browser authority
-fences; a read cut never grants control authority.
-
-Target and outline reads can be reconstructed after later appends. Selection
-happens in one SQLite transaction, bounded to `transcript`; Tool results are
-included only if their own canonical transcript position belongs to C. Runtime
-Client folds only the selected native Attempts through `journal` for response,
-process, terminal, timing and usage decorations. A final compatibility check
-rejects a concurrent semantic mutation while accepting concurrent appends.
-The result returns C exactly. Neither current response settlement nor later
-Tool results can leak backward into that window.
-
-`older` and `newer` with C page exclusively inside that same frozen prefix;
-older/newer availability also excludes appended positions above C. Reaching
-C's tail ends newer paging even if current execution has advanced. `latest`
-and `older` without a cut capture fresh bounds. A fresh outline is required to
-see new identities/locations or recover from an invalid mutation epoch or
-replacement authority, not to navigate a known historical address after each
-streamed event. Reads execute no model/Tool work and create no request snapshots
-or durable writes.
+Selection happens in one SQLite transaction, bounded to C's `transcript`; Tool
+results are included only if their own canonical transcript position belongs to
+C. Runtime Client folds only the selected native Attempts through C's `journal`
+for response, process, terminal, timing and usage decorations. A final
+compatibility check rejects a semantic mutation that landed during the read,
+while accepting concurrent appends. Reads execute no model/Tool work and create
+no request snapshots or durable writes.
 
 ## Browser reading and scrolling
 
@@ -163,7 +140,7 @@ fixed-pitch virtual mark for every turn the outline counts: marks inside the
 retained page are loaded, the rest are known by ordinal only and read their
 native page before navigating. The pinned identity is drawn only while the
 retained page is the newest one. `turn-rail-items.ts`
-merges these native sources; a current identity can have no historical cursor.
+merges these native sources; a current identity can have no cursor yet.
 Loaded transcript/process anchors remain a separate presentation capability.
 The first native process `control_cursor` absent from the outline cut triggers
 one refresh to make the current turn locatable before settlement. Subsequent
@@ -191,8 +168,7 @@ read before a failure, whose error stays visible with Load earlier still usable.
 One older read runs per Session: a repeated Load earlier is a no-op, and a jump
 arriving during a read joins it and lowers its shared target. A page that does not
 move the head ends the jump. A turn the history cannot reach fails visibly rather
-than landing elsewhere. The `turn` and `newer` selectors remain native read
-capabilities; the browser does not use them.
+than landing elsewhere.
 
 Outline paging intent is explicitly `latest` or `page(offset)`, independently of
 the native response's offset. Initial load and automatic start/location/settlement

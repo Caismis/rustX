@@ -17,14 +17,14 @@ pub struct ConversationTurnId {
     pub attempt_id: AttemptId,
 }
 
-/// Frozen inclusive Journal/transcript upper bounds plus a semantic mutation epoch.
+/// Inclusive Journal/transcript bounds a read was captured at, plus its semantic mutation epoch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationReadCut {
     pub conversation_id: ConversationId,
     pub journal: u64,
     pub transcript: u64,
-    /// Edits/removals of mutable transcript bodies retire unreconstructible cuts.
+    /// Advances on every edit/removal of a mutable pending transcript body.
     pub mutation_revision: u64,
 }
 
@@ -64,32 +64,20 @@ pub struct ConversationTurnPage {
     pub turns: Vec<ConversationTurn>,
 }
 
-/// A single transcript read vocabulary; every selector replaces a finite window.
+/// One contiguous transcript read vocabulary: the newest page, or the page
+/// before an already-read boundary, each at the current cut.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConversationWindowAt {
     Latest,
-    Older {
-        before: super::TranscriptCursor,
-        cut: Option<ConversationReadCut>,
-    },
-    Newer {
-        after: super::TranscriptCursor,
-        cut: ConversationReadCut,
-    },
-    Turn {
-        id: ConversationTurnId,
-        cut: ConversationReadCut,
-    },
+    Older { before: super::TranscriptCursor },
 }
 
+/// A page read in one transaction at `cut`, which decorations must not exceed.
 #[derive(Debug)]
 pub struct DurableConversationWindow {
     pub cut: ConversationReadCut,
     pub page: super::TranscriptPage,
-    pub newer_cursor: Option<super::TranscriptCursor>,
-    pub target: Option<ConversationTurnId>,
-    pub target_cursor: Option<super::TranscriptCursor>,
 }
 
 /// Immutable reading provenance in native start order, separate from finalized responses.

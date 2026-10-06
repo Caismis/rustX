@@ -210,7 +210,7 @@ snapshot on demand.
 
 The current SQLite development schema is defined by `SQLITE_SCHEMA_VERSION`.
 Version 48 adds immutable native turn-reading bootstrap provenance and the
-semantic mutation epoch for historical read cuts. Older stores are rejected
+semantic mutation epoch that read cuts carry. Older stores are rejected
 without migration or a compatibility path. Version 34 adds native revisioned
 Goal state and atomic Goal/inbound accounting.
 Version 32 freezes Issue #258’s durable

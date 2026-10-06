@@ -20,7 +20,7 @@ async function ready(){
  server.handlers.set('session/transcript',request=>{
   if(request.method!=='session/transcript'||request.params.at.type!=='older')throw new Error('older read');
   const before=Number(request.params.at.before),first=Math.max(1,before-request.params.limit);
-  return {type:'transcript_window',window:{cut,page:{entries:Array.from({length:before-first},(_,i)=>entry(first+i)),next_cursor:first>1?String(first):null},newer_cursor:null,target:null,target_cursor:null}};
+  return {type:'transcript_window',window:{page:{entries:Array.from({length:before-first},(_,i)=>entry(first+i)),next_cursor:first>1?String(first):null}}};
  });
  server.held.add('session/transcript');
 }
@@ -46,7 +46,7 @@ it('a distant turn pages older history through its location, publishing one cont
  expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBe(turnKey(turn(1).id));
  expect(server.client.getSnapshot().views.A.history?.loading).toBe(true);
  const first=await server.waitFor('session/transcript',1);
- expect(first.params).toMatchObject({at:{type:'older',before:'600',cut:null},limit:64});
+ expect(first.params).toMatchObject({limit:64});expect(first.params).toHaveProperty('at',{type:'older',before:'600'});
  // Pages publish together: the reader's window does not shift once per page.
  server.reply(first);await server.waitFor('session/transcript',2);
  expect(cursors()?.[0]).toBe(600);
@@ -116,7 +116,7 @@ it('a failing page keeps the pages already read, surfaces the error and leaves L
 
 it('a page that does not move the history head cannot spin the jump', async () => {
  await ready();
- server.handlers.set('session/transcript',()=>({type:'transcript_window',window:{cut,page:{entries:[],next_cursor:'600'},newer_cursor:null,target:null,target_cursor:null}}));
+ server.handlers.set('session/transcript',()=>({type:'transcript_window',window:{page:{entries:[],next_cursor:'600'}}}));
  const work=server.client.navigateTurn('A',turn(1));await serve();
  expect(await work).toBe(false);expect(reads()).toHaveLength(1);
  expect(server.client.getSnapshot().views.A.turnNavigation?.error).toContain('Invalid native history page');
@@ -181,7 +181,7 @@ it('loaded semantic ownership without its exact control cursor still pages to th
  const a=turn(90),clipped=owner(90);
  server.snapshots.set('A',{...snapshot(),transcript:{entries:[100,101].map(n=>({...entry(n),turn_process:clipped})),next_cursor:'100'}});await server.client.refresh('A');
  const locate=server.client.navigateTurn('A',a),request=await server.waitFor('session/transcript',1);
- expect(request.params).toMatchObject({at:{type:'older',before:'100',cut:null},limit:64});
+ expect(request.params).toMatchObject({limit:64});expect(request.params).toHaveProperty('at',{type:'older',before:'100'});
  server.reply(request);expect(await locate).toBe(true);
  expect(cursors()).toEqual([...Array.from({length:64},(_,i)=>36+i),100,101]);
  expect(reads()).toHaveLength(1);

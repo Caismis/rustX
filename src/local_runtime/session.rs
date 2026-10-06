@@ -4354,7 +4354,7 @@ model = "provider/model"
                 |message| matches!(message, MessageBlock::User(message) if message.id == prompt)
             )
         );
-        let outline = destination.conversation_turns(None, 0, 64).unwrap();
+        let outline = destination.conversation_turns(0, 64).unwrap();
         assert_eq!(
             (
                 outline.turns[0].prompt.as_str(),
@@ -4533,7 +4533,7 @@ model = "provider/model"
                         .snapshots
                         .is_empty()
                 );
-                let outline = copied_store.conversation_turns(None, 0, 64).unwrap();
+                let outline = copied_store.conversation_turns(0, 64).unwrap();
                 assert_eq!(
                     outline
                         .turns
@@ -4548,19 +4548,15 @@ model = "provider/model"
                     "equivalent destination position: member or inherited spine after U"
                 );
                 if retained {
-                    let selected_cut = outline.cut.clone();
                     let window = copied_store
                         .conversation_window(
-                            &crate::durable::reading::ConversationWindowAt::Turn {
-                                id: origin.clone(),
-                                cut: outline.cut,
+                            &crate::durable::reading::ConversationWindowAt::Older {
+                                before: crate::durable::TranscriptCursor::new(3),
                             },
                             1,
                         )
                         .unwrap();
-                    assert_eq!(window.cut, selected_cut);
-                    assert_eq!(window.target.as_ref(), Some(&origin));
-                    assert_eq!(window.target_cursor.unwrap().get(), 2);
+                    assert_eq!(window.page.entries[0].cursor.get(), 2);
                     let mut page =
                         crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
                     crate::runtime_client::response::decorate(copied_store, &mut page).unwrap();
@@ -4729,18 +4725,18 @@ model = "provider/model"
             if retained {
                 assert_eq!(cut.turns[0].id, frozen.turns[0].id);
                 assert_eq!(cut.turns[0].outcome, expected);
-                let outline = destination.conversation_turns(None, 0, 64).unwrap();
+                let outline = destination.conversation_turns(0, 64).unwrap();
                 assert_eq!(outline.turns[0].ordinal, 1);
                 assert_eq!(outline.turns[0].cursor.unwrap().get(), 2);
                 let window = destination
                     .conversation_window(
-                        &crate::durable::reading::ConversationWindowAt::Turn {
-                            id: outline.turns[0].id.clone(),
-                            cut: outline.cut,
+                        &crate::durable::reading::ConversationWindowAt::Older {
+                            before: crate::durable::TranscriptCursor::new(3),
                         },
                         1,
                     )
                     .unwrap();
+                assert_eq!(window.page.entries[0].cursor.get(), 2);
                 let mut page =
                     crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
                 crate::runtime_client::response::decorate(&destination, &mut page).unwrap();
@@ -4782,7 +4778,7 @@ model = "provider/model"
                     .map(|turn| (&turn.id, &turn.outcome))
                     .collect::<Vec<_>>()
             );
-            let outline = again.conversation_turns(None, 0, 64).unwrap();
+            let outline = again.conversation_turns(0, 64).unwrap();
             assert_eq!(
                 outline
                     .turns
@@ -4898,7 +4894,7 @@ model = "provider/model"
                 &prepared.database_path,
             )
             .unwrap();
-            let outline = copied.conversation_turns(None, 0, 64).unwrap();
+            let outline = copied.conversation_turns(0, 64).unwrap();
             assert_eq!(
                 outline
                     .turns
@@ -4918,9 +4914,10 @@ model = "provider/model"
             for turn in &outline.turns {
                 let window = copied
                     .conversation_window(
-                        &crate::durable::reading::ConversationWindowAt::Turn {
-                            id: turn.id.clone(),
-                            cut: outline.cut.clone(),
+                        &crate::durable::reading::ConversationWindowAt::Older {
+                            before: crate::durable::TranscriptCursor::new(
+                                turn.cursor.unwrap().get() + 1,
+                            ),
                         },
                         1,
                     )
@@ -4940,7 +4937,7 @@ model = "provider/model"
         let empty =
             SqliteConversationStore::open_existing(empty.conversation_id, &empty.database_path)
                 .unwrap();
-        assert_eq!(empty.conversation_turns(None, 0, 64).unwrap().turns, []);
+        assert_eq!(empty.conversation_turns(0, 64).unwrap().turns, []);
     }
 
     /// The one Session lifecycle classification every product path shares:

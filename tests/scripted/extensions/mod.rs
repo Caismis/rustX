@@ -3514,7 +3514,7 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
     // automatic continuation is an ordered turn even before it publishes.
     let store = tools.durable_store();
     let cut = store.conversation_read_cut().unwrap();
-    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    let outline = store.conversation_turns(0, 64).unwrap();
     assert_eq!(outline.total, 2);
     assert_eq!(outline.turns.len(), 2);
     let rustx::goal::GoalOrigin::HumanAttempt { attempt_id, .. } = &goal.origin else {
@@ -3530,14 +3530,15 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
     assert_eq!(model.requests().len(), 3, "outline starts no model work");
 
     composed.runtime.shutdown().await.unwrap();
-    let settled = store.conversation_turns(None, 0, 64).unwrap();
+    let settled = store.conversation_turns(0, 64).unwrap();
     assert_eq!(settled.total, 2);
     assert_eq!(settled.turns[1].id, outline.turns[1].id);
     let window = store
         .conversation_window(
-            &rustx::durable::reading::ConversationWindowAt::Turn {
-                id: settled.turns[1].id.clone(),
-                cut: settled.cut,
+            &rustx::durable::reading::ConversationWindowAt::Older {
+                before: rustx::durable::TranscriptCursor::new(
+                    settled.turns[1].cursor.unwrap().get() + 1,
+                ),
             },
             1,
         )
@@ -3599,7 +3600,7 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
             .unwrap(),
         )
         .unwrap();
-    let inherited = child.conversation_turns(None, 0, 64).unwrap();
+    let inherited = child.conversation_turns(0, 64).unwrap();
     assert_eq!(
         inherited
             .turns
@@ -3623,14 +3624,12 @@ async fn goal351_model_create_goal_starts_no_nested_attempt_and_continues_after_
     for turn in &inherited.turns {
         let located = child
             .conversation_window(
-                &rustx::durable::reading::ConversationWindowAt::Turn {
-                    id: turn.id.clone(),
-                    cut: inherited.cut.clone(),
+                &rustx::durable::reading::ConversationWindowAt::Older {
+                    before: rustx::durable::TranscriptCursor::new(turn.cursor.unwrap().get() + 1),
                 },
                 1,
             )
             .unwrap();
-        assert_eq!(located.target_cursor, turn.cursor);
         assert_eq!(located.page.entries[0].cursor, turn.cursor.unwrap());
     }
 }

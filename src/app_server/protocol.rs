@@ -129,7 +129,6 @@ pub enum Method {
     #[serde(rename = "session/turns")]
     ConversationTurns {
         target: AttachmentTarget,
-        cut: Option<crate::durable::reading::ConversationReadCut>,
         /// Absent selects the newest native outline page.
         offset: Option<usize>,
         #[schemars(range(min = 1, max = 64))]

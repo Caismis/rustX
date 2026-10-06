@@ -233,4 +233,4 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v35').RuntimeClientTranscriptPage, conversation_id = 'conv-A') { return { page, cut: { conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, newer_cursor: null, target: null, target_cursor: null }; }
+export function readingWindow(page: import('../../protocol/app-server/v35').RuntimeClientTranscriptPage) { return { page }; }

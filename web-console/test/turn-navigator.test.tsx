@@ -135,9 +135,9 @@ it('a loaded rail mark outside the transcript window pages older history through
  expect(turnsRequests()).toHaveLength(1);
  server.held.add('session/transcript');
  fireEvent.click(mark);const request=await server.waitFor('session/transcript',1);
- expect(request.params).toMatchObject({at:{type:'older',before:'600',cut:null},limit:64});
+ expect(request.params).toMatchObject({limit:64});expect(request.params).toHaveProperty('at',{type:'older',before:'600'});
  expect(mark.getAttribute('aria-busy')).toBe('true');
- await act(async()=>{server.socket.success(request,{type:'transcript_window',window:{cut,page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]},newer_cursor:'600',target:null,target_cursor:null}});expect(await work).toBe(true);});
+ await act(async()=>{server.socket.success(request,{type:'transcript_window',window:{page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]}}});expect(await work).toBe(true);});
  expect(mark.hasAttribute('aria-busy')).toBe(false);
  expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1','600','601']);
  // The window stays joined to the live tail: no historical freeze, no later-content paging.

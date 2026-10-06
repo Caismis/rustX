@@ -1206,12 +1206,11 @@ impl ClientInner {
 
     pub(crate) fn conversation_turns(
         &self,
-        cut: Option<&crate::durable::reading::ConversationReadCut>,
         offset: Option<usize>,
         limit: usize,
     ) -> Result<crate::durable::reading::ConversationTurnPage, RuntimeClientError> {
         self.store
-            .conversation_turns(cut, offset.unwrap_or(usize::MAX), limit)
+            .conversation_turns(offset.unwrap_or(usize::MAX), limit)
             .map_err(|error| RuntimeClientError::InvalidState {
                 message: error.to_string(),
             })
@@ -1236,16 +1235,10 @@ impl ClientInner {
             .reconstructible_from(&self.store.conversation_read_cut().map_err(failed)?)
         {
             return Err(RuntimeClientError::InvalidState {
-                message: "stale conversation read cut; reload the turn outline".into(),
+                message: "conversation history was edited during the read; read it again".into(),
             });
         }
-        Ok(crate::runtime_client::snapshot::ConversationWindow {
-            cut: read.cut,
-            page,
-            newer_cursor: read.newer_cursor.map(Into::into),
-            target: read.target,
-            target_cursor: read.target_cursor.map(Into::into),
-        })
+        Ok(crate::runtime_client::snapshot::ConversationWindow { page })
     }
 
     /// Read-only child history, addressed exclusively through this parent's registry.
