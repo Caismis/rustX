@@ -4,7 +4,7 @@
 //! *what has changed since it loaded them?* The answer is
 //! [`TraceLifecycle`] — state, timing, the request's own terminal outcome,
 //! the Tool's own outcome, the canonical message it settled into, and that
-//! message's artifacts.
+//! message's artifacts, and native ownership resolved at the current cut.
 //!
 //! Immutable historical presentation is deliberately absent, and so are the
 //! reads that would produce it. A refresh covers up to
@@ -26,7 +26,8 @@ use super::types::{TraceLifecycle, TraceRequestOutcome, TraceToolOutcomeUpdate};
 /// update leaves room for it. The ceiling is over lifecycle bytes alone: an
 /// immutable presentation block can no longer push a record's mutable
 /// outcome off its own update, because it is not projected here at all.
-const TRACE_LIFECYCLE_BYTES: usize = 1024;
+// Two bounded 512-byte location IDs may each expand sixfold under JSON escaping.
+const TRACE_LIFECYCLE_BYTES: usize = 8192;
 
 impl AnchorFacts {
     /// Projects the mutable lifecycle vocabulary of one refreshed record.
@@ -36,18 +37,23 @@ impl AnchorFacts {
     /// shortened identity is a different identity that refers to nothing.
     pub(super) fn lifecycle(self) -> TraceLifecycle {
         let mut truncated = self.truncated;
-        // A native identity a summary row would have to omit is reported as
-        // omitted here too, even though a lifecycle update does not carry
-        // it: a client must not see the same record described as complete by
-        // one response and partial by the other.
-        truncated |= self
-            .location
+        let mut location = self.location;
+        if location
             .attempt_id
-            .is_some_and(|id| !identity_fits(id.as_str()));
-        truncated |= self
-            .location
+            .as_ref()
+            .is_some_and(|id| !identity_fits(id.as_str()))
+        {
+            location.attempt_id = None;
+            truncated = true;
+        }
+        if location
             .step_id
-            .is_some_and(|id| !identity_fits(id.as_str()));
+            .as_ref()
+            .is_some_and(|id| !identity_fits(id.as_str()))
+        {
+            location.step_id = None;
+            truncated = true;
+        }
         truncated |= self.native_id.is_some_and(|id| !identity_fits(&id));
         truncated |= self
             .originating_tool_call_id
@@ -95,6 +101,7 @@ impl AnchorFacts {
         truncated |= references != attachments.len();
         let mut update = TraceLifecycle {
             id: self.id,
+            location,
             state: self.state,
             timing: self.timing,
             request,

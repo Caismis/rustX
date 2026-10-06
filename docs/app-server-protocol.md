@@ -1,4 +1,7 @@
-# App Server protocol v35
+# App Server protocol v36
+
+App Server v36 / Runtime Client v59 refresh retained Trace input ownership at the
+current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v36).
 
 App Server v35 / Runtime Client v58 separate Session configuration-adoption
 eligibility from configuration application state. `ConfigurationApplication` no
@@ -73,7 +76,7 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v35 / Runtime Client v58 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v36 / Runtime Client v59 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v48 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
@@ -1511,7 +1514,7 @@ wire types; their presence does not grant an ordinary request method. See
 [file-delivery.md](file-delivery.md) for provisioning, native admission and read
 fences, current registration policy, historical scope and resource limits.
 
-The internal Runtime Client vocabulary is v58. Only App Server v35 clients
+The internal Runtime Client vocabulary is v59. Only App Server v36 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. Event envelope 1, SQLite 49, Session catalog 13 and subagent IPC v29
 remain unchanged. Present is root-only until a real child delivery owner exists.
@@ -1543,3 +1546,15 @@ expiry; detach revokes only unconsumed preparations. Drain revokes prepared inte
 and waits for admitted native work and physical supervisor exit. Terminal settlement
 requires no transfers, upload guards or upload actors. Status on a revoked,
 unallocated operation is Absent; consumed work survives control disconnect.
+
+### Trace retained-input ownership (v36)
+
+App Server v36 / Runtime Client v59 require `TraceLifecycle.location` in each
+retained-record refresh. An idle `InboundTurnAdopted` initially has no Attempt;
+its answering Attempt is resolved natively at the read cut after that Attempt
+starts. Summary pages and retained-record refreshes use the same resolution.
+The browser replaces the cached location, including an inspected record outside
+the latest page, without guessing ownership from adjacent rows. This places the
+initial System Prompt before the first Turn and each input under its answering
+Turn. In-Attempt adoptions keep their exact recorded Attempt. Earlier peers are
+rejected; no compatibility decoder or client-side ownership inference is added.

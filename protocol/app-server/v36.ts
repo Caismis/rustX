@@ -1253,6 +1253,14 @@ export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
  */
 export type ResidencyState = 'Unloaded' | 'Loading' | 'Loaded' | 'Unloading';
 /**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
+/**
+ * Identifies one turn within an attempt.
+ */
+export type TurnId = string;
+/**
  * The closed lifecycle vocabulary.
  *
  * `Incomplete` is the truthful answer whenever no terminal fact exists and
@@ -1296,14 +1304,6 @@ export type ModelErrorKind =
  */
 export type TraceToolOutcome =
   'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
-/**
- * Identifies one turn within an attempt.
- */
-export type TurnId = string;
 /**
  * The closed record vocabulary of the ledger.
  */
@@ -5021,11 +5021,12 @@ export interface TracePage {
 /**
  * Refresh of an already loaded record, resolved at the server's snapshot cut.
  *
- * Only mutable lifecycle facts travel here. Immutable historical input is
+ * Mutable lifecycle and resolved native location travel here. Immutable historical input is
  * never repeated, because it cannot have changed.
  */
 export interface TraceLifecycle {
   id: string;
+  location: TraceLocation;
   state: TraceState;
   timing: TraceTiming;
   request?: TraceRequestOutcome | null;
@@ -5033,6 +5034,13 @@ export interface TraceLifecycle {
   message_id?: MessageId | null;
   attachments: TraceArtifact[];
   truncated: boolean;
+}
+/**
+ * Current native ownership, including an idle input's answering Attempt.
+ */
+export interface TraceLocation {
+  attempt_id?: AttemptId | null;
+  step_id?: TurnId | null;
 }
 /**
  * Two authoritative instants, or fewer.
@@ -5174,7 +5182,7 @@ export interface TraceRecord {
    * they never parse it.
    */
   position: string;
-  location: TraceLocation;
+  location: TraceLocation1;
   kind: TraceKind;
   state: TraceState;
   timing: TraceTiming;
@@ -5224,7 +5232,7 @@ export interface TraceRecord {
  * `TurnId` is the logical model step inside an Attempt. An actual request
  * retry never allocates a new step, so retries of one step group together.
  */
-export interface TraceLocation {
+export interface TraceLocation1 {
   attempt_id?: AttemptId | null;
   step_id?: TurnId | null;
 }
@@ -6028,7 +6036,7 @@ export interface RuntimeClientTranscriptPage {
 /**
  * Whole-conversation execution totals, independent of any transcript window.
  * A lineage child includes its inherited turns' recorded execution, as a
- * DeepSeek Harness fork folds its copied prefix; it owns none of it.
+ * `DeepSeek` Harness fork folds its copied prefix; it owns none of it.
  */
 export interface ConversationStatistics {
   /**

@@ -1340,3 +1340,7 @@ antialiased differently depending on which tile or partial repaint drew them:
 12 of 30 fresh pinned-browser contexts differed (Δ1 on 7 pixels) in the focused
 search capture, and other captures varied too. As its own layer it rendered
 identically in 45 of 45 targeted replays.
+
+Trace retained-input ownership repair updates generated imports to App Server v36.
+Source inventory local hashes and dependency closure reflect this mechanical
+protocol change; all Harness upstream pins remain unchanged.

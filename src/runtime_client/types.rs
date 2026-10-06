@@ -258,7 +258,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 58 adds the runtime-published Session configuration-adoption
 /// eligibility to the snapshot and its change event; ordinary streaming never
 /// publishes it. Version 57 clients are rejected without a compatibility path.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 58;
+/// Version 59 refreshes retained Trace records with their resolved native location.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 59;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1068,7 +1069,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 58);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 59);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

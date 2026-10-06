@@ -1,4 +1,4 @@
-import type { ConversationTurn, ConversationTurnId, ConversationTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v35';
+import type { ConversationTurn, ConversationTurnId, ConversationTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v36';
 import { turnKey } from '../../client/transcript';
 
 /** Native outline pages hold at most this many turns. */

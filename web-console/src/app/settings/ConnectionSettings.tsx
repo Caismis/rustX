@@ -27,7 +27,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
     <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>{tx('settings:connection-settings.reconnect')}</Button>
     <Button onClick={() => void connection.disconnect()}>{tx('settings:connection-settings.disconnect')}</Button>
     {(selection.error || transport.error) && <p role="alert">{displayText(tx, selection.error || transport.error || '')}</p>}
-    <details><summary>{tx('settings:connection-settings.connection-details')}</summary><p>{transport.endpoint} {tx('settings:connection-settings.generation')} {transport.generation} {tx('settings:copy.app-server-v35')}</p></details>
+    <details><summary>{tx('settings:connection-settings.connection-details')}</summary><p>{transport.endpoint} {tx('settings:connection-settings.generation')} {transport.generation} {tx('settings:copy.app-server-v36')}</p></details>
     {!!transport.detached?.length && <details><summary>{tx('settings:connection-settings.detached-authority-diagnostics')}</summary>
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
       {transport.detached.map((evidence, index) => <section key={index}><h3>{evidence.authority}</h3>

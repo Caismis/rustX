@@ -408,12 +408,14 @@ pub struct TraceRecord {
 
 /// Refresh of an already loaded record, resolved at the server's snapshot cut.
 ///
-/// Only mutable lifecycle facts travel here. Immutable historical input is
+/// Mutable lifecycle and resolved native location travel here. Immutable historical input is
 /// never repeated, because it cannot have changed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceLifecycle {
     pub id: String,
+    /// Current native ownership, including an idle input's answering Attempt.
+    pub location: TraceLocation,
     pub state: TraceState,
     pub timing: TraceTiming,
     pub request: Option<TraceRequestOutcome>,

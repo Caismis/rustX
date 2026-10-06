@@ -4,7 +4,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient, SessionView } from '../../client/app-server';
-import type { SourceTarget } from '../../../../protocol/app-server/v35';
+import type { SourceTarget } from '../../../../protocol/app-server/v36';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';

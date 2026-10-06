@@ -11,7 +11,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v35';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v36';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -1645,4 +1645,33 @@ it('424: wire-null User survives folds and search, is keyboard reachable and sel
   expect(load.mock.calls).toEqual([[records[0]!.id]]);
   fireEvent.click(screen.getByRole('tab', { name: 'Native' }));
   expect(within(screen.getByRole('tabpanel')).getByText(records[0]!.id)).toBeTruthy();
+});
+
+it('retained idle inputs move into their native answering turns, below the initial prompt, when refreshed outside the latest page', () => {
+  const first = traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'first input', truncated: false } });
+  const request = richRequest(2);
+  request.request!.context_additions = [];
+  const second = traceRecord(4, { kind: 'user', request: null, location: {}, preview: { text: 'second input', truncated: false } });
+  const records = [first, request,
+    traceRecord(3, { kind: 'assistant', request: null }), second,
+    traceRecord(5, { kind: 'assistant', request: null, location: { attempt_id: 'attempt-b', step_id: '1' } })];
+  const before = selectTrace(cacheOf(records), first.id);
+  const updates = [first, second].map((record, i) => ({ id: record.id,
+    location: { attempt_id: i ? 'attempt-b' : 'attempt-a', step_id: null },
+    state: record.state, timing: record.timing, attachments: [], truncated: false }));
+  const repaired = refreshTrace(before, { records: [records.at(-1)!] }, updates);
+  expect(repaired.selection?.location).toEqual(updates[0].location);
+  const projection = projectTrajectory(translator('en'), repaired.page.records);
+  const rows = ledgerRows(translator('en'), projection, trajectoryItems(repaired.page.records), new Set(), false);
+  expect(rows.filter(row => row.kind === 'semantic').map(row => [row.item!.type, row.item!.owner_record_id, row.turnStart])).toEqual([
+    ['SystemPromptCell', request.id, false], ['RecordRow', first.id, true],
+    ['RecordRow', 'trace:3', false], ['RecordRow', second.id, true], ['RecordRow', 'trace:5', false],
+  ]);
+  expect(rows.filter(row => row.turnStart).map(row => [row.item!.owner_record_id, row.turn!.attempt_id])).toEqual([
+    [first.id, 'attempt-a'], [second.id, 'attempt-b'],
+  ]);
+  const load = vi.fn(); show({ ...repaired, selection: undefined }, load);
+  const ledger = screen.getByRole('table', { name: 'Trace ledger' });
+  expect([...ledger.querySelectorAll('[data-display-type="SystemPromptCell"], [data-display-type="RecordRow"]')].length).toBeGreaterThan(0);
+  expect(load).not.toHaveBeenCalled();
 });

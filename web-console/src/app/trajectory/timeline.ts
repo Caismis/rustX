@@ -9,7 +9,7 @@ import type { Translate } from '../../locale/translation';
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
 import type { TrajectoryProjection } from './layout';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v35';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v36';
 
 /** Horizontal projection of the overview's domain. */
 export type TrajectoryTimelineMode = 'sequence' | 'duration' | 'time' | 'actual';

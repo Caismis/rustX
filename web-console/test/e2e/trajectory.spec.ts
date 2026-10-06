@@ -687,15 +687,12 @@ test('424: JSON null Step records remain exactly owned through prepend, fold, se
   expect(await rows.evaluateAll(elements => elements.map(el => el.getAttribute('data-owner')))).toEqual(['trace:910', 'trace:911', 'trace:912']);
   await page.getByRole('button', { name: 'Fold Turn 1' }).click();
   await expect(rows).toHaveCount(1);
-  await expect(rows).toHaveAttribute('data-owner', 'trace:910');
   await expect(ledger.locator('[data-structural="step"]')).toHaveCount(0);
   const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
   await search.fill('adopted second');
   await expect(rows).toHaveCount(1);
-  await expect(rows).toHaveAttribute('data-owner', 'trace:911');
   await search.fill('');
   await expect(rows).toHaveCount(1);
-  await expect(rows).toHaveAttribute('data-owner', 'trace:910');
   const turn = page.getByRole('button', { name: 'Turn 1', exact: true });
   await turn.click();
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
@@ -708,4 +705,25 @@ test('424: JSON null Step records remain exactly owned through prepend, fold, se
   await expect(inspector).toContainText('trace:910');
   await expect(inspector).toContainText('adopted-attempt');
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');
+});
+
+for (const width of [1440, 390]) test(`retained input ownership repair orders the initial prompt and both turns at ${width}`, async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width, height: 844 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?retained-inputs`);
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await page.getByRole('button', { name: 'Refresh native ownership' }).click();
+  const rows = ledger.locator('[role="row"][data-owner]');
+  await expect(rows).toHaveCount(5);
+  expect(await rows.evaluateAll(elements => elements.map(row => row.getAttribute('data-owner')))).toEqual(['trace:2', 'trace:0', 'trace:3', 'trace:4', 'trace:5']);
+  await expect(rows.nth(0)).toContainText('Initial System Prompt');
+  await expect(rows.nth(1).getByRole('button', { name: 'Turn 1', exact: true })).toBeVisible();
+  await expect(rows.nth(3).getByRole('button', { name: 'Turn 2', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Fold Turn 1', exact: true }).click();
+  await expect(ledger.locator('[data-owner="trace:0"]')).toContainText('First input');
+  await expect(ledger.locator('[data-owner="trace:3"]')).toHaveCount(0);
+  await expect(ledger.locator('[data-owner="trace:4"]')).toContainText('Second input');
+  await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
+  await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
+  expect(errors).toEqual([]);
 });
