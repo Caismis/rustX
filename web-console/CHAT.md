@@ -233,16 +233,22 @@ checks it on repeated initialization, and refuses obsolete stores without migrat
 The native `After` validator accepts local evidence and inherited provenance through
 one shared projection, while still requiring the exact destination append revision.
 
-The tail's lineage menu exposes Branch in this Session and Fork to new Session.
-Both use `side: after` and the immutable Surface revision that first appended the
+The tail follows Harness `MessageIconActions`: Copy, Regenerate (rustX's only
+extra lineage action, seated where Harness places extra actions) and one branch
+action, Branch into a new Session (`session/fork`), then the Turn usage pill and
+time. A completed response already names its exact boundary, so both lineage
+actions run on the click, as Harness `forkAt` does: no confirming chooser opens,
+the response actions lock until the transition settles, and a failure surfaces as
+the App notice. In-Session Branch is reached through `/branch` and Session tree.
+Branch into a new Session uses `side: after` and the immutable Surface revision that first appended the
 closing response. The resulting prefix includes that Assistant response and the
 composer is empty. The native owner validates the exact response/revision pair
 and durable completion. Compaction and later appends do not change that historical
 cut. Unknown revisions and mismatched boundaries fail visibly, without refreshing
 or replaying the mutation. `session/tree` resolves the attached Conversation's
 node, never the Session's mutable default. Independent Fork still copies native
-uploads in the inherited prefix before publication; in-Session Branch shares the
-Session's upload ownership.
+uploads in the inherited prefix before publication; in-Session Branch (`/branch`)
+shares the Session's upload ownership.
 
 Command discovery retains explicit pre-input boundary selection for native draft
 restoration. Retry uses `side: before`, the input in the final request's frozen

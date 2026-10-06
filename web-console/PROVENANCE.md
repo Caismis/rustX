@@ -1278,3 +1278,15 @@ became `app/agent/UsageStats.tsx` with their styles combined in
 slots, cache-write bucket and browser-side token meter are not imported: every
 figure is a native rustX reading (`ConversationStatistics.timing`,
 `CompletedResponseView.usage`/`models`, `ContextOccupancy.breakdown`).
+
+## Completed-response lineage actions (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. `ui-chat` `TurnTailNodeView.tsx`, `MessageIconActions.tsx` and the
+`forkAt` seat in `apply.ts` were consulted; no new upstream source is imported
+and no pin changes. The tail keeps one branch action, Branch into a new Session
+(`session/fork`), and rustX's Regenerate sits where Harness seats extra actions.
+Both run on the click from `App.tsx`, as `forkAt` does, instead of opening the
+`CommandPanel` chooser; the duplicate in-Session Branch tail action, the
+chooser's response-anchored rows and their copy are removed. `TurnTail.tsx`,
+`CommandPanel.tsx` and `dictionaries/agent.ts` are rehashed in the inventory.

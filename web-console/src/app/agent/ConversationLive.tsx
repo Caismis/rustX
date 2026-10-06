@@ -10,7 +10,7 @@ import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
-import type { HistoryAction } from '../commands/native';
+import type { ResponseAction } from '../commands/native';
 import type { CompletedResponseView } from '../../../../protocol/app-server/v35';
 import { useRef, useState } from 'react';
 import { useTranslation } from '../../locale/react';
@@ -19,7 +19,7 @@ import { turnAnchor } from '../../client/transcript';
 
 export function ConversationLive({ client, sessionId, mode, disabled, onHistorical }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean;
-  onHistorical: (id: HistoryAction, response: CompletedResponseView) => void;
+  onHistorical: (id: ResponseAction, response: CompletedResponseView) => void;
 }) {
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const view = useClientSelector(client, state => {

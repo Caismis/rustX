@@ -35,8 +35,10 @@ export function TurnUsage({ usage, models }: { usage: ModelUsage; models: readon
   const tx = useTranslation();
   const hit = cacheHit(usage, 1);
   const reasoning = usage.details?.reasoning_tokens;
-  return <StatDialog triggerClassName={css.trigger} title={tx('agent:usage.turn-title')}
-    trigger={<><IconDatabaseOutline16/><span className={css.label}>{tx('agent:usage.consumed', { total: count(tx, usage.total_tokens) })}</span></>}>
+  const consumed = tx('agent:usage.consumed', { total: count(tx, usage.total_tokens) });
+  // The narrow layout hides the words, so the name never rides on them.
+  return <StatDialog triggerClassName={css.trigger} label={consumed} title={tx('agent:usage.turn-title')}
+    trigger={<><IconDatabaseOutline16/><span className={css.label}>{consumed}</span></>}>
     <StatHeading icon={<IconDatabaseOutline16/>} title={tx('agent:usage.turn-title')} value={exact(tx, usage.total_tokens)}/>
     <dl className={statCss.details} data-turn-usage-details="">
       {models.length > 0 && <><dt>{tx('agent:usage.model')}</dt><dd className={statCss.route}>{models.join(', ')}</dd></>}

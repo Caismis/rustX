@@ -108,7 +108,7 @@
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
       "destination": "web-console/src/app/commands/CommandPanel.tsx",
-      "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged.",
+      "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI/UX alignment: completed-response Fork and Retry no longer open the chooser; the response-anchored rows, the retry id and their copy were removed.",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
         "../../../../protocol/app-server/v35",
@@ -131,7 +131,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b1b999107f534587888b124f7b3f0214e71667df5a486b2a79751928cbeb569b"
+      "local_sha256": "a74d66eabe88ebcce039e5fc1389cb95933f9b28e907f2a887e637bc4cb1e00a"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -2575,7 +2575,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
       "destination": "web-console/src/app/agent/TurnTail.tsx",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: Turn-owned direct actions, usage and end clock; native response boundary and origin identities retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI/UX alignment: the Turn usage pill moved to the Harness TurnUsagePanel port (UsageStats.tsx); the rustX Ran-for timing pill and its modal were removed, the process header owns the Turn duration.",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: Turn-owned direct actions, usage and end clock; native response boundary and origin identities retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI/UX alignment: the Turn usage pill moved to the Harness TurnUsagePanel port (UsageStats.tsx); the rustX Ran-for timing pill and its modal were removed, the process header owns the Turn duration. UI/UX alignment: Harness MessageIconActions order with one branch action (Branch into a new Session) and Regenerate seated as an extra action; both run on the click through App, as Harness forkAt does, and the duplicate in-Session Branch action was removed.",
       "upstream_sha256": "43d2e3e5713b6f08a33ce20a918eb8c73497f894438805413ef925f9e5437c5d",
       "additional_sources": [
         {
@@ -2609,7 +2609,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "a1d78e0130bb287c334bb3c62df2fb18a6bf45cfb13353a2fa43c949f2664198"
+      "local_sha256": "47efc8c57f437755614ef2a14eb42152ce0b763114b7f994760f342cc2b1dbe7"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -3158,7 +3158,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3169,7 +3169,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "14e958937f34378d56d9f386b6df2d22c00111932c1c7106b4b5210bd02cb43f"
+      "local_sha256": "dafe6455b371cea663c1263affb18f750c2070dbf889a8d2330158ab4e4de65c"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3579,7 +3579,7 @@
       "destination": "web-console/src/app/agent/UsageStats.tsx",
       "upstream_sha256": "d901d8069b7f7263576478608cce2b27d0312b5863a6fcb19df76c1489b7d76c",
       "classification": "B",
-      "treatment": "Harness Detailed-mode ActivityPill and UsagePill, TurnUsagePanel and ui-conversation ContextMeter over native rustX ConversationStatistics, CompletedResponseView usage/models and ContextOccupancy with its native estimated breakdown; Compact mode, plugin dock slots and the cache-write bucket excluded; explicit usage-report coverage row added.",
+      "treatment": "Harness Detailed-mode ActivityPill and UsagePill, TurnUsagePanel and ui-conversation ContextMeter over native rustX ConversationStatistics, CompletedResponseView usage/models and ContextOccupancy with its native estimated breakdown; Compact mode, plugin dock slots and the cache-write bucket excluded; explicit usage-report coverage row added. The Turn usage trigger carries its own accessible name, since the narrow layout hides its words.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v35",
@@ -3591,7 +3591,7 @@
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "c9fd6a00bfed3be3bf70458133963f015a095ffa26a320871f14620198225035"
+      "local_sha256": "3024ad30f3b74d0298d899b0b30baefb4aa3cf24c4644c8dac7e24b2ef9b917c"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",

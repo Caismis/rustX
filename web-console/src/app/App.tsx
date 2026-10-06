@@ -18,8 +18,9 @@ import { WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { AppServerClient } from '../client/app-server';
-import type { SourceTarget, UserInputBlock } from '../../../protocol/app-server/v35';
+import type { CompletedResponseView, SourceTarget, UserInputBlock } from '../../../protocol/app-server/v35';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
+import { CommandSession, type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock } from '../bindings/composer-context';
@@ -105,6 +106,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
+  const [transitioning, setTransitioning] = useState<string>();
   const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceAuthority, client, navigation), [workspaceAuthority, client, navigation]);
   useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
   // Existing navigation hints may restore wanted views, never a released claim.
@@ -135,11 +137,17 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const connected = state.connection === 'connected';
   const attached = !view?.deleting && connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
-  const invokeCommand = (request: CommandRequest | { id: 'new' } | { id: 'compact' }) => {
+  /** The selected view when it can take a Session command right now. */
+  const commandable = () => {
     const currentState = client.getSnapshot();
     const view = selected ? currentState.views[selected] : undefined;
     if (view && client.firstSubmissions.session(view.id) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(view.id)!.phase)) return;
     if (!view || currentState.connection !== 'connected' || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.modelMutation || view.snapshot?.shutting_down || view.snapshot?.durability_failure) return;
+    return view;
+  };
+  const invokeCommand = (request: CommandRequest | { id: 'new' } | { id: 'compact' }) => {
+    const view = commandable();
+    if (!view) return;
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
     if (request.id === 'new') { createInWorkspace(workspace); return; }
@@ -155,6 +163,25 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     }
     navigation.invalidate();
     setCommand({ request, current: navigation.capture(), generation: state.generation, sessionId: view.id, conversationId: view.target?.conversation_id });
+  };
+  // A completed response already names its exact boundary, so its Fork and
+  // Retry run on the click, as Harness forkAt does: no confirming chooser.
+  const transitionResponse = (action: ResponseAction, response: CompletedResponseView) => {
+    const view = commandable();
+    if (!view || transitioning) return;
+    navigation.invalidate(); setCommand(undefined);
+    const current = navigation.capture(), generation = client.getSnapshot().generation;
+    const valid = () => current() && client.getSnapshot().generation === generation;
+    const scope = new CommandSession(client, view.id, valid);
+    setTransitioning(view.id);
+    runGlobal(async () => {
+      try {
+        const result = await scope.transition(action, await scope.responseSelection(response));
+        if (!result || !valid()) return;
+        focusSession(result.session.id, { ready: () => setRestored({ conversation: result.session.active_conversation_id, content: result.content }) });
+        setOpenViews(open => open.includes(result.session.id) ? open : [...open, result.session.id]);
+      } finally { setTransitioning(undefined); }
+    });
   };
   const runGlobal = (action: () => Promise<unknown>) => {
     const generation = client.getSnapshot().generation; setError('');
@@ -296,7 +323,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view ? 'tabpanel' : undefined} aria-labelledby={view ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
-      <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen} onHistorical={(id, response) => invokeCommand({ id, response })}/></ArtifactContext.Provider></PreviewContext>
+      <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}

@@ -14,7 +14,7 @@ import { AgentStatusAnnotation } from './AgentStatus';
 import { Message } from './Message';
 import { ToolDeliveries } from '../components/Artifact';
 import { entryIdentity, HISTORY_LIMIT, turnAnchor, type TranscriptCache } from '../../client/transcript';
-import type { HistoryAction } from '../commands/native';
+import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
 import tailCss from './TurnTail.module.css';
 import css from '../../presentation/agent/Chat.module.css';
@@ -39,7 +39,7 @@ function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bod
     {prefix}<div hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
   </div>;
 }
-export function AgentTranscript({ snapshot, history, loadEarlier, loadNewer, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; loadNewer?: () => void; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
+export function AgentTranscript({ snapshot, history, loadEarlier, loadNewer, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; loadNewer?: () => void; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
   const tx = useTranslation();
   const { messages, streaming: currentStreaming } = conversation(snapshot);
   const historical=history?.mode==='historical', streaming=historical?undefined:currentStreaming;

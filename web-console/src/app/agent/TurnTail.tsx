@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 import type { CompletedResponseView } from '../../../../protocol/app-server/v35';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
-import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16 } from '../../presentation/primitives/icons';
-import type { HistoryAction } from '../commands/native';
+import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';
+import type { ResponseAction } from '../commands/native';
 import { turnAnchor } from '../../client/transcript';
 import { TurnUsage } from './UsageStats';
 import css from './TurnTail.module.css';
@@ -27,14 +27,15 @@ export function CopyMessage({ text }: { text: string }) {
     void writeClipboard(text).then(ok => setStatus(ok ? 'copied' : 'failed'));
   }}>{status === 'copied' ? <IconCheckOutline16/> : <IconCopyOutline16/>}</button></Tooltip>;
 }
-export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false }: { text: string; response: CompletedResponseView; onHistorical?: (action: HistoryAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean }) {
+export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean }) {
   const tx = useTranslation();
   return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={JSON.stringify([response.origin.conversation_id, response.origin.attempt_id])}>
     <CopyMessage text={text}/>
     {onHistorical && <>
-      <Tooltip label={tx('agent:turn-tail.fork-to-new-session')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.fork-to-new-session')} disabled={disabled} onClick={() => onHistorical('fork', response)}><IconBranchOutline16/></button></Tooltip>
-      <Tooltip label={tx('agent:turn-tail.branch-in-this-session')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch-in-this-session')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('branch', response)}><IconBranchOutline16/></button></Tooltip>
-      {response.retry_message_id && <Tooltip label={tx('agent:turn-tail.retry-regenerate')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry-regenerate')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}>↻</button></Tooltip>}
+      {/* rustX's Retry replays the original input on a sibling branch; it sits
+          where Harness seats extra actions, between copy and branch. */}
+      {response.retry_message_id && <Tooltip label={tx('agent:turn-tail.retry')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
+      <Tooltip label={tx('agent:turn-tail.branch')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch')} disabled={disabled} onClick={() => onHistorical('fork', response)}><IconBranchOutline16/></button></Tooltip>
     </>}
     {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
     <MessageTime time={response.completed_at}/>

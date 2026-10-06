@@ -9,6 +9,8 @@ export interface HistoricalSelection {
   boundary: SessionUserMessageBoundary | CompletedResponseView;
 }
 export type HistoryAction = 'fork' | 'branch' | 'retry';
+/** The lineage actions a completed response offers in place. */
+export type ResponseAction = Extract<HistoryAction, 'fork' | 'retry'>;
 export class CommandSession {
   readonly target: AttachmentTarget;
   private readonly generation: number;

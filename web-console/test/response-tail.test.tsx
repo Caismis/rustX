@@ -49,9 +49,10 @@ it('unfinalized output has no fabricated tail, usage or lineage', () => {
 it('direct Turn actions forward the exact native response and keeps switching conservative', () => {
   const onHistorical=vi.fn(); const ui=render(<AgentTranscript snapshot={conversation()} onHistorical={onHistorical} lineageSwitchSafe={false}/>);
   expect(ui.queryByRole('button',{name:'Lineage'})).toBeNull();
-  expect(ui.getByRole('button',{name:'Branch in this Session'})).toHaveProperty('disabled',true);
-  expect(ui.getByRole('button',{name:'Retry / Regenerate'})).toHaveProperty('disabled',true);
-  fireEvent.click(ui.getByRole('button',{name:'Fork to new Session'}));
+  // Harness seats one branch action: a new Session. Retry is rustX's only other lineage action.
+  expect(ui.queryByRole('button',{name:'Branch in this Session'})).toBeNull();
+  expect(ui.getByRole('button',{name:'Regenerate'})).toHaveProperty('disabled',true);
+  fireEvent.click(ui.getByRole('button',{name:'Branch into a new Session'}));
   expect(onHistorical).toHaveBeenCalledWith('fork',response);
 });
 it('paging during live refresh preserves exact response facts and freshest native totals', () => {

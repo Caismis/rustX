@@ -64,8 +64,8 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await oldTail.hover();
     await expect(oldActions).toHaveCSS('opacity', '1');
     await page.setViewportSize({ width: 390, height: 844 });
-    await oldTail.getByRole('button', { name: 'Branch in this Session', exact: true }).focus();
-    await expect(oldTail.getByRole('button', { name: 'Branch in this Session', exact: true })).toBeVisible();
+    await oldTail.getByRole('button', { name: 'Branch into a new Session', exact: true }).focus();
+    await expect(oldTail.getByRole('button', { name: 'Branch into a new Session', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/response-tail-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -176,7 +176,11 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const expandImage = async () => {
       const process = canonical.locator('[data-turn-process]').last();
       if (await process.getAttribute('aria-expanded') === 'false') await process.click();
-      const disclosure = canonical.locator('[data-tool-call-id="chat-image"]').getByRole('button', { expanded: false });
+      // The tool row sits in its step group, collapsed once the Turn settles.
+      const tool = canonical.locator('[data-tool-call-id="chat-image"]').last();
+      const step = canonical.locator('[data-step-process]').filter({ has: page.locator('[data-tool-call-id="chat-image"]') }).last().locator(':scope > button');
+      if (await step.getAttribute('aria-expanded') === 'false') await step.click();
+      const disclosure = tool.getByRole('button', { expanded: false });
       if (await disclosure.count()) await disclosure.click();
     };
     await expandImage();
@@ -227,22 +231,14 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     expect((await fixture.control('requests')).requests).toHaveLength(38);
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
-    // Every native lineage control preserves independently readable managed images.
+    // A Fork preserves independently readable managed images.
     const copiedImage = async () => {
-      const process = canonical.locator('[data-turn-process]').last();
-      if (await process.getAttribute('aria-expanded') === 'false') await process.click();
-      const disclosure = canonical.locator('[data-tool-call-id]').last().getByRole('button', { expanded: false });
-      if (await disclosure.count()) await disclosure.click();
+      await expandImage();
       await expect(load).toHaveCount(1);
       await decode();
     };
-    await page.getByRole('button', { name: 'Fork to new Session', exact: true }).last().click();
-    await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
-    await expect(page.getByRole('dialog', { name: '/fork', exact: true })).toHaveCount(0);
-    await copiedImage();
-    await page.getByRole('button', { name: 'Branch in this Session', exact: true }).last().click();
-    await page.getByRole('dialog', { name: '/branch', exact: true }).getByRole('option', { name: /Continue after this response/ }).click();
-    await expect(page.getByRole('dialog', { name: '/branch', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).last().click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await copiedImage();
     expect(errors).toEqual([]); passed = true;
   } catch (error) {
