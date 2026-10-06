@@ -243,8 +243,9 @@ for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome}
     expect(viewport.scrollTop).toBe(positions['message:A-body'] + 300);
     expectActive(a);
   }
-  scroll(positions[turnAnchor(b)] - 1); expectActive(a);
-  scroll(positions[turnAnchor(b)]); expectActive(b);
+  // The reading line is 40px into this 200px viewport; keep the exact 1px boundary.
+  scroll(positions[turnAnchor(b)] - 41); expectActive(a);
+  scroll(positions[turnAnchor(b)] - 40); expectActive(b);
   scroll(positions['message:B-body'] + 500); flush();
   expectActive(b); // No later anchor; B remains active after its marker is gone.
   ui.unmount(); server.client.disconnect();
@@ -323,8 +324,9 @@ for (const outcome of ['completed', 'timed_out'] as const) {
       for (const growth of [80, 150]) {
         v.grow(growth); expect(v.viewport.scrollTop).toBe(v.positions['message:A-body'] + 300); v.expectActive(v.a); v.expectClipped();
       }
-      v.scroll(v.positions['message:B-start'] - 1); v.expectActive(v.a);
-      v.scroll(v.positions['message:B-start']); v.expectActive(v.b);
+      // Native ownership switches exactly when B reaches the 40px reading line.
+      v.scroll(v.positions['message:B-start'] - 41); v.expectActive(v.a);
+      v.scroll(v.positions['message:B-start'] - 40); v.expectActive(v.b);
       v.scroll(v.positions['message:B-body'] + 500); v.expectActive(v.b);
     } finally { v.ui.unmount(); v.server.client.disconnect(); }
   });
@@ -386,4 +388,27 @@ it('detached unowned reading publishes unknown and semantic ownership cannot sat
   const top = v.top(), intent = owner.beginNavigation();
   expect(intent.commit('turn:clipped')).toBe(true); v.flush();
   expect(v.top()).toBe(top); // The owner exists, but no exact location is loaded.
+});
+
+it('reading line selects the first padded turn and the next visible turn before its top reaches the viewport edge', () => {
+  const v = coordinatedViewport();
+  v.positions['turn:first'] = 20;
+  v.positions['turn:second'] = 520;
+  v.replace(['turn:first', 'turn:second']); v.flush();
+  v.scroll(0); expect(v.active).toHaveBeenLastCalledWith('turn:first');
+  v.scroll(470); expect(v.active).toHaveBeenLastCalledWith('turn:first');
+  v.scroll(490); expect(v.active).toHaveBeenLastCalledWith('turn:second');
+  v.scroll(470); expect(v.active).toHaveBeenLastCalledWith('turn:first');
+});
+
+it('following a settled short final turn selects its native owner even while the preceding turn crosses the reading line', () => {
+  const v = coordinatedViewport();
+  v.positions['turn:first'] = 20;
+  v.positions['turn:second'] = 900;
+  v.replace(['turn:first', 'turn:second']); v.flush();
+  expect(v.top()).toBe(800);
+  expect(v.active).toHaveBeenLastCalledWith('turn:second');
+  v.scroll(500); expect(v.active).toHaveBeenLastCalledWith('turn:first');
+  fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' })); v.flush();
+  expect(v.active).toHaveBeenLastCalledWith('turn:second');
 });

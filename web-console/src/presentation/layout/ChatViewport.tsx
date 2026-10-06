@@ -73,11 +73,16 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     const el = this.viewport.current;
     if (!el) return;
     const regions = [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-turn-owner], [data-chat-anchor-key]') ?? [])].filter(row => !row.closest('[hidden]'));
-    const top = el.getBoundingClientRect().top;
+    // Match Harness: read inside the content, below the scrollport padding.
+    const line = el.getBoundingClientRect().top + Math.min(96, el.clientHeight * 0.2);
     // Each rendered native-owned region carries identity even when its exact
     // start is outside this finite window. Unowned rows end ownership; an owned
     // final region stays active through its tail. Locate anchors are not owners.
-    const owner = regions.reverse().find(row => row.getBoundingClientRect().top <= top)?.dataset.chatTurnOwner;
+    // Tail following also applies after an Attempt settles. A short final
+    // reply need not reach the reading line to own the bottom of the page.
+    const region = this.following ? regions.at(-1)
+      : regions.reverse().find(row => row.getBoundingClientRect().top <= line);
+    const owner = region?.dataset.chatTurnOwner;
     const key = this.following && this.props.latestTurn ? this.props.latestTurn
       : owner ?? (this.following ? undefined : null);
     if (key !== this.active) { this.active = key; this.props.onActiveTurn?.(key); }

@@ -1283,7 +1283,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
       "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
-      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. UI/UX alignment: one contiguous window through the live tail, as Harness ChatView/loadThrough; historical replacement windows and later-content paging removed.",
+      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. UI/UX alignment: one contiguous window through the live tail, as Harness ChatView/loadThrough; historical replacement windows and later-content paging removed. Navigation highlight repair: use the Harness reading line (20% of viewport height, capped at 96px) and select the rendered tail owner while following settled output. Preserve native ownership and unowned boundaries.",
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
@@ -1296,7 +1296,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b044152f062b73a934ca894fa34472f72c73918e0a59737db23e1e16e89d0161",
+      "local_sha256": "21bd9b41c3e6074ef8a8d254720fcf69998575517c6354636104a7c3db760c71",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -1321,6 +1321,18 @@
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "171ab98296b21398b1909a4f346f23ee7988da8bf77bcbfac26ae9ad1dad1303",
           "treatment": "Inspected interaction patterns; semantic anchors and follow intent adapted, multiple smooth-scroll writers and runtime authority rejected."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/use-chat-viewport.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "171ab98296b21398b1909a4f346f23ee7988da8bf77bcbfac26ae9ad1dad1303",
+          "treatment": "Adapted reading-line placement and tail-follow active-turn policy; rustX native identities, unowned boundaries and sole RAF scroll coordinator retained."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/use-chat-reading.ts",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "3b1394c43c1c73c17e1a087e40382e5445623fbea310793a2e8d2f16d3dbf41e",
+          "treatment": "Adapted reading-line placement and tail-follow active-turn policy; rustX native identities, unowned boundaries and sole RAF scroll coordinator retained."
         }
       ]
     },
