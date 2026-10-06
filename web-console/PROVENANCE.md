@@ -1303,3 +1303,36 @@ prepends. rustX's historical replacement windows, Load later content, the
 browser entry/byte cache bound and its Return-to-latest window reset are
 removed. `ChatViewport.tsx`, `TurnNavigator.tsx` and `dictionaries/agent.ts` are
 rehashed in the inventory.
+
+## Conversation header and Trajectory chrome (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. Consulted: `ui-conversation` `ConversationSession.tsx` and
+`ConversationRoot.module.css`; `ui-open-in-app` `OpenTargetButton.tsx`/`.module.css`;
+`ui-sidebar-right` `ExpandButton.tsx`/`.module.css`; `session-log-export`
+`HeaderAction.tsx`/`.module.css`; `ui-trajectory` `TrajectoryToolbar.tsx`/`.module.css`
+and `TrajectoryTable.tsx`/`.module.css`. Each adapted file records its exact
+additional source in the inventory; the repository baseline is unchanged.
+
+The header title is Harness's current crumb; the workspace opener is the compact
+hairline split button; More, Inspector and the Previews toggle (the mirrored
+panel glyph in the corner seat) are 28px icon controls; view tabs are plain
+buttons, and the Chinese Chat tab reads 对话 as in Harness. The Trajectory
+toolbar uses Harness's 32px strip, icon toggles and trailing search field;
+Actual time stays visible as a rustX switch. Ledger role tags are label-only
+until the ledger is narrow, the Turn label hangs from the Turn's first row, only
+the selected Turn draws its rail, and the Request boundary is a dot. The detail
+header shows a role tag, the native Turn/Step location and an icon close.
+Native seat heights, focus targets and controls are unchanged, so every control
+still sits inside its row.
+Menu now keeps the trigger it captured on open until the next open, so after
+a selection the keyboard returns to the split button's chevron rather than the
+anchor's first button; a menu opened from outside its anchor closes onto the
+anchor's `aria-haspopup` button. `Menu.tsx` is rehashed in the inventory. The
+Trajectory ledger anchors a prepend on its first fully visible seat.
+The search field keeps Harness's stroked hairline on its own compositing layer.
+On the page layer it straddles a raster tile, so its rounded corners were
+antialiased differently depending on which tile or partial repaint drew them:
+12 of 30 fresh pinned-browser contexts differed (Δ1 on 7 pixels) in the focused
+search capture, and other captures varied too. As its own layer it rendered
+identically in 45 of 45 targeted replays.

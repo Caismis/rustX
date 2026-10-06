@@ -287,7 +287,7 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
 
   fireEvent.click(turn);
   expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
-  expect(within(structureInspector()).getByText('Turn 1 · native Attempt')).toBeDefined();
+  expect(within(structureInspector().querySelector('header')!).getByText('Attempt')).toBeDefined(); expect(within(structureInspector().querySelector('header')!).getByText('Turn 1')).toBeDefined();
   expect(fact('Native kind')).toBe('Attempt');
   expect(fact('Record')).toBe(attempt.id);
   expect(fact('Attempt')).toBe('attempt-opaque');
@@ -300,7 +300,7 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
   expect(within(ledger).queryByRole('row', { name: 'Message' })).toBeNull();
   act(() => stepRow.focus()); fireEvent.click(stepRow);
   expect(stepRow.getAttribute('aria-pressed')).toBe('true');
-  expect(within(structureInspector()).getByText('Step 1 · native Step')).toBeDefined();
+  expect(within(structureInspector().querySelector('header')!).getByText('Step')).toBeDefined(); expect(within(structureInspector().querySelector('header')!).getByText('Step 1')).toBeDefined();
   expect(fact('Native kind')).toBe('Step');
   expect(fact('Record')).toBe(step.id);
   expect(fact('Attempt')).toBe('attempt-opaque');
@@ -334,7 +334,7 @@ it('407: prepend renumbering and lifecycle refresh keep the same native structur
   expect(screen.getByRole('button', { name: 'Turn 2' })).toBe(turn);
   expect(turn.getAttribute('aria-pressed')).toBe('true');
   expect(document.activeElement).toBe(turn);
-  expect(within(structureInspector()).getByText('Turn 2 · native Attempt')).toBeDefined();
+  expect(within(structureInspector().querySelector('header')!).getByText('Attempt')).toBeDefined(); expect(within(structureInspector().querySelector('header')!).getByText('Turn 2')).toBeDefined();
   expect(fact('Record')).toBe(attempt.id);
   expect(fact('Attempt')).toBe('attempt-a');
   expect(fact('State')).toBe('running');
@@ -413,7 +413,7 @@ it('T1-09 search reveals both collapsed kinds without any detail/history reads',
   show(cacheOf(records), load, older);
   fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Collapse Calls' }));
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turns' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'ls -la' } });
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded Trace' }), { target: { value: 'ls -la' } });
   expect(row('RecordRow', 'trace:1')).not.toBeNull(); expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
   const items = trajectoryItems([richRequest()]);
   expect(searchItems(projectTrajectory(translator('en'), [richRequest()]), 'Preview context-a')?.size).toBe(1);
@@ -579,7 +579,7 @@ it.each(['expand', 'search', 'other owner'] as const)('T1-04 pending summary det
   const summary = collapseAndSelectSummary();
   if (transition === 'expand') fireEvent.click(within(summary).getByRole('button', { name: 'Expand Calls' }));
   else if (transition === 'search') {
-    const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+    const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
     act(() => search.focus());
     fireEvent.change(search, { target: { value: 'ASSISTANT' } });
   } else {
@@ -602,7 +602,7 @@ it.each(['expand', 'search', 'other owner'] as const)('T1-04 pending summary det
     expect(row('RecordRow').getAttribute('aria-selected')).toBe('true');
     expect(reads).toEqual(['trace:0']);
     if (transition === 'search') {
-      fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: '' } });
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded Trace' }), { target: { value: '' } });
       expect(row('CollapsedCallSummary').getAttribute('aria-selected')).toBe('false');
       expect(row('RecordRow').getAttribute('aria-selected')).toBe('true');
     }
@@ -698,7 +698,7 @@ it('407: prepend renumbers Turn while collapsed selection, prompt detail and foc
   expect(document.activeElement).toBe(collapse);
   expect(screen.getByRole('complementary').textContent).toContain('Exact frozen request ten');
   expect(row('SystemPromptCell', selected.id)).not.toBeNull();
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'request-10' } });
   expect(row('SystemPromptCell', selected.id).getAttribute('aria-selected')).toBe('true');
   expect(screen.getByRole('button', { name: 'Turn 2' })).toBeDefined();
@@ -759,7 +759,7 @@ it.each([
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
   const previousKeys = () => [...ledger.querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
   const foldedKeys = previousKeys();
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: query } });
   if (label !== 'Message') expect(within(ledger).getByRole('button', { name: label }).closest('[data-attempt]')?.getAttribute('data-attempt')).toBe(attempt);
   else expect(within(ledger).queryByRole('row', { name: 'Message' })).toBeNull();
@@ -807,7 +807,7 @@ it.each([
   const load = vi.fn(); const older = vi.fn();
   show(completeTraceDetail(cacheOf(records), request.id, 1, requestDetail(0)), load, older);
   fireEvent.click(row('SystemPromptCell'));
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: query } });
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
   expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-display-key'))).toEqual(ledgerRows(translator('en'), projectTrajectory(translator('en'), records), [...items.filter(item => !isInspectable(item)), ...expected], new Set(), true).filter(row => row.item).map(row => row.display_key));
@@ -823,7 +823,7 @@ it('structural search overrides Calls without changing the stored collapse set',
   show(cacheOf([proposal(), execution(1)]), load, older);
   fireEvent.click(within(screen.getByRole('toolbar')).getByRole('button', { name: 'Collapse Calls' }));
   expect(row('RecordRow', 'trace:1')).toBeNull();
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'Step 1' } });
   expect(row('RecordRow', 'trace:1')).not.toBeNull();
   expect(row('CollapsedCallSummary')).toBeNull();
@@ -838,7 +838,7 @@ it.each(['Turn 2', 'Step 2'])('%s reveals every semantic cell of its structural 
   const records = [traceRecord(0), traceRecord(1, { location: { attempt_id: 'b', step_id: 'first' } }), request];
   show(cacheOf(records));
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turns' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: query } });
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded Trace' }), { target: { value: query } });
   const expected = trajectoryItems(query === 'Turn 2' ? records.slice(1) : [request]);
   const items = trajectoryItems(records);
   const ledger = screen.getByRole('table', { name: 'Trace ledger' });
@@ -1265,7 +1265,7 @@ it('421: fold retains System, first main semantic content and actionable compact
   expect(document.querySelector('[data-display-type="TurnSummary"]')?.getBoundingClientRect).toBeDefined();
   const keys = () => [...screen.getByRole('table').querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
   const before = keys();
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'Step 1' } });
   expect(row('RecordRow', 'trace:3')).not.toBeNull();
   const english = keys();
@@ -1284,7 +1284,7 @@ it('421: Tool input and result render bounded summary facts without detail reads
   expect(row('RecordRow', tool.id).textContent).toContain('bounded input');
   expect(row('RecordRow', tool.id).textContent).toContain('→bounded result');
   expect(within(row('RecordRow', tool.id)).getByLabelText(translator('en')('trajectory:trajectory.truncated'))).toBeDefined();
-  fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'bounded input' } });
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded Trace' }), { target: { value: 'bounded input' } });
   expect(row('RecordRow', tool.id)).not.toBeNull();
   expect(load).not.toHaveBeenCalled();
 });
@@ -1347,7 +1347,7 @@ it.each(['only-system', 'native-step', 'context', 'search'] as const)('424: prom
     expect(rows[stepIndex]!.kind).toBe('structure'); expect(rows[stepIndex]!.height).toBe(20);
   }
   const load = vi.fn(); show(cacheOf(records), load);
-  if (scenario === 'search') fireEvent.change(screen.getByRole('textbox', { name: 'Search loaded Trace' }), { target: { value: 'Frozen prompt' } });
+  if (scenario === 'search') fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded Trace' }), { target: { value: 'Frozen prompt' } });
   fireEvent.click(screen.getByRole('button', { name: 'Step 1' }));
   expect(screen.getByRole('button', { name: 'Step 1' }).getAttribute('data-step')).toBe('1');
   if (scenario !== 'only-system') expect(fact('Record')).toBe('trace:2');
@@ -1452,7 +1452,7 @@ it('424 order: search-generated fallback keeps native position and restores exac
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
   const keys = () => [...screen.getByRole('table').querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
   const foldedKeys = keys();
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'order-match' } });
   const searchingKeys = keys();
   expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['z-first', 'b-last']);
@@ -1512,7 +1512,7 @@ it('424 compact: search exposes a hidden Step and clearing restores exact compac
   const collapsedKeys = keys();
   expect(document.querySelectorAll('[data-display-type="StructuralSeat"]')).toHaveLength(0);
   expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['z-first']);
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'order-match later' } });
   expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['b-last']);
   expect(row('RecordRow', 'trace:706')).not.toBeNull();
@@ -1626,7 +1626,7 @@ it('424: wire-null User survives folds and search, is keyboard reachable and sel
   expect(row('RecordRow', records[0]!.id)).not.toBeNull();
   expect(row('RecordRow', records[1]!.id)).toBeNull();
   expect(row('RecordRow', records[2]!.id)).toBeNull();
-  const search = screen.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'adopted second' } });
   expect(row('RecordRow', records[1]!.id)).not.toBeNull();
   fireEvent.change(search, { target: { value: '' } });

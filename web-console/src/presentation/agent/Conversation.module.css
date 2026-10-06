@@ -100,6 +100,7 @@
 }
 
 .crumb {
+  display: inline-block;
   max-width: 220px;
   overflow: hidden;
   padding: 4px 8px;
@@ -162,6 +163,25 @@
 
 .headerCorner:empty {
   display: none;
+}
+
+/* Icon-only header controls share Harness's compact More/Expand geometry:
+   the 28px compact Button, secondary ink and a 15px glyph. */
+.iconButton {
+  flex: none;
+  width: 28px;
+  padding: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.iconButton svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* The left sidebar's panel icon, mirrored: the divider moves to the right side. */
+.mirrored {
+  transform: scaleX(-1);
 }
 
 /* figma Tab_Group 34:11441: 35px strip, gap 36, pad-left 8, tabs bottom-aligned.

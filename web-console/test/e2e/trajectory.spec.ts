@@ -66,12 +66,12 @@ test('T1-08/09/15 Calls warnings, independent background, search and truncated f
   await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toHaveCount(0);
   await expect(ledger.locator('[data-owner="trace:6"]')).toBeVisible();
   await expectStableScreenshot(page, 'trajectory-calls.png');
-  await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('Missing field');
+  await page.getByRole('searchbox', { name: 'Search loaded Trace' }).fill('Missing field');
   await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toBeVisible();
   await expectStableScreenshot(page, 'trajectory-search.png');
   await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
   await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '0');
-  await page.getByRole('textbox', { name: 'Search loaded Trace' }).fill('');
+  await page.getByRole('searchbox', { name: 'Search loaded Trace' }).fill('');
   await ledger.locator('[data-request-owner="trace:11"]').click();
   await expect(page.getByRole('complementary')).toContainText('failed');
   await page.getByRole('tab', { name: 'Diff', exact: true }).click();
@@ -195,7 +195,7 @@ for (const width of [1440, 390]) {
     await expect(page.locator('[data-history-reads]')).toHaveAttribute('data-history-reads', '1');
     await expect(ledger.getByRole('button', { name: 'Expand Turn 2' })).toBeVisible();
     await expect(selected).toBeVisible();
-    const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+    const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
     await search.fill('request-3');
     await expect(selected).toHaveAttribute('aria-selected', 'true');
     await expect(ledger.getByRole('button', { name: 'Turn 2', exact: true })).toBeVisible();
@@ -303,7 +303,7 @@ for (const width of [1440, 390]) {
     const turn = ledger.getByRole('button', { name: 'Turn 1', exact: true });
     await expect(turn).not.toContainText('attempt-a');
     await turn.focus(); await page.keyboard.press('Enter');
-    await expect(inspector.getByText('Turn 1 · native Attempt')).toBeVisible();
+    await expect(inspector.locator('header')).toContainText('Attempt'); await expect(inspector.locator('header').getByText('Turn 1', { exact: true })).toBeVisible();
     await expect(fact('Record')).toHaveText('trace:1');
     await expect(fact('Attempt')).toHaveText('attempt-a');
     await expect(fact('State')).toHaveText('completed');
@@ -347,7 +347,7 @@ for (const width of [1440, 390]) {
     await ledger.getByRole('button', { name: 'Fold Turn 1' }).click();
     await ledger.getByRole('button', { name: 'Fold Turn 2' }).click();
     const foldedKeys = await ledger.locator('[data-display-key]').evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')));
-    const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+    const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
     for (const [query, attempt, expected] of [
       ['Step 2', 'attempt-a', ['trace:5', 'trace:8']],
       ['Turn 2', 'attempt-b', ['trace:7']],
@@ -472,7 +472,7 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await expect(ledger.locator('[data-display-type="TurnSummary"]')).toHaveCount(1);
     await assertHierarchy();
     await expectStableScreenshot(page, `ledger-421-fold-${width}-${locale}.png`);
-    const search = page.getByRole('textbox');
+    const search = page.getByRole('searchbox');
     await search.fill('Step 2'); await expect(marker).toBeVisible(); await assertHierarchy();
     await search.fill('historical agent'); await assertHierarchy();
     await search.fill(''); await expect(ledger.locator('[data-display-type="TurnSummary"]')).toHaveCount(1);
@@ -646,7 +646,7 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) {
     await page.getByRole('complementary').getByRole('button').click();
     // Search exposes the hidden initial-only Step's fallback without changing saved folds.
     const collapsedKeys = await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')));
-    const search = page.getByRole('textbox'); await search.fill('order-match');
+    const search = page.getByRole('searchbox'); await search.fill('order-match');
     expect(await stepIds()).toEqual(['z-first', 'b-last']);
     await search.fill('');
     expect(await turnRows.evaluateAll(rows => rows.map(row => row.getAttribute('data-display-key')))).toEqual(collapsedKeys);
@@ -682,7 +682,7 @@ test('424: JSON null Step records remain exactly owned through prepend, fold, se
   await expect(rows).toHaveCount(1);
   await expect(rows).toHaveAttribute('data-owner', 'trace:910');
   await expect(ledger.locator('[data-structural="step"]')).toHaveCount(0);
-  const search = page.getByRole('textbox', { name: 'Search loaded Trace' });
+  const search = page.getByRole('searchbox', { name: 'Search loaded Trace' });
   await search.fill('adopted second');
   await expect(rows).toHaveCount(1);
   await expect(rows).toHaveAttribute('data-owner', 'trace:911');

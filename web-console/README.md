@@ -468,8 +468,8 @@ lineage mapping and deterministic intent rules.
 
 ## Open workspace
 
-Use **Open workspace** in the current Session header, or choose a discovered
-application from its menu. This opens the Product Host's desktop. The local
+Use **Open workspace** (the folder icon of the split button in the current
+Session header), or choose a discovered application from its chevron menu. This opens the Product Host's desktop. The local
 launcher supplies its shared-filesystem mapping; remote/headless Hosts report
 unavailability. See [desktop opening](../docs/open-workspace.md) for supported
 applications, authorization, launch feedback and platform limitations.

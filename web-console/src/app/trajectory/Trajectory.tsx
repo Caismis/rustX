@@ -3,8 +3,7 @@ import { useTranslation } from '../../locale/react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { TRACE_LIMIT, type TraceCache } from '../../client/trace';
-import { Button } from '../../presentation/primitives/Button';
-import { Input } from '../../presentation/primitives/Input';
+import { IconSearchOutline16 } from '../../presentation/primitives/icons';
 import { TrajectoryInspector, TrajectoryStructureInspector } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
@@ -123,21 +122,45 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     }
     select();
   };
+  // Harness locates a detail by its section and group: "Turn 2 · Step 1".
+  const location = (() => {
+    const attempt = selected?.location.attempt_id;
+    if (!attempt) return undefined;
+    const step = selected.location.step_id ?? undefined;
+    const turn = allItems.find((item): item is StructuralDisplayItem => item.type === 'TurnHeader' && item.attempt_id === attempt);
+    const group = allItems.find((item): item is StructuralDisplayItem => item.type === 'GroupHeader' && item.attempt_id === attempt && item.step_id === step);
+    return [turn?.label, group?.label].filter(Boolean).join(' · ') || undefined;
+  })();
   const inspector = structureItem
     ? <TrajectoryStructureInspector item={structureItem} onClose={close} />
     : selected && selection
-      ? <TrajectoryInspector record={selected} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error} selection={selection} onFacet={facet => setSelection(current => current ? { ...current, facet } : current)} onLoadDetail={onLoadDetail} onClose={close} />
+      ? <TrajectoryInspector record={selected} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error} selection={selection} onFacet={facet => setSelection(current => current ? { ...current, facet } : current)} onLoadDetail={onLoadDetail} onClose={close} location={location} />
       : null;
   return <section ref={root} className={css.root} aria-label={tx('trajectory:trajectory.trajectory')} onFocusCapture={event => {
     focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
   }}>
     <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:trajectory.trajectory-controls')}>
-      <Button size="sm" aria-pressed={mode === 'duration' || mode === 'actual'} onClick={() => { setMode(mode === 'duration' ? 'sequence' : mode === 'actual' ? 'time' : mode === 'time' ? 'actual' : 'duration'); setRange(null); }}>{tx('trajectory:trajectory.duration')}</Button>
-      <Button size="sm" aria-pressed={mode === 'time' || mode === 'actual'} onClick={() => { setMode(mode === 'actual' ? 'duration' : mode === 'time' ? 'sequence' : mode === 'duration' ? 'actual' : 'time'); setRange(null); }}>{tx('trajectory:trajectory.actual-time')}</Button>
-      <Button size="sm" aria-label={collapsedTurns.size ? tx('trajectory:copy.expand-turns') : tx('trajectory:copy.fold-turns')} aria-pressed={collapsedTurns.size > 0} onClick={() => setCollapsedTurns(collapsedTurns.size ? new Set() : new Set(turnIds))}>{tx('trajectory:copy.turns')}</Button>
-      <Button size="sm" aria-label={calls.size ? tx('trajectory:trajectory.expand-calls') : tx('trajectory:trajectory.collapse-calls')} aria-pressed={calls.size > 0} onClick={() => setCalls(calls.size ? new Set() : new Set(callOwners))}>{' '}{tx('trajectory:trajectory.calls')}</Button>
-      <Input className={css.search} aria-label={tx('trajectory:trajectory.search-loaded-trace')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:trajectory.search-loaded-history')} />
-      {offTail && <Button size="sm" onClick={() => { latest(); ledger.current?.latest(); }}>{tx('trajectory:trajectory.jump-to-latest')}</Button>}
+      <div className={css.toolbarActions}>
+        <button type="button" className={css.toggle} aria-pressed={mode === 'duration' || mode === 'actual'} onClick={() => { setMode(mode === 'duration' ? 'sequence' : mode === 'actual' ? 'time' : mode === 'time' ? 'actual' : 'duration'); setRange(null); }}>
+          <svg className={css.toggleIcon} viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.25" /><path d="M8 4.75V8l2.25 1.5" /></svg>
+          {tx('trajectory:trajectory.duration')}
+        </button>
+        <button type="button" className={css.control} aria-pressed={mode === 'time' || mode === 'actual'} onClick={() => { setMode(mode === 'actual' ? 'duration' : mode === 'time' ? 'sequence' : mode === 'duration' ? 'actual' : 'time'); setRange(null); }}>
+          <span>{tx('trajectory:trajectory.actual-time')}</span>
+          <span className={css.controlTrack} data-on={mode === 'time' || mode === 'actual' || undefined} aria-hidden="true"><span className={css.controlThumb} /></span>
+        </button>
+        <button type="button" className={css.action} aria-label={collapsedTurns.size ? tx('trajectory:copy.expand-turns') : tx('trajectory:copy.fold-turns')} aria-pressed={collapsedTurns.size > 0} onClick={() => setCollapsedTurns(collapsedTurns.size ? new Set() : new Set(turnIds))}>
+          <span className={css.actionIcon} aria-hidden="true">{collapsedTurns.size ? '⊞' : '⊟'}</span>{tx('trajectory:copy.turns')}
+        </button>
+        <button type="button" className={css.action} aria-label={calls.size ? tx('trajectory:trajectory.expand-calls') : tx('trajectory:trajectory.collapse-calls')} aria-pressed={calls.size > 0} onClick={() => setCalls(calls.size ? new Set() : new Set(callOwners))}>
+          <span className={css.actionIcon} aria-hidden="true">{calls.size ? '⊞' : '⊟'}</span>{tx('trajectory:trajectory.calls')}
+        </button>
+        {offTail && <button type="button" className={css.action} onClick={() => { latest(); ledger.current?.latest(); }}>{tx('trajectory:trajectory.jump-to-latest')}</button>}
+      </div>
+      <div className={css.search}>
+        <IconSearchOutline16 size={11} className={css.searchIcon} />
+        <input type="search" className={css.searchInput} aria-label={tx('trajectory:trajectory.search-loaded-trace')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:trajectory.search')} />
+      </div>
     </div>
     {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
     {/* Epoch retires read-domain ownership; the Timeline separately fences

@@ -5,6 +5,7 @@ import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTr
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v35';
 import '../../src/presentation/theme/base.css';
+import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 const text = (text: string) => ({ text, truncated: false });

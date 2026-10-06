@@ -572,7 +572,9 @@ producer/source, native family, preview and truncation with Request/Message IDs.
 
 TanStack Virtual owns ordinary virtualization with semantic keys. One display
 seat + pixel-offset anchor transfers across prepend, boundary/header
-insertion/removal and the 100-display-item threshold. There are no sticky full-width structural rows. Native structural focus can anchor
+insertion/removal and the 100-display-item threshold. The anchor is the first
+fully visible seat, so a partly hidden seat above it that shrinks when its
+Turn/Step chrome moves to a prepended row cannot shift what the reader sees. There are no sticky full-width structural rows. Native structural focus can anchor
 the inline control across a change in its semantic seat. Tail follow
 runs only at the tail; content/lifecycle-only repair does not pull a reader down.
 

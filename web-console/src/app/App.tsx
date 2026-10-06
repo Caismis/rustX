@@ -37,6 +37,7 @@ import { ConnectionController } from '../connection/controller';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
 import agentCss from '../presentation/agent/Conversation.module.css';
 import { Button } from '../presentation/primitives/Button';
+import { IconPanelLeftOutline16 } from '../presentation/primitives/icons';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { sessionDeletionNotice } from '../bindings/session-deletion';
 import { LiveInspector } from './Inspector';
@@ -311,7 +312,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     <section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
-        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={previews.workspace && <Button data-preview-toggle aria-label={tx('artifacts:workspace.reopen')} aria-expanded={previews.mode === 'preview'} onClick={() => { if (previews.mode === 'preview') collapsePanel(); else { previewOwner.reveal(); setPreviewFocus(value => value + 1); } }}>{tx('artifacts:workspace.title')}</Button>} invokeCommand={invokeCommand}
+        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={previews.workspace && <Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx('artifacts:workspace.reopen')} title={tx('artifacts:workspace.title')} aria-expanded={previews.mode === 'preview'} onClick={() => { if (previews.mode === 'preview') collapsePanel(); else { previewOwner.reveal(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
       {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {

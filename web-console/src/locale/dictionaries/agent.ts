@@ -383,7 +383,7 @@ export const zh = {
   "conversation-header.unavailable": "不可用",
   "conversation-header.close-session-settings": "关闭会话设置",
   "conversation-header.conversation-view": "对话视图",
-  "conversation-header.chat": "聊天",
+  "conversation-header.chat": "对话",
   "conversation-header.trajectory": "轨迹",
   "conversation-header.session-actions": "会话操作",
   "conversation-header.export": "导出",

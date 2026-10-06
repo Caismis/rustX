@@ -530,7 +530,7 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
       "destination": "web-console/src/app/trajectory/Trajectory.module.css",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "upstream_sha256": "b616ba24e9274a66c63d7027ac7700b9813f640ca41e6910106286d1bbeba925",
       "retained_dependencies": [
         "existing theme tokens"
@@ -545,7 +545,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "b6743b3ac0d20657b871027852a35e3cde21046b83c2ad0c7988da98cb0df0fc",
+      "local_sha256": "b9ce1d5915c770eee390d054670bc98bc46b4b39498c9a1ded1c8e33c4b1b851",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -564,19 +564,30 @@
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
           "upstream_sha256": "dba4683d768a518704f13bbd8acc4d00e5ae23c1db147d5b66d610c39dfe6d88",
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryToolbar.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "b512e1c52f397ef81775295ae779e95dbf7682d53ce7a9b48e2f1f01dd714c8c",
+          "treatment": "Toolbar strip, toggle/switch/action controls and trailing search field adapted."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "dba4683d768a518704f13bbd8acc4d00e5ae23c1db147d5b66d610c39dfe6d88",
+          "treatment": "Role tag geometry/colors, turn label, active-turn rail, request dot and detail header/tab/overview geometry adapted; native seats keep their measured heights."
         }
       ]
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/Trajectory.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. PR #424: project per-Step seats in native Turn group order; preserve exact logical focus and structural ownership.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. PR #424: project per-Step seats in native Turn group order; preserve exact logical focus and structural ownership. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../client/trace",
         "../../locale/react",
-        "../../presentation/primitives/Button",
-        "../../presentation/primitives/Input",
+        "../../presentation/primitives/icons",
         "./Trajectory.module.css",
         "./TrajectoryInspector",
         "./TrajectoryLedger",
@@ -636,14 +647,20 @@
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
           "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryToolbar.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "82ff879f1becb1187e495ca7df2fc958875ad4e71a73aa87ad0090733646fcb5",
+          "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "c9f5558b90b845f4c5949dab75d4a3cd8aa2cc52daa6db11ca8d01db47b12207"
+      "local_sha256": "832ccaeaaca4051677f139d520aab8841ef9295e3fb21f771692eb10c48ebd56"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v35",
@@ -690,9 +707,15 @@
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
           "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
+          "treatment": "Details header (role tag, section/group location, icon close) adapted."
         }
       ],
-      "local_sha256": "8726d38c7b7257a1b5fb084257fbfd4427a05592b5df6857b739ea447b1d980c"
+      "local_sha256": "247635c2519f8f14de2708de872d72378a67c7a0e528526f47d9be9e08b4962d"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -928,7 +951,7 @@
       "destination": "web-console/src/presentation/agent/Conversation.module.css",
       "upstream_sha256": "03880a4702978e8403a882f9036205ab7ff791f80cc06e47fdafa4fef6971c67",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Issue #406: Resident hero centering and composer seat geometry; no lifecycle masking. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Issue #406: Resident hero centering and composer seat geometry; no lifecycle masking. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -937,13 +960,25 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "c6adb7d1d407a52b96caca81e9623e2e8f13acf01137cd1fce98b52930e98992",
+      "local_sha256": "22ae2d36baf506dcf073e482f2e00e5ecea42221e96139f85cf3f37201946b28",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "d9d856868adfdc8a300600e060e6262afa42fc3bfc8019b5a597dec326b0c59c",
           "treatment": "Resident hero centering and composer seat geometry; no lifecycle masking."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "d9d856868adfdc8a300600e060e6262afa42fc3bfc8019b5a597dec326b0c59c",
+          "treatment": "Title crumb rendering adapted."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/shell/ExpandButton.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "d4c36e6e304067a820c3ff4873f26f85bc55c6af8341f89a4802f53766bcb599",
+          "treatment": "Compact 28px icon control and mirrored panel glyph adapted."
         }
       ]
     },
@@ -1769,7 +1804,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/Menu.tsx",
       "destination": "web-console/src/presentation/primitives/Menu.tsx",
-      "treatment": "A: upstream anchored menu, submenus, keyboard and pointer grace; local imports; autofocus waits for placement #393: all menu geometry is Floating UI's (@floating-ui/react-dom 2.1.9: offset, flip, shift, size, autoUpdate, fixed strategy). The hand-written portal geometry (anchor/list measurement, viewport clamping, capture-phase scroll and resize listeners), the CSS-positioned in-place list with its portal prop, and the CSS-positioned submenu card are removed. The list is always a body-portaled Floating UI surface (side/align map to one placement; getAnchorRect is a virtual reference), and each open submenu is a body-portaled Floating UI surface anchored to its own row (right-end, flipping to left-end, shifted and size-bounded, with a side-aware pointer bridge). size() publishes the room the viewport leaves as CSS custom properties that Menu.module.css combines with the design bounds. A submenu is its own keyboard layer: ArrowRight, Enter, Space or Tab on its row enter it, the arrows, Home and End walk only the focused layer, and Escape or ArrowLeft inside it return to its row. The upstream API (less portal), DOM classes, selection, disabled rows, pointer grace and focus restoration are retained; floating surfaces are React Aria top layers, Escape stops at the menu before a containing React Aria modal, and selected rows announce aria-current. #393 repair: every surface lives only while its reference is a visible interaction anchor (Floating UI hide, referenceHidden): a list whose anchor leaves layout, is detached or is clipped out closes through onClose; a submenu whose row scrolls out of its card closes. A keyboard either held goes to the trigger, the anchor's first enabled button or the nearest rendered focus container (a containing dialog), never to a hidden control or an unmounting row. #393 correction: a liveness close is not a dismissal. A list whose anchor is hidden settles a keyboard it held on the nearest containing focus owner without scrolling, never on the hidden trigger; a submenu whose row is hidden leaves the keyboard on the still-open list, never on the clipped row; Escape and ArrowLeft still return it to a visible row. #393 repair: a hidden anchor's keyboard goes to the focusOwner its host names, with no [tabindex] ancestor inference; with none named it is released, never left on a removed row or a hidden anchor. #393 repair: a submenu the keyboard holds (being entered, or focus inside its card) is never replaced or closed by passive hover; a pointer press on a parent row moves the keyboard to that row before it takes over. A placement reporting referenceHidden stops presenting its surface in the same render, and the layout phase of that commit settles the keyboard and closes the surface once, before paint. #400 focus lifecycle: portal into a containing Settings dialog scope when present; Floating UI geometry, reference-hidden settlement, keyboard behavior and owners unchanged.",
+      "treatment": "A: upstream anchored menu, submenus, keyboard and pointer grace; local imports; autofocus waits for placement #393: all menu geometry is Floating UI's (@floating-ui/react-dom 2.1.9: offset, flip, shift, size, autoUpdate, fixed strategy). The hand-written portal geometry (anchor/list measurement, viewport clamping, capture-phase scroll and resize listeners), the CSS-positioned in-place list with its portal prop, and the CSS-positioned submenu card are removed. The list is always a body-portaled Floating UI surface (side/align map to one placement; getAnchorRect is a virtual reference), and each open submenu is a body-portaled Floating UI surface anchored to its own row (right-end, flipping to left-end, shifted and size-bounded, with a side-aware pointer bridge). size() publishes the room the viewport leaves as CSS custom properties that Menu.module.css combines with the design bounds. A submenu is its own keyboard layer: ArrowRight, Enter, Space or Tab on its row enter it, the arrows, Home and End walk only the focused layer, and Escape or ArrowLeft inside it return to its row. The upstream API (less portal), DOM classes, selection, disabled rows, pointer grace and focus restoration are retained; floating surfaces are React Aria top layers, Escape stops at the menu before a containing React Aria modal, and selected rows announce aria-current. #393 repair: every surface lives only while its reference is a visible interaction anchor (Floating UI hide, referenceHidden): a list whose anchor leaves layout, is detached or is clipped out closes through onClose; a submenu whose row scrolls out of its card closes. A keyboard either held goes to the trigger, the anchor's first enabled button or the nearest rendered focus container (a containing dialog), never to a hidden control or an unmounting row. #393 correction: a liveness close is not a dismissal. A list whose anchor is hidden settles a keyboard it held on the nearest containing focus owner without scrolling, never on the hidden trigger; a submenu whose row is hidden leaves the keyboard on the still-open list, never on the clipped row; Escape and ArrowLeft still return it to a visible row. #393 repair: a hidden anchor's keyboard goes to the focusOwner its host names, with no [tabindex] ancestor inference; with none named it is released, never left on a removed row or a hidden anchor. #393 repair: a submenu the keyboard holds (being entered, or focus inside its card) is never replaced or closed by passive hover; a pointer press on a parent row moves the keyboard to that row before it takes over. A placement reporting referenceHidden stops presenting its surface in the same render, and the layout phase of that commit settles the keyboard and closes the surface once, before paint. #400 focus lifecycle: portal into a containing Settings dialog scope when present; Floating UI geometry, reference-hidden settlement, keyboard behavior and owners unchanged. Header/Trajectory chrome alignment: the remembered trigger survives the close, so a split-button anchor gets the keyboard back after a selection.",
       "upstream_sha256": "e7e71f29eb88b9c11516b19ea3e9e49012fd348a995d1ebac11c23e75474c571",
       "retained_dependencies": [
         "./DialogSurface",
@@ -1789,7 +1824,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "40b5a209fa6307a2c37f2417cc14ae6b4191381e283575a3a329f63860022353",
+      "local_sha256": "72b841dfff6e3640e8c1263a7dff625a74f9050434c849e0d31451a64d65483e",
       "classification": "B"
     },
     {
@@ -2536,7 +2571,7 @@
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
       "destination": "web-console/test/trajectory.test.tsx",
-      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. PR #424: project per-Step seats in native Turn group order; preserve exact logical focus and structural ownership. PR #424 compact fold: suppress hidden Step seats and logical targets while preserving expanded native group order. PR #424 review: Ledger seats use exact native group membership, including wire-null Step identity. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged.",
+      "treatment": "adapted ledger interaction contracts; rustX-authored regressions for proposal-vs-execution, settled generation metrics, on-demand detail, native source rendering and tail-follow; preserve native Goal Tool inspection regression; render only native request-relative generation boundaries with a measured start/dispatch bridge; keep dispatch-origin TTFT distinct from Harness step-start TTFT. WEB-15: Harness-first compact presentation; native Trace authority and request-relative timing unchanged. Structural Attempt/Step bars, semantic content cells, quiet Request evidence, keyboard selection, type-specific historical inspector and accessible timeline navigation. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. PR #424: project per-Step seats in native Turn group order; preserve exact logical focus and structural ownership. PR #424 compact fold: suppress hidden Step seats and logical targets while preserving expanded native group order. PR #424 review: Ledger seats use exact native group membership, including wire-null Step identity. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "upstream_sha256": "c2ce0834a8a2577c2182f7112cb8603164df803cb33535a5aa24a9bc9155f171",
       "retained_dependencies": [
         "../../protocol/app-server/v35",
@@ -2570,7 +2605,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "18a37fb7cd10301a33f9201aaa512bb348ef82dba3d7a779ecc7a495b77e0a38"
+      "local_sha256": "9a420865d02e5c50e9a322381d8731e6b73ad6dec7e149463e015b0fb903e9c0"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3158,7 +3193,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3169,7 +3204,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "c09febd060ebef51b2fed4f3e85c93d1c92cfc30b9aa21cd0461fb22b624bc2a"
+      "local_sha256": "821257dfae406989e5d815f27b3d6cd555a08bab8b404942e2ccd87d4a93a8b3"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3264,7 +3299,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #421: mandatory v26 import and/or semantic ledger convergence.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #421: mandatory v26 import and/or semantic ledger convergence. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "destination": "web-console/src/locale/dictionaries/trajectory.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3282,7 +3317,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "4fb8c392d70932f26611fd36274cf0994523f038ee913ed07b81f2f9a2b25879"
+      "local_sha256": "60275679eb7765754106faa569484df236352ef96e1b593e5462dcd78508056a"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
@@ -3329,7 +3364,7 @@
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
-      "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry.",
+      "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "destination": "web-console/src/app/trajectory/TrajectoryRow.tsx",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3350,15 +3385,21 @@
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
           "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
+          "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "412f52fd3b05a3cd70f4f6d0e28a62d52688c4b86d15278f54429447ceaf9efe"
+      "local_sha256": "e5a0c909595fa849410f248620665220989faf902cb5aec1aec560580d3d5f65"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
       "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1",
-      "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry.",
+      "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header.",
       "destination": "web-console/src/app/trajectory/TrajectoryLedger.tsx",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3382,7 +3423,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "922f1bc11bccb4cf774075b57e9c998fa8373ee5d2f9ce88bd439d6ffb3cb846"
+      "local_sha256": "a9e7359d675fdb91de434ce302e016b6ee8f56c58862a1a01078c155e519c42c"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
@@ -3604,6 +3645,40 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "local_sha256": "2237cdfb3a3a6e65e2bc36423b8b2ecfd164cb237f24803e3a6b1abc66a82f6c"
+    },
+    {
+      "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "destination": "web-console/src/app/agent/OpenWorkspace.tsx",
+      "upstream_sha256": "a1ee77d437f10b79e45914f1191052c8cbd739114f69929ccd8c04d67a7084c5",
+      "treatment": "Split-button presentation adapted: icon main action, narrow chevron menu anchor. Product Host desktop catalog, authority fencing and inline status replace Harness applications, shortcuts and toast.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../client/app-server",
+        "../../locale/react",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/Menu",
+        "../../presentation/primitives/icons",
+        "../../workspaces/authority",
+        "../../workspaces/desktop",
+        "../../workspaces/endpoint",
+        "../../workspaces/host",
+        "./OpenWorkspace.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "be3ab8685697efaa68ac63cd4e46dbc1237dd783536ef682ee9a4188c07639e3"
+    },
+    {
+      "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "destination": "web-console/src/app/agent/OpenWorkspace.module.css",
+      "upstream_sha256": "cc8959182293fb47bab6006a24c0d12e5981667343859937ba0310d5ad6418cc",
+      "treatment": "Compact 24px hairline split geometry adapted; large/skeleton variants excluded.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "0d7ab95fcc99222a1d7b97c20bd1f101d78e56b7fe30d032f2e5fb62082506e3"
     }
   ],
   "inspected_only": [
