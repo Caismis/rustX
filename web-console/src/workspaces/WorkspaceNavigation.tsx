@@ -12,7 +12,7 @@ import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
 import { Modal } from '../presentation/primitives/Modal';
 import { WorkspaceBrowser } from '../presentation/workspace/WorkspaceBrowser';
-import type { SessionNode, GroupNode } from '../presentation/workspace/types';
+import type { DraftConversation, SessionNode, GroupNode } from '../presentation/workspace/types';
 import { sameEndpoint } from './endpoint';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from './host';
 import type { WorkspaceAssociations, WorkspaceMutation } from './associations';
@@ -26,12 +26,13 @@ export function sessionObservation(tx: Translate, state: ClientView, id: string)
   if (state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ associations, host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
+export function WorkspaceNavigation({ associations, host, client, state, endpoint, navigation, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
   associations: WorkspaceAssociations;
   workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string; navigation: NavigationEpoch;
   wide: boolean; expand: () => void;
   metadataChanged: (removed?: string) => void;
+  draft?: DraftConversation;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
   openViews: readonly string[]; closeView: (id: string) => void; closeAllViews: () => void;
   openSession: (id: string) => void; createSession: (id: string) => void; forkSession: (id: string) => void; deleteSession: (id: string) => void;
@@ -88,7 +89,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
     containsCurrent: row.id === workspace,
     sessionCount: rows.filter(item => item.group === row.id).length, sessions: rows.filter(item => item.group === row.id).map(item => toNode(item.session)) }));
   return <>
-    <WorkspaceBrowser renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
+    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? '')} fork={forkSession} remove={deleteSession}
       workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => edit('add', '', '') : undefined}

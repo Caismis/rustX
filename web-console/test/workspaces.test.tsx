@@ -793,3 +793,28 @@ it.each(['en', 'zh'] as const)('selected off-page pending and unavailable demand
   expect(screen.getByText(tx('workspace:association.unavailable'))).toBeTruthy();
   expect(screen.queryByText(tx('workspace:association.refreshing'))).toBeNull();
 });
+
+it('current blank conversation is pinned, reused, relocated and hidden on departure without native creation', async () => {
+  await mount();
+  const draft = () => document.querySelector('[data-draft-conversation]')!;
+  expect(draft()).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  expect(draft().getAttribute('aria-selected')).toBe('true');
+  expect(draft().closest('[data-workspace-group]')?.textContent).toContain('Workspace A');
+  expect(draft().nextElementSibling?.querySelector('[data-session-id]')?.getAttribute('data-session-id')).toBe('A');
+  expect(draft().querySelector('[data-session-id], [data-session-actions]')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'unsent draft' } });
+  await act(async () => fireEvent.click(within(draft() as HTMLElement).getByRole('button')));
+  expect(document.activeElement).toBe(screen.getByLabelText('Message'));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  expect(document.querySelectorAll('[data-draft-conversation]')).toHaveLength(1);
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('unsent draft');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
+  expect(draft().closest('[data-workspace-group]')?.textContent).toContain('Workspace B');
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('unsent draft');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(draft()).toBeNull();
+  expect(methods()).not.toContain('session/create');
+  expect(methods()).not.toContain('session/delete');
+});

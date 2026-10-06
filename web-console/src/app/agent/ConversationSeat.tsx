@@ -24,8 +24,9 @@ export function ConversationStatus({ client, sessionId, recover }: { client: App
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, binding, current, consumed, restored, opened, onCommand }: {
+export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, binding, current, consumed, restored, opened, onCommand }: {
   client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
+  workspacePicked?: (id: string) => void;
   binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
   restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => (() => boolean) | void;
   onCommand: (id: CommandId) => void;
@@ -42,7 +43,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <div className={css.composerSeat} data-composer-seat="">
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
-      <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
+      <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
           initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,

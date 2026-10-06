@@ -1344,3 +1344,14 @@ identically in 45 of 45 targeted replays.
 Trace retained-input ownership repair updates generated imports to App Server v36.
 Source inventory local hashes and dependency closure reflect this mechanical
 protocol change; all Harness upstream pins remain unchanged.
+
+New-conversation Sidebar visibility follows Harness `tree.ts` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`: pin the current blank above history,
+exclude blanks from search, and hide them when another Session is selected.
+Harness reuses a native blank and marks it engaged on accepted input. rustX keeps
+its existing deferred creation: a separate browser draft row has no Session ID,
+timestamp, or native actions. Workspace selection moves this row without
+resetting the input; leaving the draft removes its presentation. A native create
+acknowledgement ends the draft, and the authoritative catalog supplies the real
+row. Post-create admission failures retain their existing Session-scoped recovery
+and are never hidden or deleted as abandoned drafts.

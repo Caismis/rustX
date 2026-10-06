@@ -249,7 +249,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     setOpenViews([]); focusSession();
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   };
+  const focusDraft = () => document.querySelector<HTMLTextAreaElement>('[data-resident-composer] textarea')?.focus();
   const createInWorkspace = (id?: string) => {
+    if (center.kind === 'new-conversation' && center.workspaceId === id && newConversationCurrent()) { focusDraft(); return; }
     setDraftBinding(value => value + 1);
     navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({});
     setCenter({ kind: 'new-conversation', workspaceId: id });
@@ -270,7 +272,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     panels={[]}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
-      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={createInWorkspace}
+      workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected}
+      draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={createInWorkspace}
       openSession={open} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={createInWorkspace} deleteSession={setDeletingSession}
       forkSession={id => open(id, () => {
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
@@ -327,6 +330,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
       <PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ArtifactContext.Provider value={artifacts}><ConversationLive client={client} sessionId={view?.id} mode={conversationMode} disabled={commandOpen || transitioning === view?.id} onHistorical={transitionResponse}/></ArtifactContext.Provider></PreviewContext>
       <ConversationSeat client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
+        workspacePicked={id => { if (newConversationCurrent()) setCenter({ kind: 'new-conversation', workspaceId: id }); }}
         binding={String(draftBinding)} current={newConversationCurrent} consumed={consumed} restored={restored}
         onCommand={id => invokeCommand({ id })}
         opened={id => { setOpenViews(current => current.includes(id) ? current : [...current, id]); focusSession(id, { commitDraft: true }); return navigation.capture(); }}/>

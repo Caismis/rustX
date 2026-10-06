@@ -24,7 +24,7 @@ import { AgentComposer } from '../agent/AgentComposer';
 import { firstSubmitPort } from './port';
 import { sessionModelBlock, WorkspaceControls, WorkspacePermission } from './WorkspaceControls';
 
-export function ConversationComposer({ client, host, authority, associations, initialWorkspace, current, opened, binding, active, activeView, context, consumed }: { authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; current: () => boolean; opened: (id: string) => (() => boolean) | void }) {
+export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, opened, binding, active, activeView, context, consumed }: { authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; opened: (id: string) => (() => boolean) | void }) {
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const [owner, setOwner] = useState(binding);
@@ -55,7 +55,7 @@ export function ConversationComposer({ client, host, authority, associations, in
   }, [authority, current, transport.endpoint, transport.authorityRevision]);
   const bound = sameEndpoint(catalog?.endpoint, transport.endpoint);
   const selected = bound ? catalog?.workspaces.find(w => w.id === workspaceId) : undefined;
-  const pick = (id: string) => { setWorkspace(id); setMenu(false); };
+  const pick = (id: string) => { setWorkspace(id); workspacePicked?.(id); setMenu(false); };
   const adopt = async (location: string) => {
     if (adopting || !add) return;
     const { mutation } = add;
