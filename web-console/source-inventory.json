@@ -2162,7 +2162,7 @@
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "842ee3d39398e54655eb00766623eec5bb51b5dcee74f87e206987bbeb324729",
+      "local_sha256": "fed4a0292579feb5164cad6303b26464079a88cfeafcb8605a789dfa6eb8e8bf",
       "classification": "B"
     },
     {
@@ -3278,7 +3278,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Workspace panel start-page and Session-scoped file/terminal integration; existing preview ownership retained.",
       "destination": "web-console/src/locale/dictionaries/artifacts.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3289,7 +3289,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "ce90f8ee9e2b21fb2c0b076f22f6b8119f06fc1ed9ad46197336dc7870fbb49c"
+      "local_sha256": "766c19334aca087bfd6d425ed37c9e7eeb562a3562bdeed8a13218036267f819"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -3705,6 +3705,46 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "local_sha256": "0d7ab95fcc99222a1d7b97c20bd1f101d78e56b7fe30d032f2e5fb62082506e3"
+    },
+    {
+      "destination": "web-console/src/app/components/Workbench.tsx",
+      "upstream": "packages/client/ui-sidebar-right/src/client/tabs/guide/GuideBody.tsx",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
+      "classification": "B",
+      "treatment": "Harness start-page capsule layout adapted to native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/icons",
+        "../../presentation/right-panel/Workbench.module.css",
+        "../../workspaces/desktop",
+        "../../workspaces/host",
+        "../../workspaces/workbench",
+        "./WorkbenchTerminal",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness slot registry",
+        "Harness terminal Host and Session store"
+      ],
+      "local_sha256": "4d2e172306ccb04877873d1c5e1c9a54c27e1ac1645c5aab060230e582383be7"
+    },
+    {
+      "destination": "web-console/src/presentation/right-panel/Workbench.module.css",
+      "upstream": "packages/client/ui-sidebar-right/src/client/tabs/guide/GuideBody.module.css",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "14fcccfc92a8cdabdb9337b6c961d013d3dc586228d842ef1012d7323321f4b3",
+      "classification": "B",
+      "treatment": "Harness start-page capsule layout adapted to native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness slot registry",
+        "Harness terminal Host and Session store"
+      ],
+      "local_sha256": "36c0fff08825705c5bd4e62b049c9fc00d3d2a6e3734d508751db12bfadb509a"
     }
   ],
   "inspected_only": [

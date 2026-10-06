@@ -14,5 +14,5 @@ export default defineConfig({
   // Playwright default, and normal runs must never write snapshots.
   expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 0 } },
   use: { locale: 'en-US', storageState: { cookies: [], origins: [previewURL, fixtureURL].map(origin => ({ origin, localStorage: [{ name: 'rustx-locale-v1', value: 'en' }] })) }, connectOptions: { wsEndpoint }, baseURL: previewURL, viewport: { width: 1440, height: 1000 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
-  webServer: [{ command: `pnpm preview --port ${previewPort} --strictPort`, url: previewURL, reuseExistingServer: false }, { command: `pnpm dev --port ${fixturePort} --strictPort`, url: `${fixtureURL}/test/fixtures/foundation.html`, reuseExistingServer: false }],
+  webServer: [{ command: `pnpm preview --port ${previewPort} --strictPort`, url: previewURL, reuseExistingServer: false }, { command: `pnpm dev --config test/workbench.vite.config.ts --port ${fixturePort} --strictPort`, url: `${fixtureURL}/test/fixtures/foundation.html`, reuseExistingServer: false }],
 });

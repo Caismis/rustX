@@ -1,4 +1,5 @@
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
+import { WorkspaceTerminals } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
@@ -30,6 +31,7 @@ export interface LocalHostConfig {
 }
 type Registration = { id: string; location: string; displayName: string };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
+  private readonly terminals = new WorkspaceTerminals();
   private documentReads = new Set<AbortController>();
   private fileReads = new Set<AbortController>();
   private closed = false;
@@ -87,7 +89,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       throw new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced');
     }
   }
-  close() { this.closed = true; for (const read of [...this.fileReads, ...this.documentReads]) read.abort(); }
+  close() { this.closed = true; this.terminals.close(); for (const read of [...this.fileReads, ...this.documentReads]) read.abort(); }
   /** Only currently registered Workspaces authorize bytes. Configured picker
    * locations alone authorize neither an initial nor a historical file read. */
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
@@ -160,6 +162,21 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       }
       throw cause;
     } finally { signal?.removeEventListener('abort', abort); if (settled) this.documentReads.delete(operation); }
+  }
+  async workbench(scope: WorkspaceAuthorityScope, call: import('../src/workspaces/workbench.ts').WorkbenchCall, signal?: AbortSignal) {
+    this.mutationScope(scope);
+    const target = call?.target;
+    if (!target || !['session_id', 'active_node'].every(key => typeof target[key as keyof DesktopTarget] === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(target[key as keyof DesktopTarget])) || !call.request) throw new Error('Invalid workbench target');
+    if (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken) throw new Error('Native filesystem mapping unavailable on this Product Host');
+    // Explicit close only needs the original Host-owned terminal identity, even
+    // when its native node has since retired; it cannot admit new execution.
+    if (call.request.kind === 'close') return this.terminals.request(JSON.stringify([target.session_id, target.active_node]), '', call.request, signal);
+    const cwd = await this.readSession(this.config.endpoint, this.config.transportToken, target);
+    this.mutationScope(scope); signal?.throwIfAborted();
+    if (!this.classifyLocation(cwd).authorized) throw new Error('Workspace is not authorized');
+    const value = await this.terminals.request(JSON.stringify([target.session_id, target.active_node]), realpathSync(cwd), call.request, signal);
+    this.mutationScope(scope); signal?.throwIfAborted();
+    return value;
   }
   async desktopCatalog(scope: WorkspaceAuthorityScope, refresh = false): Promise<DesktopCatalog> {
     this.mutationScope(scope);

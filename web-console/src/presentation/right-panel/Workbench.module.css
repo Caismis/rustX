@@ -1,0 +1,26 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Guide capsules adapted from GuideBody.module.css; see PROVENANCE.md. */
+.root { height:100%; min-height:0; display:flex; flex-direction:column; color:var(--dsw-alias-label-primary); }
+.root[hidden] { display:none; }
+.toolbar { display:flex; align-items:center; gap:8px; padding:8px; flex:none; }
+.guide { flex:1; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; gap:14px; }
+.compass { color:var(--dsw-alias-label-tertiary); font-size:56px; line-height:1; margin-bottom:20px; }
+.entry { display:flex; align-items:center; gap:18px; width:380px; max-width:100%; padding:18px 22px; border:.5px solid var(--dsw-alias-border-l3); border-radius:22px; background:var(--dsw-alias-bg-layer-2); color:inherit; text-align:left; }
+.entry > button { display:flex; align-items:center; gap:18px; flex:1; border:0; padding:0; background:none; color:inherit; text-align:left; }
+.entry strong { display:block; font-size:14px; font-weight:500; }
+.entry small { display:block; color:var(--dsw-alias-label-tertiary); font-size:11px; margin-top:4px; }
+.entry select { max-width:90px; background:transparent; color:inherit; border:0; }
+.entry:hover { background:var(--dsw-alias-interactive-bg-hover); }
+.entry:disabled,.entry button:disabled { opacity:.45; cursor:default; }
+.tabs { display:flex; gap:6px; overflow:auto; padding:0 8px; flex:none; }
+.tabs > div { display:flex; flex:none; }
+.tabs button { padding:6px; background:transparent; color:inherit; border:0; }
+.tabs [aria-selected=true] { border-bottom:2px solid var(--dsw-alias-state-business-primary); }
+.notice { margin:8px 16px; color:var(--dsw-alias-label-secondary); font-size:12px; }
+.files { display:flex; flex:1; min-height:0; flex-direction:column; }
+.path { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.list { overflow:auto; padding:4px 12px; }
+.list > button { display:flex; gap:8px; width:100%; padding:7px; text-align:left; border:0; background:transparent; color:inherit; font-size:12px; }
+.list > button:hover { background:var(--dsw-alias-interactive-bg-hover); }
+.source { overflow:auto; margin:0; padding:12px; font-size:12px; flex:1; }
+.terminal { flex:1; min-height:0; display:flex; flex-direction:column; background:#141414; color:#ededed; padding:8px; }
+.terminalBody { flex:1; min-height:0; overflow:hidden; }

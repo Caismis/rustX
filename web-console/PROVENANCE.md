@@ -1365,3 +1365,10 @@ provider bridge. Press/drag selection, hover cursor, outside-range dimming,
 double-click clearing and zoomed edge panning retain native record identities
 and projection-generation fencing. Exact selection edges persist until the
 projection changes; changed coordinates reproject the selected native records.
+
+The Workspace panel Start page adapts Harness `ui-sidebar-right`'s GuideBody
+and its capsule styling at `5badb15009ae1756c3afe0ae0cef1faafc290ccc`. The
+upstream slot registry and filesystem/terminal Host are not imported. rustX's
+Product Host resolves the exact native Session/node before browsing or PTY
+admission. Existing preview occurrences, resource leases and Inspector ownership
+remain in `PreviewWorkspaceOwner`; the new workbench is a separate display mode.

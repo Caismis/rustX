@@ -9,6 +9,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     if (!response.ok) throw hostFailure(await response.json());
     return response.json();
   }
+  workbench = (scope: WorkspaceAuthorityScope, call: import('./workbench').WorkbenchCall, signal?: AbortSignal) => this.call<import('./workbench').WorkbenchResult>('workbench', { scope, call }, signal);
   desktopCatalog = (scope: WorkspaceAuthorityScope, refresh = false) => this.call<import('./desktop.ts').DesktopCatalog>('desktop-catalog', { scope, refresh });
   openWorkspace = async (scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId) => {
     try { return await this.call<import('./desktop.ts').DesktopLaunch>('desktop-open', { scope, target, application }); }

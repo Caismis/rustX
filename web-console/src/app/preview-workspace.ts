@@ -21,7 +21,7 @@ export interface SessionPreviewWorkspace {
 }
 export type PreviewProblem = 'tabs' | 'sessions' | 'unavailable';
 export interface PreviewWorkspaceSnapshot {
-  geometryEpoch: number; width: number; workspace?: SessionPreviewWorkspace; mode: 'collapsed' | 'preview' | 'inspector';
+  geometryEpoch: number; width: number; workspace?: SessionPreviewWorkspace; mode: 'collapsed' | 'preview' | 'inspector' | 'workbench';
   leases: ReadonlyMap<number, FilePreviewLease>; problem?: PreviewProblem; downloadError?: string;
 }
 export const splitBounds = (width: number) => {
@@ -192,6 +192,7 @@ export class PreviewWorkspaceOwner {
   }
   collapse() { const w = this.current(); if (w) this.sessions.set(w.scope.sessionId, { ...w, expanded: false }); this.mode = 'collapsed'; this.publish(); }
   reveal() { const w = this.current(); if (!w) return; this.mode = 'preview'; this.replace({ ...w, expanded: true }); }
+  showWorkbench() { this.mode = 'workbench'; this.publish(); }
   toggleInspector() { this.mode = this.mode === 'inspector' ? this.current()?.expanded ? 'preview' : 'collapsed' : 'inspector'; this.publish(); }
   dismissProblem() { this.problem = undefined; this.downloadError = undefined; this.publish(); }
   async download(artifact: PreviewArtifact) {

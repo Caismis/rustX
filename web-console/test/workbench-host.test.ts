@@ -1,0 +1,46 @@
+// @vitest-environment node
+import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { workspaceFile, WorkspaceTerminals } from '../host/workbench';
+import { LocalWorkspaceHost } from '../host/workspaces';
+const directories: string[] = [];
+const services: WorkspaceTerminals[] = [];
+afterEach(() => { vi.unstubAllEnvs(); services.splice(0).forEach(service => service.close()); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })); });
+function directory() { const path = mkdtempSync(join(tmpdir(), 'rustx-workbench-')); directories.push(path); return path; }
+it('lists and reads relative files, rejects traversal, symlinks, binary and oversized content', () => {
+  const root = directory(), outside = directory(); mkdirSync(join(root, 'nested')); writeFileSync(join(root, 'nested/a.txt'), 'hello'); writeFileSync(join(outside, 'secret'), 'outside'); symlinkSync(outside, join(root, 'escape'));
+  expect(workspaceFile(root, '', false).entries?.map(row => row.name)).toContain('nested');
+  expect(workspaceFile(root, 'nested/a.txt', true)).toEqual({ text: 'hello' });
+  expect(() => workspaceFile(root, '../secret', true)).toThrow();
+  expect(() => workspaceFile(root, 'escape/secret', true)).toThrow();
+  expect(() => workspaceFile(root, 'escape', false)).toThrow();
+  writeFileSync(join(root, 'binary'), Buffer.from([0])); expect(() => workspaceFile(root, 'binary', true)).toThrow();
+  writeFileSync(join(root, 'large'), Buffer.alloc(1024 * 1024 + 1)); expect(() => workspaceFile(root, 'large', true)).toThrow();
+});
+it('a real PTY uses the requested cwd, resizes, reattaches output and rejects foreign ownership', async () => {
+  vi.stubEnv('RUSTX_WORKBENCH_SENTINEL', 'private-host-value');
+  const service = new WorkspaceTerminals(); services.push(service); const root = directory(), id = randomUUID();
+  const create = { kind: 'create' as const, id, shell: '/bin/sh' };
+  expect((await service.request('A', root, create)).terminals).toHaveLength(1);
+  expect((await service.request('A', root, create)).terminals).toHaveLength(1);
+  await expect(service.request('B', root, { kind: 'input', id, data: 'exit\r' })).rejects.toThrow('belong');
+  await service.request('A', root, { kind: 'resize', id, cols: 93, rows: 31 });
+  await service.request('A', root, { kind: 'input', id, data: "pwd; stty size; echo HOST_ENV_${RUSTX_WORKBENCH_SENTINEL-unset}; printf 'WORKBENCH_%s\\n' READY; exit\r" });
+  let cursor = 0, output = '';
+  for (;;) { const result = await service.request('A', root, { kind: 'poll', id, cursor }); cursor = result.cursor!; output += result.output; if (result.exited) break; }
+  expect(output).toContain('HOST_ENV_unset'); expect(output).not.toContain('private-host-value'); expect(output).toContain(root); expect(output).toContain('31 93'); expect(output).toContain('WORKBENCH_READY');
+  expect((await service.request('A', root, { kind: 'poll', id, cursor: 0 })).output).toBe(output);
+  await service.request('A', root, { kind: 'close', id }); expect((await service.request('A', root, { kind: 'terminals' })).terminals).toEqual([]);
+});
+it('Host rereads the exact native target and rejects a replaced authority before browsing', async () => {
+  const root = directory(); writeFileSync(join(root, 'a.txt'), 'A'); let calls = 0;
+  const host = new LocalWorkspaceHost({ roots: [{ id: 'root', cwd: root, displayName: 'Root' }], picker: false, metadataFile: join(root, 'metadata.json'), nativeFilesystem: 'shared', transportToken: 'test', endpoint: 'ws://localhost:8080' }, undefined, async (_endpoint, _token, target) => { expect(target).toEqual({ session_id: 'A', active_node: 'node-A' }); calls++; return root; });
+  try {
+    const scope = await host.listWorkspaces(); const call = { target: { session_id: 'A', active_node: 'node-A' }, request: { kind: 'read' as const, path: 'a.txt' } };
+    expect(await host.workbench(scope, call)).toEqual({ text: 'A' }); expect(calls).toBe(1);
+    await expect(host.workbench({ ...scope, authorityId: 'retired' }, call)).rejects.toThrow(); expect(calls).toBe(1);
+  } finally { host.close(); }
+});

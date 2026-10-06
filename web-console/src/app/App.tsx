@@ -1,3 +1,4 @@
+import { Workbench } from './components/Workbench';
 import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
 import { message } from '../locale/translation';
 import { useTranslation, useNotice } from '../locale/react';
@@ -80,6 +81,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   useEffect(() => previewOwner.start(), [previewOwner]);
   const [previewFocus, setPreviewFocus] = useState(0);
   const previewOpener = useRef<HTMLElement | null>(null);
+  const [workbenchFullscreen, setWorkbenchFullscreen] = useState(false);
   const inspectorOpen = previews.mode === 'inspector';
   const returnPreviewFocus = () => {
     const opener = previewOpener.current;
@@ -279,7 +281,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
         setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
       })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => openSettings(userSettingsTarget)} />} />}
-    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel closeLabel={previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
+    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel actions={previews.mode === 'workbench' && <Button size="sm" aria-label={tx(workbenchFullscreen ? 'artifacts:workbench.restore' : 'artifacts:workbench.fullscreen')} onClick={() => setWorkbenchFullscreen(value => !value)}>⛶</Button>} closeLabel={previews.mode === 'workbench' ? tx('artifacts:workbench.toggle') : previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'workbench' ? tx('artifacts:workbench.start') : previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
+      <Workbench key={JSON.stringify([state.generation, selected, view?.summary?.active_node, workspaceAuthority.getRevision()])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={view?.summary ? { session_id: view.id, active_node: view.summary.active_node } : undefined} visible={previews.mode === 'workbench'} fullscreen={workbenchFullscreen} toggleFullscreen={() => setWorkbenchFullscreen(value => !value)}/>
+      {previews.mode === 'preview' && <Button size="sm" onClick={() => previewOwner.showWorkbench()}>{tx('artifacts:workbench.start')}</Button>}
       <PreviewWorkspace owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
       {inspectorOpen && <LiveInspector client={client} sessionId={view?.id} />}
     </RightPanel>}
@@ -315,7 +319,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     <section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} id="session-view" role="region" aria-labelledby="session-title">
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
-        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={previews.workspace && <Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx('artifacts:workspace.reopen')} title={tx('artifacts:workspace.title')} aria-expanded={previews.mode === 'preview'} onClick={() => { if (previews.mode === 'preview') collapsePanel(); else { previewOwner.reveal(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
+        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={previews.mode === 'preview' || previews.mode === 'workbench'} onClick={event => { previewOpener.current = event.currentTarget; if (previews.mode === 'preview' || previews.mode === 'workbench') collapsePanel(); else { if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
       {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {
