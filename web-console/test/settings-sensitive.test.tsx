@@ -124,9 +124,9 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   fireEvent.click(form.getByRole('button', { name: /Credential source/ }));
   const listbox = await screen.findByRole('listbox');
   expect(within(listbox).getAllByRole('option').map(option => option.textContent)).toEqual([
-    'Read it from an environment variable', 'Enter a literal secret',
+    'Read it from an environment variable', 'Enter a secret',
   ]);
-  expect(within(listbox).queryByRole('option', { name: 'Keep the credential this scope already authored' })).toBeNull();
+  expect(within(listbox).queryByRole('option', { name: 'Keep the saved credential' })).toBeNull();
   // Select owns this Escape. A synthetic click need not settle browser focus,
   // so document.activeElement can still name a control in the Settings layer.
   fireEvent.keyDown(listbox, { key: 'Escape' });
@@ -173,7 +173,7 @@ it('S2-12 the form library opens no devtools channel, so a typed secret is never
     await openSettingsPage('Models');
     await openResourceRow('transport');
     fireEvent.click(screen.getByRole('button', { name: /Credential source$/ }));
-    fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Enter a secret' }));
     fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SENTINEL } });
     // The draft legitimately holds the secret in the actor-owned transaction.
     await waitFor(() => expect(retained(s)).toContain(SENTINEL));

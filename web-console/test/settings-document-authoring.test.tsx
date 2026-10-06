@@ -80,9 +80,9 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
   await screen.findByText(/Revision: saved-2/);
   expect(screen.queryByRole('form', { name: 'Repair malformed source' })).toBeNull();
   open('Tools & Permissions');
-  const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
+  const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
   fireEvent.click(tools.getByLabelText('read'));
-  fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(tools.getByRole('button', { name: 'Save Built-in tools' }));
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ expected_revision: 'saved-2', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read'] } } });
   expect(sourcesReads(s).length).toBeGreaterThanOrEqual(2);
@@ -131,9 +131,9 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   expect(screen.queryByLabelText('New MCP identity')).toBeNull();
   expect(forms()).toEqual([]);
   open('Tools & Permissions');
-  const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
+  const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
   fireEvent.click(tools.getByLabelText('read'));
-  fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(tools.getByRole('button', { name: 'Save Built-in tools' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'user-1', mutation: { kind: 'config' } });
 });

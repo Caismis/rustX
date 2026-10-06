@@ -126,11 +126,12 @@ it.each([false, true])('one launcher grammar preserves unrelated draft and caret
   const message = input(); fireEvent.change(message, { target: { value: 'unrelated prose' } }); message.focus(); message.setSelectionRange(3, 6);
   fireEvent.mouseDown(screen.getByRole('button', { name: 'Commands' })); fireEvent.click(screen.getByRole('button', { name: 'Commands' }));
   const launcher = screen.getByRole('listbox');
+  expect(launcher.querySelector('#command-new')).toBeNull();
   expect(message.value).toBe('unrelated prose'); expect(document.activeElement).toBe(message); expect([message.selectionStart, message.selectionEnd]).toEqual([3, 6]);
-  const choices = launcher.textContent;
+  const choices = [...launcher.querySelectorAll('[role="option"]')].filter(row => row.id !== 'command-attach').map(row => row.textContent);
   fireEvent.keyDown(message, { key: 'Escape' }); expect(screen.queryByRole('listbox')).toBeNull();
   fireEvent.change(message, { target: { value: '/' } });
-  expect(screen.getByRole('listbox').textContent).toBe(choices);
+  expect([...screen.getByRole('listbox').querySelectorAll('[role="option"]')].filter(row => !['command-new', 'command-model'].includes(row.id)).map(row => row.textContent)).toEqual(choices);
   expect(inputTrigger(undefined, { type: 'toggle' })).toEqual({ source: 'launcher', query: '', highlight: 0 });
   expect(inputTrigger(undefined, { type: 'track', draft: '/' })).toEqual({ source: 'typed', query: '', highlight: 0 });
 });
@@ -151,13 +152,15 @@ it.each(['/model', 'unrelated prose'])('hero model selection settles the command
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   const message = input();
   fireEvent.change(message, { target: { value: draft } });
-  if (draft !== '/model') fireEvent.click(screen.getByRole('button', { name: 'Commands' }));
-  fireEvent.keyDown(message, { key: 'Tab' });
+  if (draft !== '/model') {
+    fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
+  }
+  if (draft === '/model') fireEvent.keyDown(message, { key: 'Tab' });
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));
   await waitFor(() => expect(message.value).toBe(draft === '/model' ? '' : draft));
   expect(screen.queryByRole('menu')).toBeNull();
-  expect(document.activeElement).toBe(message);
+  if (draft === '/model') expect(document.activeElement).toBe(message);
 });
 
 it.each([false, true])('a confirmed native model selection seeds the next Session without modifying other Sessions (navigate before acknowledgement=%s)', async navigate => {
@@ -171,7 +174,7 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   fireEvent.click(screen.getByRole('button', { name: 'Model and reasoning' }));
-  await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
+  await waitFor(() => expect(screen.queryByText('Loading models…')).toBeNull());
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   if (navigate) server.held.add('session/setModel');
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));

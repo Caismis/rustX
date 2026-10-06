@@ -292,9 +292,6 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
     onSubmit={event => { event.preventDefault(); unit.submit(); }}>
     <fieldset disabled={unit.busy}><legend>{title}</legend>
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
-        <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
-          {authoredStateLabel(tx, unit.facts.authored, unit.scope)} · {effectiveStateLabel(tx, unit.facts.effective)} · {provenanceLabel(tx, unit.facts.origin)}
-        </p>
         {unit.facts.authored.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.authored-source-is-invalid')}{' '}{unit.facts.authored.diagnostic}</p>}
         {unit.facts.effective.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.native-effective-resolution-failed')}{' '}{unit.facts.effective.diagnostic}</p>}
         {unit.inheritance && <Advanced title={tx('settings:bridge.native-resolved-value-not-session-adoption')}>
@@ -308,6 +305,9 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           override transition. */}
       <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
       <Advanced title={tx('settings:bridge.source-revision-replacement')}>
+        {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
+          {authoredStateLabel(tx, unit.facts.authored, unit.scope)} · {effectiveStateLabel(tx, unit.facts.effective)} · {provenanceLabel(tx, unit.facts.origin)}
+        </p>}
         <p className={css.hint}>{tx('settings:bridge.draft-base-revision')}{' '}{unit.base}<br />{tx('settings:bridge.current-revision')}{' '}{unit.observed}</p>
         <p>{tx('settings:bridge.save-replaces-this-native-semantic-unit-remove-omits-it-from-thi')}</p>
       </Advanced>

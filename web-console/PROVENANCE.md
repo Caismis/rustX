@@ -1,3 +1,55 @@
+## Local Harness desktop presentation alignment
+
+The installed DeepSeek Harness Windows desktop UI was visually inspected on
+2026-10-04. The existing attributed presentation components remain the source
+baseline; no brand assets, runtime code or new dependencies are imported.
+
+- The application frame uses the reference's muted sidebar surface and rounded
+  conversation panel. Browser chrome remains browser-owned.
+- On narrow screens the expanded sidebar overlays the conversation, preserving
+  the reading width; Escape or the backdrop dismisses it. Covered content is inert.
+- Conversation title weight, default reading width and composer-context alignment
+  follow the inspected desktop layout. Deliberate width preferences remain intact.
+- The sidebar Extensions entry opens rustX's existing native-backed Settings
+  extension inventory; it does not imply a Harness plugin runtime.
+- General settings presents the existing Light and Dark choices as accessible
+  theme cards, following the inspected desktop arrangement. The icons and CSS
+  are locally authored; no unsupported preference is added.
+- The settings modal follows the inspected 800x704 desktop geometry and plain
+  dimmed backdrop; native configuration ownership and reload controls remain.
+- Configuration, extension, upload and context copy uses user-facing language
+  in both locales. General removes the duplicate appearance heading and the
+  unrelated connection paragraph.
+- Configuration cards keep source, revision and provenance details behind a
+  disclosure. Invalid values and save outcomes remain visible; duplicate Tools
+  group headings are removed while each form retains its own legend.
+- The composer plus launcher includes file intake as its first action. Plus,
+  paperclip and command glyphs reuse the already attributed Harness icon module.
+  File selection keeps the existing upload owner and slash discovery remains
+  command-only; the separate attachment toolbar button is removed.
+- Chat/trajectory, Session actions, history navigation, attachment and command
+  controls, approvals, settings and the developer inspector retain their owners.
+
+The local hashes for adapted presentation files are updated in the
+source inventory. The independent-session fork glyph additionally reuses Harness
+`ui-primitives/src/icons/index.tsx` at immutable commit
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, recorded with its exact source hash
+in the icon module's `additional_sources`. In-session branches retain the
+original branch glyph; model and tools commands reuse the intelligence and code
+glyphs. Existing source pins and dependency closures remain unchanged.
+
+Model catalog refresh keeps the launcher enabled and visually stable while
+fencing menu choices until the read finishes. First-load feedback lives inside
+the popup; cached refresh does not add an inline loading label to the composer.
+
+Updated screenshot references use exact pixel comparison. Noise evidence tied
+to the previous layout is preserved with its original images in the comparator
+fixtures, rather than reused as an exception for the new layout.
+The narrow running-draft Composer references have newly measured rounded-shadow
+noise at 15 light and 16 dark pixel sites. Each site has its own measured channel
+bound; adjacent pixels, dimensions and all other references remain exact. The
+manifest records independent runs, the pinned browser and decoded-image hashes.
+
 ## #439 Composer keyboard policy
 
 Approved read-only reference: `deepseek-ai/deepseek-harness` at

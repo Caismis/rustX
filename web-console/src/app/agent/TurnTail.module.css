@@ -10,6 +10,8 @@
 .metrics dd { margin: 0; font-variant-numeric: tabular-nums; }
 .stats { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; min-width: 0; max-width: 100%; box-sizing: border-box; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 20px; padding: 4px 8px; }
 .stats .stat { gap: 6px; min-height: 22px; padding: 1px 8px; border-radius: 999px; font: inherit; font-variant-numeric: tabular-nums; }
+.stats { font-size: 14px; gap: 16px; }
+.stats .stat > svg { flex: none; width: 16px; height: 16px; }
 @media (hover: hover) and (pointer: fine) {
   [data-response-reveal='hover'] .actions, .actions[data-response-reveal='hover'] { opacity: 0; transition: opacity 80ms ease; }
   [data-response-reveal='hover']:hover .actions, [data-response-reveal='hover']:focus-within .actions, .actions[data-response-reveal='hover']:hover, .actions[data-response-reveal='hover']:focus-within { opacity: 1; }

@@ -14,7 +14,7 @@ import { HoverCard } from '../primitives/HoverCard';
 import { Menu } from '../primitives/Menu';
 import { StateDot, type StateDotState } from '../primitives/StateDot';
 import { relativeTime } from '../primitives/relative-time';
-import { IconBranchOutline16, IconEditOutline16, IconEllipsisOutline16,
+import { IconForkOutline16, IconEditOutline16, IconEllipsisOutline16,
   IconFolderClose16, IconFolderOpen16, IconPlusOutline16, IconTrashOutline16, IconTriangleRightFill14 } from '../primitives/icons';
 import type { GroupNode, SearchResultNode, SessionNode } from './types';
 import type { Translate } from '../../locale/translation';
@@ -390,7 +390,7 @@ export function SessionNodeItem({
   const sessionMenuItems = [
     ...(onClose ? [{ id: 'close', label: tx('workspace:rows.close-value-view', { p0: title }) }] : []),
     { id: 'rename', label: t('workspace:rename'), icon: <IconEditOutline16 /> },
-    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconBranchOutline16 /> },
+    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconForkOutline16 /> },
     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
     { id: 'delete', label: t('workspace:menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
   ]

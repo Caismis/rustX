@@ -28,8 +28,7 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   // Appearance lives on General, the page global Settings opens at.
   const theme = (option: string) => {
-    fireEvent.click(screen.getByRole('button', { name: (name: string) => name.endsWith('Theme') }));
-    fireEvent.click(screen.getByRole('option', { name: option }));
+    fireEvent.click(screen.getByRole('radio', { name: option }));
   };
   theme('Dark');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
@@ -37,6 +36,17 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(false);
   expect(server.requests.slice(baseline).every(row => row.request.method === 'configuration/sourcesRead')).toBe(true);
   expect(JSON.stringify(localStorage)).not.toMatch(/workspaceId|cwd|snapshot|interaction/);
+});
+it('the sidebar Extensions shortcut opens native settings and leaves the general settings entry available', async () => {
+  await server.connect();
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Extensions' })));
+  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Extensions' }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('heading', { name: 'Extensions' })).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close Settings' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
+  expect(screen.getByRole('tab', { name: 'General' }).getAttribute('aria-selected')).toBe('true');
 });
 it('waiting interactions outrank running; queued input alone is not a waiting interaction', async () => {
   server.snapshots.get('A')!.attempt = { attempt_id: 'running', phase: { type: 'running' }, turn: 1 };

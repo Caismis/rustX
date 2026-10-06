@@ -144,7 +144,7 @@ export async function openResourceRow(name: string) {
  * observation. Source paths and revisions are diagnostics and live on
  * Advanced, so readiness is asserted from the lifecycle itself. */
 export async function settingsReady() {
-  await screen.findByText('Authoritative source observed');
+  await screen.findByText('Configuration loaded');
 }
 
 /** The primary page currently displayed. */

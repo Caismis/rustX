@@ -402,7 +402,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 },
         },
         MethodResult::ConversationTurns { page: crate::durable::reading::ConversationTurnPage {
-            cut: reading_cut.clone(), total: 1, offset: 0, turns: vec![crate::durable::reading::ConversationTurn { id: reading_id.clone(), ordinal: 1, cursor: Some(crate::durable::TranscriptCursor::new(EXACT)), preview: "Native preview".into() }],
+            cut: reading_cut.clone(), total: 1, offset: 0, turns: vec![crate::durable::reading::ConversationTurn { id: reading_id.clone(), ordinal: 1, cursor: Some(crate::durable::TranscriptCursor::new(EXACT)), prompt: "User question".into(), response: "Native preview".into() }],
         } },
         MethodResult::TranscriptWindow { window: crate::runtime_client::snapshot::ConversationWindow { cut: reading_cut, page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage { entries: Vec::new(), next_cursor: None, statistics: None }, target: Some(reading_id), target_cursor: Some(crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(EXACT)), newer_cursor: None } },
         MethodResult::InboundAccepted {

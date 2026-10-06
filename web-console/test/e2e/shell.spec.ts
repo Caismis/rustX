@@ -1,7 +1,6 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { choose } from './shell-actions';
 
 /** The shell reference owns its cold-load interleaving. Present the unclassified
  * baseline before publishing the Host reply, then await both shared consumers.
@@ -21,6 +20,25 @@ async function openClassifiedShell(page: Page, initial?: 'other-uncertain') {
   await expect(tree).not.toContainText('Refreshing Workspace associations');
   await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toBeVisible();
 }
+
+test('narrow sidebar overlays the conversation without squeezing its composer', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  const center = page.locator('main');
+  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+  const width = (await center.boundingBox())!.width;
+  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+  await expect(page.getByRole('button', { name: 'Collapse Sidebar' })).toBeVisible();
+  expect((await center.boundingBox())!.width).toBe(width);
+  await expect(center).toHaveAttribute('inert', '');
+  await page.getByRole('button', { name: 'Collapse Sidebar' }).press('Escape');
+  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+  await expect(center).not.toHaveAttribute('inert', '');
+  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+  await page.getByRole('button', { name: 'Close navigation' }).click({ position: { x: 370, y: 400 } });
+  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+});
 
 test('stream publications and a turn-local clock preserve chrome identity, geometry and caret', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-24T23:00:00Z') });
@@ -118,7 +136,8 @@ test('Harness shell reference states and presentation-only navigation', async ({
   // Global Settings opens at General, which holds Appearance.
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-light.png');
-  await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
+  await page.getByRole('radiogroup', { name: 'Theme', exact: true }).getByText('Dark', { exact: true }).click();
+ await expect(page.getByRole('radio', { name: 'Dark', exact: true })).toBeChecked();
   await expectStableScreenshot(page, 'settings-shell-dark.png');
   await page.getByRole('button', { name: 'Close Settings' }).click();
   await expectStableScreenshot(page, 'desktop-expanded-dark.png');

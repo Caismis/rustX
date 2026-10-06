@@ -126,7 +126,7 @@ it('S2-03 each setting has exactly one primary editor across the six pages', asy
   }
   expect(seen.get('Default model')).toBe('Models');
   expect(seen.get('Root instructions')).toBe('Agent');
-  expect(seen.get('Native Tools')).toBe('Tools & Permissions');
+  expect(seen.get('Built-in tools')).toBe('Tools & Permissions');
   expect(seen.get('Todo extension')).toBe('Extensions');
   expect(seen.get('Context policy')).toBe('Advanced');
 });
@@ -138,7 +138,7 @@ it('S2-04 Agent holds identity and guidance; Tools & Permissions holds what the 
   await user(s, 'Agent');
   expect(forms()).toEqual(['Root identity', 'Root description', 'Root instructions', 'Project guidance']);
   await openSettingsPage('Tools & Permissions');
-  expect(forms()).toEqual(expect.arrayContaining(['Approval mode', 'Native Tools', 'Skill visibility', 'Agent allowlist', 'Workflow allowlist']));
+  expect(forms()).toEqual(expect.arrayContaining(['Approval mode', 'Built-in tools', 'Skill visibility', 'Agent allowlist', 'Workflow allowlist']));
   // Per-Tool policies are one task deeper, not scattered primary tabs.
   expect(screen.getByRole('button', { name: 'Advanced Tool policies' }).getAttribute('aria-expanded')).toBe('false');
   // The old native-unit tabs do not exist as navigation.
@@ -861,7 +861,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params.expected_revision).toBe('user-1');
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new' } } });
-  await screen.findByText('Saved. Native application proceeds automatically.');
+  await screen.findByText('Saved. Check the status above to confirm it has taken effect.');
   // The post-commit read is outstanding: the presentation still holds the
   // pre-commit Model, and it is no base for a new draft of the same unit.
   expect(wire().value).toBe('wire');
@@ -933,7 +933,7 @@ it('S2-11 source paths, revisions and raw projections are on Advanced only', asy
     // Protocol vocabulary is not needed for ordinary tasks.
     expect(text(), page).not.toMatch(/\b(root_model|native_tools|source_tools|expected_revision|sourceWrite)\b/);
     // The per-unit CAS base is a collapsed disclosure, never page content.
-    for (const disclosure of screen.queryAllByRole('button', { name: 'Source revision & replacement' })) {
+    for (const disclosure of screen.queryAllByRole('button', { name: 'Configuration details' })) {
       expect(disclosure.getAttribute('aria-expanded')).toBe('false');
     }
   }
@@ -951,9 +951,11 @@ function sources(dir: string): string[] {
     return statSync(path).isDirectory() ? sources(path) : /\.(ts|tsx)$/.test(name) ? [path] : [];
   });
 }
-const importers = (module: string) => sources(join(root, 'src'))
-  .filter(path => new RegExp(`from '${module}'`).test(readFileSync(path, 'utf8')))
-  .map(path => relative(root, path)).sort();
+// Source files do not change during this suite. Read once, especially on bind mounts.
+const sourceImports = sources(join(root, 'src')).map(path => ({ path, text: readFileSync(path, 'utf8') }));
+const importers = (module: string) => sourceImports
+  .filter(source => new RegExp(`from '${module}'`).test(source.text))
+  .map(source => relative(root, source.path)).sort();
 
 it('S2-12 no global state framework, router, second design system or form devtools is a dependency', () => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
@@ -966,6 +968,7 @@ it('S2-12 no global state framework, router, second design system or form devtoo
 
 it('S2-12 React Aria and TanStack Form stay bounded to their declared interaction owners', () => {
   expect(importers('react-aria-components')).toEqual([
+    'src/app/settings/general/GeneralPage.tsx', // Accessible appearance radio cards.
     'src/app/settings/models/ModelsPage.tsx',
     'src/app/settings/primitives/aria.tsx',
     'src/app/trajectory/TrajectoryInspector.tsx',

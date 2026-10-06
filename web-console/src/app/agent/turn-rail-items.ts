@@ -14,5 +14,5 @@ export function turnRailItems(page?: ConversationTurnPage, current?: Conversatio
   const turns=page?.turns ?? [];
   if (!current || turns.some(turn=>turnKey(turn.id)===turnKey(current))) return turns;
   // Ordinal zero denotes the pinned live identity until the native outline supplies order/location.
-  return [...turns,{id:current,ordinal:0,cursor:location && page && BigInt(location)<=BigInt(page.cut.transcript) ? location : null,preview:''}];
+  return [...turns,{id:current,ordinal:0,cursor:location && page && BigInt(location)<=BigInt(page.cut.transcript) ? location : null,prompt:'',response:''}];
 }

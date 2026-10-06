@@ -297,6 +297,7 @@
   flex: none;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: none;
   border-radius: 999px;
   corner-shape: round;
@@ -304,6 +305,7 @@
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
 }
+.add > span { display: flex; align-items: center; justify-content: center; }
 
 .add:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover-solid);
@@ -374,6 +376,8 @@
   background: var(--dsw-alias-button-info-hover);
 }
 
+.primary > span { display: flex; }
+
 .primary:disabled {
   opacity: 0.4;
   cursor: default;
@@ -390,21 +394,6 @@
   cursor: pointer;
 }
 
-/* File intake is a quiet accessory; + remains the command launcher. */
-.attachment {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-.attachment:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
-.attachment:disabled { opacity: .5; cursor: default; }
 /* Native control popovers use fixed positioning; do not add a size container. */
 .row { container-type: normal; }
 .dock { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
@@ -417,7 +406,9 @@
 .attachments { display: flex; gap: 10px; overflow-x: auto; padding: 6px 14px; }
 .attachments:empty { display: none; }
 
-/* Quiet input preference, outside the operation toolbar. */
-.busyEnter { width: 100%; max-width: var(--dsh-composer-card-max-width); display: flex; justify-content: flex-end; }
-.busyEnter .select { height: 24px; font-size: 12px; font-weight: 400; }
+/* Input preference shares the toolbar with permission and model controls. */
+.busyEnter { display: flex; align-items: center; }
+.busyEnter .select { display: flex; align-items: center; gap: 4px; }
+.busyEnter .select > span { display: flex; }
+.busyEnter .select { border-radius: 24px; font-family: var(--dsw-font-family); font-size: 13px; line-height: 20px; font-weight: 500; }
 .busyEnter .select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

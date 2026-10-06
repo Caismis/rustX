@@ -4,7 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const TURN_PAGE_MAX: usize = 64;
-pub const TURN_PREVIEW_MAX: usize = 240;
+/// One rail-card line of the turn's opening human prompt.
+pub const TURN_PROMPT_PREVIEW_MAX: usize = 50;
+/// Three rail-card lines of the turn's final response.
+pub const TURN_RESPONSE_PREVIEW_MAX: usize = 120;
 
 /// Origin survives lineage copying; ordinal never participates in identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -43,8 +46,12 @@ pub struct ConversationTurn {
     pub ordinal: usize,
     /// None until native work has a visible member or terminal position.
     pub cursor: Option<super::TranscriptCursor>,
-    #[schemars(length(max = 240))]
-    pub preview: String,
+    /// The turn's first human prompt; empty when none was adopted for it.
+    #[schemars(length(max = 50))]
+    pub prompt: String,
+    /// The turn's final text-bearing response; empty until the turn settles.
+    #[schemars(length(max = 120))]
+    pub response: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -94,6 +101,8 @@ pub struct TurnReadingProvenance {
     pub process_message_ids: Vec<crate::runtime::identity::MessageId>,
     /// Canonical predecessor of a terminal-only location; None precedes all content.
     pub preceding_message_id: Option<crate::runtime::identity::MessageId>,
+    /// The canonical human prompt that opened the turn, when one was retained.
+    pub prompt_message_id: Option<crate::runtime::identity::MessageId>,
     pub outcome: InheritedTurnOutcome,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,

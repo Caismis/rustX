@@ -44,7 +44,7 @@ it('S1-03 native effective value and provenance are projected, never recomputed 
   expect(facts.authored.state).toBe('absent');
   expect(facts.effective).toEqual({ state: 'available', value: ['read', 'glob'] });
   expect(provenanceLabel(translator('en'), facts.origin)).toBe('Inherited from User');
-  expect(provenanceLabel(translator('en'), { state: 'known', origin: { kind: 'builtin' } })).toBe('Native default');
+  expect(provenanceLabel(translator('en'), { state: 'known', origin: { kind: 'builtin' } })).toBe('Default');
   expect(provenanceLabel(translator('en'), { state: 'known', origin: workspace })).toBe('Workspace override');
   expect(provenanceLabel(translator('en'), { state: 'known', origin: { kind: 'process', base: '/run' } })).toBe('Process default');
   expect(provenanceLabel(translator('en'), { state: 'mixed' })).toBe('Mixed origins');

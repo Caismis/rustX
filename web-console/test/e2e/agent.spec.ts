@@ -1,7 +1,6 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { choose } from './shell-actions';
 // Each reference owns a fresh context/page, including its renderer paint caches.
 for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'questionnaire', 'selectors']) test(`Harness Agent ${mode} reference uses native snapshots`, async ({ page }) => {
  const errors: string[] = [];
@@ -23,7 +22,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
    if (mode === 'selectors') {
      await expect(page.getByRole('button', { name: 'Approval mode' })).toHaveCount(0);
      await page.getByRole('button', { name: 'Model and reasoning' }).click();
-     await expect(page.getByText('Reading native models…')).toHaveCount(0);
+     await expect(page.getByText('Loading models…')).toHaveCount(0);
      await page.getByRole('menuitem', { name: 'Reasoning profile' }).click();
      await expect(page.getByRole('menuitem', { name: 'deliberate' })).toBeVisible();
    }
@@ -31,7 +30,8 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  if (mode === 'selectors') {
  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
  await page.getByRole('button', { name: 'Settings', exact: true }).click();
- await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Theme', 'Dark');
+ await page.getByRole('radiogroup', { name: 'Theme', exact: true }).getByText('Dark', { exact: true }).click();
+ await expect(page.getByRole('radio', { name: 'Dark', exact: true })).toBeChecked();
  await page.getByRole('button', { name: 'Close Settings' }).click();
  await expectStableScreenshot(page, 'agent-dark-desktop.png');
  await page.setViewportSize({ width: 390, height: 844 });
@@ -107,6 +107,11 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     const primary = page.locator('[data-composer-primary]');
     const shot = async (state: string) => expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
     await expect(input).toBeVisible(); await expect(primary).toHaveCount(1);
+    const plus = page.getByRole('button', { name: 'Commands', exact: true });
+    expect(await plus.evaluate(el => {
+      const button = el.getBoundingClientRect(), icon = el.querySelector('svg')!.getBoundingClientRect();
+      return [icon.x + icon.width / 2 - button.x - button.width / 2, icon.y + icon.height / 2 - button.y - button.height / 2];
+    })).toEqual([0, 0]);
     if (width === 1440) {
       await expect.poll(async () => {
         const left = (await page.getByRole('button', { name: 'Commands', exact: true }).boundingBox())!;
@@ -131,7 +136,9 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await input.fill('Steer through the existing native operation.'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
     expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/start', 'turn/steer']);
     // A real picker gesture and receipt path; the toolbar accessory stays quiet.
-    const chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: 'Add attachments' }).click();
+    await page.getByRole('button', { name: 'Commands', exact: true }).click();
+    expect(await page.getByRole('listbox', { name: 'Commands' }).getByRole('option').evaluateAll(rows => rows.every(row => row.querySelector('svg')))).toBe(true);
+    const chooser = page.waitForEvent('filechooser'); await page.getByRole('option', { name: 'Add attachments', exact: true }).click();
     await (await chooser).setFiles({ name: 'review.txt', mimeType: 'text/plain', buffer: Buffer.from('Review notes') });
     await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
     await input.fill('Review these notes.'); await shot('attachment');
@@ -143,10 +150,11 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');
-    for (const name of ['Commands', 'Add attachments', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of ['Commands', 'Model and reasoning']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add attachments' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Approval mode', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Model and reasoning' }).click();
-    await expect(page.getByText('Reading native models…')).toHaveCount(0); await page.keyboard.press('Escape');
+    await expect(page.getByText('Loading models…')).toHaveCount(0); await page.keyboard.press('Escape');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   });
@@ -185,7 +193,7 @@ test('ModelSelect submenus stay usable inside a narrow viewport', async ({ page 
   // Keyboard: the menu opens on Model, the arrows reach the profile row, and
   // ArrowRight enters its submenu.
   await trigger.focus(); await page.keyboard.press('Enter');
-  await expect(page.getByText('Reading native models…')).toHaveCount(0);
+  await expect(page.getByText('Loading models…')).toHaveCount(0);
   await expect(page.getByRole('menuitem', { name: 'Model', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowDown'); await expect(profile).toBeFocused();
   await page.keyboard.press('ArrowRight'); await expect(page.getByRole('menuitem', { name: 'deliberate' })).toBeFocused();

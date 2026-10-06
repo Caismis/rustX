@@ -38,6 +38,9 @@ pub(super) fn read(
     // Member presence selects message-backed history. A terminal-only predecessor
     // controls structural prefix membership only AFTER the Journal cut filtered time.
     turns.retain_mut(|turn| {
+        if turn.prompt_message_id.as_ref().is_some_and(|id| !referenced.contains(id)) {
+            turn.prompt_message_id = None;
+        }
         let had_members = !turn.process_message_ids.is_empty();
         turn.process_message_ids
             .retain(|id| referenced.contains(id));

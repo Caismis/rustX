@@ -41,13 +41,13 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await openSettingsPage(page, 'Agent');
     await settings.getByLabel('Instructions', { exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
     await settings.getByRole('button', { name: 'Save Root instructions', exact: true }).click();
-    await expect(settings.getByText('Root instructions saved. Native coordination owns application.')).toBeVisible();
+    await expect(settings.getByText('Root instructions saved. Check the status above to confirm it has taken effect.')).toBeVisible();
     await closeSettings(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByLabel('read', { exact: true }).uncheck();
-    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-    await expect(settings.getByText('Native Tools saved. Native coordination owns application.')).toBeVisible();
+    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+    await expect(settings.getByText('Built-in tools saved. Check the status above to confirm it has taken effect.')).toBeVisible();
     const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
     const workspaceA = (await f.workspaceHost.host.listWorkspaces()).workspaces.find(workspace => workspace.displayName === 'Workspace A')!;
     const workspaceSource = await f.workspaceHost.host.configureWorkspace(workspaceA.id, f.endpoint, { kind: 'read' });

@@ -6,7 +6,7 @@ import type { CompletedResponseView, CompletedResponseTiming, ModelUsage } from 
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Modal } from '../../presentation/primitives/Modal';
-import { IconClockOutline16, IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconDatabaseOutline16 } from '../../presentation/primitives/icons';
+import { IconClockOutline16, IconRefreshOutline16, IconCopyOutline16, IconCheckOutline16, IconForkOutline16, IconBranchOutline16, IconDatabaseOutline16 } from '../../presentation/primitives/icons';
 import type { HistoryAction } from '../commands/native';
 import { turnAnchor } from '../../client/transcript';
 import css from './TurnTail.module.css';
@@ -34,7 +34,7 @@ export function Usage({ usage, label: suppliedLabel, showCache = false }: { usag
   const [open, setOpen] = useState(false);
   const label = suppliedLabel ?? tx('agent:copy.usage');
   const cached = usage.details?.cached_input_tokens;
-  return <><button className={css.stat} type="button" aria-haspopup="dialog" aria-expanded={open} aria-label={tx('agent:turn-tail.value-value-tokens', { p0: label, p1: usage.total_tokens })} onClick={() => setOpen(true)}><IconDatabaseOutline16/><span>{compactTokens(tx, usage.total_tokens)} {tx('agent:turn-tail.tok')}{showCache && cached != null && usage.input_tokens > 0 && cached <= usage.input_tokens ? tx('agent:turn-tail.value-cache', { p0: Math.round(100 * cached / usage.input_tokens) }) : ''}</span></button>
+  return <><button className={css.stat} type="button" aria-haspopup="dialog" aria-expanded={open} aria-label={tx('agent:turn-tail.value-value-tokens', { p0: label, p1: usage.total_tokens })} onClick={() => setOpen(true)}><IconDatabaseOutline16/><span>{compactTokens(tx, usage.total_tokens)} {showCache ? tx('agent:conversation-stats.token-unit') : tx('agent:turn-tail.tok')}{showCache && cached != null && usage.input_tokens > 0 && cached <= usage.input_tokens ? tx('agent:conversation-stats.cache', { percent: Math.round(100 * cached / usage.input_tokens) }) : ''}</span></button>
     <Modal open={open} title={label} closeLabel={tx('agent:turn-tail.close-usage')} onClose={() => setOpen(false)}><dl className={css.metrics}>
       <dt>{tx('agent:turn-tail.total')}</dt><dd>{usage.total_tokens.toLocaleString(tx.language)}</dd>
       <dt>{tx('agent:turn-tail.input')}</dt><dd>{usage.input_tokens.toLocaleString(tx.language)}</dd>
@@ -62,9 +62,9 @@ export function TurnTail({ text, response, onHistorical, disabled, lineageSwitch
   return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={JSON.stringify([response.origin.conversation_id, response.origin.attempt_id])}>
     <CopyMessage text={text}/>
     {onHistorical && <>
-      <Tooltip label={tx('agent:turn-tail.fork-to-new-session')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.fork-to-new-session')} disabled={disabled} onClick={() => onHistorical('fork', response)}><IconBranchOutline16/></button></Tooltip>
+      <Tooltip label={tx('agent:turn-tail.fork-to-new-session')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.fork-to-new-session')} disabled={disabled} onClick={() => onHistorical('fork', response)}><IconForkOutline16/></button></Tooltip>
       <Tooltip label={tx('agent:turn-tail.branch-in-this-session')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch-in-this-session')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('branch', response)}><IconBranchOutline16/></button></Tooltip>
-      {response.retry_message_id && <Tooltip label={tx('agent:turn-tail.retry-regenerate')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry-regenerate')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}>↻</button></Tooltip>}
+      {response.retry_message_id && <Tooltip label={tx('agent:turn-tail.retry-regenerate')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry-regenerate')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
     </>}
     {response.usage && <Usage usage={response.usage}/>}
     {response.timing && <Timing timing={response.timing}/>}

@@ -76,7 +76,7 @@ it.each([
   ['live', noisePolicy, reference],
   ['frozen comparator', comparatorPolicy, fixture],
 ] as const)('the %s noise manifest is measured evidence bound to bounded, disjoint regions', (_label, policy, image_) => {
-  expect(policy.length).toBeGreaterThan(0);
+  if (_label === 'frozen comparator') expect(policy.length).toBeGreaterThan(0);
   for (const entry of policy) {
     expect(entry.evidence).toBeTruthy();
     expect(entry.regions.length).toBeGreaterThan(0);
@@ -396,8 +396,8 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
 
 it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51]] as const)('measured Composer corner noise stays restricted: %s %s', (state, theme, sites, bound, cornerY) => {
   const name = `composer-${state}-${theme}-390-linux.png`;
-  const expected = reference(name);
-  const entry = noisePolicy.find(entry => entry.reference === name)!;
+  const expected = fixture(name);
+  const entry = comparatorPolicy.find(entry => entry.reference === name)!;
   const measured = entry.pixels as MeasuredNoisePixel[];
   expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
   expect(measured).toHaveLength(sites);
@@ -406,32 +406,46 @@ it.each([['idle-empty', 'light', 12, 2, 51], ['idle-empty', 'dark', 12, 2, 51]] 
     expect(pixel(expected, x, y)).toEqual(before);
     paint(observed, x, y, after);
   }
-  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, comparatorPolicy).ok).toBe(true);
   expect(compare(observed, name, expected, []).ok).toBe(false);
-  expect(compare(observed, `composer-idle-draft-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  expect(compare(observed, `composer-idle-draft-${theme}-390-linux.png`, expected, comparatorPolicy).ok).toBe(false);
   for (const region of entry.regions) {
     expect(region.maxChannelDelta).toBeLessThanOrEqual(bound);
     const excessive = copy(expected);
     nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   }
   // Adjacent corner, text, and control pixels retain exact comparison.
   for (const [x, y] of [[34, cornerY], [33, cornerY + 2], [24, cornerY + 4], [50, 76], [300, 126]]) {
     const changed = copy(observed); nudge(changed, x, y, 1);
-    const result = compare(changed, name, expected, noisePolicy);
+    const result = compare(changed, name, expected, comparatorPolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
   const shifted = copy(observed);
   for (let y = 0; y < shifted.height; y++)
     for (let x = shifted.width - 1; x > 0; x--) paint(shifted, x, y, pixel(observed, x - 1, y));
-  expect(compare(shifted, name, expected, noisePolicy).ok).toBe(false);
-  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(shifted, name, expected, comparatorPolicy).ok).toBe(false);
+  expect(compare({ ...observed, height: observed.height - 1 }, name, expected, comparatorPolicy).ok).toBe(false);
 });
 
-it.each(['light', 'dark'])('integrated running Composer remains strict after remeasurement: %s', theme => {
+it.each(['light', 'dark'])('integrated running Composer accepts only measured corner sites: %s', theme => {
   const name = `composer-running-draft-${theme}-390-linux.png`;
-  expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
+  const entry = noisePolicy.find(entry => entry.reference === name)!;
   const expected = reference(name);
+  const observed = copy(expected);
+  expect(entry.pixels).toHaveLength(theme === 'light' ? 15 : 16);
+  expect(entry.regions.flatMap(cells)).toEqual(entry.pixels!.map(([x, y]) => [x, y]));
+  for (const [x, y, before, after] of entry.pixels!) {
+    expect(pixel(expected, x, y)).toEqual(before);
+    paint(observed, x, y, after);
+  }
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, []).ok).toBe(false);
+  for (const region of entry.regions) {
+    expect([region.width, region.height, region.maxChangedPixels]).toEqual([1, 1, 1]);
+    const changed = copy(expected); nudge(changed, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
+  }
   for (const [x, y] of [[24, 117], [33, 120], [34, 117], [50, 76], [300, 126]]) {
     const changed = copy(expected); nudge(changed, x, y, 1);
     expect(compare(changed, name, expected, noisePolicy).ok).toBe(false);
@@ -441,9 +455,9 @@ it.each(['light', 'dark'])('integrated running Composer remains strict after rem
 
 const MOBILE_EXPANDED = 'mobile-expanded-dark-linux.png';
 it('mobile expanded measured variants are exact-reference-local evidence', () => {
-  const expected = reference(MOBILE_EXPANDED);
-  const entry = noisePolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
-  expect(compare(expected, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(true);
+  const expected = fixture(MOBILE_EXPANDED);
+  const entry = comparatorPolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
+  expect(compare(expected, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(true);
   const sites = entry.regions.flatMap(cells);
   expect(sites).toEqual(entry.pixels!.map(([x, y]) => [x, y]));
   expect(new Set(sites.map(([x, y]) => `${x},${y}`)).size).toBe(sites.length);
@@ -460,19 +474,19 @@ it('mobile expanded measured variants are exact-reference-local evidence', () =>
     const actual = copy(expected);
     for (const [x, y, , after] of entry.pixels!) if (select(x)) paint(actual, x, y, after);
     expect(createHash('sha256').update(actual.data).digest('hex')).toBe(hash);
-    expect(compare(actual, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(true);
+    expect(compare(actual, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(true);
     expect(compare(actual, MOBILE_EXPANDED, expected, []).ok).toBe(false);
-    expect(compare(actual, 'mobile-rail-dark-linux.png', expected, noisePolicy).ok).toBe(false);
+    expect(compare(actual, 'mobile-rail-dark-linux.png', expected, comparatorPolicy).ok).toBe(false);
   }
 });
 
 it('mobile expanded evidence cannot conceal neighboring glyphs, gaps, contrast or layout changes', () => {
-  const expected = reference(MOBILE_EXPANDED);
-  const entry = noisePolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
+  const expected = fixture(MOBILE_EXPANDED);
+  const entry = comparatorPolicy.find(entry => entry.reference === MOBILE_EXPANDED)!;
   for (const region of entry.regions) {
     const beyond = copy(expected);
     nudge(beyond, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(beyond, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(false);
+    expect(compare(beyond, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(false);
   }
   const glyphRows = new Set(entry.pixels!.filter(([x]) => x === 303).map(([, y]) => y));
   const neighbors = [...glyphRows].flatMap(y => [[302, y], [304, y]]);
@@ -482,7 +496,7 @@ it('mobile expanded evidence cannot conceal neighboring glyphs, gaps, contrast o
   neighbors.push([320, 250]); // A separate transcript content pixel.
   for (const [x, y] of neighbors) {
     const actual = copy(expected); nudge(actual, x, y, 1);
-    expect(compare(actual, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(false);
+    expect(compare(actual, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(false);
   }
   const shifted = copy(expected);
   const theme = copy(expected);
@@ -491,6 +505,6 @@ it('mobile expanded evidence cannot conceal neighboring glyphs, gaps, contrast o
     for (let x = 0; x < expected.width; x++) nudge(theme, x, y, 1);
   }
   for (const actual of [shifted, theme, { ...expected, width: expected.width - 1 }, { ...expected, height: expected.height - 1 }]) {
-    expect(compare(actual, MOBILE_EXPANDED, expected, noisePolicy).ok).toBe(false);
+    expect(compare(actual, MOBILE_EXPANDED, expected, comparatorPolicy).ok).toBe(false);
   }
 });

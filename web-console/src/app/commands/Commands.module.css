@@ -30,5 +30,7 @@
 }
 .row[aria-selected="true"], .row:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .row small { color: var(--dsw-alias-label-tertiary); }
+.label { display: flex; align-items: center; gap: 8px; }
+.label > span { display: flex; flex: none; }
 .options { max-height: 40vh; overflow-y: auto; }
 .search { width: 100%; margin-bottom: 8px; }

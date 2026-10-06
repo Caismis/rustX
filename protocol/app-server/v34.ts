@@ -7100,7 +7100,14 @@ export interface ConversationTurn {
    * None until native work has a visible member or terminal position.
    */
   cursor?: TranscriptCursor | null;
-  preview: string;
+  /**
+   * The turn's first human prompt; empty when none was adopted for it.
+   */
+  prompt: string;
+  /**
+   * The turn's final text-bearing response; empty until the turn settles.
+   */
+  response: string;
 }
 /**
  * The current read model; observing it never starts or authorizes work.

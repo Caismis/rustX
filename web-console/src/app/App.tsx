@@ -224,8 +224,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else navigationActor.send({ type: 'OPEN.OWNER', directory: owner.directory });
   };
-  return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
-    panels={[]}
+  return <AppFrame dismissSidebarLabel={tx('sidebar:toggle.dismiss')} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => createInWorkspace(workspace)}
     browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       metadataChanged={removed => { if (removed) setCenter(value => value.kind === 'new-conversation' && value.workspaceId === removed ? { kind: 'new-conversation' } : value); }}
       workspaceSettings={(id, label) => openSettings(workspaceSettingsTarget(id, label))} workspace={workspace} selected={selected} selectWorkspace={createInWorkspace}

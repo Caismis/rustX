@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v34';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
+import { ContextUsage } from './ContextSeat';
+import contextCss from './ContextSeat.module.css';
 import { Button } from '../../presentation/primitives/Button';
 import { activeAttempt } from '../../bindings/projection';
 import { catalogAdmits, catalogChoices } from '../../bindings/model-catalog';
@@ -47,8 +49,9 @@ export function AgentControls({ client, view, draft, blocked: pending = false }:
  const model = view?.snapshot?.model;
  const choices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : catalog;
  const draftError = draft?.source?.session_models?.kind === 'unavailable' ? draft.source.session_models.diagnostic : undefined;
- const disabled = pending || !attached || busy;
- return <div className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={catalogChoices(choices)}
+ // Refresh fences choices through `loading`; the launcher itself stays stable.
+ const disabled = pending || !attached;
+ return <div className={contextCss.controls}><div className={contextCss.modelRow}><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={catalogChoices(choices)}
    current={draft ? draft.intent?.model : model?.configured.model} profile={(draft ? draft.intent?.reasoningProfile : model?.effective.reasoningProfile) ?? undefined} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : blocked} error={draft ? draftError : error} load={draft ? () => {} : load}
    choose={(selected, profile) => { if (!catalogAdmits(choices, selected, profile)) return;
      const selection = { model: selected, ...(profile === undefined ? {} : { reasoningProfile: profile }) };
@@ -56,6 +59,7 @@ export function AgentControls({ client, view, draft, blocked: pending = false }:
      void mutate(async () => {
        await selectSessionModel(client, view!.id, selection);
      }); }}/>
+   {!draft && view && <ContextUsage client={client} sessionId={view.id}/>}</div>
    {activeAttempt(view?.snapshot) && view?.snapshot?.attempt?.model && view?.snapshot.attempt.model.primary.model !== model?.effective.model && <small>{tx('agent:agent-controls.running')}{' '}{view?.snapshot?.attempt?.model?.primary.model}</small>}
    {!draft && blocked && !busy && error && <Button size="sm" disabled={!attached} onClick={load}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;

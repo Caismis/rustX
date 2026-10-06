@@ -56,13 +56,13 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaultModel, 'Model', 'fixture/second-model');
     await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
-    await expect(settings.getByText('Default model saved. Native coordination owns application.')).toBeVisible();
+    await expect(settings.getByText('Default model saved. Check the status above to confirm it has taken effect.')).toBeVisible();
     await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await confirmSettingsAction(page, 'Use global default Default model');
-    await expect(settings.getByText('Default model saved. Native coordination owns application.')).toBeVisible();
+    await expect(settings.getByText('Default model saved. Check the status above to confirm it has taken effect.')).toBeVisible();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await page.locator(`button[data-session-id="${idB}"]`).click(); await send('Use B while A runs');

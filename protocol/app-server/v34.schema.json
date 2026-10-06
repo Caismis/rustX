@@ -13350,16 +13350,23 @@
             }
           ]
         },
-        "preview": {
+        "prompt": {
+          "description": "The turn's first human prompt; empty when none was adopted for it.",
           "type": "string",
-          "maxLength": 240
+          "maxLength": 50
+        },
+        "response": {
+          "description": "The turn's final text-bearing response; empty until the turn settles.",
+          "type": "string",
+          "maxLength": 120
         }
       },
       "additionalProperties": false,
       "required": [
         "id",
         "ordinal",
-        "preview"
+        "prompt",
+        "response"
       ]
     },
     "GoalView": {

@@ -35,7 +35,7 @@ function Fixture() {
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState('None');
   const [submitted, setSubmitted] = useState(0);
-  return <AppFrame sidebar={() => <div>Navigation fixture</div>}>
+  return <AppFrame dismissSidebarLabel="Close navigation" sidebar={() => <div>Navigation fixture</div>}>
     <h1>Foundation contracts</h1>
     <form onSubmit={event => { event.preventDefault(); setSubmitted(value => value + 1); }}>
       <Input aria-label="Form value" /><Button>Ordinary button</Button><Button type="submit">Submit form</Button><Button disabled>Disabled button</Button>

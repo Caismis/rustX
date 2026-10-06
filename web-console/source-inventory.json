@@ -30,6 +30,8 @@
         "../../presentation/attachments/AttachmentCard",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Menu",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/icons",
         "../commands/CommandMenu",
         "../commands/matching",
         "../commands/registry",
@@ -48,7 +50,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "8e0c5562da2460eac2defc6b0c7e468e9e87e883b351c1c569d2d6e1563e74bc",
+      "local_sha256": "97994dfaef87675d02f712f1aec9552d387cfea511fcddadfcf5d06a751bf430",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -91,6 +93,7 @@
       "upstream_sha256": "765da986046fcf0f5f02d676b3e3c31aa82d10e9e614c853022794e1ae36683f",
       "retained_dependencies": [
         "../../locale/react",
+        "../../presentation/primitives/icons",
         "./Commands.module.css",
         "./registry",
         "react"
@@ -103,7 +106,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3953b19993138d7935c19c59244aea28ebf8cf3fdac096592c404a2d64965647"
+      "local_sha256": "ec42e159ae38cb4110eecc962ca2e75ed15dd854f4aed000cf71a0c2b45fc040"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
@@ -157,7 +160,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "841b0593924cd5bcd6e019de4a886ffd7342dd4d78fec2dd568cdaf745897bd1"
+      "local_sha256": "c77cfedab95dbd51d0255f5957a919711d5e608b3340b4f38d1c916d2d4aa70a"
     },
     {
       "upstream": "packages/client/ui-primitives/src/rank-by-name.ts",
@@ -920,7 +923,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "79192ae363a86b3599dc3a4bba0827dfb653ab297de50d91b50c7795f9b90bf3"
+      "local_sha256": "df7ce7fdc6d24329cbd29423700cb11d4f8b8219a44ef0184026f3086d482bed"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -937,7 +940,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "c6adb7d1d407a52b96caca81e9623e2e8f13acf01137cd1fce98b52930e98992",
+      "local_sha256": "dec4846f5f70474d57f30339fa3ce7eb1d0844e5e46201d94b6e90f658cfd817",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -999,7 +1002,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "1a1eddf0485fa42335afc61e66cb1f100fb64741cf04aa0c99f4f4bf21dfd09b"
+      "local_sha256": "4026e3e5f7391224707cde17e6415392fadcc1e6a6d0a1bfa38e650047580e8f"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1022,7 +1025,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "5ae9b7c2ef12e82b18964c8e9dc2411bd439ab6f3f455cc1f033c77aad8c8cdc",
+      "local_sha256": "06a85e8ad0770f39c8b904d5a58712106dd58437d2e7260cf425eee1fe9aa0a0",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -1221,7 +1224,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "65057571cf2aec805e94a35d999fcd503f026022c3b8f2f0c8d590c84d1e9ad9",
+      "local_sha256": "a8a1becba3c8d08c3a5f00a940c209f74b224a34f13b15736916dcc5af457122",
       "classification": "A"
     },
     {
@@ -1242,7 +1245,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9041d0996cfbd9f193f825b44c50cbe4d8a3688b0bdf44a8807037e619a36eff",
+      "local_sha256": "7cc2bd46bcad86cc665de0b96895b1ae82015fc673700ede4d9d2c230e079697",
       "classification": "A"
     },
     {
@@ -1302,7 +1305,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "8be7be41d7ed6872024a78541d9ad6e25fad5b3bd44dc7fe2bbd7aa150df1bbd",
+      "local_sha256": "939bb258e7ba02168e58a240b184074bfca399222ff0ab7cf02d5ce131bcbbfd",
       "classification": "A"
     },
     {
@@ -2019,7 +2022,15 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "dab20ae73fde866385b7b7bc9de8c8a8c63c41b40bb8eb6cf871c49007d3c21b",
+      "local_sha256": "ab0f47233b21e62a4512b79c65514da4f093b6e17ec25af755f6ecf11dfb5f04",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "25052a41938e69b557fd730f1ada0deae0994f1ee410195f98c83661188b958a",
+          "treatment": "Reuse BranchOutlineRegular paths as IconForkOutline16 to distinguish independent Session forks from in-Session branches. Other icons retain their existing source baseline."
+        }
+      ],
       "classification": "A"
     },
     {
@@ -2170,7 +2181,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "9fcb2a507c60c18c0d466edabda8eb984133f67e629587f24c5595a45d8aa84c",
+      "local_sha256": "e494ac64da5a4579bce939372aad8c458f877526d6de0ee57cf998123388f39e",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2394,7 +2405,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "65de345ed097a5f0b12357ca2e2eefdbea9e26d05892f7faf794b4aa09db3d4c",
+      "local_sha256": "afd5599bf921230a475ee27afdec4c87625177c7c4aa048804dff9d7c0a8bc1a",
       "classification": "B"
     },
     {
@@ -2609,7 +2620,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "b7f82bce1c482ee9166988764077c32aa7d028047cb03fb89853a765aeb34bee"
+      "local_sha256": "5e97cf03ac8de643870b8a391036a221700036006bb0ff49f28c952e5fe63a0d"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -2637,7 +2648,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "a792e0683b5ea930a3dbfa4b9020e5e799808b01d133ce247940196aed2177f9"
+      "local_sha256": "6062c6da21a2ecbaea8722bf6d3f75e6f9f2be01b0946587ae870057c18b5f2d"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.tsx",
@@ -2661,6 +2672,7 @@
         "../../../../protocol/app-server/v34",
         "../../locale/react",
         "../../presentation/primitives/Modal",
+        "../../presentation/primitives/icons",
         "./TurnTail",
         "./TurnTail.module.css",
         "react"
@@ -2672,7 +2684,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "10c51dc66a10e88d5d286febc16362d7aaa39c7b1a6514c08fc5f5828b755830"
+      "local_sha256": "92e455703c519762fd3ba68d0fb4060c01b91c8dae64796cc74a8912b8553b3f"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -2777,7 +2789,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "0e020066128ecca068f94bb98d8a869d1dba33e7d2132008bba97dc3dadbf727",
+      "local_sha256": "f40a631126eaa46d27684c7cdb936b252edb71fcabab52e42fae004ce57ecb6a",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -2811,7 +2823,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "c51739d288f3c782c1d7ed23f51897ef701cbf006ff719e001153610ec68cc19",
+      "local_sha256": "dbb3337a1800dc123f6e896314867fbc42026a32fae37537b637a44cee8fe931",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",
@@ -3204,7 +3216,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "47a4051d9476edd61a6b9cf8b72232cf0127b2b5bafcd1e157bfa5d7f66a457e"
+      "local_sha256": "e1fda9e554a6e1fe40bd6e00658a487297b94e0963670f4484480edca9d601a5"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3293,7 +3305,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "86f5a5d1196f7cee0f015e04f28fd8894a4e2dcba77a2408dc282af559c3f993"
+      "local_sha256": "adca4e6e4eb38e858a3396fb53630980bbd14bc428c753e21aa9d1ee6c7c56ba"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3317,7 +3329,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "4fb8c392d70932f26611fd36274cf0994523f038ee913ed07b81f2f9a2b25879"
+      "local_sha256": "c4d6ea23ba349fac357c18b36e1af82ce9c6cdfe34da64c136fd7898fdf92642"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
@@ -3358,7 +3370,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "0cfe01e1477c33b05f46b5af2526d10ada7c3437f357e448e18262592c963301"
+      "local_sha256": "2bf28d46458e8a26f42525c1b74a735ff3dec92176b19b567df8e426afc0c8b6"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -3463,7 +3475,7 @@
         "Cordis runtime",
         "Harness scroll ownership"
       ],
-      "local_sha256": "02d336aa11c5ec122fe33d40fa39febfc3d409c786204643f94f09499341899b"
+      "local_sha256": "7cd3de077ca87de4dcb3fdb4c7bea0ae4fd956bd35629de59243df25af5b7530"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",

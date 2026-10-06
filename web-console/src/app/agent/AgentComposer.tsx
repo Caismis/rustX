@@ -9,12 +9,14 @@ import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type Int
 import type { UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v34';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
-import { CommandMenu } from '../commands/CommandMenu';
+import { CommandMenu, type ComposerAction, type ComposerActionRow } from '../commands/CommandMenu';
+import { IconPlusOutline16, IconSendOutline14, IconQueueOutline14, IconPaperPlaneOutline14 } from '../../presentation/primitives/icons';
 import { useInputTrigger } from '../composer/input-trigger';
 import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
 import { useBusyEnter } from '../composer/preferences';
 import { StopSequence, type StopScope } from '../composer/stop-sequence';
+import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { Menu } from '../../presentation/primitives/Menu';
 import { useTextareaAutosize } from '../composer/useTextareaAutosize';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
@@ -86,8 +88,11 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   }
   useTextareaAutosize(input, draft);
   const query = trigger.state?.query;
-  const menu = onCommand && !!trigger.state && !disabled && !busy;
-  const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true)));
+  const menu = !!trigger.state && !disabled && !busy && (onCommand || trigger.state.source === 'launcher');
+  const rows: ComposerActionRow[] = [
+    ...(trigger.state?.source === 'launcher' ? [{ id: 'attach' as const, labelKey: 'agent:agent-composer.add-attachments' as const }] : []),
+    ...matchCommands(query ?? '', commands.filter(command => (trigger.state?.source !== 'launcher' || !['new', 'model'].includes(command.id)) && onCommand && available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true))),
+  ];
   const parsed = parseCommand(draft);
   const selectedCommand = menu && rows[highlight] ? rows[highlight].id : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, busyEnter, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
@@ -100,8 +105,9 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     window.addEventListener('blur', stopSequence.reset);
     return () => { window.removeEventListener('blur', stopSequence.reset); stopSequence.reset(); };
   }, [stopSequence]);
-  const invoke = (id: CommandId) => {
+  const invoke = (id: ComposerAction) => {
     if (disabled || busy) return;
+    if (id === 'attach') { trigger.dismiss(); trigger.restore(); picker.current?.click(); return; }
     if (files.length || restored.length) { setError(message('agent:copy.remove-draft-attachments-before-invoking-a-command')); return; }
     const definition = commands.find(command => command.id === id)!;
     if (!onCommand || !available(definition, active, hasGoal, lineageSwitchSafe) || commandAvailable?.(id) === false) { setError(message('agent:copy.command-unavailable-in-the-current-session-state')); return; }
@@ -189,10 +195,18 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
       </div>
       <div className={css.row}>
         <div className={css.tools}>
-          {onCommand && <button type="button" className={css.add} aria-label={tx('agent:agent-composer.commands')} title={tx('agent:agent-composer.commands')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}>+</button>}
+          <button type="button" className={css.add} aria-label={tx('agent:agent-composer.commands')} title={tx('agent:agent-composer.commands')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}><span aria-hidden="true"><IconPlusOutline16 /></span></button>
           <input ref={picker} type="file" hidden multiple aria-label={tx('agent:agent-composer.attach-files')} disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? []).map(file => ({ file }))); event.target.value = ''; }}/>
-          <button type="button" className={css.attachment} aria-label={tx('agent:agent-composer.add-attachments')} title={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy')} disabled={disabled || busy} onClick={() => picker.current?.click()}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 14l8-8" /></svg></button>
           {permission}
+      <div className={css.busyEnter}>
+      <Menu open={preferenceOpen} autoFocus onClose={() => setPreferenceOpen(false)} selectedId={busyEnter}
+        items={['queue', 'steer'].map(id => ({ id, label: tx(id === 'queue' ? 'agent:submission.queue' : 'agent:submission.immediate'), icon: id === 'queue' ? <IconQueueOutline14 /> : <IconPaperPlaneOutline14 /> }))}
+        onSelect={id => { preference.setBusyEnter(id as 'queue' | 'steer'); setPreferenceOpen(false); }}
+        anchor={<Tooltip label={tx(busyEnter === 'queue' ? 'agent:submission.queue-description' : 'agent:submission.immediate-description')} side="top"><button type="button" className={css.select} aria-label={tx('agent:submission.enter-preference', { behavior: tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') })}
+          aria-haspopup="menu" aria-expanded={preferenceOpen} onClick={() => setPreferenceOpen(value => !value)}>
+          <span aria-hidden="true">{busyEnter === 'queue' ? <IconQueueOutline14 /> : <IconPaperPlaneOutline14 />}</span>{tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.immediate')}
+        </button></Tooltip>} />
+      </div>
         </div>
         <div className={css.trailing}>
           {model}
@@ -200,19 +214,11 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'
               ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
-              : <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M8 13V3m-4 4 4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2"/></svg>}
+              : <span aria-hidden="true"><IconSendOutline14 /></span>}
           </button>
         </div>
       </div>
-    </div>
-    <div className={css.busyEnter}>
-      <Menu open={preferenceOpen} autoFocus onClose={() => setPreferenceOpen(false)} selectedId={busyEnter}
-        items={['queue', 'steer'].map(id => ({ id, label: tx(id === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') }))}
-        onSelect={id => { preference.setBusyEnter(id as 'queue' | 'steer'); setPreferenceOpen(false); }}
-        anchor={<button type="button" className={css.select} title={tx('agent:submission.enter-while-running')}
-          aria-haspopup="menu" aria-expanded={preferenceOpen} onClick={() => setPreferenceOpen(value => !value)}>
-          {tx('agent:submission.enter-preference', { behavior: tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') })}
-        </button>} />
+
     </div>
   </div>;
 }

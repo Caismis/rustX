@@ -2807,6 +2807,10 @@ pub(crate) fn remap_seed(
                 .preceding_message_id
                 .as_ref()
                 .and_then(|id| message_ids.get(id).cloned());
+            copied.prompt_message_id = turn
+                .prompt_message_id
+                .as_ref()
+                .and_then(|id| message_ids.get(id).cloned());
             Some(copied)
         })
         .collect();
@@ -4266,6 +4270,103 @@ model = "provider/model"
     #[test]
     fn same_surface_revision_newer_native_cut_admits_terminal_only_turn() {
         same_revision_different_temporal_cuts(false);
+    }
+
+    /// A copied turn keeps its opening human prompt under the destination's
+    /// own message identity, so the destination outline previews it unchanged.
+    #[test]
+    fn copied_turn_keeps_its_prompt_under_destination_identity() {
+        use crate::durable::inbox::InboundDraft;
+        use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+        use crate::message::types::{InboundKind, UserContentBlock, UserSource};
+        use crate::runtime::identity::{AttemptId, EventId};
+        let (_directory, catalog, _config) = open_catalog();
+        let (conversation, session, _) = append_history(&catalog, &[]);
+        let store = store_for(&catalog, &session, &conversation);
+        let attempt = AttemptId::new("prompted-attempt");
+        let event = |kind| RuntimeEventEnvelope {
+            schema_version: 1,
+            event_id: EventId::new(format!(
+                "prompted-event-{}",
+                store.presentation_frontier().unwrap() + 1
+            )),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(attempt.clone()),
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: kind,
+        };
+        let accepted = store
+            .accept_inbound(InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "Explain the rail".into(),
+                })],
+                timestamp: chrono::Utc::now(),
+                correlation: None,
+            })
+            .unwrap();
+        store.adopt_pending_batch(accepted.sequence, None).unwrap();
+        store
+            .append_event(event(RuntimeEvent::AttemptStarted {
+                attempt_id: attempt.clone(),
+            }))
+            .unwrap();
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("rail-answer"),
+                    content: vec![AssistantContentBlock::Text(TextBlock {
+                        text: "It marks every turn".into(),
+                    })],
+                }),
+                event(RuntimeEvent::AssistantMessageCommitted {
+                    message_id: MessageId::new("rail-answer"),
+                }),
+            )
+            .unwrap();
+        store
+            .append_event(event(RuntimeEvent::AttemptTimedOut {
+                attempt_id: attempt.clone(),
+            }))
+            .unwrap();
+        let cut = store
+            .read_lineage_cut(store.load_head().unwrap().revision)
+            .unwrap();
+        assert_eq!(
+            cut.turns[0].prompt_message_id,
+            Some(accepted.message_id.clone())
+        );
+        let copy = catalog.prepare_clone_session(&state(), &cut).unwrap();
+        let destination = SqliteConversationStore::open_existing(
+            copy.conversation_id.clone(),
+            &copy.database_path,
+        )
+        .unwrap();
+        let inherited = destination
+            .read_lineage_cut(destination.load_head().unwrap().revision)
+            .unwrap();
+        let prompt = inherited.turns[0]
+            .prompt_message_id
+            .clone()
+            .expect("copied prompt");
+        assert_ne!(prompt, accepted.message_id, "destination identity");
+        assert!(
+            inherited.canonical.iter().any(
+                |message| matches!(message, MessageBlock::User(message) if message.id == prompt)
+            )
+        );
+        let outline = destination.conversation_turns(None, 0, 64).unwrap();
+        assert_eq!(
+            (
+                outline.turns[0].prompt.as_str(),
+                outline.turns[0].response.as_str()
+            ),
+            ("Explain the rail", "It marks every turn")
+        );
     }
 
     #[allow(clippy::too_many_lines)] // One R, two ordered native cuts and immutable reopened/repeated copies.

@@ -108,7 +108,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Escape'); await expect(page.getByRole('listbox')).toHaveCount(0);
     await expect(credential).toBeFocused();
     // A disclosure toggles from the keyboard.
-    const revision = settings.getByRole('button', { name: 'Source revision & replacement', exact: true });
+    const revision = settings.getByRole('button', { name: 'Configuration details', exact: true });
     await tabTo(revision); await page.keyboard.press('Enter');
     await expect(revision).toHaveAttribute('aria-expanded', 'true');
     // A destructive action opens a modal confirmation that holds focus, is

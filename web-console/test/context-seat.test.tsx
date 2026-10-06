@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { ContextSeat } from '../src/app/agent/ContextSeat';
+import { ContextSeat, ContextUsage } from '../src/app/agent/ContextSeat';
 import { Server, snapshot } from './fixture';
 import type { RuntimeClientContextView } from '../../protocol/app-server/v34';
 let server: Server;
@@ -73,14 +73,18 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   expect(count()).toBe(0);
 });
 it.each([undefined, { input_tokens: 0, context_window_tokens: 100, model: 'frozen/model' }, { input_tokens: 25, context_window_tokens: 100, model: 'frozen/model' }, { input_tokens: 25, context_window_tokens: 0, model: 'frozen/model' }])('renders measured zero separately from unavailable capacity: %j', async occupancy => {
-  render(<ContextSeat client={server.client} sessionId="A"/>);
+  render(<ContextUsage client={server.client} sessionId="A"/>);
   await observe({ ...base, last_request_occupancy: occupancy });
-  expect(screen.getByText(occupancy?.context_window_tokens ? `Last request context ${occupancy.input_tokens}%` : 'Last request context unavailable')).toBeTruthy();
-  if (occupancy?.context_window_tokens) expect(screen.getByText(/frozen\/model/)).toBeTruthy();
+  expect(screen.getByLabelText(occupancy?.context_window_tokens ? `Last request context ${occupancy.input_tokens}%` : 'Last request context unavailable')).toBeTruthy();
+
   await observe({ ...base });
-  expect(screen.getByText('Last request context unavailable')).toBeTruthy();
+  expect(screen.getByLabelText('Last request context unavailable')).toBeTruthy();
   await observe({ ...base, last_request_occupancy: { input_tokens: 40, context_window_tokens: 200, model: 'later/model' } });
-  expect(screen.getByText('Last request context 20%')).toBeTruthy();
+  expect(screen.getByLabelText('Last request context 20%')).toBeTruthy();
+  expect(screen.queryByText('20%')).toBeNull();
+  await observe({ ...base, last_request_occupancy: { input_tokens: 644, context_window_tokens: 1048576, model: 'later/model' } });
+  expect(screen.queryByText('0.06%')).toBeNull();
+  expect(screen.getByLabelText('Last request context 0.06%').querySelector('[stroke-dasharray]')?.getAttribute('stroke-dasharray')).not.toBe('0 100');
 });
 
 it('a replacement attachment rejects the held old response', async () => {

@@ -1,7 +1,8 @@
 import { localeController } from '../../../locale/controller';
 import { useTranslation } from '../../../locale/react';
 import { Choice } from '../primitives/aria';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { Label, Radio, RadioGroup } from 'react-aria-components';
+import appearance from './GeneralPage.module.css';
 
 /** The General product page.
  *
@@ -19,9 +20,14 @@ export function GeneralPage({ theme, setTheme }: { theme: 'light' | 'dark'; setT
     <h3>{tx('settings:general-page.general')}</h3>
     <p>{tx('settings:general-page.preferences-this-browser-client-owns-they-are-stored-by-the-clie')}</p>
     <Choice label={tx('settings:copy.language')} value={tx.locale} options={[["en", "English"], ["zh", "中文"]]} onChange={localeController.setLocale} />
-    <h4>{tx('settings:general-page.appearance')}</h4>
-    <Choice label={tx('settings:general-page.theme')} value={theme} options={[['light', tx('settings:copy.light')], ['dark', tx('settings:copy.dark')]]}
-      onChange={value => setTheme?.(value)} />
-    <p className={css.hint}>{tx('settings:general-page.connection-is-also-client-owned-it-is-kept-with-the-other-diagno')}</p>
+    <RadioGroup className={appearance.themes} value={theme} onChange={value => { if (value === 'light' || value === 'dark') setTheme?.(value); }}>
+      <Label className={appearance.label}>{tx('settings:general-page.theme')}</Label>
+      {(['light', 'dark'] as const).map(value => <Radio key={value} value={value} className={appearance.theme}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+          {value === 'light' ? <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></> : <path d="M20.5 13.5A8.5 8.5 0 0 1 10.5 3a8.5 8.5 0 1 0 10 10.5Z"/>}
+        </svg>
+        <span>{tx(`settings:copy.${value}`)}</span>
+      </Radio>)}
+    </RadioGroup>
   </section>;
 }

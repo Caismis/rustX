@@ -1,0 +1,36 @@
+.themes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-block: 24px 20px;
+}
+
+.label {
+  grid-column: 1 / -1;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+}
+
+.theme {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 84px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 16px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.theme[data-selected] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-label-tertiary);
+}
+
+.theme[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
+.theme[data-focus-visible] {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
