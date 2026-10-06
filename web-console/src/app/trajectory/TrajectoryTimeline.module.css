@@ -189,3 +189,19 @@
 
 .span[data-kind='request']:not([style*='--trajectory-dispatch']):not([data-error]) { background: var(--trajectory-assistant-decoding-color); }
 .boundary span { display: none; }
+
+/* Equal-width sequence glyphs show the measured phase ratio, not wall positions. */
+.span[data-kind='request'][style*='--trajectory-sequence-ttft']:not([data-error]) {
+  background: linear-gradient(to right,
+    var(--trajectory-assistant-ttft-color) 0 var(--trajectory-sequence-ttft),
+    var(--trajectory-assistant-decoding-color) var(--trajectory-sequence-ttft) 100%);
+}
+.cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 3;
+  pointer-events: none;
+  background: var(--dsw-alias-state-business-primary);
+}

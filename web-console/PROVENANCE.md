@@ -1355,3 +1355,13 @@ resetting the input; leaving the draft removes its presentation. A native create
 acknowledgement ends the draft, and the authoritative catalog supplies the real
 row. Post-create admission failures retain their existing Session-scoped recovery
 and are never hidden or deleted as abandoned drafts.
+
+Trajectory overview alignment follows Harness `TrajectoryTimeline.tsx` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`. Its two model colours represent
+TTFT and decoding, not a reasoning-content boundary. The equal-width sequence
+view now paints the measured TTFT/generation ratio without promoting numeric
+metrics into wall-clock coordinates. Timed projections still require the native
+provider bridge. Press/drag selection, hover cursor, outside-range dimming,
+double-click clearing and zoomed edge panning retain native record identities
+and projection-generation fencing. Exact selection edges persist until the
+projection changes; changed coordinates reproject the selected native records.

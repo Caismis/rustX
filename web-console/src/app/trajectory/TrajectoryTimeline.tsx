@@ -151,6 +151,7 @@ function TimelineInteraction({
   const panRef = useRef<Pan | null>(null);
   const [draft, setDraft] = useState<TrajectoryTimeRange | null>(null);
   const [viewport, setViewport] = useState<TrajectoryTimeRange | null>(null);
+  const [cursor, setCursor] = useState<number | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const domain = viewport ?? (model === null ? null : { start: model.start, end: model.end });
   const span = domain === null ? 0 : Math.max(1e-6, domain.end - domain.start);
@@ -208,11 +209,14 @@ function TimelineInteraction({
     }
     if (event.button !== 0) return;
     const at = pointAt(event.clientX);
+    setCursor(at);
+    setDraft({ start: at, end: at });
     dragRef.current = { pointerId: event.pointerId, clientX: event.clientX, recordId: (event.target as HTMLElement).closest<HTMLElement>('[data-record-id]')?.dataset.recordId, anchor: at, current: at, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    setCursor(pointAt(event.clientX));
     const pan = panRef.current;
     if (pan !== null && pan.pointerId === event.pointerId) {
       if (Math.abs(event.clientX - pan.clientX) >= MINIMUM_DRAG_PX) pan.moved = true;
@@ -225,7 +229,19 @@ function TimelineInteraction({
     }
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
-    drag.current = pointAt(event.clientX);
+    const rect = rootRef.current!.getBoundingClientRect();
+    let start = domain.start;
+    if (viewport !== null) {
+      const zone = Math.min(32, Math.max(1, rect.width * .08));
+      const x = event.clientX - rect.left;
+      const direction = x < zone ? -1 : x > rect.width - zone ? 1 : 0;
+      if (direction) {
+        const strength = Math.min(1, (direction < 0 ? zone - x : x - rect.width + zone) / zone);
+        start = Math.max(model.start, Math.min(model.end - span, start + direction * span * .025 * Math.max(.2, strength)));
+        setViewport({ start, end: start + span });
+      }
+    }
+    drag.current = start + Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width))) * span;
     if (Math.abs(event.clientX - drag.clientX) >= MINIMUM_DRAG_PX) drag.moved = true;
     setDraft({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
   };
@@ -241,10 +257,13 @@ function TimelineInteraction({
     }
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
+    drag.current = pointAt(event.clientX);
+    drag.moved ||= Math.abs(event.clientX - drag.clientX) >= MINIMUM_DRAG_PX;
     dragRef.current = null;
     setDraft(null);
     if (!drag.moved) {
-      if (drag.recordId !== undefined) onSelect(drag.recordId);
+      if (drag.recordId !== undefined) { onRangeChange(null); onSelect(drag.recordId); }
+      else onRangeChange({ start: drag.current, end: drag.current });
       return;
     }
     onRangeChange({ start: Math.min(drag.anchor, drag.current), end: Math.max(drag.anchor, drag.current) });
@@ -283,7 +302,9 @@ function TimelineInteraction({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => { dragRef.current = null; panRef.current = null; setDraft(null); }}
+        onPointerCancel={() => { dragRef.current = null; panRef.current = null; setDraft(null); setCursor(null); }}
+        onPointerLeave={() => { if (!dragRef.current && !panRef.current) setCursor(null); }}
+        onDoubleClick={event => { event.preventDefault(); dragRef.current = null; panRef.current = null; setDraft(null); onRangeChange(null); }}
         onContextMenu={event => event.preventDefault()}
       >
         {showsEarlierBoundary && (
@@ -293,6 +314,7 @@ function TimelineInteraction({
             onLoad={onLoadEarlier}
           />
         )}
+        {cursor !== null && <div className={css.cursor} data-timeline-cursor="" aria-hidden="true" style={{ left: `${percent(cursor)}%` }}/>}
         {focus !== null && (
           <div
             className={css.focus}
@@ -356,7 +378,7 @@ function TimelineInteraction({
                       data-selected={candidate.id === selectedId || undefined}
                       data-marker={marker || undefined}
                       data-dimmed={
-                        searchMatches !== null && !searchMatches.has(candidate.id) ? '' : undefined
+                        (searchMatches !== null && !searchMatches.has(candidate.id)) || (focus !== null && (candidate.end < focus.start || candidate.start > focus.end)) ? '' : undefined
                       }
                       aria-label={tx('trajectory:trajectory-timeline.inspect-value', { p0: candidate.label })}
                       title={detail}
@@ -376,6 +398,7 @@ function TimelineInteraction({
                           width: marker ? undefined : `${width}%`,
                           '--trajectory-dispatch': phasePercent(candidate.dispatchAt),
                           '--trajectory-first-output': phasePercent(candidate.firstOutputAt),
+                          '--trajectory-sequence-ttft': mode === 'sequence' && candidate.ttftMs !== undefined && candidate.generationMs !== undefined && candidate.ttftMs >= 0 && candidate.generationMs >= 0 && candidate.ttftMs + candidate.generationMs > 0 ? `${100 * candidate.ttftMs / (candidate.ttftMs + candidate.generationMs)}%` : undefined,
                         } as CSSProperties
                       }
                     />

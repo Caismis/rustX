@@ -9,7 +9,7 @@ import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, ledgerRows, rowOwnsKey, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectorySelection, type TurnStructure } from './layout';
 import { searchItems } from './search';
-import { timelineFocus, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
+import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
 
 export interface TrajectoryProps {
@@ -32,7 +32,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     return item ? selectionOf(item) : undefined;
   });
   const [structure, setStructure] = useState<TurnStructure | undefined>(undefined);
-  const [focus, setFocus] = useState<{ epoch: number; ids: ReadonlySet<string> } | null>(null);
+  const [focus, setFocus] = useState<{ epoch: number; ids: ReadonlySet<string>; range: TrajectoryTimeRange; revision: string } | null>(null);
   const [width, setWidth] = useState(0);
   const [offTail, setOffTail] = useState(false);
   const root = useRef<HTMLElement>(null);
@@ -53,13 +53,15 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
   // identities, so renumbered Turns and moved coordinates keep its ownership.
   // A rebase onto a new epoch retires it: no stale set can dim the new domain.
   const focusedIds = focus?.epoch === cache.epoch ? focus.ids : null;
+  const revision = timelineProjectionRevision(timelineModel, mode);
   const range = useMemo<TrajectoryTimeRange | null>(() => {
+    if (focus?.epoch === cache.epoch && focus.revision === revision) return focus.range;
     const spans = timelineModel?.spans.filter(span => focusedIds?.has(span.id)) ?? [];
     return spans.length ? { start: Math.min(...spans.map(span => span.start)), end: Math.max(...spans.map(span => span.end)) } : null;
-  }, [timelineModel, focusedIds]);
+  }, [timelineModel, focusedIds, focus, cache.epoch, revision]);
   const setRange = (range: TrajectoryTimeRange | null) => {
     const ids = timelineFocus(timelineModel, range);
-    setFocus(ids?.size ? { epoch: cache.epoch, ids } : null);
+    setFocus(ids && range ? { epoch: cache.epoch, ids, range, revision } : null);
   };
   const selectedItem = selection ? preferredItem(selectionItems, selection.owner_record_id, selection) : undefined;
   const selected = selectedItem?.record ?? (cache.selection?.id === selection?.owner_record_id ? cache.selection : undefined);
