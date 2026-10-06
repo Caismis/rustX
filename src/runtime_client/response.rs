@@ -99,7 +99,7 @@ pub(crate) fn terminal_turn(
 
 /// Whole-conversation execution totals, independent of any transcript window.
 /// A lineage child includes its inherited turns' recorded execution, as a
-/// DeepSeek Harness fork folds its copied prefix; it owns none of it.
+/// `DeepSeek` Harness fork folds its copied prefix; it owns none of it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationStatistics {

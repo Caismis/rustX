@@ -472,7 +472,7 @@ impl McpConnection {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn pause_reconnect_admission(
         &self,
         before: bool,
@@ -481,7 +481,7 @@ impl McpConnection {
         *self.admission_pause.lock().unwrap() = Some((before, pause));
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) async fn established_count(&self) -> u64 {
         self.state.lock().await.next_generation - 1
     }

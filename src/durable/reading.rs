@@ -102,7 +102,7 @@ pub struct TurnReadingProvenance {
 
 /// Additive execution evidence of one native Attempt through a lineage cut.
 ///
-/// As a DeepSeek Harness fork folds its copied event prefix, a lineage child's
+/// As a `DeepSeek` Harness fork folds its copied event prefix, a lineage child's
 /// whole-conversation statistics and context occupancy include the turns it
 /// inherited. These are the Attempt's own facts, never destination execution:
 /// they own no request, Tool, settlement or live clock.

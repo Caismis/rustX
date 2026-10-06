@@ -152,7 +152,7 @@ use crate::tools::workspace::Workspace;
 pub(crate) use connection::McpConnection;
 /// The fixed rustX-owned multi-round-trip bound, re-exported for the
 /// in-crate boundary suite that proves both sides of it.
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp-fixture"))]
 pub(crate) use mrtr::MCP_MRTR_MAX_ROUNDS;
 
 /// The MCP protocol revisions rustX offers, most preferred first.
@@ -652,7 +652,7 @@ impl McpRuntimeRetirementRegistry {
             .clone()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn pending_count(&self) -> usize {
         self.inner
             .entries
@@ -970,7 +970,7 @@ impl McpRuntimeLeaseSet {
 
     /// Whether one of these leases resolves to the given published
     /// transport (deterministic ownership tests only).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn contains_runtime(&self, runtime: &Arc<McpServerRuntime>) -> bool {
         self.leases.iter().any(|lease| {
             lease
@@ -3015,14 +3015,14 @@ impl McpServerRuntime {
     ///
     /// The memory bound of the local request ownership layer, exposed so a
     /// boundary regression can assert it directly rather than infer it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn outstanding_http_requests(&self) -> usize {
         self.request_ownership
             .as_ref()
             .map_or(0, |ownership| ownership.outstanding_requests())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn hold_http_release(
         &self,
         method: &'static str,
@@ -3033,7 +3033,7 @@ impl McpServerRuntime {
             .hold_http_release(method)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn http_request_states(
         &self,
     ) -> Vec<(rmcp::model::RequestId, Option<String>, String, bool)> {
@@ -3044,7 +3044,7 @@ impl McpServerRuntime {
     }
 
     /// Current progress cardinality, including pre-admission tombstones.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn tracked_progress_requests(&self) -> usize {
         self.handler.progress.tracked_requests()
     }
