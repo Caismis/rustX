@@ -179,11 +179,20 @@ marker. Genuinely unowned rows publish explicitly unknown detached ownership;
 the rail cannot substitute a stale navigation target or unrelated live Attempt.
 Only an exact native anchor satisfies a navigation scroll. Return to latest
 restores the current live identity and follow mode through ChatViewport. An
-unloaded mark reaches a distant page without accumulating outline history. Transcript
-cache limits remain 512 entries / 8 MiB; ordinary prepend reads are 64 entries.
-Historical jumps and adjacent pages replace a finite window. Two outstanding
-window reads per Session are permitted; further intents retire older work without
-queuing another read. A same-cut loaded exact anchor avoids another locate read.
+unloaded mark reaches a distant page without accumulating outline history.
+
+As in DeepSeek Harness's Chat window (`loadOlder`/`loadThrough`), the browser
+transcript is one contiguous window from its oldest loaded page through the live
+tail. Older pages only ever prepend; nothing replaces or freezes the window, and
+there is no later-content paging. A loaded exact anchor lands without a read. Any
+other jump pages `older` reads of 64 entries until the window's head reaches the
+turn's native cursor, then lands; the pages publish together once, including those
+read before a failure, whose error stays visible with Load earlier still usable.
+One older read runs per Session: a repeated Load earlier is a no-op, and a jump
+arriving during a read joins it and lowers its shared target. A page that does not
+move the head ends the jump. A turn the history cannot reach fails visibly rather
+than landing elsewhere. The `turn` and `newer` selectors remain native read
+capabilities; the browser does not use them.
 
 Outline paging intent is explicitly `latest` or `page(offset)`, independently of
 the native response's offset. Initial load and automatic start/location/settlement
@@ -194,14 +203,13 @@ the newest page explicitly restores latest intent. One refresh demand arriving d
 in-flight outline read is retained and serviced after its reply; streaming text
 deltas create no demand. The cache still holds only one outline page.
 
-Every window read captures the attachment target, connection generation,
-attachment epoch, resync authority, cache epoch and monotonic user reading intent.
-Only the newest still-valid reply installs a window/active mark or requests a
-scroll commit. Session/node/runtime changes, resync and user scrolling retire old
-replacement work. Ordinary prepend can finish after user detachment: it merges
-native rows while ChatViewport preserves the newer reading position. A new
-navigation/action still retires that prepend. Outline reads have independent paging intent and survive window changes;
-resync retires both domains.
+Every older read captures the attachment target, connection generation,
+attachment epoch, resync authority and cache epoch. Node/runtime changes,
+reattachment, resync and a window rebase orphan it. Only the newest navigation
+intent lands, and only while ChatViewport's intent ticket is current: user
+scrolling retires the landing, never the read, whose rows still merge while
+ChatViewport preserves the newer reading position. Outline reads have
+independent paging intent and survive window changes; resync retires both domains.
 
 ChatViewport is the sole automatic Chat scroll writer. The rail and Return to
 latest share its existing overlay surface, without a second flex wrapper or
@@ -213,12 +221,11 @@ stable rendered anchors across prepend, width/sidebar/panel reflow, Tool disclos
 and image/content growth. Missing anchors use retained adjacent reading anchors
 then a clamped absolute position; they never restore follow mode.
 
-Ordinary scrolling away from the live bottom exposes Return to latest even for
-short history. Historical navigation also exposes it and suppresses live output
-within that historical window. The explicit action restores the latest snapshot
-window and frame-owned bottom/follow mode; subsequent streaming follows until
-another user scroll or navigation detaches. The HISTORY_LIMIT recovery remains
-an independent bounded-cache case.
+Ordinary scrolling away from the live bottom or a turn jump exposes Return to
+latest even for short history; live output keeps rendering in the window. The
+explicit action restores frame-owned bottom/follow mode without discarding loaded
+history; subsequent streaming follows until another user scroll or navigation
+detaches.
 
 ## Width preference
 

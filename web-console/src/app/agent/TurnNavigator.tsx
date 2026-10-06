@@ -71,8 +71,7 @@ export function TurnNavigator({ client, sessionId, onNavigate, active }: { clien
   useEffect(() => { if (missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment === 'attached') void client.refreshTurns(sessionId); },
     [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
   const attached = view.attachment === 'attached';
-  const isActive = (item: TurnRailItem) => !!item.id && (active !== undefined ? active === `turn:${item.id}`
-    : view.navigation?.active === item.id || !view.navigation?.active && !!currentId && turnKey(currentId) === item.id);
+  const isActive = (item: TurnRailItem) => !!item.id && (active !== undefined ? active === `turn:${item.id}` : !!currentId && turnKey(currentId) === item.id);
   const navigate = useCallback((item: TurnRailItem) => {
     if (item.turn) { onNavigate(item.turn); return; }
     const total = client.getSnapshot().views[sessionId]?.turnOutline?.page?.total ?? 0;

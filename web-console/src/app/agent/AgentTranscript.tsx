@@ -13,7 +13,7 @@ import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
 import { Message } from './Message';
 import { ToolDeliveries } from '../components/Artifact';
-import { entryIdentity, HISTORY_LIMIT, turnAnchor, type TranscriptCache } from '../../client/transcript';
+import { entryIdentity, turnAnchor, type TranscriptCache } from '../../client/transcript';
 import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
 import tailCss from './TurnTail.module.css';
@@ -39,10 +39,9 @@ function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bod
     {prefix}<div hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
   </div>;
 }
-export function AgentTranscript({ snapshot, history, loadEarlier, loadNewer, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; loadNewer?: () => void; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
+export function AgentTranscript({ snapshot, history, loadEarlier, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'>; history?: TranscriptCache; loadEarlier?: () => void; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
   const tx = useTranslation();
-  const { messages, streaming: currentStreaming } = conversation(snapshot);
-  const historical=history?.mode==='historical', streaming=historical?undefined:currentStreaming;
+  const { messages, streaming } = conversation(snapshot);
   const entries = history?.page.entries ?? snapshot.transcript.entries ?? [];
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [stepsOpen, setStepsOpen] = useState<ReadonlySet<string>>(new Set());
@@ -57,7 +56,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadNewer, onH
   const process = turnProcesses(entries, placement, snapshot.conversation_id);
   const toldByCall = askUserAudits(entries);
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry));
-  const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => historical || tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.message_id === tool.message_id && live.block_index === tool.block_index && live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool);
+  const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => live.message_id === tool.message_id && live.block_index === tool.block_index && live.call_id === tool.call_id && live.tool_id === tool.tool_id) ?? tool);
   const audit = (entry: RuntimeClientTranscriptEntry) => entry.item.type === 'message' ? null : <details>
     <summary>{entry.item.type === 'publication_audit' ? tx('agent:agent-transcript.assistant-recovery-details') : tx('agent:agent-transcript.historical-interaction-details')}</summary>
     <pre>{json(entry.item)}</pre>
@@ -80,16 +79,14 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadNewer, onH
   };
   // Agent Status has its own anchored annotation, so its canonical Context message
   // must not reappear here as ordinary chat or as purported current context.
-  const currentContext = historical?[]:messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isAgentStatusContext(message));
-  const liveProcess = !historical && snapshot.attempt && snapshot.attempt.phase.type !== 'settled' && !entries.some(entry => entry.turn_process?.conversation_id === snapshot.conversation_id && entry.turn_process.attempt_id === snapshot.attempt!.attempt_id) && !entries.some(entry => entry.completed_response?.origin.conversation_id === snapshot.conversation_id && entry.completed_response.origin.attempt_id === snapshot.attempt!.attempt_id) && <TurnProcess id={JSON.stringify([snapshot.conversation_id, snapshot.attempt.attempt_id])} open tools={snapshot.attempt.foreground?.length ?? 0} messages={0}
+  const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isAgentStatusContext(message));
+  const liveProcess = snapshot.attempt && snapshot.attempt.phase.type !== 'settled' && !entries.some(entry => entry.turn_process?.conversation_id === snapshot.conversation_id && entry.turn_process.attempt_id === snapshot.attempt!.attempt_id) && !entries.some(entry => entry.completed_response?.origin.conversation_id === snapshot.conversation_id && entry.completed_response.origin.attempt_id === snapshot.attempt!.attempt_id) && <TurnProcess id={JSON.stringify([snapshot.conversation_id, snapshot.attempt.attempt_id])} open tools={snapshot.attempt.foreground?.length ?? 0} messages={0}
       running
       start={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.started_at : undefined}
       end={snapshot.transcript.statistics?.latest_turn?.attempt_id === snapshot.attempt.attempt_id ? snapshot.transcript.statistics.latest_turn.ended_at ?? undefined : undefined}/>;
   return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
-    {history?.page.next_cursor != null && <Button disabled={history.loading || !historical && entries.length >= HISTORY_LIMIT} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
-    {entries.length >= HISTORY_LIMIT && <p>{tx('agent:agent-transcript.history-window-is-full')}{' '}<Button data-chat-latest>{tx('agent:agent-transcript.return-to-latest')}</Button></p>}
+    {history?.page.next_cursor != null && <Button disabled={history.loading} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
     {history?.error && <p role="alert">{history.error}</p>}
-    {history?.window?.newer_cursor != null && <Button disabled={history.loading} onClick={loadNewer}>{tx('agent:reading.load-newer')}</Button>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {[...turnPresentation(entries), ...(liveProcess ? [{ kind: 'live-process' as const }] : []), ...(streaming && !durableIds.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])].map(node => {
       if (node.kind === 'live-process') return <div key="live-process" data-chat-turn-owner={turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt!.attempt_id})}>{liveProcess}</div>;

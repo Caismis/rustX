@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v35';
 import { Server, snapshot, readingWindow } from './fixture';
-import { prependTranscript, refreshTranscript, replaceTranscript, HISTORY_LIMIT } from '../src/client/transcript';
+import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
 const entry = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `m${n}`, role: 'assistant', content: [{ type: 'text', text: `Message ${n}` }] } } });
 let server: Server;
 afterEach(() => server?.client.disconnect());
@@ -20,10 +20,6 @@ it('ordinary live refresh retains provable overlap; gaps discard the cache', () 
   const gap = refreshTranscript(live, { entries: [entry(20)], next_cursor: '20' });
   expect(gap.epoch).toBeGreaterThan(live.epoch);
   expect(gap.page.entries).toEqual([entry(20)]);
-});
-it('retention is finite', () => {
-  const full = replaceTranscript({ entries: Array.from({ length: HISTORY_LIMIT }, (_, i) => entry(i + 1)), next_cursor: '1' });
-  expect(() => prependTranscript(full, { entries: [entry(0)] })).toThrow('full');
 });
 it('a live message arriving during older read survives and advances only the live cursor', async () => {
   server = new Server(); server.snapshots.set('A', { ...snapshot(), transcript: { entries: [entry(10)], next_cursor: '10' } });
@@ -53,9 +49,9 @@ it('resync fences an older read even when snapshot refresh installs the same con
 it('reconnect replaces historical read caches without replay', async () => {
   server = new Server(); server.snapshots.set('A', { ...snapshot(), transcript: { entries: [entry(10)], next_cursor: '10' } });
   await server.attached('A'); server.held.add('session/transcript');
-  const older = server.client.loadEarlier('A'); const rejected = expect(older).rejects.toThrow();
+  const older = server.client.loadEarlier('A');
   const request = await server.waitFor('session/transcript', 1); const old = server.socket;
-  await server.connect(); await rejected;
+  await server.connect(); await older;
   old.success(request, { type: 'transcript_window', window: readingWindow({ entries: [entry(9)] }) });
   expect(server.client.getSnapshot().views.A.history?.page.entries).toEqual([entry(10)]);
 });

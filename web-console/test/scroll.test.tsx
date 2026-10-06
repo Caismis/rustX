@@ -106,16 +106,16 @@ it('short-history prepend retains reading ownership through disappearing anchors
   ui.rerender(<ChatViewport><div>No anchored rows</div></ChatViewport>); flush(); expect(top).toBe(150); // Bounded absolute fallback, never tail.
 });
 
-function coordinatedViewport(historical = false, latestTurn?: string) {
+function coordinatedViewport(latestTurn?: string) {
   let frame: FrameRequestCallback | undefined, height = 1000, top = 0;
   const positions: Record<string, number> = { a: 0, b: 200, 'turn:target': 500 };
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
   vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
   let owner: ChatViewport | null = null;
-  const latest = vi.fn(), user = vi.fn(), active=vi.fn();
+  const active=vi.fn();
   const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id} data-chat-turn-owner={id.startsWith('turn:') ? id : undefined}>{id}</div>);
-  const element = (ids: string[], past = historical) => <ChatViewport ref={value => { owner = value; }} historical={past} latestTurn={latestTurn} onActiveTurn={active} latestLabel="Return to latest" onLatest={latest} onUserIntent={user}>{content(ids)}</ChatViewport>;
+  const element = (ids: string[]) => <ChatViewport ref={value => { owner = value; }} latestTurn={latestTurn} onActiveTurn={active} latestLabel="Return to latest">{content(ids)}</ChatViewport>;
   const ui = render(element(['a', 'b', 'turn:target']));
   const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
   Object.defineProperties(el, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 }, scrollTop: { get: () => top, set: value => { top = value; } } });
@@ -125,10 +125,10 @@ function coordinatedViewport(historical = false, latestTurn?: string) {
   });
   const flush = () => { const cb = frame; frame = undefined; cb?.(0); };
   flush();
-  return { ui, el, owner: () => owner!, latest, user, active, positions, flush, top: () => top,
+  return { ui, el, owner: () => owner!, active, positions, flush, top: () => top,
     scroll(value: number) { top = value; fireEvent.scroll(el); },
     grow(value: number) { height += value; resize(); },
-    replace(ids: string[], past = historical) { ui.rerender(element(ids, past)); } };
+    replace(ids: string[]) { ui.rerender(element(ids)); } };
 }
 
 it('ordinary short detached reading exposes Return to latest and subsequently follows streaming', () => {
@@ -137,7 +137,7 @@ it('ordinary short detached reading exposes Return to latest and subsequently fo
   v.scroll(210); expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
   v.grow(400); v.flush(); expect(v.top()).toBe(210);
   fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' })); v.flush();
-  expect(v.latest).toHaveBeenCalledOnce(); expect(v.top()).toBe(1200);
+  expect(v.top()).toBe(1200);
   v.grow(300); v.flush(); expect(v.top()).toBe(1500);
   v.scroll(210); v.grow(200); v.flush(); expect(v.top()).toBe(210);
 });
@@ -154,18 +154,18 @@ it('newer native user scroll retires navigation both before reply and before its
 it('target replacement exits follow, preserves reflow and missing anchors never enter follow', () => {
   const v = coordinatedViewport();
   const ticket = v.owner().beginNavigation();
-  v.replace(['turn:target'], true); expect(ticket.commit('turn:target')).toBe(true); v.flush(); expect(v.top()).toBe(500);
+  v.replace(['turn:target']); expect(ticket.commit('turn:target')).toBe(true); v.flush(); expect(v.top()).toBe(500);
   // Content, Tool/image disclosure and column/sidebar/panel reflow all deliver
   // the same observer contract; semantic anchor position, not height, wins.
   for (const reflow of [80, 150, 60, 90]) {
     v.positions['turn:target'] += reflow; v.grow(reflow + 100); v.flush();
     expect(v.top()).toBe(v.positions['turn:target']);
   }
-  const missing = v.owner().beginNavigation(); v.replace([], true); missing.commit('turn:gone'); v.flush();
+  const missing = v.owner().beginNavigation(); v.replace([]); missing.commit('turn:gone'); v.flush();
   const retained = v.top(); v.grow(500); v.flush(); expect(v.top()).toBe(retained);
   fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' }));
-  // Latest installation may prepend overlapping content before its frame.
-  v.positions.older = 0; v.replace(['older', 'a', 'b', 'turn:target'], false); v.flush();
+  // Content may prepend before the frame that returns to the tail.
+  v.positions.older = 0; v.replace(['older', 'a', 'b', 'turn:target']); v.flush();
   const bottom = v.top(); v.grow(100); v.flush(); expect(v.top()).toBe(bottom + 100);
 });
 
@@ -176,13 +176,13 @@ it('authority replacement after native installation still retires the scheduled 
   authority = false; v.flush(); expect(v.top()).toBe(210);
 });
 
-it('follow publishes the live native turn without a locate cursor; historical anchors and Return to latest own active reading',()=>{
- const v=coordinatedViewport(false,'turn:live');
+it('follow publishes the live native turn without a locate cursor; navigated anchors and Return to latest own active reading',()=>{
+ const v=coordinatedViewport('turn:live');
  expect(v.active).toHaveBeenLastCalledWith('turn:live');
- const ticket=v.owner().beginNavigation();v.replace(['turn:target'],true);ticket.commit('turn:target');v.flush();
+ const ticket=v.owner().beginNavigation();v.replace(['turn:target']);ticket.commit('turn:target');v.flush();
  expect(v.top()).toBe(500);expect(v.active).toHaveBeenLastCalledWith('turn:target');
  v.grow(300);v.flush();expect(v.top()).toBe(500);
- fireEvent.click(v.ui.getByRole('button',{name:'Return to latest'}));v.replace(['a','b','turn:target'],false);v.flush();
+ fireEvent.click(v.ui.getByRole('button',{name:'Return to latest'}));v.replace(['a','b','turn:target']);v.flush();
  expect(v.active).toHaveBeenLastCalledWith('turn:live');const bottom=v.top();v.grow(100);v.flush();expect(v.top()).toBe(bottom+100);
 });
 
@@ -209,7 +209,7 @@ for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome}
   const active = vi.fn();
   function Reading() {
     const [current, setCurrent] = useState<string | null>();
-    return <ChatViewport historical onActiveTurn={key => { active(key); setCurrent(key); }}
+    return <ChatViewport onActiveTurn={key => { active(key); setCurrent(key); }}
       overlay={<TurnNavigator client={server.client} sessionId="A" active={current} onNavigate={() => {}}/>}>
       <AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>
     </ChatViewport>;
@@ -252,7 +252,7 @@ for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome}
 
 
 it('the final native turn remains active beyond its location marker', () => {
-  const v = coordinatedViewport(true);
+  const v = coordinatedViewport();
   v.scroll(750);
   expect(v.active).toHaveBeenLastCalledWith('turn:target');
   v.grow(200); v.flush();
@@ -282,7 +282,7 @@ async function clippedReading(outcome: 'completed' | 'timed_out', later = true) 
   const active = vi.fn();
   function Reading() {
     const [current, setCurrent] = useState<string | null>();
-    return <ChatViewport historical onActiveTurn={key => { active(key); setCurrent(key); }}
+    return <ChatViewport onActiveTurn={key => { active(key); setCurrent(key); }}
       overlay={<TurnNavigator client={server.client} sessionId="A" active={current} onNavigate={() => {}}/>}>
       <AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>
     </ChatViewport>;
@@ -338,20 +338,17 @@ for (const outcome of ['completed', 'timed_out'] as const) {
   });
 }
 
-it('real older historical replacement derives clipped ownership from the installed projection instead of the prior B navigation', async () => {
+it('an older page prepends above the reading position and clipped ownership comes from the merged projection', async () => {
   const v = await clippedReading('completed');
   v.ui.unmount();
   try {
+    await act(async () => { v.server.snapshots.set('A', { ...snapshot(), transcript: { entries: v.entries.slice(2), next_cursor: '120' } }); await v.server.client.refresh('A'); });
     await v.server.client.readTurns('A');
     v.server.held.add('session/transcript');
-    const navigate = v.server.client.navigateTurn('A', v.turns[1]);
-    const request = await v.server.waitFor('session/transcript', 1);
-    v.server.socket.success(request, { type: 'transcript_window', window: { cut: v.cut, page: { entries: v.entries.slice(2), next_cursor: '120' }, newer_cursor: '121', target: v.b, target_cursor: '120' } });
-    expect(await navigate).toBe(true);
     const ui = await act(async () => render(<ConversationLive client={v.server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/>));
     const viewport = ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
     Object.defineProperties(viewport, { scrollHeight: { value: 2200 }, clientHeight: { value: 200 } });
-    // Geometry belongs to the installed page, just as native ownership does.
+    // Geometry belongs to the rendered window, just as native ownership does.
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function(this: HTMLElement) {
       const key = this.dataset.chatAnchorKey ?? this.dataset.chatTurnOwner;
       const offset = v.server.client.getSnapshot().views.A.history?.page.entries?.[0].cursor === '120' ? 1000 : 0;
@@ -361,28 +358,30 @@ it('real older historical replacement derives clipped ownership from the install
     v.flush(); viewport.scrollTop = 400; fireEvent.scroll(viewport); v.flush();
     const current = () => [...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark => mark.getAttribute('data-turn-id'));
     expect(current()).toEqual([turnAnchor(v.b).slice(5)]);
-    const older = v.server.client.loadEarlier('A'), read = await v.server.waitFor('session/transcript', 2);
-    expect(read.params).toMatchObject({ at: { type: 'older', before: '120', cut: v.cut }, limit: 64 });
+    const older = v.server.client.loadEarlier('A'), read = await v.server.waitFor('session/transcript', 1);
+    expect(read.params).toMatchObject({ at: { type: 'older', before: '120', cut: null }, limit: 64 });
     await act(async () => {
-      v.server.socket.success(read, { type: 'transcript_window', window: { cut: v.cut, page: { entries: v.entries.slice(0, 2), next_cursor: '100' }, newer_cursor: '101', target: null, target_cursor: null } });
+      v.server.socket.success(read, { type: 'transcript_window', window: { cut: v.cut, page: { entries: v.entries.slice(0, 2), next_cursor: '100' }, newer_cursor: '120', target: null, target_cursor: null } });
       await older;
     });
     v.flush();
-    expect(v.server.client.getSnapshot().views.A.turnNavigation?.active).toBe(turnAnchor(v.b).slice(5));
-    expect(v.server.client.getSnapshot().views.A.history?.page.entries?.[0].cursor).toBe('100');
-    expect(viewport.scrollTop).toBe(400); expect(current()).toEqual([turnAnchor(v.a).slice(5)]);
+    expect(v.server.client.getSnapshot().views.A.history?.page.entries?.map(row => row.cursor)).toEqual(['100', '101', '120', '121']);
+    // The prepended page lands above the reader: B stays where it was read.
+    expect(viewport.scrollTop).toBe(1400); expect(current()).toEqual([turnAnchor(v.b).slice(5)]);
+    viewport.scrollTop = 400; fireEvent.scroll(viewport); v.flush();
+    expect(current()).toEqual([turnAnchor(v.a).slice(5)]);
     expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].some(row => row.getAttribute('data-chat-anchor-key') === turnAnchor(v.a))).toBe(false);
     ui.unmount();
   } finally { v.server.client.disconnect(); }
 });
 
 it('detached unowned reading publishes unknown and semantic ownership cannot satisfy an exact locate', () => {
-  const v = coordinatedViewport(true, 'turn:live');
+  const v = coordinatedViewport('turn:live');
   v.scroll(750); expect(v.active).toHaveBeenLastCalledWith('turn:target');
-  v.positions.unowned = 700; v.replace(['turn:target', 'unowned'], true); v.flush();
+  v.positions.unowned = 700; v.replace(['turn:target', 'unowned']); v.flush();
   expect(v.active).toHaveBeenLastCalledWith(null);
   const owner = v.owner();
-  v.ui.rerender(<ChatViewport historical onActiveTurn={v.active}><div data-chat-anchor-key="b" data-chat-turn-owner="turn:clipped">clipped</div></ChatViewport>);
+  v.ui.rerender(<ChatViewport onActiveTurn={v.active}><div data-chat-anchor-key="b" data-chat-turn-owner="turn:clipped">clipped</div></ChatViewport>);
   v.flush(); expect(v.active).toHaveBeenLastCalledWith('turn:clipped');
   const top = v.top(), intent = owner.beginNavigation();
   expect(intent.commit('turn:clipped')).toBe(true); v.flush();

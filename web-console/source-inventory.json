@@ -1248,7 +1248,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
       "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
-      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name.",
+      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. UI/UX alignment: one contiguous window through the live tail, as Harness ChatView/loadThrough; historical replacement windows and later-content paging removed.",
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
@@ -1261,7 +1261,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "2bc9916c36ca7473220e1c2ee3ea8901348edd7afa436b2c1d49db8aca58b465",
+      "local_sha256": "b044152f062b73a934ca894fa34472f72c73918e0a59737db23e1e16e89d0161",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -3169,7 +3169,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "dafe6455b371cea663c1263affb18f750c2070dbf889a8d2330158ab4e4de65c"
+      "local_sha256": "c09febd060ebef51b2fed4f3e85c93d1c92cfc30b9aa21cd0461fb22b624bc2a"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3411,7 +3411,7 @@
       "destination": "web-console/src/app/agent/TurnNavigator.tsx",
       "upstream_sha256": "be03cfad53e5b0211651ba17a3d5170872139c8f3d7c086e60625f5d38a0998f",
       "classification": "B",
-      "treatment": "Fixed-pitch native-identity rail, active/pending marks and bounded hover/focus preview adapted to the rustX native Attempt outline and exact read-cut windows. One 64-item page and direct ordinal page access replace Harness runtime/loaded-only assumptions. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: explicit latest versus historical outline-page intent. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI repair: Harness-parity rail — every native turn is a fixed-pitch virtual mark centered in the reading band with fades; unloaded marks read their native outline page before navigating; previews show native prompt and final response. Paging arrows and the ordinal input are removed.",
+      "treatment": "Fixed-pitch native-identity rail, active/pending marks and bounded hover/focus preview adapted to the rustX native Attempt outline and exact read-cut windows. One 64-item page and direct ordinal page access replace Harness runtime/loaded-only assumptions. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: explicit latest versus historical outline-page intent. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI repair: Harness-parity rail — every native turn is a fixed-pitch virtual mark centered in the reading band with fades; unloaded marks read their native outline page before navigating; previews show native prompt and final response. Paging arrows and the ordinal input are removed. UI/UX alignment: one contiguous window through the live tail, as Harness ChatView/loadThrough; historical replacement windows and later-content paging removed.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v35",
@@ -3429,7 +3429,7 @@
         "Cordis runtime",
         "Harness scroll ownership"
       ],
-      "local_sha256": "a2c8ac23047123214d9d619fd103b9ec088f57ff0c2216e5c083e42f489ac1e0"
+      "local_sha256": "6b097700c9cb724f8363ea7c7ce54dc0000c77f402c53ea4bc34a84aef075ecf"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",

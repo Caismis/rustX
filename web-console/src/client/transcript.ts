@@ -1,16 +1,14 @@
-import type { ConversationWindow, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v35';
+import type { RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v35';
 
-export const HISTORY_LIMIT = 512;
-export const HISTORY_MAX_BYTES = 8 * 1024 * 1024;
 export const HISTORY_PAGE_SIZE = 64;
-/** A contiguous, replaceable durable read window. Never contains live events. */
+/** One contiguous durable read window from its oldest loaded page through the
+ * live tail, as Harness's Chat window: older pages only ever prepend. Never
+ * contains live events. */
 export interface TranscriptCache {
   page: RuntimeClientTranscriptPage;
   epoch: number;
   loading?: boolean;
   error?: string;
-  mode?: 'latest' | 'historical';
-  window?: ConversationWindow;
 }
 export function entryIdentity(entry: RuntimeClientTranscriptEntry): string {
   const item = entry.item;
@@ -28,7 +26,6 @@ export function replaceTranscript(page: RuntimeClientTranscriptPage, previous?: 
   return { page, epoch: (previous?.epoch ?? 0) + 1 };
 }
 export function refreshTranscript(previous: TranscriptCache | undefined, page: RuntimeClientTranscriptPage): TranscriptCache {
-  if (previous?.mode === 'historical') return previous;
   if (!previous) return replaceTranscript(page);
   const overlap = (previous.page.entries ?? []).some(old => (page.entries ?? []).some(entry => entry.cursor === old.cursor && entryIdentity(entry) === entryIdentity(old)));
   if (!overlap) return replaceTranscript(page, previous);
@@ -40,18 +37,11 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
     return { ...replaceTranscript(page, previous), error: 'History was refreshed to reread unresolved native responses or Tools. Load earlier for their current results.' };
   }
   const entries = merge(previous.page.entries ?? [], page.entries ?? []);
-  if (entries.length > HISTORY_LIMIT || JSON.stringify(entries).length * 2 > HISTORY_MAX_BYTES) return { ...replaceTranscript(page, previous), error: 'History read window reached its bound and was replaced with the current page.' };
   return { ...previous, page: { ...page, entries, next_cursor: previous.page.next_cursor } };
-}
-export function installTranscriptWindow(window: ConversationWindow, previous?: TranscriptCache): TranscriptCache {
-  const entries = window.page.entries ?? [];
-  if (entries.length > HISTORY_LIMIT || JSON.stringify(entries).length * 2 > HISTORY_MAX_BYTES) throw new Error('Native history window exceeds the browser reading bound.');
-  return { ...replaceTranscript(window.page, previous), mode: 'historical', window };
 }
 export const turnKey = (id: { conversation_id: string; attempt_id: string }) => JSON.stringify([id.conversation_id, id.attempt_id]);
 export const turnAnchor = (id: { conversation_id: string; attempt_id: string }) => `turn:${turnKey(id)}`;
 export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTranscriptPage): TranscriptCache {
   const entries = merge(page.entries ?? [], cache.page.entries ?? []);
-  if (entries.length > HISTORY_LIMIT || JSON.stringify(entries).length * 2 > HISTORY_MAX_BYTES) throw new Error('History window is full. Return to latest to load another window.');
   return { ...cache, loading: false, error: undefined, page: { ...cache.page, entries, next_cursor: page.next_cursor } };
 }

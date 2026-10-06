@@ -8,9 +8,6 @@ interface ViewportProps {
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
-  historical?: boolean;
-  onLatest?: () => void;
-  onUserIntent?: () => void;
   latestTurn?: string;
   /** null means observed detached reading with no native owner; undefined is
    * unobserved/follow mode, where the rail may use current native state. */
@@ -81,16 +78,16 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     // start is outside this finite window. Unowned rows end ownership; an owned
     // final region stays active through its tail. Locate anchors are not owners.
     const owner = regions.reverse().find(row => row.getBoundingClientRect().top <= top)?.dataset.chatTurnOwner;
-    const key = this.following && !this.props.historical && this.props.latestTurn ? this.props.latestTurn
-      : owner ?? (!this.following || this.props.historical ? null : undefined);
+    const key = this.following && this.props.latestTurn ? this.props.latestTurn
+      : owner ?? (this.following ? undefined : null);
     if (key !== this.active) { this.active = key; this.props.onActiveTurn?.(key); }
   };
   private onScroll = () => {
     const el = this.viewport.current!;
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     if (Math.abs(el.scrollTop - Math.min(this.writtenTop, floor)) > 0.5) {
-      this.intent++; this.navigation = undefined; this.props.onUserIntent?.();
-      this.following = !this.props.historical && floor - el.scrollTop <= 24;
+      this.intent++; this.navigation = undefined;
+      this.following = floor - el.scrollTop <= 24;
       this.reading = this.following ? undefined : this.position();
       this.setState({ detached: !this.following });
       this.publishActive();
@@ -101,7 +98,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
   returnToBottom = () => {
     this.intent++; this.navigation = undefined;
     this.explicitLatest = true;
-    this.props.onLatest?.(); this.following = true; this.reading = undefined;
+    this.following = true; this.reading = undefined;
     this.setState({ detached: false }); this.markLayoutDirty();
   };
   beginNavigation = () => {
@@ -146,9 +143,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean }
     this.frame = undefined;
   }
   render() {
-    return <div className="chat-reading-surface" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>{this.props.overlay}<div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}
-      onClickCapture={event => { if ((event.target as HTMLElement).closest('[data-chat-latest]')) this.returnToBottom(); }}>
+    return <div className="chat-reading-surface" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>{this.props.overlay}<div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }} onScroll={this.onScroll}>
       <div ref={this.content}>{this.props.children}</div>
-    </div>{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</div>;
+    </div>{this.props.latestLabel && this.state.detached && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</div>;
   }
 }

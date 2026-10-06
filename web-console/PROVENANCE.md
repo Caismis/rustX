@@ -1290,3 +1290,16 @@ Both run on the click from `App.tsx`, as `forkAt` does, instead of opening the
 `CommandPanel` chooser; the duplicate in-Session Branch tail action, the
 chooser's response-anchored rows and their copy are removed. `TurnTail.tsx`,
 `CommandPanel.tsx` and `dictionaries/agent.ts` are rehashed in the inventory.
+
+## Turn-rail reading window (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. `ui-chat` `ChatView.tsx` and `use-chat-navigation.ts`, and
+`session-controller` `Session.loadOlder`/`loadThrough`, were consulted; no new
+upstream source is imported and no pin changes. As there, the Chat transcript is
+one contiguous window through the live tail: a rail jump to an unloaded turn
+pages older history through its location before landing, and Load earlier only
+prepends. rustX's historical replacement windows, Load later content, the
+browser entry/byte cache bound and its Return-to-latest window reset are
+removed. `ChatViewport.tsx`, `TurnNavigator.tsx` and `dictionaries/agent.ts` are
+rehashed in the inventory.

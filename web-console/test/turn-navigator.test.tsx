@@ -116,15 +116,15 @@ it('current native identity precedes location; the first durable process locatio
  expect(mark().getAttribute('aria-current')).toBe('true');
 });
 
-it('a loaded historical rail mark remains usable after same-Attempt append progress without refreshing its cut', async()=>{
+it('a loaded rail mark outside the transcript window pages older history through its location and live output keeps appending', async()=>{
  installTurnNavigatorObserver();
  server=new Server();await server.attached('A');
- const old={id:{conversation_id:'conversation-A',attempt_id:'old'},ordinal:1,cursor:'1',prompt:'historical',response:'answer'};
+ const old={id:{conversation_id:'conversation-A',attempt_id:'old'},ordinal:1,cursor:'1',prompt:'first',response:'answer'};
  const live={id:{conversation_id:'conversation-A',attempt_id:'live'},ordinal:2,cursor:'600',prompt:'current',response:''};
  const cut={conversation_id:'conversation-A',journal:'600',transcript:'600',mutation_revision:'0'};
  const owner={...live.id,control_cursor:'600',message_count:1,tool_call_count:0,outcome:'running' as const};
  const row=(cursor:string)=>({cursor,item:{type:'message' as const,message:{role:'assistant' as const,id:`m${cursor}`,content:[{type:'text' as const,text:`output ${cursor}`}]}},turn_process:owner});
- const s={...server.snapshots.get('A')!,attempt:{attempt_id:'live',phase:{type:'running' as const},turn:1},transcript:{entries:[row('600')]}};
+ const s={...server.snapshots.get('A')!,attempt:{attempt_id:'live',phase:{type:'running' as const},turn:1},transcript:{entries:[row('600')],next_cursor:'600'}};
  server.snapshots.set('A',s);await server.client.refresh('A');
  server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:2,turns:[old,live]}}));
  let work:Promise<boolean>|undefined,ui:ReturnType<typeof render>;
@@ -135,16 +135,17 @@ it('a loaded historical rail mark remains usable after same-Attempt append progr
  expect(turnsRequests()).toHaveLength(1);
  server.held.add('session/transcript');
  fireEvent.click(mark);const request=await server.waitFor('session/transcript',1);
- expect(request.params).toMatchObject({at:{type:'turn',id:old.id,cut}});
- await act(async()=>{server.socket.success(request,{type:'transcript_window',window:{cut,page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]},newer_cursor:'1',target:old.id,target_cursor:'1'}});expect(await work).toBe(true);});
- const installed=server.client.getSnapshot().views.A.history!;
- expect(installed.mode).toBe('historical');expect(installed.window?.cut).toEqual(cut);
- expect(installed.page.entries?.map(row=>row.cursor)).toEqual(['1']);expect(mark.getAttribute('aria-current')).toBe('true');
- act(()=>server.client.latestTranscript('A'));
- expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['600','601']);
- // Follow/current publication belongs to ChatViewport, separately tested in scroll.test.tsx.
- ui!.rerender(<TurnNavigator client={server.client} sessionId="A" active={'turn:["conversation-A","live"]'} onNavigate={()=>{}}/>);
- expect(ui!.getByRole('button',{name:'Jump to turn 2'}).getAttribute('aria-current')).toBe('true');
+ expect(request.params).toMatchObject({at:{type:'older',before:'600',cut:null},limit:64});
+ expect(mark.getAttribute('aria-busy')).toBe('true');
+ await act(async()=>{server.socket.success(request,{type:'transcript_window',window:{cut,page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]},newer_cursor:'600',target:null,target_cursor:null}});expect(await work).toBe(true);});
+ expect(mark.hasAttribute('aria-busy')).toBe(false);
+ expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1','600','601']);
+ // The window stays joined to the live tail: no historical freeze, no later-content paging.
+ await act(async()=>{server.durableUpdate('A',{...s,transcript:{entries:[row('600'),row('601'),row('602')]}});});
+ expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1','600','601','602']);
+ // Active reading belongs to ChatViewport, separately tested in scroll.test.tsx.
+ ui!.rerender(<TurnNavigator client={server.client} sessionId="A" active={'turn:["conversation-A","old"]'} onNavigate={()=>{}}/>);
+ expect(mark.getAttribute('aria-current')).toBe('true');
  expect(turnsRequests()).toHaveLength(1);
 });
 
@@ -209,7 +210,7 @@ async function pagingRail(initial:number){
   start:async(n:number)=>{total=n;location=undefined;await update(n,false,true);},locate:async(n:number)=>{location=n;await update(n);},settle:async(n:number)=>{await update(n,true,true);}};
 }
 
-it('observed unknown detached ownership suppresses both stale navigation and unrelated live fallback', async () => {
+it('observed unknown detached ownership suppresses the unrelated live fallback', async () => {
  installTurnNavigatorObserver();
  server=new Server();await server.attached('A');
  const id={conversation_id:'conversation-A',attempt_id:'live'},cut={conversation_id:'conversation-A',journal:'1',transcript:'1',mutation_revision:'0'};
@@ -218,11 +219,6 @@ it('observed unknown detached ownership suppresses both stale navigation and unr
  const turn={id,ordinal:2,cursor:'1',prompt:'',response:''};
  server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:2,turns:[native(1),turn]}}));
  const ui=await act(async()=>render(<TurnNavigator client={server.client} sessionId="A" active={null} onNavigate={()=>{}}/>));
- expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(0);
- server.held.add('session/transcript');
- const work=server.client.navigateTurn('A',turn),read=await server.waitFor('session/transcript',1);
- await act(async()=>{server.socket.success(read,{type:'transcript_window',window:{cut,page:{entries:[]},target:id,target_cursor:'1',newer_cursor:null}});expect(await work).toBe(true);});
- expect(server.client.getSnapshot().views.A.turnNavigation?.active).toBe('["conversation-A","live"]');
  expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(0);
  ui.rerender(<TurnNavigator client={server.client} sessionId="A" onNavigate={()=>{}}/>);
  expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(1);

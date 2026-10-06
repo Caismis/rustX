@@ -48,7 +48,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => {
       const NativeSocket = window.WebSocket;
-      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0 };
+      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, located: 0 };
       Object.assign(window, { readingTransport: state });
       class GatedSocket extends NativeSocket {
         private methods = new Map<string, string>();
@@ -56,7 +56,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
           super(...args);
           this.addEventListener('message', event => {
             const reply = JSON.parse(String(event.data));
-            if (reply.id && this.methods.get(String(reply.id)) === 'turn') {
+            if (reply.id && this.methods.get(String(reply.id)) === 'older') {
               event.stopImmediatePropagation();
               const deliver = () => this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(state.fail ? {jsonrpc:'2.0',id:reply.id,error:{code:-32000,message:'Reading fixture rejection'}} : reply) }));
               if (state.gate) state.held.push(deliver); else deliver();
@@ -65,7 +65,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
         }
         send(data: Parameters<WebSocket['send']>[0]) {
           const request = JSON.parse(String(data));
-          if (request.method === 'session/transcript' && request.params.at.type === 'turn') { this.methods.set(String(request.id), 'turn'); state.reads++; }
+          if (request.method === 'session/transcript' && request.params.at.type === 'older') { this.methods.set(String(request.id), 'older'); state.reads++; }
+          if (request.method === 'session/transcript' && request.params.at.type !== 'older') state.located++;
           super.send(data);
         }
       }
@@ -83,7 +84,16 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await newest.hover();
     await expect(rail.getByRole('tooltip')).toContainText('Reading 299');
     await expect(rail.getByRole('tooltip')).toContainText('Native reading answer 299');
-    // A distant unloaded mark reads its native page, then jumps exactly once.
+    // A rejected history read fails visibly and stays recoverable.
+    await railScroll(1900);
+    const errorMark=rail.locator('[data-turn-ordinal="200"]');
+    await page.evaluate(() => { (window as any).readingTransport.fail=true; }); await errorMark.click();
+    await expect(page.locator('[data-turn-navigator]').getByRole('alert')).toContainText('Reading fixture rejection');
+    await page.evaluate(() => { (window as any).readingTransport.fail=false; });
+    await page.locator('[data-turn-navigator]').getByRole('button', { name: 'Reload turns' }).click();
+    await expect(page.locator('[data-turn-navigator]').getByRole('alert')).toHaveCount(0);
+    // A distant unloaded mark reads its outline page, then pages older history
+    // through the turn's location (as Harness's loadThrough) and jumps once.
     await railScroll(0);
     const mark = rail.locator('[data-turn-ordinal="1"]');
     await expect(mark).toHaveAccessibleName('Load and jump to turn 1');
@@ -98,16 +108,11 @@ test('native distant reading rail, detached/latest follow and measured width in 
     const target = page.locator('[data-chat-anchor-key]').filter({ hasText: 'Native reading answer 0' }).first();
     await expect(page.getByText(/Native reading answer 0\n/).first()).toBeVisible();
     await expect.poll(async () => Math.abs(await target.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el=>el.getBoundingClientRect().top))).toBeLessThan(3);
-    expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBe(1);
-    expect(await page.locator('[data-chat-anchor-key]').count()).toBeLessThan(200);
-    // A rejected jump keeps the selected native page and stays recoverable.
-    await railScroll(1900);
-    const errorMark=rail.locator('[data-turn-ordinal="200"]');
-    await page.evaluate(() => { (window as any).readingTransport.fail=true; }); await errorMark.click();
-    await expect(page.locator('[data-turn-navigator]').getByRole('alert')).toContainText('Reading fixture rejection');
-    await page.evaluate(() => { (window as any).readingTransport.fail=false; });
-    await page.locator('[data-turn-navigator]').getByRole('button', { name: 'Reload turns' }).click();
-    await expect(page.getByText(/Native reading answer 0\n/).first()).toHaveCount(1);
+    // Only ordinary older pages were read, and the window still reaches the live tail.
+    expect(await page.evaluate(()=>(window as any).readingTransport.located)).toBe(0);
+    expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBeGreaterThan(1);
+    await expect(page.getByText(/Native reading answer 299\n/)).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Load later content' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     // Ordinary detached state has no historical jump/cache-limit prerequisite.

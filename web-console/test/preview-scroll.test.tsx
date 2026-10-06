@@ -15,7 +15,7 @@ vi.mock('../src/app/components/ArtifactPreview', () => ({ ArtifactPreview: ({ ar
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { cleanup(); cleanups.splice(0).forEach(stop => stop()); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-async function fixture(mode: 'following' | 'detached' | 'historical') {
+async function fixture(mode: 'following' | 'detached' | 'navigated') {
   const server = new Server(); await server.attached('A');
   const authority = new WorkspaceAuthority(server.workspaceHost); await authority.observe();
   const owner = new PreviewWorkspaceOwner(server.client, server.workspaceHost, authority), stop = owner.start();
@@ -44,7 +44,7 @@ async function fixture(mode: 'following' | 'detached' | 'historical') {
     return <>
       <button onClick={() => owner.toggleInspector()}>Inspector</button>
       <button onClick={() => owner.reveal()}>Reopen previews</button>
-      <ChatViewport ref={node => { if (node) chat = node; }} historical={mode === 'historical'} latestLabel="Return to latest" latestTurn="turn:latest">
+      <ChatViewport ref={node => { if (node) chat = node; }} latestLabel="Return to latest" latestTurn="turn:latest">
         {Object.keys(positions).map(key => <div key={key} data-chat-anchor-key={key} data-chat-turn-owner={key.startsWith('turn:') ? key : undefined}>{key}{key === 'turn:stream' ? ` streamed chunk ${streamed}` : ''}</div>)}
       </ChatViewport>
       <RightPanel open={snapshot.mode !== 'collapsed'} close={() => owner.collapse()} width={width} canShow={width >= 608} fullscreen={snapshot.workspace?.fullscreen} title="Previews" closeLabel="Collapse previews">
@@ -63,7 +63,7 @@ async function fixture(mode: 'following' | 'detached' | 'historical') {
   const scroll = (value: number) => { top = value; fireEvent.scroll(viewport); };
   flush(); expect(top).toBe(1200);
   if (mode === 'detached') { scroll(210); flush(); }
-  if (mode === 'historical') {
+  if (mode === 'navigated') {
     act(() => { const navigation = chat.beginNavigation(); expect(navigation.commit('turn:history')).toBe(true); });
     flush(); expect(top).toBe(500);
   }
@@ -76,7 +76,7 @@ async function fixture(mode: 'following' | 'detached' | 'historical') {
   };
 }
 
-it.each(['following', 'detached', 'historical'] as const)('actual preview geometry actions preserve %s Conversation ownership', async mode => {
+it.each(['following', 'detached', 'navigated'] as const)('actual preview geometry actions preserve %s Conversation ownership', async mode => {
   const f = await fixture(mode);
   const transition = (action: () => void) => {
     const before = f.top(), writes = f.writes();

@@ -460,8 +460,9 @@ managed artifact service, never browser access to a local path.
 
 ## Conversation reading
 
-Chat now has a bounded native turn rail, exact historical windows, ordinary
-detached Return to latest, and measured browser width preferences. See
+Chat now has a bounded native turn rail whose jumps page one contiguous
+transcript window through the live tail, ordinary detached Return to latest, and
+measured browser width preferences. See
 [the reading contract](../docs/conversation-reading.md) for ownership, limits,
 lineage mapping and deterministic intent rules.
 

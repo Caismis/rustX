@@ -191,15 +191,15 @@ ordinary events advance it without a snapshot reread.
 
 ## Paging and reconnect
 
-The cache holds at most 512 entries and an 8 MiB conservative UTF-16 serialization
-budget; each older request asks for at most 64 entries. It is a contiguous durable
-window, never canonical persistence. Current refresh preserves it only with a
-matching durable cursor and fact identity. Current entries win overlaps. Missing
-continuity or a capacity overflow replaces the window with the current page;
-capacity replacement has a visible diagnostic. Unsettled native Tool projections
-outside a fresh page also force a visible window rebase; historical assembled state
-is never retained indefinitely as a substitute for rereading terminal authority. At the entry bound, Return to
-latest explicitly replaces the window before more paging.
+The cache is one contiguous durable window from its oldest loaded page through
+the live tail, as Harness's Chat window; each older request asks for at most 64
+entries. It is never canonical persistence. Current refresh preserves it only with
+a matching durable cursor and fact identity. Current entries win overlaps. Missing
+continuity replaces the window with the current page. Unsettled native Tool
+projections outside a fresh page also force a visible window rebase; historical
+assembled state is never retained indefinitely as a substitute for rereading
+terminal authority. Turn jumps page through this same window
+([conversation-reading.md](../docs/conversation-reading.md)).
 
 Older responses require the same connection generation, complete attachment
 target and window epoch. Ordinary overlapping live refresh does not advance that

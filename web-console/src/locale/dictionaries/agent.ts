@@ -57,7 +57,6 @@ export const en = {
   "reading.jump-load-turn": "Load and jump to turn {n}",
   "reading.turn": "Turn {n}",
   "reading.reload-turns": "Reload turns",
-  "reading.load-newer": "Load later content",
 
   "agent-status.time": "Time",
   "agent-status.background": "Background",
@@ -84,7 +83,6 @@ export const en = {
   "agent-transcript.canonical-conversation": "Canonical conversation",
   "agent-transcript.loading-earlier": "Loading earlier…",
   "agent-transcript.load-earlier": "Load earlier",
-  "agent-transcript.history-window-is-full": "History window is full.",
   "agent-transcript.return-to-latest": "Return to latest",
   "agent-transcript.ready-for-a-task": "Ready for a task.",
   "agent-transcript.what-would-you-like-to-work-on": "What would you like to work on?",
@@ -343,7 +341,6 @@ export const zh = {
   "reading.jump-load-turn": "加载并跳转到第 {n} 轮",
   "reading.turn": "第 {n} 轮",
   "reading.reload-turns": "重新加载轮次",
-  "reading.load-newer": "加载后续内容",
 
   "agent-status.time": "时间",
   "agent-status.background": "后台",
@@ -370,7 +367,6 @@ export const zh = {
   "agent-transcript.canonical-conversation": "规范对话",
   "agent-transcript.loading-earlier": "正在加载更早内容…",
   "agent-transcript.load-earlier": "加载更早内容",
-  "agent-transcript.history-window-is-full": "历史窗口已满。",
   "agent-transcript.return-to-latest": "返回最新",
   "agent-transcript.ready-for-a-task": "准备接收任务。",
   "agent-transcript.what-would-you-like-to-work-on": "你想处理什么？",
