@@ -3,7 +3,7 @@ import type { ConversationTurn, ConversationTurnPage, ConversationWindow, Runtim
 import { Server, snapshot } from './fixture';
 import { HISTORY_LIMIT, HISTORY_MAX_BYTES, turnKey } from '../src/client/transcript';
 const entry=(n:number):RuntimeClientTranscriptEntry=>({cursor:String(n),item:{type:'message',message:{role:'assistant',id:`m${n}`,content:[{type:'text',text:`answer-${n}`}]}}});
-const turn=(n:number):ConversationTurn=>({id:{conversation_id:'conversation-A',attempt_id:`attempt-${n}`},ordinal:n,cursor:String(n),preview:`preview-${n}`});
+const turn=(n:number):ConversationTurn=>({id:{conversation_id:'conversation-A',attempt_id:`attempt-${n}`},ordinal:n,cursor:String(n),prompt:`prompt-${n}`,response:''});
 const cut={conversation_id:'conversation-A',journal:'600',transcript:'600',mutation_revision: '0'};
 const outline:ConversationTurnPage={cut,offset:0,total:600,turns:Array.from({length:64},(_,i)=>turn(i+1))};
 const window=(target:ConversationTurn):ConversationWindow=>({cut,page:{entries:Array.from({length:64},(_,i)=>({...entry(Number(target.cursor)+i),...(i===0?{turn_process:{...target.id,control_cursor:target.cursor!,message_count:1,tool_call_count:0,outcome:'completed' as const}}:{})})),next_cursor:target.cursor},newer_cursor:String(Number(target.cursor)+63),target:target.id,target_cursor:target.cursor});

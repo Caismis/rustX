@@ -695,7 +695,8 @@ export const fixtures = [
             },
             "ordinal": 1,
             "cursor": "9007199254740993",
-            "preview": "Native preview"
+            "prompt": "Native prompt",
+            "response": "Native response"
           }
         ]
       }

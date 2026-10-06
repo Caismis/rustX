@@ -79,7 +79,9 @@ partials. Surface messages outside the loaded page are not appended as history.
 Typed current context is disclosed separately. Subagent, Workflow and background
 activity are current adjuncts, not fabricated historical placements. Foreground
 Tools occupy their canonical Assistant block position.
-Historical interaction/publication audits are read-only; live Approval,
+Historical interaction/publication audits are read-only; a native `ask_user`
+questionnaire's request and settlement audits are told by its call's question row
+instead (matched by interaction id on the loaded page), so they render no body. Live Approval,
 Questionnaire and Review retain existing typed settlement and uncertain-outcome
 controls. Todo/Goal/Queue projection remains in the composer docks. WEB-05 adds
 native historical actions as described below; it never derives canonical history.
@@ -98,8 +100,24 @@ a settled durable record wins. React never joins call and result messages.
 ToolId. Unknown identities use the same generic Harness card. Inputs, text/JSON
 output, native status and managed image/file attachments remain truthful subsets.
 Edit/Write diffs show **requested changes**, not an inferred filesystem diff.
+The native `ask_user` call (ToolId `tool-ask-user`) uses Harness's question row:
+`bindings/ask-user.ts` reads its verdict from the persisted arguments and result
+(waiting, `N/M answered`, cancelled for a decline, interrupted for a cancelled
+call) and pairs each answer with its question by the echoed `question_index`, so
+an omitted (skipped) question reads as not answered. A failed call, or a record it
+cannot pair, keeps the generic card with the raw input and output.
 Background execution uses its native ExecutionId, not a fabricated call identity.
-No process folding or subcall nesting is inferred from adjacency or Tool names.
+No subcall nesting is inferred from adjacency or Tool names.
+
+Inside a settled Attempt, `bindings/step-groups.ts` applies Harness's step
+grouping (its default `detailed` mode, which groups history only): reasoning,
+Tool calls and bodied records collect into one group until a reply (visible
+Assistant text, refusal or media) or an independent message closes it. Interaction
+audits join the group of the Attempt they name. A group renders whole where it
+starts, so canonical order never changes; its collapsed title ranks the top three
+Tool categories by distinct calls (`Read files, ran commands…`, `向用户提出了问题`,
+or `Analysis completed` for reasoning alone) and its body is capped and scrolls.
+A live or page-cut Attempt keeps every row in place.
 
 ## Agent Status annotations
 
@@ -371,19 +389,35 @@ these native totals from the newest snapshot. Older page responses never replace
 newer totals. Compaction does not erase journal usage. Fork/Branch create fresh
 Conversation execution epochs, as established by native lineage. Inherited tails
 retain their own historical usage while destination cumulative execution totals
-start from zero; these two quantities are deliberately separate.
+start from zero; these two quantities are deliberately separate. Its `timing`
+follows Harness session statistics rather than a per-response exact aggregate:
+LLM time sums measured requests' dispatch-to-terminal spans, Tool time sums
+foreground Tool start-to-terminal pairs within their Attempt, TTFT is the mean
+over requests that produced output, and TPS divides output tokens by decode time
+over requests that report both. Each figure is absent until measured.
 
-The Context owner exposes the last provider-measured request occupancy paired with
-that exact request snapshot's model capacity. It is labeled **Last request context**,
-excludes unsent input, and disappears after compaction or a newer unmeasured request.
-No Web tokenization or browser-clock timing is used.
+The Composer Context seat renders only compaction lifecycle and occupies no
+stack seat while idle. Under the Composer card, the Harness Detailed-mode dock
+shows three pills, each opening a trigger-anchored stat dialog (Base UI
+Popover): Turn/Step counts with whole-session decode speed (LLM time, Tool time,
+mean TTFT, TPS from native `statistics.timing`), reported tokens with cache hit
+(uncached and cached input, output, and an explicit usage-report coverage row
+when some requests did not report), and the last measured request's context
+ring. The ring reads `last_request_occupancy` only while the view is connected
+and attached; its numerator is the provider measurement, and its System prompt /
+Tool definitions / Messages parts are the native `ceil(bytes / 4)` breakdown, the
+messages part being the measured remainder. No Web tokenization or browser-clock
+timing is used.
 
 #364 merged as `3063ebd6`. Its native `GenerationEvidence` is the single request
 clock contract consumed independently by Trace and completed-response projections.
-Chat never reads Trace. `Ran for` is successful Attempt completion minus Attempt
-start, including tools and retries. Details distinguish first-request TTFT from
-dispatch (never Attempt-start latency), summed first-output-to-terminal model
-work, and output speed over fully covered positive generation spans. Unknown
+Chat never reads Trace. The completed Turn's actions carry the Harness Turn
+usage pill: its dialog shows the exact total, the requests' distinct models,
+cache hit, uncached and cached input, and output with reasoning. The process
+header owns the Turn duration (successful Attempt completion minus start); the
+per-response timing (first-request TTFT from dispatch, summed
+first-output-to-terminal work, output speed over fully covered positive
+generation spans) stays native evidence. Unknown
 endpoints/usage remain absent; zero measured generation is zero with no rate.
 Known no-output requests add no decode span; missing request evidence invalidates
 exact aggregate generation. Failed requests with evidence remain included.

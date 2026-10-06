@@ -520,6 +520,7 @@ async fn archive_preserves_native_inherited_response_provenance_without_executio
         retry_message_id: Some(MessageId::new("input")),
         usage: None,
         timing: None,
+        models: Vec::new(),
     }];
     let cloned = catalog.prepare_clone_session(&state(), &source).unwrap();
     catalog

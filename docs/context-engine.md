@@ -954,7 +954,9 @@ superseded model-request semantic attachment architecture.
 
 The Web `/compact` command claims local duplicate-submission ownership synchronously,
 consumes its exact invoking draft, and submits one `context/compact` request directly.
-The resident Composer context seat observes execution without a command modal.
+The resident Composer context seat observes execution without a command modal. It
+renders only while a compaction lifecycle has something to report and occupies no
+Composer stack seat otherwise.
 Pending inbound remains permitted; manual compaction creates no Attempt.
 
 App Server v35 requires a caller-generated `ManualCompactionRequestId` for
@@ -988,8 +990,12 @@ independently of the still-pending RPC. A new explicit invocation receives a new
 old transport callbacks cannot change it. A confirmed successful
 RPC remains successful if the following read repair fails.
 
-The separate context meter reads `last_request_occupancy`: input tokens, capacity,
-and provider-facing model frozen in the same native RequestSnapshot. Desired model
+`last_request_occupancy` (shown by the TUI status line and the Web composer's
+context ring) carries input tokens, capacity, provider-facing model and an
+estimated breakdown, all frozen in the same native RequestSnapshot. The breakdown
+prices the Effective System Prompt and Tool definitions with the default
+`ceil(bytes / 4)` estimator; messages are the measured remainder, saturating at
+zero. Desired model
 selection cannot change its denominator. The latest prepared request must have its
 own reported usage; a newer unmeasured request invalidates the previous value.
 Compaction invalidates occupancy until a later request measurement. Zero is a real

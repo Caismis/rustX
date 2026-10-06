@@ -7680,13 +7680,48 @@
         "model": {
           "description": "Provider-facing historical model, never substituted from current config.",
           "type": "string"
+        },
+        "breakdown": {
+          "description": "Heuristic composition of the same request's input.",
+          "$ref": "#/$defs/ContextBreakdown"
         }
       },
       "additionalProperties": false,
       "required": [
         "input_tokens",
         "context_window_tokens",
-        "model"
+        "model",
+        "breakdown"
+      ]
+    },
+    "ContextBreakdown": {
+      "description": "Where one request's measured input went, priced by the provider-neutral\n`ceil(bytes / 4)` estimate. Only the System prompt and Tool definitions are\nestimated; messages are the measured remainder, so the parts sum to the\nprovider's reading unless the estimates alone exceed it.",
+      "type": "object",
+      "properties": {
+        "system_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tool_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "message_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "system_tokens",
+        "tool_tokens",
+        "message_tokens"
       ]
     },
     "RuntimeClientCompactionView": {
@@ -11068,10 +11103,10 @@
           ]
         },
         "timing": {
-          "description": "Complete measured request timing, separate from usage coverage.",
+          "description": "Summed measured work time, separate from usage coverage.",
           "anyOf": [
             {
-              "$ref": "#/$defs/CompletedResponseTiming"
+              "$ref": "#/$defs/ConversationTiming"
             },
             {
               "type": "null"
@@ -11135,12 +11170,12 @@
         "started_at"
       ]
     },
-    "CompletedResponseTiming": {
-      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+    "ConversationTiming": {
+      "description": "Whole-conversation work time. Unlike a completed response's exact\naggregate, each figure sums only the requests or Tool executions that\nmeasured it, and is absent until the first one did.",
       "type": "object",
       "properties": {
-        "total_duration_ms": {
-          "description": "Authoritative successful Attempt completion minus its start timestamp.",
+        "model_ms": {
+          "description": "Summed dispatch-to-provider-terminal time of measured requests.",
           "type": [
             "integer",
             "null"
@@ -11149,8 +11184,8 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
-        "ttft_ms": {
-          "description": "First actual request's adapter-dispatch-to-first-output duration.",
+        "tool_ms": {
+          "description": "Summed start-to-terminal time of settled foreground Tool executions.",
           "type": [
             "integer",
             "null"
@@ -11159,8 +11194,8 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
-        "generation_ms": {
-          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
+        "mean_ttft_ms": {
+          "description": "Mean dispatch-to-first-output time over requests that produced output.",
           "type": [
             "integer",
             "null"
@@ -11170,7 +11205,7 @@
           "maximum": 9007199254740991
         },
         "output_tokens_per_second": {
-          "description": "Fully covered output usage divided by fully covered positive generation work.",
+          "description": "Output tokens over decode time, summed over requests that report\nusage and a positive decode span.",
           "type": [
             "number",
             "null"
@@ -11375,6 +11410,13 @@
               "type": "null"
             }
           ]
+        },
+        "models": {
+          "description": "Distinct provider-facing models of the Attempt's actual requests.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false,
@@ -11406,6 +11448,51 @@
         "attempt_id",
         "closing_message_id"
       ]
+    },
+    "CompletedResponseTiming": {
+      "description": "Historical product timing derived from native lifecycle and generation evidence.\nMissing evidence stays absent; these are not destination execution facts.",
+      "type": "object",
+      "properties": {
+        "total_duration_ms": {
+          "description": "Authoritative successful Attempt completion minus its start timestamp.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ttft_ms": {
+          "description": "First actual request's adapter-dispatch-to-first-output duration.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "generation_ms": {
+          "description": "Sum of output-producing requests' first-output-to-provider-terminal spans.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens_per_second": {
+          "description": "Fully covered output usage divided by fully covered positive generation work.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
     },
     "ForegroundToolExecution": {
       "description": "The foreground tool execution read model of one logical tool call.\n\nKeyed by the canonical logical tool-call identity, so parallel physical\ncompletion timing can never corrupt logical identities or canonical\nordering. Native, MCP, and Python foreground executions converge through\nthis one shape.",
@@ -13350,16 +13437,23 @@
             }
           ]
         },
-        "preview": {
+        "prompt": {
+          "description": "The turn's first human prompt; empty when none was adopted for it.",
           "type": "string",
-          "maxLength": 240
+          "maxLength": 50
+        },
+        "response": {
+          "description": "The turn's final text-bearing response; empty until the turn settles.",
+          "type": "string",
+          "maxLength": 120
         }
       },
       "additionalProperties": false,
       "required": [
         "id",
         "ordinal",
-        "preview"
+        "prompt",
+        "response"
       ]
     },
     "GoalView": {

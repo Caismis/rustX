@@ -1,0 +1,267 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Adapted from DeepSeek Harness ui-chat StatsPills.module.css and
+   TurnUsagePanel.module.css and ui-conversation ContextMeter.module.css: the
+   Turn usage pill in the response actions, and the activity, usage and context
+   pills under the composer. Every dialog but the context panel wears the
+   shared StatDialog skin. */
+
+/* Composer dock: the pills sit centered in one row under the card. */
+.dock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 12px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  line-height: inherit;
+  white-space: nowrap;
+}
+
+.pill svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+/* Only the button form (a pill with dialog rows to open) invites interaction. */
+button.pill {
+  cursor: pointer;
+}
+
+button.pill:hover,
+button.pill[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.pill:focus-visible,
+.trigger:focus-visible,
+.meter:focus-visible {
+  outline: 2px solid var(--dsw-alias-button-info-fill);
+  outline-offset: 2px;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sep {
+  margin: 0 6px;
+}
+
+/* Turn usage: the response actions' information pill, at the icon actions' resting color. */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 28px;
+  padding: 6px 8px;
+  border: none;
+  /* Harness --dsw-radius-sm. */
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 24px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trigger svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.trigger:hover,
+.trigger[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Narrow viewport: the Turn pill collapses to its bare glyph; the dialog keeps the words. */
+@media (max-width: 480px) {
+  .trigger {
+    justify-content: center;
+    width: 28px;
+    padding: 6px;
+  }
+
+  .trigger .label {
+    display: none;
+  }
+}
+
+/* Context occupancy ring and percentage. */
+.meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 1px 8px;
+  border: none;
+  /* Harness --dsw-radius-sm. */
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.meter:hover,
+.meter[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.track {
+  fill: none;
+  stroke: var(--dsw-alias-border-l3);
+  stroke-width: 2;
+}
+
+.fill {
+  fill: none;
+  stroke: var(--dsw-alias-label-tertiary);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.contextPanel {
+  box-sizing: border-box;
+  width: min(264px, calc(100vw - 24px));
+  padding: 12px;
+  border: 0;
+  /* Harness --dsw-radius-lg. */
+  border-radius: 16px;
+  background: var(--dsw-specific-menu);
+  /* Harness --dsw-menu-backdrop-filter. */
+  backdrop-filter: blur(40px) saturate(150%);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: default;
+  outline: none;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.figures {
+  margin-left: auto;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+}
+
+.percent {
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.headline {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* A locale that brackets the reading on one side only drops the empty side. */
+.headline:empty {
+  display: none;
+}
+
+.bar {
+  display: flex;
+  gap: 1px;
+  margin: 10px 0 12px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  overflow: hidden;
+}
+
+.segment {
+  flex: none;
+  min-width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--meter-tint, var(--dsw-alias-label-tertiary));
+}
+
+.swatch {
+  display: inline-block;
+  margin-right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--meter-tint);
+  vertical-align: baseline;
+}
+
+.colorSystem {
+  --meter-tint: var(--dsw-static-neutral-bluish-400);
+}
+
+.colorTools {
+  /* The design platform ships no purple static token; violet-400 literal. */
+  --meter-tint: rgb(167, 139, 250);
+}
+
+.colorMessages {
+  --meter-tint: var(--dsw-static-blue-450);
+}
+
+.rows {
+  margin: 6px 0 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.row dt {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.row dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+}

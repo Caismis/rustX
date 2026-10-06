@@ -314,38 +314,6 @@
   cursor: default;
 }
 
-/* Plan / Read-only / model — native <select>, chip-like closed chrome
-   (figma ToggleButton: 13/20 medium secondary, 12px chevron). */
-.select {
-  max-width: 220px;
-  height: 28px;
-  padding: 0 20px 0 8px;
-  border: none;
-  border-radius: 8px;
-  outline: none;
-  background-color: transparent;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 4px center;
-  background-size: 12px 12px;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  appearance: none;
-}
-
-.select:hover:not(:disabled) {
-  background-color: var(--dsw-alias-interactive-bg-hover);
-}
-
-.select:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 /* Primary send (figma IconButton 34:10465): 34px circle, #3964FE light /
    #679EFE dark — the info-fill pair (500→400), NOT button-primary (ink);
    white glyph; empty text = 0.4 opacity. */
@@ -418,6 +386,3 @@
 .attachments:empty { display: none; }
 
 /* Quiet input preference, outside the operation toolbar. */
-.busyEnter { width: 100%; max-width: var(--dsh-composer-card-max-width); display: flex; justify-content: flex-end; }
-.busyEnter .select { height: 24px; font-size: 12px; font-weight: 400; }
-.busyEnter .select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

@@ -1,7 +1,7 @@
 //! Response aggregation is a sibling of Trace over the same request evidence.
-use crate::durable::response::CompletedResponseTiming;
+use crate::durable::response::{CompletedResponseTiming, ConversationTiming};
 use crate::model::{ModelUsage, generation_evidence::GenerationEvidence};
-use crate::runtime::identity::RequestId;
+use crate::runtime::identity::{AttemptId, RequestId, ToolCallId};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 
@@ -95,5 +95,67 @@ impl TimingFold {
             }
         }
         observed_output.then_some((duration, output))
+    }
+}
+
+/// Whole-conversation work totals: Harness session statistics over native
+/// request generation evidence and foreground Tool lifecycle timestamps.
+#[derive(Default)]
+pub(crate) struct ActivityFold {
+    model_ms: Option<u64>,
+    ttft_ms: u64,
+    ttft_requests: u64,
+    decode_ms: u64,
+    decode_tokens: u64,
+    tool_ms: Option<u64>,
+    tools: BTreeMap<(AttemptId, ToolCallId), DateTime<Utc>>,
+}
+impl ActivityFold {
+    pub(crate) fn request(
+        &mut self,
+        generation: Option<&GenerationEvidence>,
+        usage: Option<&ModelUsage>,
+    ) {
+        let Some(generation) = generation else {
+            return;
+        };
+        self.model_ms = Some(
+            self.model_ms
+                .unwrap_or(0)
+                .saturating_add(generation.terminal_ms),
+        );
+        if let Some(first) = generation.time_to_first_output_ms() {
+            self.ttft_ms = self.ttft_ms.saturating_add(first);
+            self.ttft_requests += 1;
+        }
+        if let (Some(span), Some(usage)) = (generation.generation_ms(), usage)
+            && span > 0
+        {
+            self.decode_ms = self.decode_ms.saturating_add(span);
+            self.decode_tokens = self.decode_tokens.saturating_add(usage.output_tokens);
+        }
+    }
+    pub(crate) fn tool_started(&mut self, attempt: AttemptId, call: ToolCallId, at: DateTime<Utc>) {
+        self.tools.insert((attempt, call), at);
+    }
+    /// A terminal without its recorded start, or a reversed clock, adds nothing.
+    pub(crate) fn tool_settled(&mut self, attempt: AttemptId, call: ToolCallId, at: DateTime<Utc>) {
+        let Some(started) = self.tools.remove(&(attempt, call)) else {
+            return;
+        };
+        let span = u64::try_from(at.signed_duration_since(started).num_milliseconds()).unwrap_or(0);
+        self.tool_ms = Some(self.tool_ms.unwrap_or(0).saturating_add(span));
+    }
+    pub(crate) fn summary(&self) -> Option<ConversationTiming> {
+        #[allow(clippy::cast_precision_loss)] // Display ratio, as in the per-response rate.
+        let output_tokens_per_second = (self.decode_ms > 0)
+            .then(|| self.decode_tokens as f64 * 1000.0 / self.decode_ms as f64);
+        let summary = ConversationTiming {
+            model_ms: self.model_ms,
+            tool_ms: self.tool_ms,
+            mean_ttft_ms: (self.ttft_requests > 0).then(|| self.ttft_ms / self.ttft_requests),
+            output_tokens_per_second,
+        };
+        (summary != ConversationTiming::default()).then_some(summary)
     }
 }

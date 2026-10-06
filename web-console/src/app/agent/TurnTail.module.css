@@ -1,15 +1,10 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions.module.css and TurnUsagePanel.module.css; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions.module.css; see PROVENANCE.md. */
 .actions { display: flex; align-items: center; gap: 8px; min-height: 28px; flex-wrap: wrap; margin-top: 8px; }
 .action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 6px; border: 0; border-radius: 28px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .action svg { width: 15px; height: 15px; }
-.action:hover, .stat:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
-.action:focus-visible, .stat:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
+.action:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+.action:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
 .action:disabled { opacity: .4; cursor: default; }
-.stat { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 2px 6px; border: 0; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 13px; cursor: pointer; }
-.metrics { display: grid; grid-template-columns: 1fr auto; gap: 12px 24px; }
-.metrics dd { margin: 0; font-variant-numeric: tabular-nums; }
-.stats { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; min-width: 0; max-width: 100%; box-sizing: border-box; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 20px; padding: 4px 8px; }
-.stats .stat { gap: 6px; min-height: 22px; padding: 1px 8px; border-radius: 999px; font: inherit; font-variant-numeric: tabular-nums; }
 @media (hover: hover) and (pointer: fine) {
   [data-response-reveal='hover'] .actions, .actions[data-response-reveal='hover'] { opacity: 0; transition: opacity 80ms ease; }
   [data-response-reveal='hover']:hover .actions, [data-response-reveal='hover']:focus-within .actions, .actions[data-response-reveal='hover']:hover, .actions[data-response-reveal='hover']:focus-within { opacity: 1; }

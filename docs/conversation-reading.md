@@ -15,8 +15,22 @@ interrupted, timed-out and limited Attempts retain that identity. A location is
 the first committed assistant process member, or the exact Attempt terminal when
 there is no assistant member. A just-started Attempt with neither has no location;
 the live Runtime Client still supplies its current identity; historical locate
-remains disabled. Preview is the first text/refusal block at that location,
-limited to 240 Unicode characters; no preview is fabricated for a terminal.
+remains disabled.
+
+Each turn carries two native previews, matching DeepSeek Harness's turn outline.
+`prompt` is the turn's first human prompt: the earliest User message with Human
+source and ordinary Message kind adopted with this Attempt, or adopted while idle
+after the previous Attempt started and before this one did. Steering of the
+previous turn carries that turn's identity and never opens this one; automatic
+continuation has no prompt. Queued inbound reserves its transcript position at
+acceptance, so transcript adjacency is never used to find a prompt. `response`
+is the newest text/refusal-bearing Assistant member, present only once the turn
+has a terminal at the cut. Both join text blocks with single spaces, collapse
+whitespace and end with an ellipsis when clipped: at most 50 and 120 Unicode
+characters (one and three rail-card lines). Inherited turns carry their prompt as
+`TurnReadingProvenance.prompt_message_id`, remapped to destination identity on
+copy and dropped when the prompt is outside the retained cut; their response is
+the newest text-bearing retained member of a settled inherited turn.
 
 `TurnReadingProvenance` is a separate immutable lineage/bootstrap domain from
 `CompletedResponseProvenance` (finalized response, Retry, timing and usage).
@@ -88,7 +102,8 @@ Compaction changes the canonical Surface, not these durable origins/order.
 `session/turns {target, cut?, offset?, limit}` returns `ConversationTurnPage`:
 exact cut, total, offset and at most 64 ordered native turns. Omitted offset selects
 the final page; an explicit offset directly indexes history. Each mark carries its
-origin, ordinal, bounded preview and optional exact transcript cursor.
+origin, ordinal, bounded prompt and response previews and optional exact
+transcript cursor.
 
 `session/transcript {target, at, limit}` replaces the old root `before` request
 with one selector vocabulary and returns `transcript_window`:
@@ -142,8 +157,12 @@ or durable writes.
 
 ## Browser reading and scrolling
 
-The browser retains one outline page of at most 64 marks/previews, plus at most
-one pinned current identity from live Runtime Client state. `turn-rail-items.ts`
+The browser retains one outline page of at most 64 previews, plus at most one
+pinned current identity from live Runtime Client state. The rail draws a
+fixed-pitch virtual mark for every turn the outline counts: marks inside the
+retained page are loaded, the rest are known by ordinal only and read their
+native page before navigating. The pinned identity is drawn only while the
+retained page is the newest one. `turn-rail-items.ts`
 merges these native sources; a current identity can have no historical cursor.
 Loaded transcript/process anchors remain a separate presentation capability.
 The first native process `control_cursor` absent from the outline cut triggers
@@ -159,8 +178,8 @@ reaches the reading position. The final owned region stays active beyond its sta
 marker. Genuinely unowned rows publish explicitly unknown detached ownership;
 the rail cannot substitute a stale navigation target or unrelated live Attempt.
 Only an exact native anchor satisfies a navigation scroll. Return to latest
-restores the current live identity and follow mode through ChatViewport. Paging and an
-ordinal input reach distant pages without accumulating outline history. Transcript
+restores the current live identity and follow mode through ChatViewport. An
+unloaded mark reaches a distant page without accumulating outline history. Transcript
 cache limits remain 512 entries / 8 MiB; ordinary prepend reads are 64 entries.
 Historical jumps and adjacent pages replace a finite window. Two outstanding
 window reads per Session are permitted; further intents retire older work without
@@ -169,9 +188,9 @@ queuing another read. A same-cut loaded exact anchor avoids another locate read.
 Outline paging intent is explicitly `latest` or `page(offset)`, independently of
 the native response's offset. Initial load and automatic start/location/settlement
 refreshes in latest mode omit the offset, so 64→65 and 128→129 select the new final
-page. Older, intermediate newer and ordinal selections establish an explicit
-page; automatic refresh preserves it as live turns arrive. Selecting the newest
-page explicitly restores latest intent. One refresh demand arriving during an
+page. Selecting an unloaded mark on any other page establishes an explicit
+page; automatic refresh preserves it as live turns arrive. Selecting a mark on
+the newest page explicitly restores latest intent. One refresh demand arriving during an
 in-flight outline read is retained and serviced after its reply; streaming text
 deltas create no demand. The cache still holds only one outline page.
 

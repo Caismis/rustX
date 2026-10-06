@@ -8,6 +8,7 @@ import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protoc
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
+import { railAwareResizeObserver } from './turn-navigator-fixture';
 let resize: () => void;
 const disconnect = vi.fn();
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -55,7 +56,7 @@ it('one frame owns 10 observer deliveries and 5 React updates; newer user intent
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
   const cancel = vi.fn(() => { frame = undefined; });
   vi.stubGlobal('cancelAnimationFrame', cancel);
-  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', railAwareResizeObserver(callback => { resize = callback; }));
   let height = 600, top = 0, writes = 0;
   const ui = render(<ChatViewport><div data-chat-anchor-key="a">0</div></ChatViewport>);
   const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
@@ -199,12 +200,12 @@ for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome}
   const entries = [entry('1', 'A-start', a), entry('2', 'A-body', a), entry('3', 'B-start', b), entry('4', 'B-body', b)];
   server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: {
     cut: { conversation_id: 'conversation-A', journal: '6', transcript: '4', mutation_revision: '0' },
-    offset: 0, total: 2, turns: [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, preview: '' })),
+    offset: 0, total: 2, turns: [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, prompt: '', response: '' })),
   } }));
   let frame: FrameRequestCallback | undefined, height = 2000;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
-  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', railAwareResizeObserver(callback => { resize = callback; }));
   const active = vi.fn();
   function Reading() {
     const [current, setCurrent] = useState<string | null>();
@@ -272,12 +273,12 @@ async function clippedReading(outcome: 'completed' | 'timed_out', later = true) 
   });
   const entries = [row('100', 'A-prefix', a), row('101', 'A-body', a), ...(later ? [row('120', 'B-start', b), row('121', 'B-body', b)] : [])];
   const cut = { conversation_id: 'conversation-A', journal: '130', transcript: '121', mutation_revision: '0' };
-  const turns = [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, preview: '' }));
+  const turns = [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, prompt: '', response: '' }));
   server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut, offset: 0, total: 2, turns } }));
   let frame: FrameRequestCallback | undefined, height = 2200;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
-  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', railAwareResizeObserver(callback => { resize = callback; }));
   const active = vi.fn();
   function Reading() {
     const [current, setCurrent] = useState<string | null>();

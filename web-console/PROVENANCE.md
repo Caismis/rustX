@@ -1165,13 +1165,23 @@ Materially adapted interaction patterns:
   explicit commit/cancel. The implementation publishes local CSS and persists
   only deliberate browser preferences.
 - `packages/client/ui-chat/src/client/chat/TurnNavigator.tsx`:
-  fixed pitch, active/pending marks, bounded hover/focus preview and keyboard
-  focus. The implementation consumes rustX's bounded native Attempt outline.
+  the fixed-pitch virtual rail of every known turn, active/busy marks, focus
+  range retention, first-size placement, follow-outside-the-fade-band and the
+  hover/focus prompt/response preview. The implementation consumes rustX's
+  native Attempt outline: its count names every mark, its one bounded page
+  supplies loaded marks, and an unloaded mark reads its native page before
+  navigating (Harness pages its event window the same way).
 - `packages/client/ui-chat/src/client/chat/turn-rail-items.ts` was inspected for
   outline/loaded-anchor reconciliation; no source was copied. Loaded anchors
   are reused only with the same native cut and exact origin/cursor.
-- `TurnNavigator.module.css` was inspected for rail geometry. The local rail
-  stylesheet is independently authored with rustX tokens.
+- `TurnNavigator.module.css` supplies the rail geometry, ticks, fades, preview
+  card and narrow-container hiding. The slot is the rustX reading surface,
+  which already excludes the composer, so the frame centers in it.
+- `tests/turn-navigator-fixture.ts` supplies the jsdom rail size observer.
+
+The preview text is native: `ConversationTurn.prompt` (the turn's first human
+prompt) and `ConversationTurn.response` (its final text once settled), bounded to
+Harness's one-line and three-line budgets. No preview is derived in the browser.
 
 No Harness runtime, Session store, semantic turn derivation, scroll coordinator
 or shell was imported. Native Attempt origins own turn identity; display ordinal
@@ -1205,10 +1215,66 @@ Read-only behavioral reference at approved pin
 - `packages/client/ui-chat/src/client/contract/snapshot.ts`
 - `packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx`
 
-These informed the non-modal lifecycle, inspectable diagnostic, checkpoint identity,
-and Composer measurement disclosure. ContextSeat is rustX-authored over native
-read state. No Harness command execution/storage, heuristic token breakdown, or
+These informed the non-modal lifecycle, inspectable diagnostic and checkpoint identity.
+The Composer occupancy disclosure was later removed for Harness parity; ContextSeat
+is rustX-authored over native read state and renders only compaction lifecycle. No Harness command execution/storage, heuristic token breakdown, or
 projected token estimate was imported. Existing canonical transcript rendering owns
 historical checkpoints; the context seat adds no history rows. The failed lookup
 of `ui-chat/src/client/chat/ContextMeter.tsx` was corrected to the actual
 `ui-conversation` path above. Source hashes are recorded under `inspected_only`.
+
+## Ask-question takeover and transcript row (UI/UX alignment)
+
+Reference pin `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+
+- `packages/client/ui-user-questions/src/client/QuestionComposer.tsx` (QuestionFlow):
+  the takeover keeps the header-only eyebrow, the minimize and dismiss icon
+  actions, the always-visible custom answer row, single-choice advance, the
+  skip/next/submit footer and the recommended first-choice draft. Dismissing
+  the set is the native decline; a skipped question is omitted from the native
+  index submission, exactly like any unanswered one. Countdown, Remote,
+  plan-review and slot-store machinery is excluded.
+- `packages/client/ui-tool/src/client/tool/toolviews/ask-question-row.tsx`,
+  `components/QuestionToolRow.tsx` and `components/AskQuestionCard.tsx` →
+  `src/presentation/agent/QuestionRow.tsx`: the row summary is the interaction
+  verdict (waiting, answered count, cancelled, interrupted) and its expansion is
+  the read-only question/answer record. `src/bindings/ask-user.ts` reads it from
+  the persisted native `ask_user` arguments and result, pairing answers by their
+  echoed question index; anything it cannot pair keeps the generic tool card.
+- `components/AskQuestionCard.module.css` → `src/presentation/agent/AskQuestionCard.module.css`.
+
+The timed-question panel actions and the trajectory Inspect pill have no rustX
+counterpart and were not imported.
+
+## Step-process groups (UI/UX alignment)
+
+Reference pin `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
+
+- `packages/client/ui-chat/src/client/conversation-nodes/process-groups.ts` and
+  `process-activity.ts` were followed for segmentation and the category ranking;
+  `src/bindings/step-groups.ts` re-expresses them over native transcript entries
+  and rustX Tool names. No source was copied.
+- `packages/client/ui-chat/src/client/chat/ChatGroupSeat.tsx` and `step-process.ts`
+  → `src/presentation/agent/StepGroup.tsx`: the group header (activity icon
+  swapped for the chevron on hover or expansion), the closed-group title
+  composition and the capped body with scroll-edge fades.
+- `ChatGroupSeat.module.css` → `src/presentation/agent/StepGroup.module.css`.
+- `packages/client/ui-chat/src/client/presentation-policy.ts`: rustX has no work-details
+  mode and uses Harness's default `detailed` policy (history grouped, live in place).
+
+Live group titles and details, follow scrolling, presentation modes and the
+searchable-hidden reveal were not imported.
+
+## Usage pills and context meter (UI/UX alignment)
+
+Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
+read-only. `ui-chat` `stat-dialog.ts` / `.module.css` became the
+`StatDialog` primitive (Base UI Popover owns placement and dismissal);
+`StatsPills.tsx`, `TurnUsagePanel.tsx` and `ui-conversation` `ContextMeter.tsx`
+became `app/agent/UsageStats.tsx` with their styles combined in
+`UsageStats.module.css`; `token-format.ts` (plus `formatDuration` and
+`formatTokensPerSecond`) became `app/agent/token-format.ts`. The retired
+`ConversationStats.tsx` record is removed. Harness's Compact mode, plugin dock
+slots, cache-write bucket and browser-side token meter are not imported: every
+figure is a native rustX reading (`ConversationStatistics.timing`,
+`CompletedResponseView.usage`/`models`, `ContextOccupancy.breakdown`).

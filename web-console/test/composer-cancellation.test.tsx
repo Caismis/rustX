@@ -166,7 +166,7 @@ it('a locally refused control continuation cannot clear a successor cancellation
 it.each(['queue', 'steer'] as const)('resident ContextSeat preserves %s submission, exact cancellation and compact draft ownership', async preference => {
   composerPreferences().setBusyEnter(preference);
   await mount(); vi.useRealTimers();
-  expect(screen.getByText('Last request context unavailable')).toBeTruthy();
+  expect(document.querySelector('[data-context-seat]')).toBeNull();
   const expected = server.client.cancellationTarget('A')!;
   fireEvent.change(input(), { target: { value: 'ordinary draft' } });
   await act(async () => fireEvent.keyDown(input(), { key: 'Enter' }));

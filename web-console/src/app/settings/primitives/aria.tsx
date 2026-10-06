@@ -5,11 +5,12 @@ import clsx from 'clsx';
 import {
   Button as AriaButton, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
   ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Popover as AriaPopover, SearchField, Select, SelectValue,
-  Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs,
+  Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs, Text,
 } from 'react-aria-components';
 import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import buttonCss from '../../../presentation/primitives/Button.module.css';
 import css from '../../../presentation/settings/SettingsWorkflow.module.css';
+import contentCss from '../../../presentation/settings/SettingsContent.module.css';
 
 function Popover(props: React.ComponentProps<typeof AriaPopover>) {
   const container = useDialogPortal();
@@ -38,7 +39,7 @@ export function Choice<T extends string>({ label, value, onChange, options, disa
   return <Select className={css.select} selectedKey={value} isDisabled={disabled} onSelectionChange={key => onChange(key as T)}>
     <Label>{label}</Label>
     <AriaButton className={css.selectTrigger}><SelectValue /><span aria-hidden="true">▾</span></AriaButton>
-    {description}
+    {description && <Text slot="description" className={contentCss.hint}>{description}</Text>}
     <Popover className={css.popover}>
       <ListBox>{options.map(([key, text]) => <ListBoxItem key={key} id={key} className={css.option}>{text}</ListBoxItem>)}</ListBox>
     </Popover>

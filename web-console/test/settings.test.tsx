@@ -7,10 +7,11 @@ import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
-  confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
+  chooseOption, confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
   settingsReady, SettingsSurface,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
+import { composerPreferences, COMPOSER_PREFERENCE_KEY } from '../src/app/composer/preferences';
 afterEach(cleanup);
 
 /** The native source path and revision are diagnostics: they live on Advanced,
@@ -107,6 +108,21 @@ it('S2-01 global Settings has exactly six product pages and opens at General', a
   ]);
   expect(screen.getByRole('tab', { name: 'General', selected: true })).toBeTruthy();
   for (const gone of obsoletePages) expect(screen.queryByRole('tab', { name: gone })).toBeNull();
+});
+
+it('General owns the busy-state Enter behavior the Composer reads (Harness composer-enter row)', async () => {
+  localStorage.clear(); composerPreferences().setBusyEnter('queue');
+  const subject = cfg3Client();
+  render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
+  const general = screen.getByRole('region', { name: 'General' });
+  const trigger = within(general).getByRole('button', { name: (name: string) => name.endsWith('Send behavior while busy') });
+  expect(trigger.textContent).toContain('Queue');
+  expect(trigger.getAttribute('aria-describedby')).toBeTruthy();
+  expect(within(general).getByText(/Cmd\/Ctrl\+Enter uses the other behavior/)).toBeTruthy();
+  await chooseOption('Send behavior while busy', 'Steer', within(general));
+  expect(composerPreferences().getSnapshot()).toBe('steer');
+  expect(localStorage.getItem(COMPOSER_PREFERENCE_KEY)).toBe('steer');
+  act(() => composerPreferences().setBusyEnter('queue'));
 });
 
 it('S2-01 Workspace Settings is a constrained page set that lands on Models', async () => {

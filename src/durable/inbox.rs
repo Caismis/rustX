@@ -512,13 +512,23 @@ impl LineageSeed {
                     .iter()
                     .any(|message| crate::conversation::message_id_of(message) == *id)
             });
+            let valid_prompt = turn.prompt_message_id.as_ref().is_none_or(|id| {
+                self.canonical.iter().any(
+                    |message| matches!(message, MessageBlock::User(message) if &message.id == id),
+                )
+            });
             let valid_location = !turn.process_message_ids.is_empty()
                 || !matches!(
                     turn.outcome,
                     super::reading::InheritedTurnOutcome::IncompleteAtCut
                         | super::reading::InheritedTurnOutcome::Completed
                 );
-            if !unique_owner || !valid_members || !valid_predecessor || !valid_location {
+            if !unique_owner
+                || !valid_members
+                || !valid_predecessor
+                || !valid_prompt
+                || !valid_location
+            {
                 return Err(ConversationStoreError::InvalidReference(
                     "invalid inherited turn provenance".into(),
                 ));

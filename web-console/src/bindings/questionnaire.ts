@@ -3,7 +3,8 @@ import type { QuestionSpecification, QuestionnaireAnswerEntry, QuestionnaireSubm
 export class QuestionnaireValidationError extends Error {
   constructor(tx: Translate, readonly notice: Message) { super(displayText(tx, notice)); }
 }
-export interface QuestionDraft { selected: number[]; text: string; boolean?: boolean }
+/** `skipped` marks a question the user passed on; it is omitted like any unanswered one. */
+export interface QuestionDraft { selected: number[]; text: string; boolean?: boolean; skipped?: boolean }
 export const emptyDraft = (): QuestionDraft => ({ selected: [], text: '' });
 
 /** Encode the existing lossless binary64 wire scalar, never a JSON number. */

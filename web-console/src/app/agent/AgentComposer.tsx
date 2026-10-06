@@ -15,7 +15,6 @@ import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
 import { useBusyEnter } from '../composer/preferences';
 import { StopSequence, type StopScope } from '../composer/stop-sequence';
-import { Menu } from '../../presentation/primitives/Menu';
 import { useTextareaAutosize } from '../composer/useTextareaAutosize';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
@@ -32,8 +31,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
   consumed?: { id: string; sequence: number };
 }) {
   const tx = useTranslation();
-  const [busyEnter, preference] = useBusyEnter();
-  const [preferenceOpen, setPreferenceOpen] = useState(false);
+  const [busyEnter] = useBusyEnter();
   const [stopSequence] = useState(() => new StopSequence());
   const composing = useRef(false);
   const escapePress = useRef<{ event: KeyboardEvent; accept: ReturnType<StopSequence['prepare']> } | undefined>(undefined);
@@ -94,7 +92,7 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
     blocked: disabled || submitDisabled, acknowledging: busy, uploadsPending: pending, cancellationAvailable };
   const primary = composerSubmissionPolicy(facts);
-  useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu, preferenceOpen]);
+  useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
   useEffect(() => {
     // Window blur only resets; keyboard recognition stays on the focused editor.
     window.addEventListener('blur', stopSequence.reset);
@@ -204,15 +202,6 @@ export function AgentComposer({ onRetainedRemove, onRetainedRecover, intakeOwner
           </button>
         </div>
       </div>
-    </div>
-    <div className={css.busyEnter}>
-      <Menu open={preferenceOpen} autoFocus onClose={() => setPreferenceOpen(false)} selectedId={busyEnter}
-        items={['queue', 'steer'].map(id => ({ id, label: tx(id === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') }))}
-        onSelect={id => { preference.setBusyEnter(id as 'queue' | 'steer'); setPreferenceOpen(false); }}
-        anchor={<button type="button" className={css.select} title={tx('agent:submission.enter-while-running')}
-          aria-haspopup="menu" aria-expanded={preferenceOpen} onClick={() => setPreferenceOpen(value => !value)}>
-          {tx('agent:submission.enter-preference', { behavior: tx(busyEnter === 'queue' ? 'agent:submission.queue' : 'agent:submission.steer') })}
-        </button>} />
     </div>
   </div>;
 }

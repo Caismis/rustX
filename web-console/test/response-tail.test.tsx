@@ -1,12 +1,13 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { ConversationStats } from '../src/app/agent/ConversationStats';
+import { ConversationStats } from '../src/app/agent/UsageStats';
+import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
 import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v35';
 import { snapshot } from './fixture';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });
 const response: CompletedResponseView = { closing_message_id: 'final-a', origin: { conversation_id: 'origin-conversation', closing_message_id: 'final-a', attempt_id: 'attempt-a' }, completed_at: '2026-09-19T08:00:00Z', surface_revision: '42', retry_message_id: 'input-a', usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } };
 function conversation(): RuntimeClientSnapshot {
   return { ...snapshot(), transcript: { entries: [
@@ -32,10 +33,10 @@ it('one completed response tail copies only final visible text and keeps missing
   const tail=within(ui.getByLabelText('Completed Turn'));
   await act(async()=>fireEvent.click(tail.getByRole('button',{name:'Copy'})));
   expect(writeText).toHaveBeenCalledWith('Final answer');
-  fireEvent.click(tail.getByRole('button',{name:'Usage 120 tokens'}));
-  const detail=within(ui.getByRole('dialog',{name:'Usage'}));
+  fireEvent.click(tail.getByRole('button',{name:'Usage 120 tok'}));
+  const detail=within(await ui.findByRole('dialog',{name:'Turn usage'}));
   expect(detail.getByText('Input')).toBeTruthy();
-  expect(detail.queryByText('Cache read')).toBeNull(); expect(detail.queryByText('Reasoning')).toBeNull();
+  expect(detail.queryByText('Cached input')).toBeNull(); expect(detail.queryByText('Cache hit')).toBeNull(); expect(detail.queryByText('Model')).toBeNull();
   expect(ui.queryByText(/Ran for/)).toBeNull();
   expect(ui.container.textContent).not.toContain('attempt-a'); expect(ui.container.textContent).not.toContain('42');
 });
@@ -62,16 +63,32 @@ it('paging during live refresh preserves exact response facts and freshest nativ
   expect(merged.page.entries?.filter(entry=>entry.completed_response)).toHaveLength(1);
   expect(merged.page.entries?.at(-1)?.completed_response).toEqual(response);
 });
-it('composer totals ignore the loaded transcript and context uses only native measurement', () => {
+it('composer pills read native totals and the last measured request, never the loaded transcript', async () => {
   const state=conversation(); state.transcript.entries=[];
-  state.context={compaction_count:0,compaction_in_progress:false,last_request_occupancy:{input_tokens:1024,context_window_tokens:4096,model:'historical-model'}};
-  const ui=render(<ConversationStats snapshot={state}/>);
-  expect(ui.getByText('12 Turns · 34 Steps')).toBeTruthy();
-  expect(ui.getByRole('button',{name:'Conversation usage 1200 tokens'})).toBeTruthy();
-  expect(ui.queryByLabelText('Last request context 25%')).toBeNull();
-  delete state.context!.last_request_occupancy;
-  ui.rerender(<ConversationStats snapshot={state}/>);
-  expect(ui.queryByLabelText('Last request context 25%')).toBeNull();
+  const statistics={...state.transcript.statistics!,timing:{model_ms:20500,tool_ms:9652000,mean_ttft_ms:3100,output_tokens_per_second:49.2},
+    reported_usage:{input_tokens:22297,output_tokens:543,total_tokens:22840,details:{cached_input_tokens:13568}}};
+  const occupancy={input_tokens:7700,context_window_tokens:262144,model:'historical-model',breakdown:{system_tokens:1900,tool_tokens:6000,message_tokens:0}};
+  act(()=>localeController.setLocale('zh'));
+  const ui=render(<ConversationStats statistics={statistics} occupancy={occupancy}/>);
+  fireEvent.click(ui.getByRole('button',{name:'12 轮 34 步 · 49 tok/s'}));
+  const session=within(await ui.findByRole('dialog',{name:'会话统计'}));
+  expect(session.getByText('20.5秒')).toBeTruthy(); expect(session.getByText('160分52秒')).toBeTruthy(); expect(session.getByText('3.1秒')).toBeTruthy();
+  fireEvent.click(ui.getByRole('button',{name:'22.8K tok · 缓存命中 61%'}));
+  const usage=within(await ui.findByRole('dialog',{name:'Token 用量'}));
+  expect(usage.getByText('22,840 tok')).toBeTruthy(); expect(usage.getByText('8,729 tok')).toBeTruthy(); expect(usage.getByText('13,568 tok')).toBeTruthy();
+  // Every request reported usage, so no coverage row is shown.
+  expect(usage.queryByText('用量上报')).toBeNull();
+  fireEvent.click(ui.getByRole('button',{name:'上下文已用 3%'}));
+  const context=within(await ui.findByRole('dialog',{name:'上下文已用'}));
+  expect(context.getByText('7.7K / 262K')).toBeTruthy(); expect(context.getByText('~6K')).toBeTruthy();
+  // A zero part draws no segment: the bar keeps only the system and tool parts.
+  expect(document.querySelectorAll('[role="dialog"] [style*="width"]')).toHaveLength(2);
+  ui.rerender(<ConversationStats statistics={{...statistics,timing:undefined,requests_with_usage:'33',reported_usage:{input_tokens:100,output_tokens:20,total_tokens:120}}}/>);
+  expect(ui.getByText('12 轮 34 步').closest('button')).toBeNull();
+  expect(ui.queryByRole('button',{name:/上下文已用/})).toBeNull();
+  fireEvent.click(ui.getByRole('button',{name:'120 tok'}));
+  const partial=within(await ui.findByRole('dialog',{name:'Token 用量'}));
+  expect(partial.getByText('输入')).toBeTruthy(); expect(partial.getByText('33/34')).toBeTruthy();
 });
 it('an unresolved response outside the fresh window is reread instead of freezing missing completion', () => {
   const state=conversation(); state.transcript.entries![2].response_pending=true;
@@ -83,25 +100,19 @@ it('an unresolved response outside the fresh window is reread instead of freezin
   expect(refreshed.error).toContain('reread unresolved native responses');
 });
 
-it('timing details use native whole runtime and distinguish first-request TTFT, missing values and zero', () => {
+it('the Turn usage dialog splits cached input and names the requests\' models', async () => {
   const state = conversation();
-  state.transcript.entries![2].completed_response = { ...response, timing: { total_duration_ms: 19000, ttft_ms: 320, generation_ms: 1280, output_tokens_per_second: 15.625 } };
+  state.transcript.entries![2].completed_response = { ...response, models: ['kimi-k3', 'deepseek-v4'], timing: { total_duration_ms: 19000 },
+    usage: { input_tokens: 15055, output_tokens: 406, total_tokens: 15461, details: { cached_input_tokens: 7168, reasoning_tokens: 120 } } };
   const ui = render(<AgentTranscript snapshot={state}/>);
-  fireEvent.click(ui.getByRole('button', { name: 'Ran for 19 s' }));
-  const detail = within(ui.getByRole('dialog', { name: 'Response timing' }));
-  expect(detail.getByText('First request TTFT (from dispatch)')).toBeTruthy();
-  expect(detail.getByText('0.32 s')).toBeTruthy();
-  expect(detail.getByText('1.28 s')).toBeTruthy();
-  expect(detail.getByText('15.6 tok/s')).toBeTruthy();
-  fireEvent.click(ui.getByRole('button', { name: 'Close timing' }));
-  state.transcript.entries![2].completed_response!.timing = { total_duration_ms: 0, generation_ms: 0 };
-  ui.rerender(<AgentTranscript snapshot={state}/>);
-  fireEvent.click(ui.getByRole('button', { name: 'Ran for 0 s' }));
-  expect(ui.queryByText('First request TTFT (from dispatch)')).toBeNull();
-  expect(ui.queryByText('Output speed')).toBeNull();
-  expect(ui.getAllByText('0 s')).toHaveLength(2);
-  fireEvent.click(ui.getByRole('button', { name: 'Close timing' }));
-  state.transcript.entries![2].completed_response!.timing = { ttft_ms: 320 };
-  ui.rerender(<AgentTranscript snapshot={state}/>);
+  fireEvent.click(ui.getByRole('button', { name: 'Usage 15.5K tok' }));
+  const detail = within(await ui.findByRole('dialog', { name: 'Turn usage' }));
+  expect(detail.getByText('15,461 tok')).toBeTruthy();
+  expect(detail.getByText('kimi-k3, deepseek-v4')).toBeTruthy();
+  expect(detail.getByText('47.6%')).toBeTruthy();
+  expect(detail.getByText('7,887 tok')).toBeTruthy();
+  expect(detail.getByText('7,168 tok')).toBeTruthy();
+  expect(detail.getByText('(120 tok reasoning)')).toBeTruthy();
+  // The process header owns the Turn duration; the actions carry no timing pill.
   expect(ui.queryByRole('button', { name: /Ran for/ })).toBeNull();
 });

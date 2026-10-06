@@ -27,13 +27,15 @@ export function Interactions({ client, state, view }: {
       {kind.type === 'approval' ? <ApprovalTakeover title={tx('interactions:interactions.value-value', { p0: kind.tool_name, p1: kind.reason })} detail={<pre>{json(kind.arguments)}</pre>}
         disabled={disabled} status={status} onAllow={() => response({ type: 'approval', decision: { type: 'allow' } })}
         onDeny={() => response({ type: 'approval', decision: { type: 'deny', reason: 'Denied by developer in rustX Web Console.' } })} />
-        : kind.type === 'questionnaire' ? <Questionnaire key={key} questions={kind.questionnaire.questions} disabled={disabled} status={`${kind.requester.tool_name} · ${status}`}
+        : kind.type === 'questionnaire' ? <Questionnaire key={key} questions={kind.questionnaire.questions} disabled={disabled}
+          status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
           onSubmit={value => response({ type: 'questionnaire', response: { type: 'submitted', value } })}
           onDecline={() => response({ type: 'questionnaire', response: { type: 'declined' } })} />
           : <Review key={key} title={status} detail={json({ subject: kind.review.subject, context: kind.review.context })} disabled={disabled}
             accept={() => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'accepted' } } })}
             reject={feedback => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'rejected', feedback } } })} />}
-      <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
+      {/* A questionnaire's own dismiss action is its decline. */}
+      {kind.type !== 'questionnaire' && <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>}
     </div>;
   });
 }

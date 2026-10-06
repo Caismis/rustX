@@ -215,6 +215,49 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
         );
         append(&store, attempt, RuntimeEvent::TurnStarted);
         request(&store, attempt, 0, Some(usage(Some(20))));
+        let call = crate::runtime::identity::ToolCallId::new("call");
+        let tool_id = crate::runtime::identity::ToolId::new("tool-bash");
+        let proposal = MessageId::new(format!("proposal-{attempt}"));
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(AssistantMessageBlock {
+                    id: proposal.clone(),
+                    content: vec![AssistantContentBlock::ToolCall(crate::tools::ToolCall {
+                        id: call.clone(),
+                        tool_id: tool_id.clone(),
+                        name: "bash".into(),
+                        arguments: serde_json::json!({}),
+                    })],
+                }),
+                event(
+                    &store,
+                    attempt,
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: proposal,
+                    },
+                ),
+            )
+            .unwrap();
+        append(
+            &store,
+            attempt,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call.clone(),
+                tool_id: tool_id.clone(),
+            },
+        );
+        // Calls pair within their Attempt; each Attempt reuses the provider call id.
+        let mut settled = event(
+            &store,
+            attempt,
+            RuntimeEvent::ToolExecutionFailed {
+                tool_call_id: call,
+                tool_id,
+                error: "controlled".into(),
+            },
+        );
+        settled.timestamp += chrono::Duration::milliseconds(1500);
+        store.append_event(settled).unwrap();
         assistant(&store, attempt, &format!("answer-{attempt}"));
         finish(&store, attempt);
     }
@@ -223,15 +266,21 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
     let earlier = page(&store, latest.next_cursor.map(Into::into), 1);
     assert_eq!(full.statistics, latest.statistics);
     assert_eq!(full.statistics, earlier.statistics);
-    let totals = full.statistics.unwrap();
+    let totals = full.statistics.clone().unwrap();
     assert_eq!(totals.turns, 2);
     assert_eq!(totals.steps, 2);
     assert_eq!(totals.model_requests, 2);
     assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
     assert_eq!(
-        totals.timing.unwrap().output_tokens_per_second,
-        Some(15.625)
+        totals.timing.unwrap(),
+        crate::durable::response::ConversationTiming {
+            model_ms: Some(3200),
+            tool_ms: Some(3000),
+            mean_ttft_ms: Some(320),
+            output_tokens_per_second: Some(15.625),
+        }
     );
+    assert_eq!(tails(&full)[0].models, ["historical-model"]);
     let clock = totals.latest_turn.unwrap();
     assert_eq!(clock.attempt_id, AttemptId::new("b"));
     assert_eq!(clock.ended_at, Some(clock.started_at));
@@ -434,6 +483,15 @@ fn context_measurement_is_native_and_is_invalidated_by_compaction() {
     assert_eq!(read.input_tokens, 100);
     assert_eq!(read.context_window_tokens, 4096);
     assert_eq!(read.model, "historical-model");
+    // The `"system"` prompt prices at ceil(8 / 4); messages are the measured remainder.
+    assert_eq!(
+        read.breakdown,
+        crate::context::occupancy::ContextBreakdown {
+            system_tokens: 2,
+            tool_tokens: 0,
+            message_tokens: 98
+        }
+    );
     request(&store, "a", 1, None);
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),

@@ -596,7 +596,7 @@ describe('Composer context stack lifecycle', () => {
     const full = running(withQueue([inbound('1', 'one'), inbound('2', 'two')], withGoal(goal(), withTodos([task('1', 'pending')]))));
     const ui = await mount(full);
     const order = () => [...ui.container.querySelector('[data-composer-context-stack]')!.children].map(node => (node.hasAttribute('data-context-seat') ? 'Context' : node.getAttribute('aria-label')) ?? (node.querySelector('[data-composer-card]') ? 'Composer' : 'unknown'));
-    expect(order()).toEqual(['Context', 'To-dos', 'Goal', 'Queue', 'Composer']);
+    expect(order()).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
     const message = screen.getByLabelText('Message');
     fireEvent.change(message, { target: { value: 'Independent composer draft' } });
     fireEvent.click(within(dock('To-dos')).getByRole('button', { expanded: false }));
@@ -604,20 +604,20 @@ describe('Composer context stack lifecycle', () => {
     fireEvent.change(within(dock('Goal')).getByRole('textbox'), { target: { value: 'Kept draft' } });
     // Queue disappears: Todo disclosure and Goal draft are unaffected.
     await update(running(withGoal(goal(), withTodos([task('1', 'pending')]))));
-    expect(order()).toEqual(['Context', 'To-dos', 'Goal', 'Composer']);
+    expect(order()).toEqual(['To-dos', 'Goal', 'Composer']);
     expect(screen.getByLabelText('Message')).toBe(message);
     expect(message).toHaveProperty('value', 'Independent composer draft');
     expect(within(dock('To-dos')).getByRole('button', { expanded: true })).toBeTruthy();
     expect(within(dock('Goal')).getByRole('textbox')).toHaveProperty('value', 'Kept draft');
     // Todo disappears and Queue returns collapsed; Goal keeps its own draft.
     await update(running(withQueue([inbound('3', 'three'), inbound('4', 'four')], withGoal(goal()))));
-    expect(order()).toEqual(['Context', 'Goal', 'Queue', 'Composer']);
+    expect(order()).toEqual(['Goal', 'Queue', 'Composer']);
     expect(screen.getByLabelText('Message')).toBe(message);
     expect(message).toHaveProperty('value', 'Independent composer draft');
     expect(within(dock('Queue')).getByRole('button', { expanded: false })).toBeTruthy();
     expect(within(dock('Goal')).getByRole('textbox')).toHaveProperty('value', 'Kept draft');
     await update(withTodos([task('1', 'pending')]));
-    expect(order()).toEqual(['Context', 'To-dos', 'Composer']);
+    expect(order()).toEqual(['To-dos', 'Composer']);
     expect(screen.getByLabelText('Message')).toBe(message);
     expect(message).toHaveProperty('value', 'Independent composer draft');
     expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
@@ -640,10 +640,10 @@ describe('Composer context stack lifecycle', () => {
   it('R08: the composed composer stack reserves no Todo seat while the current list is empty', async () => {
     const ui = await mount(withTodos([task('1', 'pending')]));
     const seats = () => [...ui.container.querySelector('[data-composer-context-stack]')!.children].map(node => (node.hasAttribute('data-context-seat') ? 'Context' : node.getAttribute('aria-label')) ?? 'Composer');
-    expect(seats()).toEqual(['Context', 'To-dos', 'Composer']);
+    expect(seats()).toEqual(['To-dos', 'Composer']);
     await update(withTodos([]));
-    // The native Context seat and Composer remain; no empty Todo card reserves space.
-    expect(seats()).toEqual(['Context', 'Composer']);
+    // Only the Composer remains: an idle Context seat and an empty Todo reserve no space.
+    expect(seats()).toEqual(['Composer']);
     expect(ui.container.querySelector('[data-todo-state]')).toBeNull();
   });
   it('Session views never share dock presentation state', async () => {

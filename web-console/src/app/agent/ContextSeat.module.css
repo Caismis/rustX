@@ -2,7 +2,5 @@
 .root p { margin: 4px 0; }
 .root summary { cursor: pointer; }
 .root summary:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
-.measurement { color: var(--dsw-alias-label-tertiary); }
-.meter { width: 48px; height: 10px; margin-inline-end: 6px; }
 .read { margin-block: 4px; padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .read:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }

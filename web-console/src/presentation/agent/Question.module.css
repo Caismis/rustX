@@ -97,6 +97,13 @@
   margin: 0 2px 8px;
 }
 
+.waitStatus {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
 .footerActions {
   display: flex;
   align-items: center;

@@ -2,7 +2,10 @@ use crate::durable::reading::*;
 use crate::durable::{ConversationStore, LineageSeed, SqliteConversationStore};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::TextBlock;
-use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, MessageBlock};
+use crate::message::types::{
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock,
+    UserMessageBlock, UserSource,
+};
 use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId};
 use chrono::Utc;
 
@@ -67,6 +70,95 @@ fn timeout(store: &SqliteConversationStore, attempt: &str) {
         ))
         .unwrap();
 }
+fn human(id: &str, text: &str) -> MessageBlock {
+    MessageBlock::User(UserMessageBlock {
+        id: MessageId::new(id),
+        content: vec![UserContentBlock::Text(TextBlock { text: text.into() })],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: None,
+    })
+}
+fn commit_text(store: &SqliteConversationStore, attempt: &str, id: &str, text: &str) {
+    store
+        .append_canonical_with_event(
+            &message(id, text),
+            event(
+                store,
+                attempt,
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: MessageId::new(id),
+                },
+            ),
+        )
+        .unwrap();
+}
+/// Accepts and adopts one inbound message, idle (`None`) or into `attempt`.
+fn adopt(store: &SqliteConversationStore, source: UserSource, text: &str, attempt: Option<&str>) {
+    use crate::durable::inbox::InboundDraft;
+    let accepted = store
+        .accept_inbound(InboundDraft {
+            message_id: None,
+            source,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock { text: text.into() })],
+            timestamp: Utc::now(),
+            correlation: None,
+        })
+        .unwrap();
+    store
+        .adopt_pending_batch(accepted.sequence, attempt.map(AttemptId::new))
+        .unwrap();
+}
+#[test]
+fn turn_previews_are_the_opening_human_prompt_and_the_settled_final_response() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    // Turn one opens from an idle adoption; a steer adopted into it is not its prompt.
+    adopt(&store, UserSource::Human, "Open   turn\none", None);
+    start(&store, "a1");
+    commit_text(&store, "a1", "a1-first", "First answer");
+    adopt(&store, UserSource::Human, "Steer turn one", Some("a1"));
+    commit_text(&store, "a1", "a1-final", "Final answer one");
+    // A queued message adopted after the steer still belongs to turn two.
+    adopt(&store, UserSource::Human, "Queued for two", None);
+    let running = store.conversation_turns(None, 0, 64).unwrap();
+    assert_eq!(
+        (
+            running.turns[0].prompt.as_str(),
+            running.turns[0].response.as_str()
+        ),
+        ("Open turn one", ""),
+        "a turn still running at the cut has no final response",
+    );
+    timeout(&store, "a1");
+    start(&store, "a2");
+    commit_text(&store, "a2", "a2-final", "Answer two");
+    timeout(&store, "a2");
+    // Non-human inbound never opens a turn's prompt; automatic continuation has none.
+    adopt(&store, UserSource::ExternalSystem, "System notice", None);
+    start(&store, "a3");
+    timeout(&store, "a3");
+    let outline = store.conversation_turns(None, 0, 64).unwrap();
+    let previews: Vec<_> = outline
+        .turns
+        .iter()
+        .map(|turn| (turn.prompt.as_str(), turn.response.as_str()))
+        .collect();
+    assert_eq!(
+        previews,
+        [
+            ("Open turn one", "Final answer one"),
+            ("Queued for two", "Answer two"),
+            ("", ""),
+        ]
+    );
+    // The frozen cut keeps its own previews after later work.
+    adopt(&store, UserSource::Human, "Later", None);
+    assert_eq!(
+        store.conversation_turns(Some(&outline.cut), 0, 64).unwrap(),
+        outline
+    );
+}
 #[test]
 fn distant_turn_windows_are_exact_bounded_and_read_only() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
@@ -80,7 +172,10 @@ fn distant_turn_windows_are_exact_bounded_and_read_only() {
     let outline = store.conversation_turns(None, 0, 64).unwrap();
     assert_eq!(outline.total, 600);
     assert_eq!(outline.turns.len(), 64);
-    assert_eq!(outline.turns[0].preview.chars().count(), 240);
+    // One rail-card line of prompt, three of response: bounded and marked clipped.
+    assert_eq!(outline.turns[0].prompt, "");
+    assert_eq!(outline.turns[0].response.chars().count(), 120);
+    assert!(outline.turns[0].response.ends_with('…'));
     let target = &outline.turns[0];
     let latest = store
         .conversation_window(&ConversationWindowAt::Latest, 64)
@@ -193,11 +288,13 @@ fn copied_turns_preserve_origin_and_use_destination_locations() {
         retry_message_id: None,
         usage: None,
         timing: None,
+        models: vec!["origin-model".into()],
     };
     destination
         .initialize_lineage(
             &LineageSeed::history(vec![
                 message("unowned", "canonical text without a native owner"),
+                human("copied-prompt", "  Inherited\n prompt  "),
                 message("copied-first", "first"),
                 message("copied-final", "final"),
             ])
@@ -208,6 +305,7 @@ fn copied_turns_preserve_origin_and_use_destination_locations() {
                 },
                 process_message_ids: provenance.process_message_ids.clone(),
                 preceding_message_id: None,
+                prompt_message_id: Some(MessageId::new("copied-prompt")),
                 outcome: InheritedTurnOutcome::Completed,
                 started_at: None,
                 ended_at: Some(provenance.completed_at),
@@ -222,7 +320,23 @@ fn copied_turns_preserve_origin_and_use_destination_locations() {
     let outline = destination.conversation_turns(None, 0, 64).unwrap();
     assert_eq!(outline.total, 2);
     assert_eq!(outline.turns[0].id.conversation_id, source);
-    assert_eq!(outline.turns[0].cursor.unwrap().get(), 2);
+    assert_eq!(outline.turns[0].cursor.unwrap().get(), 3);
+    // Inherited previews come from immutable provenance: its prompt and its
+    // newest text-bearing member. The new local turn has neither.
+    assert_eq!(
+        (
+            outline.turns[0].prompt.as_str(),
+            outline.turns[0].response.as_str()
+        ),
+        ("Inherited prompt", "final")
+    );
+    assert_eq!(
+        (
+            outline.turns[1].prompt.as_str(),
+            outline.turns[1].response.as_str()
+        ),
+        ("", "")
+    );
     let window = destination
         .conversation_window(
             &ConversationWindowAt::Turn {

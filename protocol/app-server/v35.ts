@@ -4977,6 +4977,15 @@ export interface ContextOccupancy {
    * Provider-facing historical model, never substituted from current config.
    */
   model: string;
+  breakdown: ContextBreakdown;
+}
+/**
+ * Heuristic composition of the same request's input.
+ */
+export interface ContextBreakdown {
+  system_tokens: number;
+  tool_tokens: number;
+  message_tokens: number;
 }
 /**
  * Public metadata for one committed compaction.
@@ -6061,9 +6070,9 @@ export interface ConversationStatistics {
    */
   latest_turn?: ConversationTurnClock | null;
   /**
-   * Complete measured request timing, separate from usage coverage.
+   * Summed measured work time, separate from usage coverage.
    */
-  timing?: CompletedResponseTiming | null;
+  timing?: ConversationTiming | null;
   completed_responses: string;
   model_requests: string;
   /**
@@ -6078,24 +6087,26 @@ export interface ConversationTurnClock {
   ended_at?: string | null;
 }
 /**
- * Historical product timing derived from native lifecycle and generation evidence.
- * Missing evidence stays absent; these are not destination execution facts.
+ * Whole-conversation work time. Unlike a completed response's exact
+ * aggregate, each figure sums only the requests or Tool executions that
+ * measured it, and is absent until the first one did.
  */
-export interface CompletedResponseTiming {
+export interface ConversationTiming {
   /**
-   * Authoritative successful Attempt completion minus its start timestamp.
+   * Summed dispatch-to-provider-terminal time of measured requests.
    */
-  total_duration_ms?: number | null;
+  model_ms?: number | null;
   /**
-   * First actual request's adapter-dispatch-to-first-output duration.
+   * Summed start-to-terminal time of settled foreground Tool executions.
    */
-  ttft_ms?: number | null;
+  tool_ms?: number | null;
   /**
-   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   * Mean dispatch-to-first-output time over requests that produced output.
    */
-  generation_ms?: number | null;
+  mean_ttft_ms?: number | null;
   /**
-   * Fully covered output usage divided by fully covered positive generation work.
+   * Output tokens over decode time, summed over requests that report
+   * usage and a positive decode span.
    */
   output_tokens_per_second?: number | null;
 }
@@ -6345,6 +6356,10 @@ export interface CompletedResponseView {
    */
   usage?: ModelUsage | null;
   timing?: CompletedResponseTiming | null;
+  /**
+   * Distinct provider-facing models of the Attempt's actual requests.
+   */
+  models?: string[];
 }
 /**
  * Original execution owner, including for inherited historical responses.
@@ -6356,6 +6371,28 @@ export interface ResponseOrigin {
    * Identifies a committed canonical message block.
    */
   closing_message_id: string;
+}
+/**
+ * Historical product timing derived from native lifecycle and generation evidence.
+ * Missing evidence stays absent; these are not destination execution facts.
+ */
+export interface CompletedResponseTiming {
+  /**
+   * Authoritative successful Attempt completion minus its start timestamp.
+   */
+  total_duration_ms?: number | null;
+  /**
+   * First actual request's adapter-dispatch-to-first-output duration.
+   */
+  ttft_ms?: number | null;
+  /**
+   * Sum of output-producing requests' first-output-to-provider-terminal spans.
+   */
+  generation_ms?: number | null;
+  /**
+   * Fully covered output usage divided by fully covered positive generation work.
+   */
+  output_tokens_per_second?: number | null;
 }
 /**
  * The foreground tool execution read model of one logical tool call.
@@ -7108,7 +7145,14 @@ export interface ConversationTurn {
    * None until native work has a visible member or terminal position.
    */
   cursor?: TranscriptCursor | null;
-  preview: string;
+  /**
+   * The turn's first human prompt; empty when none was adopted for it.
+   */
+  prompt: string;
+  /**
+   * The turn's final text-bearing response; empty until the turn settles.
+   */
+  response: string;
 }
 /**
  * The current read model; observing it never starts or authorizes work.
