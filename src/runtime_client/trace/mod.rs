@@ -41,6 +41,7 @@
 //! System Prompt state  nearest preceding actual request, in durable order
 //! Context introduction RequestSnapshot.request_context_ids + Ledger reads
 //! Tool-owned domains   the outer ToolCallId frozen in the native start fact
+//! Idle adoption        the first Attempt started after it (turn prompt rule)
 //! ```
 //!
 //! ## The two read responsibilities

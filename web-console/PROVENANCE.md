@@ -1320,11 +1320,15 @@ panel glyph in the corner seat) are 28px icon controls; view tabs are plain
 buttons, and the Chinese Chat tab reads 对话 as in Harness. The Trajectory
 toolbar uses Harness's 32px strip, icon toggles and trailing search field;
 Actual time stays visible as a rustX switch. Ledger role tags are label-only
-until the ledger is narrow, the Turn label hangs from the Turn's first row, only
-the selected Turn draws its rail, and the Request boundary is a dot. The detail
+until the ledger is narrow, the Turn label hangs from the Turn's first row and is
+the only structural chrome (Steps have no chrome, seat or navigation target),
+only the selected Turn draws its rail, and the promoted initial System row sits
+outside that rail and names its change only. As in Harness, a Request is a
+gutter dot on the boundary above the first output of its own Step; a Request
+without such output keeps its own 10px seat, and folded Turns show no Request
+dots. The timeline's model span uses Harness's TTFT/decoding violets. The detail
 header shows a role tag, the native Turn/Step location and an icon close.
-Native seat heights, focus targets and controls are unchanged, so every control
-still sits inside its row.
+Every control except the boundary dot sits inside its row.
 Menu now keeps the trigger it captured on open until the next open, so after
 a selection the keyboard returns to the split button's chevron rather than the
 anchor's first button; a menu opened from outside its anchor closes onto the

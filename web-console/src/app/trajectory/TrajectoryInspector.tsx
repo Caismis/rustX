@@ -36,7 +36,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { diffLines } from 'diff';
-import { contextKindLabel, facetLabel, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
+import { contextKindLabel, facetLabel, type TurnStructure, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { Artifact } from '../components/Artifact';
 import { formatDuration, formatInstant } from './timeline';
 import css from './Trajectory.module.css';
@@ -924,20 +924,20 @@ function InspectorHeader({ kind, tag, location, closeLabel, onClose }: { kind: s
 }
 
 /**
- * Bounded evidence of one Turn or Step header.
+ * Bounded evidence of one Turn header.
  *
  * A header is presentation structure, not a detail owner: this reads only the
- * exact native Attempt/Step summary record the projection already attached to
- * it, and issues no detail read. Without that exact record it says so rather
- * than borrowing identity, lifecycle or timing from a member record.
+ * exact native Attempt summary record the projection already attached to it,
+ * and issues no detail read. Without that exact record it says so rather than
+ * borrowing identity, lifecycle or timing from a member record.
  */
-export function TrajectoryStructureInspector({ item, onClose }: { item: StructuralDisplayItem; onClose: () => void }) {
+export function TrajectoryStructureInspector({ item, onClose }: { item: TurnStructure; onClose: () => void }) {
   const tx = useTranslation();
   const record = item.native_record;
-  const native = item.type === 'TurnHeader' ? tx('trajectory:trajectory-inspector.attempt') : item.kind === 'step' ? tx('trajectory:copy.step') : undefined;
+  const native = tx('trajectory:trajectory-inspector.attempt');
   return (
     <aside className={css.inspector} aria-label={tx('trajectory:copy.trace-structure-inspector')}>
-      <InspectorHeader kind={item.type === 'TurnHeader' ? 'attempt' : 'step'} tag={native ?? item.label} location={item.label} closeLabel={tx('trajectory:copy.close-structure')} onClose={onClose} />
+      <InspectorHeader kind="attempt" tag={native} location={item.label} closeLabel={tx('trajectory:copy.close-structure')} onClose={onClose} />
       <div className={css.inspectorBody}>
         <p className={css.note}>“{item.label}{tx('trajectory:copy.is-a-loaded-window-ordinal-not-an-identity')}</p>
         {record ? (
@@ -951,12 +951,6 @@ export function TrajectoryStructureInspector({ item, onClose }: { item: Structur
               <dd className={css.machine}>{record.id}</dd>
               <dt>{tx('trajectory:trajectory-inspector.attempt')}</dt>
               <dd className={css.machine}>{record.location.attempt_id ?? <Unavailable />}</dd>
-              {record.kind === 'step' && (
-                <>
-                  <dt>{tx('trajectory:trajectory-inspector.logical-step')}</dt>
-                  <dd className={css.machine}>{record.location.step_id ?? <Unavailable />}</dd>
-                </>
-              )}
               {record.native_id && (
                 <>
                   <dt>{tx('trajectory:trajectory-inspector.native-identity')}</dt>
@@ -980,9 +974,7 @@ export function TrajectoryStructureInspector({ item, onClose }: { item: Structur
           </>
         ) : (
           <p className={css.unavailable}>
-            {native
-              ? tx('trajectory:copy.the-exact-native-value-record-is-not-loaded-at-this-read-cut-so-its-structural-evidence-is', { p0: native })
-              : tx('trajectory:copy.message-groups-attempt-owned-records-with-no-logical-step-it-has-no-native-structural-reco')}
+            {tx('trajectory:copy.the-exact-native-value-record-is-not-loaded-at-this-read-cut-so-its-structural-evidence-is', { p0: native })}
           </p>
         )}
       </div>

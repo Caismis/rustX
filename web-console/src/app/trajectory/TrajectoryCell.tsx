@@ -122,8 +122,8 @@ export function CellContent({ record }: { record: TraceRecord }) {
 
 /** Dedicated prompt cell: its request identity and native classification survive paging. */
 export function SystemPromptCell({ cell }: { cell: Extract<InspectableDisplayItem, { type: 'SystemPromptCell' }> }) {
-  const tx = useTranslation();
+  // As in Harness, the row names the change; the prompt itself is inspected.
   return <span className={css.preview} data-system-prompt-state={cell.record.request?.system_prompt.state} data-tool-catalog-state={cell.record.request?.tool_catalog}>
-    <strong>{cell.label}</strong> · {cell.preview || tx('trajectory:trajectory-inspector.empty')}
+    {cell.label}
   </span>;
 }

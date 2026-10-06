@@ -96,16 +96,20 @@
   background: var(--dsw-alias-label-tertiary);
 }
 
-/* Native request-relative positions: preparation, TTFT, generation.
+/* Native request-relative positions: preparation, TTFT, generation. Harness
+   colours: TTFT is the decoding violet mixed into the layer behind it.
    No minimum width may stretch these authoritative phase coordinates. */
+.span[data-kind='request'] {
+  --trajectory-assistant-decoding-color: color-mix(in srgb, var(--dsw-alias-brand-primary-new-colorprimary-new-color) 60%, var(--dsw-alias-state-error-secondary));
+  --trajectory-assistant-ttft-color: color-mix(in srgb, var(--trajectory-assistant-decoding-color) 54%, var(--dsw-alias-bg-layer-2));
+}
 .span[style*='--trajectory-dispatch'] {
   min-width: 0;
   background: linear-gradient(
     to right,
     var(--dsw-alias-label-tertiary) 0 var(--trajectory-dispatch),
-    color-mix(in srgb, #885fc2 42%, transparent)
-      var(--trajectory-dispatch) var(--trajectory-first-output, 100%),
-    #885fc2 var(--trajectory-first-output, 100%)
+    var(--trajectory-assistant-ttft-color) var(--trajectory-dispatch) var(--trajectory-first-output, 100%),
+    var(--trajectory-assistant-decoding-color) var(--trajectory-first-output, 100%)
   );
 }
 
@@ -183,5 +187,5 @@
   opacity: 1;
 }
 
-.span[data-kind='request']:not([style*='--trajectory-dispatch']):not([data-error]) { background: #885fc2; }
+.span[data-kind='request']:not([style*='--trajectory-dispatch']):not([data-error]) { background: var(--trajectory-assistant-decoding-color); }
 .boundary span { display: none; }

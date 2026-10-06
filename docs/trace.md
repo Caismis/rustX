@@ -475,13 +475,23 @@ The browser projects native `TraceRecord` summaries into a closed local
 `TrajectoryProjection` of Turn models and outside records. Each Turn owns Message
 and Step groups. Inspectable structural objects remain in the selection universe;
 `ledgerRows` projects a separate measurable semantic ledger. Ordinary rows are
-`RecordRow`, `SystemPromptCell`, `ContextRow` or a Calls summary. Turn and Step
-controls are inline chrome with exact native targets, never peer content rows.
-A Request marker belongs to its own System cell, otherwise its own Context cell,
-otherwise a 10px marker-only seat. No adjacent Assistant borrows a Request.
-There are no Event/Content headings. Initial System Prompt cells precede Turn
-chrome while retaining their exact Request and Step. Collapsed Turns keep System
-cells, their first main semantic row, and a 20px Step/Tool-call count summary.
+`RecordRow`, `SystemPromptCell`, `ContextRow` or a Calls summary. As in
+DeepSeek Harness, the Turn label is the only structural chrome: inline, with an
+exact native target, never a peer content row. A Step has no chrome or seat of
+its own; its label is search context and Inspector location only, so a Step
+with no visible content adds no row.
+As in DeepSeek Harness, a Request marker is a gutter dot on the boundary above
+the first output its own Step shows after the Request's own System/Context
+cells; that row hosts the marker without owning the Request. A Request with no
+such output (still running, or followed by a retry) keeps a 10px marker-only
+seat; when that seat opens a Turn it grows to 20px for the Turn label, and its
+dot leads the content column so it never covers the label. As in Harness,
+consecutive Request dots step 8px right per preceding marker seat rather than
+stacking. There are no Event/Content headings. Initial System Prompt cells precede
+Turn chrome and its rail while retaining their exact Request and Step; a System
+row names its change and leaves the prompt to the Inspector. Collapsed Turns keep System
+cells, their first main semantic row, and a 20px Step/Tool-call count summary;
+they show no Request markers.
 Important lifecycle, uncertainty, missing history and truncation remain visible.
 
 The closed display model separates inspectable items from structural headers.
@@ -495,12 +505,12 @@ and exact loaded membership for scrolling/search. The anchor is the first
 visible native record, **not** the structural or detail owner. A proven loaded
 Attempt/Step record may supply `native_record` evidence by exact kind and native
 structural IDs; no child can supply it. If the native start record is outside the
-page, that evidence is absent. Neither header owns a detail read: no fake detail
-domain and no owner-fetch paging. Selecting a header opens a separate structure
-inspector that renders only its exact `native_record` summary (record ID, native
-kind, Attempt ID, Step ID for a Step, lifecycle state, recorded start/end/duration,
-native ID and preview when present). Without that record it states that exact
-structural evidence is unavailable at this read cut; Message never has one.
+page, that evidence is absent. No header owns a detail read: no fake detail
+domain and no owner-fetch paging. Only a Turn header is selectable; it opens a
+separate structure inspector that renders only its exact Attempt `native_record`
+summary (record ID, native kind, Attempt ID, lifecycle state, recorded
+start/end/duration, native ID and preview when present). Without that record it
+states that exact structural evidence is unavailable at this read cut.
 
 Keys are JSON tuples, never indexes: record + native ID, system/request-boundary
 + Record ID + Request ID, context + Record ID + Request ID + Message ID, group +
@@ -522,18 +532,18 @@ focus. Calls construction remains solely in the display-policy projection.
 
 Detail selection stores display key, native owner, facet and optional Context
 Message ID. Structural focus is a separate local state with no detail owner.
-Click, Enter or Space on a header selects that structure, replaces any record
+Click, Enter or Space on a Turn label selects that structure, replaces any record
 Inspector with the structure inspector and clears cache selection without a detail
 read; that inspector reads the header's evidence from the current projection, so
 a lifecycle refresh or Turn renumbering never shows a stale copy. Closing it
-returns focus to the header without reselecting it. Arrow keys navigate
-display items; entering an inspectable row explicitly selects its owner. A Turn's
+returns focus to the header without reselecting it. Arrow keys navigate Turn
+labels, Request markers and semantic rows; entering an inspectable row explicitly selects its owner. A Turn's
 fold button changes only collapse state, preserving its selected cell and Inspector. Escape clears selection. Timeline
 selection only resolves inspectable items, never a structural header.
 
 A late detail reply can populate its owner's cache but cannot replace structural
 focus or a newer detail facet. On prepend, structural focus retains the same native
-Attempt/Step key even when the first loaded record changes. Crossing the virtual
+Attempt key even when the first loaded record changes. Crossing the virtual
 mount threshold restores DOM focus to that same key. Inspectable selection retains
 its exact record/facet. Neither path falls back to a numeric position.
 
@@ -542,7 +552,9 @@ renumber every Turn; it cannot move collapse, selection, detail, search or focus
 One native Attempt owns exactly one Turn and one native Step owns exactly one Step
 group even with interleaved records. The first loaded occurrence orders groups,
 never assigns membership. Attempt-owned records with no Step form Message.
-Unscoped records remain outside Turns. Flattening can therefore bring interleaved
+Unscoped records remain outside Turns. An adoption committed while idle carries no
+Attempt of its own; Trace resolves it to the first Attempt started after it,
+the rule the turn outline reads its prompt by, so a Turn opens on its own input. Flattening can therefore bring interleaved
 members of the same native structure together, without changing native history.
 Retries stay request metadata inside the same Step. Native IDs remain in Inspector.
 There is no Attempt-first renderer or compatibility hierarchy.
@@ -574,7 +586,7 @@ TanStack Virtual owns ordinary virtualization with semantic keys. One display
 seat + pixel-offset anchor transfers across prepend, boundary/header
 insertion/removal and the 100-display-item threshold. The anchor is the first
 fully visible seat, so a partly hidden seat above it that shrinks when its
-Turn/Step chrome moves to a prepended row cannot shift what the reader sees. There are no sticky full-width structural rows. Native structural focus can anchor
+Turn chrome moves to a prepended row cannot shift what the reader sees. There are no sticky full-width structural rows. Native structural focus can anchor
 the inline control across a change in its semantic seat. Tail follow
 runs only at the tail; content/lifecycle-only repair does not pull a reader down.
 

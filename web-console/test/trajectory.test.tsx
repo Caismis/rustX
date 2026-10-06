@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem } from '../src/app/trajectory/layout';
+import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, preferredStructure, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
 import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v35';
@@ -221,26 +221,26 @@ it('T1-06 retries stay one logical Step; failed and running requests need no Ass
   expect(screen.queryByText('Fold Steps')).toBeNull();
 });
 
-it('T1-06/10 segment anchors regroup within the same structure without acquiring detail ownership', () => {
+it('T1-06/10 Turn anchors regroup within the same Attempt without acquiring detail ownership', () => {
   const middle = traceRecord(10);
-  const segment = trajectoryItems([middle]).find(item => item.type === 'GroupHeader')!;
-  expect(segment.anchor_record_id).toBe(middle.id);
-  expect('owner_record_id' in segment).toBe(false);
-  const nativeStep = traceRecord(8, { kind: 'step', request: null });
-  const all = trajectoryItems([nativeStep, traceRecord(9), middle]);
-  const target = preferredStructure(all, segment)!;
-  expect(target.type).toBe('GroupHeader');
-  expect(target.native_record?.id).toBe(nativeStep.id);
-  expect(target.anchor_record_id).toBe(nativeStep.id);
+  const turn = trajectoryItems([middle]).find((item): item is TurnStructure => item.type === 'TurnHeader')!;
+  expect(turn.anchor_record_id).toBe(middle.id);
+  expect('owner_record_id' in turn).toBe(false);
+  const nativeAttempt = traceRecord(8, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' } });
+  const all = trajectoryItems([nativeAttempt, traceRecord(9), middle]);
+  const target = preferredStructure(all, turn)!;
+  expect(target.type).toBe('TurnHeader');
+  expect(target.native_record?.id).toBe(nativeAttempt.id);
+  expect(target.anchor_record_id).toBe(nativeAttempt.id);
   expect('owner_record_id' in target).toBe(false);
   const split = trajectoryItems([traceRecord(9), traceRecord(11, { kind: 'background', request: null, location: {} }), middle]);
   expect(split.filter(item => item.type === 'GroupHeader')).toHaveLength(1);
-  expect(preferredStructure(split, segment)?.anchor_record_id).toBe('trace:9');
-  expect(preferredStructure(trajectoryItems([traceRecord(9)]), segment)?.display_key).toBe(segment.display_key);
+  expect(preferredStructure(split, turn)?.anchor_record_id).toBe('trace:9');
+  expect(preferredStructure(trajectoryItems([traceRecord(9)]), turn)?.display_key).toBe(turn.display_key);
   expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:10', 'trace:11']);
 });
 
-it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never lends its evidence to a structure without its exact native record', kind => {
+it.each(['request', 'tool'] as const)('T1-04/06 mid-Turn %s anchor never lends its evidence to a structure without its exact native record', kind => {
   const child = kind === 'request' ? traceRecord(10) : traceTool(10);
   const load = vi.fn(); const select = vi.fn(); const older = vi.fn();
   render(<Trajectory cache={cacheOf([child])} onSelect={select} onLoadDetail={load} loadEarlier={older} latest={noop} />);
@@ -248,17 +248,17 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never lends i
   const step = items.find(item => item.type === 'GroupHeader')!;
   expect(step.display_key).toBe(JSON.stringify(['group', 'attempt-a', '1']));
   expect(trajectoryItems([{ ...child, state: 'running' }]).find(item => item.type === 'GroupHeader')!.display_key).toBe(step.display_key);
-  for (const type of ['TurnHeader', 'GroupHeader']) {
-    const header = document.querySelector<HTMLElement>(`[data-structural="${type === 'TurnHeader' ? 'turn' : 'step'}"]`)!;
-    act(() => header.focus()); fireEvent.click(header); fireEvent.keyDown(header, { key: 'Enter' });
-    expect(header.hasAttribute('data-owner')).toBe(false);
-    expect(document.activeElement).toBe(header);
-    expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
-    const evidence = structureInspector().textContent!;
-    expect(evidence).toContain(`The exact native ${type === 'TurnHeader' ? 'Attempt' : 'Step'} record is not loaded at this read cut`);
-    for (const borrowed of [child.id, 'attempt-a', child.state, 'request-10', 'tool-bash']) expect(evidence).not.toContain(borrowed);
-    expect(within(structureInspector()).queryByText('Record')).toBeNull();
-  }
+  // As in Harness, a Step has no chrome; the Turn is the only structure.
+  expect(document.querySelector('[data-structural="step"]')).toBeNull();
+  const header = document.querySelector<HTMLElement>('[data-structural="turn"]')!;
+  act(() => header.focus()); fireEvent.click(header); fireEvent.keyDown(header, { key: 'Enter' });
+  expect(header.hasAttribute('data-owner')).toBe(false);
+  expect(document.activeElement).toBe(header);
+  expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
+  const evidence = structureInspector().textContent!;
+  expect(evidence).toContain('The exact native Attempt record is not loaded at this read cut');
+  for (const borrowed of [child.id, 'attempt-a', child.state, 'request-10', 'tool-bash']) expect(evidence).not.toContain(borrowed);
+  expect(within(structureInspector()).queryByText('Record')).toBeNull();
   expect(select.mock.calls.every(([id]) => id === undefined)).toBe(true);
   expect(load).not.toHaveBeenCalled(); expect(older).not.toHaveBeenCalled();
   fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
@@ -267,7 +267,7 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Step %s anchor never lends i
   expect(screen.getByRole('tab', { name: kind === 'request' ? 'System Prompt' : 'Input' })).toBeDefined();
 });
 
-it('407: exact native Attempt and Step records are inspectable structural evidence without any detail read', () => {
+it('407: the exact native Attempt record is inspectable structural evidence without any detail read', () => {
   const location = { attempt_id: 'attempt-opaque', step_id: 'step-opaque' };
   // The Attempt has not settled and the Step was cancelled before any Request.
   const attempt = traceRecord(8, { kind: 'attempt', request: null, preview: null, location: { attempt_id: location.attempt_id }, state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } });
@@ -282,10 +282,13 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
   expect(ledger.textContent).not.toContain('attempt-opaque');
   expect(ledger.textContent).not.toContain('step-opaque');
   expect(ledger.textContent).not.toContain('Attempt');
+  // As in Harness, Steps have no chrome; an empty Step has no seat.
+  expect(within(ledger).queryByRole('button', { name: 'Step 1' })).toBeNull();
+  expect(within(ledger).queryByRole('row', { name: 'Message' })).toBeNull();
   const turn = within(ledger).getByRole('button', { name: 'Turn 1' });
-  const stepRow = within(ledger).getByRole('button', { name: 'Step 1' });
 
-  fireEvent.click(turn);
+  act(() => turn.focus()); fireEvent.click(turn);
+  expect(turn.getAttribute('aria-pressed')).toBe('true');
   expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
   expect(within(structureInspector().querySelector('header')!).getByText('Attempt')).toBeDefined(); expect(within(structureInspector().querySelector('header')!).getByText('Turn 1')).toBeDefined();
   expect(fact('Native kind')).toBe('Attempt');
@@ -295,26 +298,14 @@ it('407: exact native Attempt and Step records are inspectable structural eviden
   expect(fact('Ended')).toBe('Unavailable');
   expect(fact('Duration')).toBe('Unavailable');
   expect(within(structureInspector()).queryByText('Logical Step')).toBeNull();
-
-  // Native chrome uses ordinary keyboard-focusable buttons; no Message header.
-  expect(within(ledger).queryByRole('row', { name: 'Message' })).toBeNull();
-  act(() => stepRow.focus()); fireEvent.click(stepRow);
-  expect(stepRow.getAttribute('aria-pressed')).toBe('true');
-  expect(within(structureInspector().querySelector('header')!).getByText('Step')).toBeDefined(); expect(within(structureInspector().querySelector('header')!).getByText('Step 1')).toBeDefined();
-  expect(fact('Native kind')).toBe('Step');
-  expect(fact('Record')).toBe(step.id);
-  expect(fact('Attempt')).toBe('attempt-opaque');
-  expect(fact('Logical Step')).toBe('step-opaque');
-  expect(fact('State')).toBe('cancelled');
-  expect(fact('Duration')).toBe('1.00 s');
-  fireEvent.keyDown(stepRow, { key: 'Escape' });
+  fireEvent.keyDown(turn, { key: 'Escape' });
   expect(screen.queryByRole('complementary')).toBeNull();
-  expect(document.activeElement).toBe(stepRow);
-  fireEvent.click(stepRow);
+  expect(document.activeElement).toBe(turn);
+  fireEvent.click(turn);
   const close = within(structureInspector()).getByRole('button', { name: 'Close structure' });
   act(() => close.focus()); fireEvent.click(close);
   // Focus returns to the header without reopening its inspection.
-  expect(document.activeElement).toBe(stepRow);
+  expect(document.activeElement).toBe(turn);
   expect(screen.queryByRole('complementary')).toBeNull();
   expect(load).not.toHaveBeenCalled();
   expect(select.mock.calls.every(([id]) => id === undefined)).toBe(true);
@@ -352,7 +343,7 @@ it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hi
   let resolve!: (detail: TraceDetail) => void;
   const reads: string[] = []; const selections: (string | undefined)[] = [];
   function Fixture() {
-    const [cache, setCache] = useState(cacheOf([traceRecord(9, { kind: 'step', request: null, preview: null }), child]));
+    const [cache, setCache] = useState(cacheOf([traceRecord(9, { kind: 'attempt', request: null, preview: null, location: { attempt_id: 'attempt-a' } }), child]));
     const load = useCallback((id: string) => {
       reads.push(id); setCache(current => beginTraceDetail(current, id));
       void new Promise<TraceDetail>(done => { resolve = done; }).then(detail => setCache(current => completeTraceDetail(current, id, 1, detail)));
@@ -361,14 +352,14 @@ it.each(['request', 'tool'] as const)('T1-04 controlled late %s detail cannot hi
   }
   render(<Fixture />);
   fireEvent.click(row(kind === 'request' ? 'RequestBoundary' : 'RecordRow', child.id));
-  const step = document.querySelector<HTMLElement>('[data-structural="step"]')!;
-  act(() => step.focus()); fireEvent.click(step);
+  const turn = document.querySelector<HTMLElement>('[data-structural="turn"]')!;
+  act(() => turn.focus()); fireEvent.click(turn);
   expect(selections.at(-1)).toBeUndefined();
   expect(fact('Record')).toBe('trace:9');
   await act(async () => resolve(kind === 'request' ? requestDetail(10) : toolDetail(10)));
-  expect(document.activeElement).toBe(step); expect(step.getAttribute('data-selected')).toBe('true');
+  expect(document.activeElement).toBe(turn); expect(turn.getAttribute('data-selected')).toBe('true');
   expect(screen.queryByRole('complementary', { name: 'Trace record inspector' })).toBeNull();
-  expect(fact('Record')).toBe('trace:9'); expect(fact('Logical Step')).toBe('1');
+  expect(fact('Record')).toBe('trace:9'); expect(fact('Attempt')).toBe('attempt-a');
   expect(reads).toEqual([child.id]);
 });
 
@@ -501,7 +492,7 @@ it('T1-09 structural search and Attempt collapse never borrow child facts or ano
   const items = trajectoryItems([child, other]);
   const matches = searchItems(projectTrajectory(translator('en'), [child, other]), 'unique child preview')!;
   expect(items.filter(item => matches.has(item.display_key)).every(item => item.type !== 'GroupHeader' && item.type !== 'TurnHeader')).toBe(true);
-  const structural = items.find(item => item.type === 'GroupHeader')!;
+  const structural = items.find((item): item is TurnStructure => item.type === 'TurnHeader')!;
   expect(searchItems(projectTrajectory(translator('en'), [child, other]), 'Step 1')).toEqual(new Set(items.filter(isInspectable).map(item => item.display_key)));
   expect(preferredStructure(trajectoryItems([{ ...child, location: { attempt_id: 'attempt-b', step_id: '1' } }]), structural)).toBeUndefined();
   const visible = visibleItems(translator('en'), items, [child, other], new Set(), null);
@@ -513,7 +504,7 @@ it('T1-09 structural search and Attempt collapse never borrow child facts or ano
 
 it('T1-04 timeline navigation explicitly selects its native Request after structural focus', () => {
   const child = traceRecord(10); const load = vi.fn(); show(cacheOf([child]), load);
-  const header = document.querySelector<HTMLElement>('[data-structural="step"]')!;
+  const header = document.querySelector<HTMLElement>('[data-structural="turn"]')!;
   act(() => header.focus());
   expect(load).not.toHaveBeenCalled();
   fireEvent.click(document.querySelector('[data-record-id="trace:10"]')!);
@@ -761,8 +752,10 @@ it.each([
   const foldedKeys = previousKeys();
   const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: query } });
-  if (label !== 'Message') expect(within(ledger).getByRole('button', { name: label }).closest('[data-attempt]')?.getAttribute('data-attempt')).toBe(attempt);
-  else expect(within(ledger).queryByRole('row', { name: 'Message' })).toBeNull();
+  // As in Harness, only a Turn has chrome; a Step or Message query exposes its
+  // member cells without a header of its own.
+  if (type === 'TurnHeader') expect(within(ledger).getByRole('button', { name: label }).closest('[data-attempt]')?.getAttribute('data-attempt')).toBe(attempt);
+  else { expect(within(ledger).queryByRole('button', { name: label })).toBeNull(); expect(within(ledger).queryByRole('row', { name: label })).toBeNull(); }
   expect([...ledger.querySelectorAll('[data-owner]')].map(el => el.getAttribute('data-owner'))).toEqual([...ids]);
   const spans = [...document.querySelectorAll('[data-record-id]')];
   expect(spans.length).toBeGreaterThan(0);
@@ -1221,6 +1214,37 @@ it('folded Turn preview and summary Status localize native lifecycle states with
   expect([load, older, select, latest].map(fn => fn.mock.calls.length)).toEqual(calls);
 });
 
+it('Harness ledger: each Turn opens on its own input, with the Request marker above its first output', () => {
+  const at = (attempt_id: string, step_id?: string) => ({ attempt_id, ...(step_id ? { step_id } : {}) });
+  const first = richRequest(2); first.location = at('attempt-a', '1');
+  const second = traceRecord(6, { location: at('attempt-b', '1') });
+  const records = [
+    traceRecord(1, { kind: 'user', request: null, location: at('attempt-a') }), first,
+    traceRecord(3, { kind: 'assistant', request: null, location: at('attempt-a', '1') }),
+    traceRecord(5, { kind: 'user', request: null, location: at('attempt-b') }), second,
+    traceRecord(7, { kind: 'assistant', request: null, location: at('attempt-b', '1') }),
+  ];
+  const rows = ledgerRows(translator('en'), projectTrajectory(translator('en'), records), trajectoryItems(records), new Set(), false);
+  expect(rows.map(row => [row.item?.type, row.item?.owner_record_id, row.turnStart, row.request?.owner_record_id ?? null])).toEqual([
+    ['SystemPromptCell', 'trace:2', false, null],
+    ['RecordRow', 'trace:1', true, null],
+    ['ContextRow', 'trace:2', false, null], ['ContextRow', 'trace:2', false, null],
+    ['RecordRow', 'trace:3', false, 'trace:2'],
+    ['RecordRow', 'trace:5', true, null],
+    ['RecordRow', 'trace:7', false, 'trace:6'],
+  ]);
+  expect(rows.every(row => row.kind === 'semantic')).toBe(true);
+  show(cacheOf(records));
+  // As in Harness, Steps carry no chrome of their own.
+  expect(document.querySelector('[data-structural="step"]')).toBeNull();
+  fireEvent.click(row('RecordRow', 'trace:3'));
+  // The promoted initial prompt sits outside the active Turn's rail.
+  expect(row('SystemPromptCell', 'trace:2').querySelector('[class*="rail"]')).toBeNull();
+  expect(row('RecordRow', 'trace:1').querySelector('[class*="rail"]')).not.toBeNull();
+  expect(row('SystemPromptCell', 'trace:2').textContent).toContain('Initial System Prompt');
+  expect(row('SystemPromptCell', 'trace:2').textContent).not.toContain('Frozen prompt');
+});
+
 it('421: ledger seats carry exact native actions and System precedes Turn chrome without heavyweight structure', () => {
   const request = richRequest(2);
   const retry = traceRecord(3);
@@ -1234,21 +1258,27 @@ it('421: ledger seats carry exact native actions and System precedes Turn chrome
   expect(rows[0]!.item?.type).toBe('SystemPromptCell');
   expect(rows[0]!.item?.record.location).toEqual(request.location);
   expect(rows[0]!.turnStart).toBe(false);
-  expect(rows[0]!.stepMarkers).toEqual([]);
   expect(rows[1]!.turnStart).toBe(true);
-  expect(rows[0]!.request?.owner_record_id).toBe(request.id);
-  const contextSeat = rows.find(row => row.request?.owner_record_id === contextRequest.id)!;
-  expect(contextSeat.item?.type).toBe('ContextRow');
-  expect(contextSeat.item?.owner_record_id).toBe(contextRequest.id);
+  // As in Harness, a Request's marker sits above the first output of its own
+  // Step; a Request followed by another Request keeps its own marker seat.
+  expect(rows[0]!.request).toBeUndefined();
+  for (const owner of [request, retry]) {
+    const seat = rows.find(row => row.request?.owner_record_id === owner.id)!;
+    expect(seat.kind).toBe('marker'); expect(seat.height).toBe(10);
+    expect(seat.item?.record.request?.request_id).toBe(owner.request!.request_id);
+  }
+  // As in Harness, consecutive Request dots step right instead of stacking.
+  expect([request, retry].map(owner => rows.find(row => row.request?.owner_record_id === owner.id)!.requestRun)).toEqual([0, 1]);
+  const outputSeat = rows.find(row => row.request?.owner_record_id === contextRequest.id)!;
+  expect(outputSeat.requestRun).toBe(0);
+  expect(outputSeat.item?.owner_record_id).toBe(assistant.id);
+  expect(outputSeat.request?.record.request?.request_id).toBe(contextRequest.request!.request_id);
   expect(rows.filter(row => row.request?.owner_record_id === contextRequest.id)).toHaveLength(1);
-  const seat = rows.find(row => row.request?.owner_record_id === retry.id)!;
-  expect(seat.kind).toBe('marker'); expect(seat.height).toBe(10);
-  expect(seat.item?.record.request?.request_id).toBe(retry.request!.request_id);
-  expect(rows.find(row => row.item?.owner_record_id === assistant.id)?.request).toBeUndefined();
+  expect(rows.find(row => row.item?.type === 'ContextRow' && row.item.owner_record_id === contextRequest.id)?.request).toBeUndefined();
   const load = vi.fn(); show(cacheOf(records), load);
   expect(document.querySelectorAll('[role="row"][data-display-type="TurnHeader"], [role="row"][data-display-type="GroupHeader"], [role="row"][data-display-type="RequestBoundary"]')).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: 'Turn 1' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Step 1' }));
+  expect(screen.queryByRole('button', { name: 'Step 1' })).toBeNull();
   expect(load).not.toHaveBeenCalled();
   fireEvent.click(row('RequestBoundary', retry.id));
   expect(load.mock.calls).toEqual([[retry.id]]);
@@ -1290,41 +1320,37 @@ it('421: Tool input and result render bounded summary facts without detail reads
 });
 
 
-it('424: logical arrows visit exact Turn, Step, Request and semantic targets without structural detail reads', () => {
+it('424: logical arrows visit exact Turn, Request and semantic targets without structural detail reads', () => {
   const records = [
     traceRecord(0, { kind: 'user', request: null, location: {} }),
     traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' } }),
     traceRecord(2, { kind: 'step', request: null }), traceRecord(3), traceRecord(4),
   ];
   const rows = ledgerRows(translator('en'), projectTrajectory(translator('en'), records), trajectoryItems(records), new Set(), false);
+  // As in Harness, a Step has no chrome and is never a navigation target.
   expect(ledgerFocusTargets(rows).map(target => [target.kind, target.item.type])).toEqual([
-    ['semantic', 'RecordRow'], ['turn', 'TurnHeader'], ['step', 'GroupHeader'], ['request', 'RequestBoundary'], ['request', 'RequestBoundary'],
+    ['semantic', 'RecordRow'], ['turn', 'TurnHeader'], ['request', 'RequestBoundary'], ['request', 'RequestBoundary'],
   ]);
   const load = vi.fn(); show(cacheOf(records), load);
   expect(row('RequestBoundary', 'trace:3').closest('[role=row]')!.textContent).not.toContain('historical-model');
+  expect(screen.queryByRole('button', { name: 'Step 1' })).toBeNull();
   const user = row('RecordRow', 'trace:0');
   const turn = screen.getByRole('button', { name: 'Turn 1' });
-  const step = screen.getByRole('button', { name: 'Step 1' });
   act(() => user.focus());
   fireEvent.keyDown(user, { key: 'ArrowDown' }); expect(document.activeElement).toBe(turn);
   expect(fact('Record')).toBe('trace:1');
-  fireEvent.keyDown(turn, { key: 'ArrowDown' }); expect(document.activeElement).toBe(step);
-  expect(fact('Record')).toBe('trace:2'); expect(fact('Logical Step')).toBe('1');
-  fireEvent.keyDown(step, { key: 'ArrowUp' }); expect(document.activeElement).toBe(turn);
-  fireEvent.keyDown(turn, { key: 'ArrowDown' }); expect(document.activeElement).toBe(step);
   expect(load).not.toHaveBeenCalled();
-  fireEvent.keyDown(step, { key: 'ArrowDown' }); expect(document.activeElement).toBe(row('RequestBoundary', 'trace:3'));
+  fireEvent.keyDown(turn, { key: 'ArrowDown' }); expect(document.activeElement).toBe(row('RequestBoundary', 'trace:3'));
   expect(load.mock.calls).toEqual([['trace:3']]);
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' }); expect(document.activeElement).toBe(row('RequestBoundary', 'trace:4'));
   expect(load.mock.calls).toEqual([['trace:3'], ['trace:4']]);
   fireEvent.keyDown(row('RequestBoundary', 'trace:4'), { key: 'ArrowUp' });
   fireEvent.keyDown(row('RequestBoundary', 'trace:3'), { key: 'ArrowUp' });
-  expect(document.activeElement).toBe(step); expect(fact('Record')).toBe('trace:2');
-  fireEvent.keyDown(step, { key: 'ArrowUp' });
+  expect(document.activeElement).toBe(turn); expect(fact('Record')).toBe('trace:1');
   fireEvent.keyDown(turn, { key: 'ArrowUp' }); expect(document.activeElement).toBe(user);
 });
 
-it.each(['only-system', 'native-step', 'context', 'search'] as const)('424: promoted System defers exact Step chrome and truthful fallback geometry: %s', scenario => {
+it.each(['only-system', 'native-step', 'context', 'search'] as const)('424: promoted System precedes the Turn chrome with truthful fallback geometry: %s', scenario => {
   const request = richRequest(3);
   if (scenario !== 'context') request.request!.context_additions = [];
   const records = [traceRecord(1, { kind: 'attempt', request: null, location: { attempt_id: 'attempt-a' } }),
@@ -1335,22 +1361,20 @@ it.each(['only-system', 'native-step', 'context', 'search'] as const)('424: prom
   const rows = ledgerRows(translator('en'), projectTrajectory(translator('en'), records), visibleItems(translator('en'), items, records, new Set(), matches), new Set(), !!matches);
   const system = rows.find(row => row.item?.type === 'SystemPromptCell')!;
   expect(system.item?.record.location).toEqual(request.location);
-  expect(system.request?.owner_record_id).toBe(request.id);
-  expect(system.stepMarkers).toEqual([]);
+  // With no output yet, the Request keeps its own marker seat in its Step.
+  expect(system.request).toBeUndefined();
+  if (scenario !== 'search') expect(rows.find(row => row.request?.owner_record_id === request.id)!.item?.type).toBe('RequestBoundary');
   const turnIndex = rows.findIndex(row => row.turnStart);
-  const stepIndex = rows.findIndex(row => row.stepMarkers.length);
   expect(turnIndex).toBeGreaterThan(rows.indexOf(system));
-  expect(stepIndex).toBeGreaterThanOrEqual(turnIndex);
-  expect(rows[stepIndex]!.stepMarkers[0]!.step_id).toBe('1');
-  expect(rows[stepIndex]!.height).toBeGreaterThanOrEqual(20);
-  if (scenario === 'only-system' || scenario === 'native-step' || scenario === 'search') {
-    expect(rows[stepIndex]!.kind).toBe('structure'); expect(rows[stepIndex]!.height).toBe(20);
-  }
+  const opening = rows[turnIndex]!;
+  // A Request or structure seat that opens a Turn grows to hold its chrome.
+  if (scenario === 'context') { expect(opening.item?.owner_record_id).toBe('trace:0'); expect(opening.height).toBe(30); }
+  else { expect(opening.kind).toBe('structure'); expect(opening.height).toBe(20); expect(opening.item?.type).toBe(scenario === 'search' ? undefined : 'RequestBoundary'); }
   const load = vi.fn(); show(cacheOf(records), load);
   if (scenario === 'search') fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded Trace' }), { target: { value: 'Frozen prompt' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Step 1' }));
-  expect(screen.getByRole('button', { name: 'Step 1' }).getAttribute('data-step')).toBe('1');
-  if (scenario !== 'only-system') expect(fact('Record')).toBe('trace:2');
+  expect(document.querySelector('[data-structural="step"]')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Turn 1' }));
+  expect(fact('Record')).toBe('trace:1');
   expect(load).not.toHaveBeenCalled();
 });
 
@@ -1360,7 +1384,7 @@ it('424: structural-only seats and request-only seats have distinct exact naviga
   const rows = ledgerRows(translator('en'), projectTrajectory(translator('en'), records), trajectoryItems(records), new Set(), false);
   const empty = rows.find(row => row.turn?.attempt_id === 'empty')!;
   expect(empty.kind).toBe('structure'); expect(empty.height).toBe(20);
-  expect(ledgerFocusTargets([empty]).map(target => target.kind)).toEqual(['turn', 'step']);
+  expect(ledgerFocusTargets([empty]).map(target => target.kind)).toEqual(['turn']);
   const requestOnly = rows.find(row => row.request?.owner_record_id === 'trace:4')!;
   expect(requestOnly.kind).toBe('marker'); expect(requestOnly.height).toBe(10);
   expect(ledgerFocusTargets([requestOnly]).map(target => target.kind)).toEqual(['request']);
@@ -1382,16 +1406,15 @@ it('424: Inspector close restores the exact structural key after folding hides a
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Turn 1' }));
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(document.activeElement).toBe(row('RecordRow', user.id));
-  // Hidden Step structure has no collapsed target. Expanding restores it.
+  // As in Harness, Steps have no chrome, folded or expanded.
   expect(screen.queryByRole('button', { name: 'Step 1' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Expand Turn 1' }));
-  act(() => row('RecordRow', user.id).focus());
-  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
-  const step = screen.getByRole('button', { name: 'Step 1' });
-  expect(document.activeElement).toBe(step);
+  expect(screen.queryByRole('button', { name: 'Step 1' })).toBeNull();
+  const turn = screen.getByRole('button', { name: 'Turn 1' });
+  act(() => turn.focus()); fireEvent.click(turn);
   const reads = load.mock.calls.length;
   fireEvent.click(screen.getByRole('button', { name: 'Close structure' }));
-  expect(document.activeElement).toBe(step);
+  expect(document.activeElement).toBe(turn);
   expect(load.mock.calls.length).toBe(reads);
 });
 
@@ -1400,62 +1423,44 @@ it.each([
   ['A initial-only first Step', true, 0],
   ['B empty middle Step', false, 1],
   ['C consecutive empty Steps', false, 2],
-] as const)('424 order: %s follows native groups in rows and logical targets', (_name, initial, emptySteps) => {
+] as const)('424 order: %s keeps native group order and gives empty Steps no seat', (_name, initial, emptySteps) => {
   const records = orderedStepRecords(initial, emptySteps);
   const projection = projectTrajectory(translator('en'), records);
   const rows = ledgerRows(translator('en'), projection, trajectoryItems(records), new Set(), false);
-  const expected = ['z-first', ...['a-empty', 'm-empty'].slice(0, emptySteps), 'b-last'];
-  expect(rows.flatMap(row => row.stepMarkers.map(step => step.step_id))).toEqual(expected);
-  const targets = ledgerFocusTargets(rows);
-  expect(targets.filter(target => target.kind === 'step').map(target => target.item.type === 'GroupHeader' && target.item.step_id)).toEqual(expected);
-  const fallbacks = rows.filter(row => row.kind === 'structure' && !row.item);
-  expect(new Set(fallbacks.map(row => row.display_key)).size).toBe(fallbacks.length);
-  for (const seat of fallbacks) {
-    expect(seat.height).toBe(20); expect(seat.stepMarkers).toHaveLength(1); expect(seat.steps).toEqual(seat.stepMarkers);
-    expect(seat.item).toBeUndefined(); expect(seat.request).toBeUndefined();
-    expect(seat.display_key).toContain(seat.stepMarkers[0]!.step_id!);
-  }
-  if (initial) {
-    expect(rows[0]!.item?.record.location).toEqual(records[2]!.location);
-    expect(rows[0]!.request?.owner_record_id).toBe('trace:702');
-    expect(rows[0]!.stepMarkers).toEqual([]);
-    expect(rows.findIndex(row => row.turnStart)).toBeGreaterThan(0);
-    expect(targets.findIndex(target => target.kind === 'turn')).toBeLessThan(targets.findIndex(target => target.kind === 'step'));
-  }
+  // As in Harness, a Step has no chrome: empty Steps add no rows or targets.
+  expect(rows.map(row => [row.item?.type, row.item?.owner_record_id, row.turnStart])).toEqual(initial
+    ? [['SystemPromptCell', 'trace:702', false], ['RequestBoundary', 'trace:702', true], ['RecordRow', 'trace:706', false]]
+    : [['RecordRow', 'trace:702', true], ['RecordRow', 'trace:706', false]]);
+  expect(ledgerFocusTargets(rows).map(target => target.kind)).toEqual(initial ? ['semantic', 'turn', 'request', 'semantic'] : ['turn', 'semantic', 'semantic']);
   const load = vi.fn(); show(cacheOf(records), load);
-  for (const id of expected) {
-    fireEvent.click(document.querySelector(`[data-step="${id}"]`)!);
-    expect(fact('Logical Step')).toBe(id);
-  }
+  expect(document.querySelector('[data-step]')).toBeNull();
+  const turn = screen.getByRole('button', { name: 'Turn 1' });
+  act(() => turn.focus()); fireEvent.click(turn);
+  expect(fact('Record')).toBe('trace:700');
   expect(load).not.toHaveBeenCalled();
-  if (initial) {
-    const turn = screen.getByRole('button', { name: 'Turn 1' });
-    act(() => turn.focus());
-    for (const id of expected) {
-      fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
-      expect((document.activeElement as HTMLElement).dataset.step).toBe(id);
-    }
-    expect(load).not.toHaveBeenCalled();
-  }
+  fireEvent.keyDown(turn, { key: 'ArrowDown' });
+  expect(document.activeElement).toBe(initial ? row('RequestBoundary', 'trace:702') : row('RecordRow', 'trace:702'));
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(document.activeElement).toBe(row('RecordRow', initial ? 'trace:706' : 'trace:706'));
 });
 
-it('424 order: search-generated fallback keeps native position and restores exact folds across locales', () => {
+it('424 order: search keeps native position and restores exact folds across locales', () => {
   const records = orderedStepRecords(true, 0, true);
   const projection = projectTrajectory(translator('en'), records);
   const items = trajectoryItems(records);
   const matches = searchItems(projection, 'order-match')!;
   const rows = ledgerRows(translator('en'), projection, visibleItems(translator('en'), items, records, new Set(), matches), new Set(['ordered-turn']), true);
-  expect(rows.flatMap(row => row.stepMarkers.map(step => step.step_id))).toEqual(['z-first', 'b-last']);
-  expect(rows.find(row => row.stepMarkers[0]?.step_id === 'z-first')!.kind).toBe('structure');
+  expect(rows.map(row => [row.item?.owner_record_id, row.turnStart])).toEqual([['trace:702', false], ['trace:706', true]]);
   expect(rows.some(row => row.item?.type === 'ContextRow')).toBe(false);
   const load = vi.fn(); show(cacheOf(records), load);
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
   const keys = () => [...screen.getByRole('table').querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
+  const owners = () => [...screen.getByRole('table').querySelectorAll<HTMLElement>('[role="row"][data-owner]')].map(el => el.dataset.owner);
   const foldedKeys = keys();
   const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'order-match' } });
   const searchingKeys = keys();
-  expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['z-first', 'b-last']);
+  expect(owners()).toEqual(['trace:702', 'trace:706']);
   act(() => localeController.setLocale('zh')); expect(keys()).toEqual(searchingKeys);
   fireEvent.change(search, { target: { value: '' } }); expect(keys()).toEqual(foldedKeys);
   expect(load).not.toHaveBeenCalled(); act(() => localeController.setLocale('en'));
@@ -1466,56 +1471,55 @@ it.each(['many', 'initial', 'middle'] as const)('424 compact: bounded fold and e
   const tx = translator('en'); const projection = projectTrajectory(tx, records); const items = trajectoryItems(records);
   const nativeSteps = projection.sections.flatMap(section => section.kind === 'turn' ? section.groups.filter(group => group.kind === 'step').map(group => group.nativeStepId) : []);
   const project = (folded: boolean) => ledgerRows(tx, projection, items, new Set(folded ? ['ordered-turn'] : []), false);
-  const stepIds = (rows: ReturnType<typeof project>) => ledgerFocusTargets(rows).flatMap(target => target.kind === 'step' && target.item.type === 'GroupHeader' ? [target.item.step_id] : []);
   const expanded = project(false);
   expect(nativeSteps).toHaveLength(scenario === 'many' ? 50 : 4);
-  expect(stepIds(expanded)).toEqual(nativeSteps);
-  expect(expanded.filter(row => row.kind === 'structure').every(row => row.height === 20 && row.stepMarkers.length === 1)).toBe(true);
+  // Fifty native Steps cost no rows: only visible content and the Turn's
+  // own opening seat exist.
+  expect(expanded.map(row => row.item?.owner_record_id)).toEqual(scenario === 'middle' ? ['trace:702', 'trace:706'] : ['trace:702', 'trace:702', 'trace:706']);
+  expect(expanded.filter(row => row.kind === 'structure' && !row.turnStart)).toEqual([]);
   const collapsed = project(true);
   expect(collapsed.map(row => row.kind)).toEqual(scenario === 'middle' ? ['semantic', 'summary'] : ['semantic', 'semantic', 'summary']);
   expect(collapsed.filter(row => row.turnStart)).toHaveLength(1);
   expect(collapsed.at(-1)!.summary).toBe(`${nativeSteps.length} Steps · 0 Tool calls`);
-  expect(collapsed.at(-1)!.stepMarkers).toEqual([]);
-  expect(stepIds(collapsed)).toEqual([scenario === 'middle' ? 'z-first' : 'b-last']);
   expect(collapsed.filter(row => row.kind === 'structure')).toEqual([]);
   if (scenario !== 'middle') {
     expect(collapsed[0]!.item?.type).toBe('SystemPromptCell');
     expect(collapsed[0]!.item?.record.location).toEqual({ attempt_id: 'ordered-turn', step_id: 'z-first' });
-    expect(collapsed[0]!.request?.owner_record_id).toBe('trace:702');
-    expect(collapsed[0]!.stepMarkers).toEqual([]); expect(collapsed[0]!.turnStart).toBe(false);
+    // As in Harness, a folded Turn shows no Request markers.
+    expect(collapsed.some(row => row.request)).toBe(false);
+    expect(collapsed[0]!.turnStart).toBe(false);
     expect(collapsed[1]!.item?.owner_record_id).toBe('trace:706');
   } else expect(collapsed[0]!.item?.owner_record_id).toBe('trace:702');
   expect(project(false)).toEqual(expanded);
 });
 
-it('424 compact: hidden Step targets disappear from arrows and return on expand without structural reads', () => {
+it('424 compact: Steps are never arrow targets, folded or expanded, and need no structural reads', () => {
   const load = vi.fn(); show(cacheOf(orderedStepRecords()), load);
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
-  expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['b-last']);
+  expect(document.querySelector('[data-step]')).toBeNull();
   const turn = screen.getByRole('button', { name: 'Turn 1' }); act(() => turn.focus());
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
-  expect((document.activeElement as HTMLElement).dataset.step).toBe('b-last'); expect(fact('Logical Step')).toBe('b-last');
+  expect(document.activeElement).toBe(row('RecordRow', 'trace:706'));
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' }); expect(document.activeElement).toBe(turn);
-  expect(load).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Expand Turn 1' })); act(() => screen.getByRole('button', { name: 'Turn 1' }).focus());
-  for (const id of ['z-first', 'a-empty', 'm-empty', 'b-last']) {
-    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
-    expect((document.activeElement as HTMLElement).dataset.step).toBe(id); expect(fact('Logical Step')).toBe(id);
-  }
-  expect(load).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-step]')).toBeNull();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' }); expect(document.activeElement).toBe(row('RequestBoundary', 'trace:702'));
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' }); expect(document.activeElement).toBe(row('RecordRow', 'trace:706'));
+  expect(load.mock.calls).toEqual([['trace:706'], ['trace:702'], ['trace:706']]);
 });
 
-it('424 compact: search exposes a hidden Step and clearing restores exact compact rows', () => {
+it('424 compact: search exposes folded content and clearing restores exact compact rows', () => {
   const load = vi.fn(); show(cacheOf(orderedStepRecords(false)), load);
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
   const keys = () => [...screen.getByRole('table').querySelectorAll('[data-display-key]')].map(el => el.getAttribute('data-display-key'));
   const collapsedKeys = keys();
+  const owners = () => [...screen.getByRole('table').querySelectorAll<HTMLElement>('[role="row"][data-owner]')].map(el => el.dataset.owner);
   expect(document.querySelectorAll('[data-display-type="StructuralSeat"]')).toHaveLength(0);
-  expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['z-first']);
+  expect(owners()).toEqual(['trace:702']);
   const search = screen.getByRole('searchbox', { name: 'Search loaded Trace' });
   fireEvent.change(search, { target: { value: 'order-match later' } });
-  expect([...document.querySelectorAll<HTMLElement>('[data-step]')].map(el => el.dataset.step)).toEqual(['b-last']);
-  expect(row('RecordRow', 'trace:706')).not.toBeNull();
+  expect(owners()).toEqual(['trace:706']);
+  expect(document.querySelector('[data-step]')).toBeNull();
   expect(document.querySelectorAll('[data-display-type="TurnSummary"]')).toHaveLength(0);
   fireEvent.change(search, { target: { value: '' } });
   expect(keys()).toEqual(collapsedKeys);
@@ -1524,7 +1528,7 @@ it('424 compact: search exposes a hidden Step and clearing restores exact compac
   expect(load).not.toHaveBeenCalled();
 });
 
-it.each(['structure-only', 'initial-only', 'updated-system'] as const)('424 compact: sparse Turn needs no hidden Step seats: %s', scenario => {
+it.each(['structure-only', 'initial-only', 'updated-system'] as const)('424 compact: sparse Turn needs no Step seats: %s', scenario => {
   const records = orderedStepRecords().filter(record => record.kind === 'attempt' || record.kind === 'step' || (scenario !== 'structure-only' && record.kind === 'request'));
   if (scenario === 'updated-system') {
     const updated = traceRecord(707, { location: { attempt_id: 'ordered-turn', step_id: 'b-last' } });
@@ -1536,7 +1540,7 @@ it.each(['structure-only', 'initial-only', 'updated-system'] as const)('424 comp
   expect(rows.map(row => row.kind)).toEqual(scenario === 'structure-only' ? ['summary'] : scenario === 'initial-only' ? ['semantic', 'summary'] : ['semantic', 'semantic', 'summary']);
   expect(rows.filter(row => row.turnStart)).toHaveLength(1);
   expect(rows.at(-1)!.summary).toBe('4 Steps · 0 Tool calls');
-  expect(ledgerFocusTargets(rows).filter(target => target.kind === 'step')).toHaveLength(scenario === 'updated-system' ? 1 : 0);
+  expect(ledgerFocusTargets(rows).map(target => target.kind)).not.toContain('step');
   const load = vi.fn(); show(cacheOf(records), load);
   fireEvent.click(screen.getByRole('button', { name: 'Fold Turn 1' }));
   fireEvent.click(screen.getByRole('button', { name: 'Turn 1' }));
@@ -1550,7 +1554,6 @@ it('424 compact: summary counts Tool proposals from hidden semantic content', ()
   const rows = ledgerRows(tx, projection, trajectoryItems(records), new Set(['ordered-turn']), false);
   expect(rows.map(row => row.kind)).toEqual(['semantic', 'summary']);
   expect(rows.at(-1)!.summary).toBe('4 Steps · 2 Tool calls');
-  expect(rows.at(-1)!.stepMarkers).toEqual([]);
   expect(rows.some(row => row.item?.owner_record_id === 'trace:706')).toBe(false);
 });
 
@@ -1600,12 +1603,10 @@ it('424: explicit-null Step membership preserves native order across partial win
     expect(expanded.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual(window.map(record => record.id));
     const userTargets = ledgerFocusTargets(expanded).filter(target => target.kind === 'semantic');
     expect(userTargets.map(target => isInspectable(target.item) && target.item.owner_record_id)).toEqual(window.map(record => record.id));
-    expect(expanded.filter(row => row.item?.record.kind === 'user').every(row => row.steps.length === 0 && row.stepMarkers.length === 0)).toBe(true);
     const folded = new Set(['adopted-attempt']);
     const collapsed = ledgerRows(translator('en'), projection, items, folded, false);
     expect(collapsed.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual([window[0]!.id]);
     expect(collapsed.map(row => row.height)).toEqual([30, 20]);
-    expect(ledgerFocusTargets(collapsed).some(target => target.kind === 'step')).toBe(false);
     const matches = searchItems(projection, window[0]!.preview!.text)!;
     const searched = ledgerRows(translator('en'), projection, visibleItems(translator('en'), items, window, new Set(), matches), folded, true);
     expect(searched.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual([window[0]!.id]);

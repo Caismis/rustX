@@ -68,7 +68,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(oldTail.getByRole('button', { name: 'Branch into a new Session', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/response-tail-mobile.png' });
-    await page.setViewportSize({ width: 1440, height: 1000 });
+    // The Harness ledger seats a Request on its output row, so two finite
+    // pages need a shorter pane to overflow by a real scrolling extent.
+    await page.setViewportSize({ width: 1440, height: 800 });
     // WEB-03 uses this same native Session, transcript and provider scenario.
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
@@ -141,9 +143,14 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
     await expect(trajectory.locator('[data-request-owner][data-status="running"]').first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    const beforeSettlement = Number(await ledger.getAttribute('aria-rowcount'));
+    // Settlement appends the running Request's Assistant output, which then
+    // hosts its marker in place of the Request's own seat.
+    const running = trajectory.locator('[data-request-owner][data-status="running"]');
+    await expect(running).toHaveCount(1);
+    const settling = trajectory.locator(`[data-request-owner="${await running.getAttribute('data-request-owner')}"]`);
     await fixture.release('settle-chat');
-    await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(beforeSettlement);
+    await expect(settling).toHaveAttribute('data-status', 'completed');
+    await expect(settling.locator('xpath=ancestor::*[@role="row"]')).toHaveAttribute('data-kind', 'assistant');
     expect(await ledger.evaluate(el => el.scrollTop)).toBe(0);
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('Settled', { exact: true })).toHaveCount(1);

@@ -7,7 +7,7 @@ import { IconSearchOutline16 } from '../../presentation/primitives/icons';
 import { TrajectoryInspector, TrajectoryStructureInspector } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, ledgerRows, rowOwnsKey, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectorySelection } from './layout';
+import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, isInspectable, preferredStructure, ledgerRows, rowOwnsKey, type FocusableDisplayItem, type StructuralDisplayItem, type TrajectorySelection, type TurnStructure } from './layout';
 import { searchItems } from './search';
 import { timelineFocus, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
@@ -31,7 +31,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
     const item = cache.selection ? preferredItem(trajectoryItems(tx, projectTrajectory(tx, cache.page.records)), cache.selection.id) : undefined;
     return item ? selectionOf(item) : undefined;
   });
-  const [structure, setStructure] = useState<StructuralDisplayItem | undefined>(undefined);
+  const [structure, setStructure] = useState<TurnStructure | undefined>(undefined);
   const [focus, setFocus] = useState<{ epoch: number; ids: ReadonlySet<string> } | null>(null);
   const [width, setWidth] = useState(0);
   const [offTail, setOffTail] = useState(false);
@@ -87,7 +87,7 @@ export function Trajectory({ cache, loadEarlier, latest, onSelect, onLoadDetail 
       if (selection.display_key !== selectedItem.display_key) setSelection({ ...selection, display_key: selectedItem.display_key });
     }
   }, [selection, selectedItem]);
-  // Structural regrouping stays within the containing native Attempt/Step.
+  // Structural regrouping stays within the containing native Attempt.
   // Neither a late detail response nor a new loaded anchor supplies an owner.
   useLayoutEffect(() => {
     if (!structure) return;

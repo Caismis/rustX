@@ -5,6 +5,12 @@ Only that record describes validation of the repaired generation (Runtime Client
 App Server 28). The dated validation sections below are historical evidence for
 older commits, not evidence that the current HEAD passes.
 
+The Harness ledger alignment of 2026-10-06 supersedes every Step chrome, Step
+fallback seat and Request-seat rule in the historical sections below: as in
+DeepSeek Harness, Steps have no chrome, seats or navigation targets, and a
+Request marker sits on the boundary above its Step's first output. The current
+contract is the section that follows and [Trace](trace.md).
+
 
 Historical initial implementation: issue #421 was based independently on `a64e8ae79b2fa03da87d9995038670f179434845`
 (fetched `origin/main`). The primary worktree contained only untracked
@@ -55,35 +61,33 @@ request-relative presentation evidence, not an execution event.
 `TrajectoryProjection` retains exact Attempt and Step grouping. The inspectable
 universe retains Turn/Step structural objects and Request targets, but those
 objects no longer imply ordinary ledger rows. `TrajectoryLedgerRow` names the
-measurable seat, semantic item, exact Turn, Step actions, exact Request action,
-start markers and compact summary. The renderer never discovers these relations
+measurable seat, semantic item, exact Turn, exact Request action, Turn start
+and compact summary. The renderer never discovers these relations
 from its neighbors or DOM position.
 
 * Content seats are 30px; Calls and collapsed Turn summaries are 20px;
-  Request-only seats are 10px; structural seats containing Turn or Step chrome
-  are 20px (semantic seats retain their content height).
+  Request-only seats are 10px; a structural seat carrying Turn chrome is 20px
+  (semantic seats retain their content height).
 * Initial System cells move visually before Turn chrome using native
   `system_prompt.state === initial`; their Request/Step identities do not change.
-* Turn ordinal/fold/inspection and Step state/inspection are inline controls.
-  In expanded/search mode, each native Step occupies its position in
-  `TrajectoryTurnModel.groups`: its first
-  eligible semantic seat owns its chrome, or one stable 20px fallback owns that
-  exact Step. Message groups never acquire a synthetic Step. No full-width Turn,
-  Group/Step or Request row and no Event/Content headings remain.
-* Each Request selects its own native record. The marker prioritizes its own
-  System cell, then its own Context cell; otherwise it owns a marker seat.
-  Retry ordinals remain visible on that exact marker. An Assistant never supplies
-  a seat by adjacency. Search may expose a Context without its System sibling;
-  the marker still comes from that Context's exact Request record.
-* Structural inspection reads the exact loaded native Attempt/Step summary.
+* Turn ordinal/fold/inspection are inline controls on the Turn's first seat.
+  As in Harness, a Step has no chrome, seat or navigation target: groups in
+  `TrajectoryTurnModel.groups` order the visible seats, and a Step with no
+  visible content adds no row. Message groups never acquire a synthetic Step.
+  No full-width Turn, Group/Step or Request row and no Event/Content headings remain.
+* Each Request selects its own native record. Its marker is a gutter dot on the
+  boundary above the first output its own Step shows after the Request's own
+  System/Context cells; that row hosts the marker without owning the Request.
+  Without such output (still running, or followed by a retry) the Request keeps
+  a 10px marker seat. Retry ordinals label that exact marker on hover.
+* Structural inspection reads the exact loaded native Attempt summary.
   Missing native starts are explicitly unavailable; the first child is never
   substituted as native evidence. Structural selection clears detail selection
   and performs zero heavy reads.
 * Collapsed Turns retain all System cells and the first main semantic row, with
-  one compact native-membership Step/Tool-call count and actionable Turn chrome.
-  Only retained non-initial content carries Step chrome. Hidden Steps have no
-  fallback seats or logical focus targets until expansion; row count is bounded
-  by retained System/main content plus one summary, independently of hidden Steps.
+  one compact native-membership Step/Tool-call count and actionable Turn chrome,
+  and no Request markers; row count is bounded by retained System/main content
+  plus one summary, independently of hidden Steps.
   Search bypasses folding without mutating the saved fold sets. English and
   Chinese role/Turn/Step/Context vocabulary and native IDs share one index.
 * TanStack Virtual retains stable semantic seat keys and the existing end anchor.

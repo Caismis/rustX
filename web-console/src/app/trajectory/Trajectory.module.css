@@ -556,21 +556,26 @@
 .copyText { margin: 4px 0; }
 .nativeDetails { padding: 12px 0; }
 
-.record[data-display-type='SystemPromptCell'] strong { font-weight: 500; }
 .record[data-selected] { box-shadow: inset 3px 0 var(--dsw-alias-brand-primary-new-colorprimary-new-color); }
 
 .record:lang(zh) { grid-template-columns: 84px minmax(0, 1fr); }
 /* Harness turn label: a small code-face tab hanging from the Turn's first row. */
 .turnChrome { position: absolute; z-index: 3; top: 0; left: 0; display: inline-flex; align-items: center; gap: 3px; box-sizing: border-box; padding: 1px 5px; border-radius: 0 0 2px; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-module-platform); font: 8px/10px var(--ds-font-family-code); font-variant-numeric: tabular-nums; white-space: nowrap; user-select: none; }
 .turnChrome[data-active] { color: color-mix(in srgb, var(--dsw-static-blue-500) 55%, var(--dsw-alias-label-tertiary)); background: var(--trajectory-turn-accent); }
-.turnChrome button, .stepChrome, .requestChrome { border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.turnChrome button, .requestChrome { border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
 .turnLabelCompact { display: none; }
-.turnChrome button[data-selected], .stepChrome[data-selected] { color: var(--dsw-alias-state-business-primary); outline: 1px solid currentColor; outline-offset: 1px; }
-.stepChrome { flex: none; max-width: 64px; overflow: hidden; padding: 1px 5px; border-radius: 2px; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-module-platform); font: 8px/10px var(--ds-font-family-code); text-overflow: ellipsis; white-space: nowrap; }
-/* Harness request boundary: a 5px dot ringed by the row's fill; selection
+.turnChrome button[data-selected] { color: var(--dsw-alias-state-business-primary); outline: 1px solid currentColor; outline-offset: 1px; }
+/* Harness request boundary: a 5px dot in the gutter on the boundary above the
+   Request's first output, ringed by the row's fill; hover names it, selection
    rings it in the business blue, failure fills it red. */
-.requestChrome { position: relative; display: inline-flex; flex: none; align-items: center; min-width: 10px; height: 10px; padding-left: 10px; color: var(--dsw-alias-label-caption); font: 8px/10px var(--ds-font-family-code); }
-.requestChrome::before { content: ''; position: absolute; top: 2.5px; left: 2.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--dsw-alias-label-caption); box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); transition: background 120ms var(--ds-ease-in-out), box-shadow 120ms var(--ds-ease-in-out); }
+.requestChrome { position: absolute; z-index: 6; top: -8px; left: calc(12px + var(--request-boundary-offset, 0px)); width: 16px; height: 16px; }
+.record[data-display-type='MarkerSeat'] .requestChrome { top: -3px; }
+/* A seat that opens a Turn holds the Turn label in the gutter, so its Request
+   dot leads the content column instead of covering the label. */
+.record[data-display-type='StructuralSeat'] .requestChrome { position: relative; top: auto; left: auto; flex: none; }
+.requestChrome::before { content: ''; position: absolute; top: 5.5px; left: 5.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--dsw-alias-label-caption); box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); transition: background 120ms var(--ds-ease-in-out), box-shadow 120ms var(--ds-ease-in-out); }
+.requestChrome::after { content: attr(data-label); position: absolute; top: 2px; left: 17px; width: max-content; padding: 0 4px; border: .5px solid var(--dsw-alias-border-l1); border-radius: 2px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); box-shadow: 0 2px 6px rgba(0, 0, 0, .12); font: 9px/12px var(--ds-font-family-code); opacity: 0; pointer-events: none; transform: translateX(-2px); transition: opacity 120ms var(--ds-ease-in-out), transform 120ms var(--ds-ease-in-out); user-select: none; white-space: nowrap; }
+.requestChrome:hover::after, .requestChrome:focus-visible::after { opacity: 1; transform: translateX(0); }
 .requestChrome:hover::before, .requestChrome:focus-visible::before { background: var(--dsw-alias-brand-primary-new-colorprimary-new-color); }
 .requestChrome[data-selected]::before { background: color-mix(in srgb, var(--dsw-alias-brand-primary-new-colorprimary-new-color) 18%, var(--dsw-alias-bg-layer-1)); box-shadow: 0 0 0 1.5px var(--dsw-alias-state-business-primary); }
 .requestChrome[data-status='failed']::before { background: var(--dsw-alias-state-error-primary); }
@@ -588,8 +593,7 @@
 .toolResult[data-error] { color: var(--dsw-alias-state-error-primary); }
 @container ledger (max-width: 560px) {
   .record:lang(zh), .record { grid-template-columns: 50px minmax(0, 1fr); }
-  .stepChrome { max-width: 30px; font-size: 8px; }
-  .toolFlow { grid-template-columns: minmax(0, 48%) 7px minmax(0, 1fr); gap: 3px; font-size: 10px; }
+    .toolFlow { grid-template-columns: minmax(0, 48%) 7px minmax(0, 1fr); gap: 3px; font-size: 10px; }
   .toolInput { flex-direction: column; align-items: start; gap: 0; line-height: 12px; }
   .toolName { max-width: 100%; font-size: 9px; }
   .toolInput .preview { max-width: 100%; }

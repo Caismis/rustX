@@ -111,7 +111,13 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     // historical owner only after its activity has arrived.
     const process = activity.locator('xpath=ancestor::*[@data-turn-process-owner][1]').locator(':scope > [data-turn-process]');
     await expect(process).toHaveCount(1);
+    // That attempt has settled durably, but its process view publishes on its
+    // own read. Only a settled process is toggleable, and only then are its
+    // steps grouped (collapsed) as in Harness, so reveal both once it settles.
+    await expect(process).toBeEnabled();
     if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+    const step = page.locator('[data-step-process]').filter({ has: activity }).last().locator(':scope > button');
+    if (await step.getAttribute('aria-expanded') === 'false') await step.click();
     await expect(activity).toBeVisible();
     const details = activity.getByText('Execution details', { exact: true });
     await expect(details).toBeVisible();
