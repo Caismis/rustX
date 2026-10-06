@@ -934,7 +934,7 @@
       "destination": "web-console/src/presentation/agent/Composer.module.css",
       "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
       "classification": "A",
-      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups. #439: quiet 24px preference footer and keyboard focus treatment using existing visual primitives. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter.",
+      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups. #439: quiet 24px preference footer and keyboard focus treatment using existing visual primitives. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Card and send circle rasterize on their own compositing layers (opacity / transform hint), so partial repaints never re-antialias their rounded edges.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -943,7 +943,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "3a17ebf0bda7f4db7ec443b42e42b672150c6ca6c4f715ceb1b80445c5b36838"
+      "local_sha256": "892a1158f65d18296a5050366680ff324aaac687ecc91c8158bd3be1d60534dc"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

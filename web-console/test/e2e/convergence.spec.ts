@@ -117,6 +117,9 @@ test('Harness New Conversation, permission, model, native process and Models con
     expect(await page.locator('[aria-label="Canonical conversation"]').evaluate(root => { const disclosure = root.querySelector('[data-turn-process]')!; return [...root.querySelectorAll('[role="note"]')].every(note => !!(disclosure.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING)); })).toBe(true);
     await shot('08-process-expanded');
     const bash = page.locator('[data-tool-call-id="bash-402"]');
+    // The settled Turn groups its tool steps, collapsed as in Harness.
+    const steps = page.locator('[data-step-process]').filter({ has: bash }).locator(':scope > button');
+    await expect(steps).toHaveAttribute('aria-expanded', 'false'); await steps.click();
     await bash.getByRole('button').first().click(); await shot('09-terminal');
     const write = page.locator('[data-tool-call-id="write-402"]');
     await write.getByRole('button').first().click(); await shot('10-write-diff');

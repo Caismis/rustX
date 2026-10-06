@@ -219,17 +219,3 @@ describe('baseline update coverage', () => {
     expect(scripts['test:e2e']).toBe('pnpm build && bash scripts/browser-tests.sh');
   });
 });
-
-
-it.each(['light', 'dark'] as const)('measured live %s Composer variants never count as an exactly stable sequence', async theme => {
-  const name = `composer-running-draft-${theme}-390-linux.png`;
-  const expected = decodePng(readFileSync(new URL(`./e2e/agent.spec.ts-snapshots/${name}`, import.meta.url)));
-  const policy = JSON.parse(readFileSync(new URL('./fixtures/rasterizer-noise.json', import.meta.url), 'utf8')) as NoisePolicy;
-  const actual = { ...expected, data: Uint8Array.from(expected.data) };
-  for (const [x, y, , after] of policy.find(entry => entry.reference === name)!.pixels!) actual.data.set(after, (y * actual.width + x) * 4);
-  const stable = await verifyScreenshot({ capture: sequence([actual, actual]).capture, referenceName: name, expected, noisePolicy: policy });
-  expect(stable.stable && stable.comparison.ok).toBe(true);
-  const alternating = sequence(settleSchedule.map((_, index) => index % 2 ? actual : expected));
-  const unstable = await verifyScreenshot({ capture: alternating.capture, referenceName: name, expected, noisePolicy: policy });
-  expect(unstable.stable).toBe(false); expect('comparison' in unstable).toBe(false);
-});

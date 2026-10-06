@@ -62,6 +62,12 @@
   border-radius: 22px;
   background: var(--dsw-specific-input-major);
   box-shadow: var(--dsw-elevation-soft);
+  /* Its own layer: the 22px stroke ring is rasterized whole, never split by
+     a page raster tile or a neighbouring partial repaint (focus, caret,
+     draft), either of which antialiases its corners differently. Opacity,
+     not transform, so the card never becomes the containing block of a
+     position:fixed descendant. */
+  will-change: opacity;
   /* The draft text follows the Settings font-size preference (the textarea,
      mirror, and backdrop all inherit from here, so the three layers stay in
      step); the line height keeps the default 10px leading via the shared px
@@ -336,6 +342,10 @@
      keeps its original seat while the smaller chips sit lower. Transform, not
      margin, so flex centering math is untouched. */
   transform: translateY(-2px);
+  /* Its own layer, as the card's: a partial repaint of the row (a removed
+     attachment, a docked stack above) never re-rasterizes only part of the
+     circle's antialiased edge. */
+  will-change: transform;
 }
 
 .primary:hover:not(:disabled) {
